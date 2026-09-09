@@ -28,6 +28,8 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- tools/ is packaging resource (bundled node/mermaid CLI); its node_modules contains .cs files that must be excluded from compilation -->
+    <Compile Remove="tools\**" />
     <AvaloniaResource Include="Assets\**" />
     <Content Include="Assets\Languages\**">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
