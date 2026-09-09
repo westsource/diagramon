@@ -23,7 +23,7 @@
 
             <StackPanel Orientation="Horizontal" Spacing="10" Margin="24,0,0,0">
                 <RadioButton GroupName="ScaleMode" Content="{Binding FixedModeText}" IsChecked="{Binding UseFixedScale}" VerticalAlignment="Center"/>
-                <NumericUpDown Value="{Binding FixedScale}" Minimum="1.5" Maximum="5" Increment="0.5"
+                <NumericUpDown Value="{Binding FixedScale}" Minimum="1.5" Maximum="10" Increment="0.5"
                                FormatString="0.0" Width="110" IsEnabled="{Binding FixedScaleEnabled}"/>
                 <TextBlock Text="x" FontSize="14" VerticalAlignment="Center"/>
             </StackPanel>

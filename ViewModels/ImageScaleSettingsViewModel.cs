@@ -15,7 +15,7 @@ public partial class ImageScaleSettingsViewModel : ViewModelBase
     private readonly Action? _onSaved;
 
     private const double MinScale = 1.5;
-    private const double MaxScale = 5.0;
+    private const double MaxScale = 10.0;
 
     [ObservableProperty]
     private bool _useAutoScale = true;

@@ -13,7 +13,7 @@ public class AppSettings
     public double PreviewZoom { get; set; } = 1.0;
 
     public const double MinExportScale = 1.5;
-    public const double MaxExportScale = 5.0;
+    public const double MaxExportScale = 10.0;
 
     /// <summary>图片保存/拷贝倍率:true=使用 FixedExportScale,false=按复杂度自动(1.5x~5.0x)。</summary>
     public bool UseFixedExportScale { get; set; }
