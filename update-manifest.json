@@ -1,8 +1,8 @@
 ﻿{
-    "version":  "2.0.260818.0",
-    "releaseNotes":  "fix: 发布包内置 Chrome headless shell 与 Node.js 运行时，渲染错误分类提示\n更新 README：同步最新功能（查找替换、崩溃日志、最近历史搜索、离屏渲染等）\nfeat: add search/filter functionality to RecentHistoryDialog\nfix: 修复 release notes 中的乱码\nchore: bump version to v2.0.260513.0 and update manifest\n更新readme\nWebView 预览区域焦点时支持 Ctrl+S 保存，移除标签页左右箭头，保留滚轮切换标签页\n修改AIpanel相关样式\nchore: update manifest for v2.0.260506.0 release\nfix: install SearchPanel and fix copy/paste in Find/Replace text boxes\nrefactor: separate recent files/history into recent-history.json\nchore: fix publish script Gitee API and clean manifest release notes",
-    "zipFileName":  "Mermaider-2.0.260818.0-win-x64.zip",
-    "downloadUrl":  "https://github.com/westsource/mermaider/releases/download/v2.0.260818.0/Mermaider-2.0.260818.0-win-x64.zip",
-    "publishedAt":  "2026-08-18T10:52:25.3658292+08:00",
-    "zipFileSize":  256291099
+    "version":  "2.0.260909.0",
+    "releaseNotes":  "",
+    "zipFileSize":  256298291,
+    "downloadUrl":  "",
+    "publishedAt":  "2026-09-09T22:45:01.0226426+08:00",
+    "zipFileName":  "Mermaider-2.0.260909.0-win-x64.zip"
 }
