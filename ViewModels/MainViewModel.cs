@@ -105,6 +105,7 @@ public partial class MainViewModel : ViewModelBase
     public string MenuSaveAs => S.MenuSaveAs;
     public string MenuCloseTab => S.MenuCloseTab;
     public string MenuAISettings => S.MenuAISettings;
+    public string MenuImageScaleSettings => S.MenuImageScaleSettings;
     public string MenuExit => S.MenuExit;
     public string MenuEdit => S.MenuEdit;
     public string MenuUndo => S.MenuUndo;
@@ -152,6 +153,7 @@ public partial class MainViewModel : ViewModelBase
         OnPropertyChanged(nameof(MenuSaveAs));
         OnPropertyChanged(nameof(MenuCloseTab));
         OnPropertyChanged(nameof(MenuAISettings));
+        OnPropertyChanged(nameof(MenuImageScaleSettings));
         OnPropertyChanged(nameof(MenuExit));
         OnPropertyChanged(nameof(MenuEdit));
         OnPropertyChanged(nameof(MenuUndo));
@@ -386,6 +388,28 @@ public partial class MainViewModel : ViewModelBase
         _ = dialog.ShowDialog(_ownerWindow);
     }
 
+    [RelayCommand]
+    private void OpenImageScaleSettings()
+    {
+        var dialog = new ImageScaleSettingsDialog(new ImageScaleSettingsViewModel(_settingsService, OnImageScaleSettingsSaved));
+        _ = dialog.ShowDialog(_ownerWindow);
+    }
+
+    private void OnImageScaleSettingsSaved()
+    {
+        // 导出倍率可能变化:作废所有标签页的缓存 PNG,并让当前页按新设置预生成
+        foreach (var tab in Tabs)
+        {
+            tab.CachedPngBytes = null;
+            tab.CachedPngScale = -1;
+        }
+
+        if (CurrentTab != null)
+        {
+            ScheduleBackgroundImageGeneration(CurrentTab);
+        }
+    }
+
     public void SaveSettings()
     {
         _settingsService.Settings.EditorPreviewRatio = EditorPreviewRatio;
@@ -439,6 +463,7 @@ public partial class MainViewModel : ViewModelBase
             tab.IsModified = true;
             tab.UpdateHeader();
             tab.CachedPngBytes = null;
+            tab.CachedPngScale = -1;
             ScheduleValidationAndRender(tab);
         }
     }
@@ -637,13 +662,13 @@ public partial class MainViewModel : ViewModelBase
             return null;
         }
 
-        if (tab.CachedPngBytes != null)
+        var elementCount = CountDiagramElements(tab.Content);
+        var scale = GetExportScale(elementCount);
+
+        if (tab.CachedPngBytes != null && Math.Abs(tab.CachedPngScale - scale) < 0.001)
         {
             return tab.CachedPngBytes;
         }
-
-        var elementCount = CountDiagramElements(tab.Content);
-        var scale = CalculateScale(elementCount);
 
         var result = await _mermaidService.RenderAndValidateAsync(tab.Content, scale);
         if (!result.Success || result.ImageData == null)
@@ -695,6 +720,17 @@ public partial class MainViewModel : ViewModelBase
         return 5.0;
     }
 
+    private double GetExportScale(int elementCount)
+    {
+        var settings = _settingsService.Settings;
+        if (settings.UseFixedExportScale)
+        {
+            return Math.Clamp(settings.FixedExportScale, AppSettings.MinExportScale, AppSettings.MaxExportScale);
+        }
+
+        return CalculateScale(elementCount);
+    }
+
     private void ScheduleBackgroundImageGeneration(TabItem tab)
     {
         if (!ReferenceEquals(tab, CurrentTab))
@@ -724,7 +760,7 @@ public partial class MainViewModel : ViewModelBase
         var contentSnapshot = tab.Content;
 
         var elementCount = CountDiagramElements(contentSnapshot);
-        var scale = CalculateScale(elementCount);
+        var scale = GetExportScale(elementCount);
 
         var result = await _mermaidService.RenderAndValidateAsync(contentSnapshot, scale);
 
@@ -734,6 +770,7 @@ public partial class MainViewModel : ViewModelBase
         if (ReferenceEquals(tab, CurrentTab) && tab.Content == contentSnapshot)
         {
             tab.CachedPngBytes = result.ImageData;
+            tab.CachedPngScale = scale;
         }
     }
 

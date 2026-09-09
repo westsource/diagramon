@@ -39,6 +39,7 @@ public class Strings
     public string MenuSaveAs => Get("MenuSaveAs");
     public string MenuCloseTab => Get("MenuCloseTab");
     public string MenuAISettings => Get("MenuAISettings");
+    public string MenuImageScaleSettings => Get("MenuImageScaleSettings");
     public string MenuExit => Get("MenuExit");
     public string MenuEdit => Get("MenuEdit");
     public string MenuUndo => Get("MenuUndo");
@@ -107,6 +108,12 @@ public class Strings
     public string AIEditPanelTitle => Get("AIEditPanelTitle");
     public string AIEndpoint => Get("AIEndpoint");
     public string AIDeploymentName => Get("AIDeploymentName");
+
+    public string ImageScaleTitle => Get("ImageScaleTitle");
+    public string ImageScaleDescription => Get("ImageScaleDescription");
+    public string ImageScaleAutoMode => Get("ImageScaleAutoMode");
+    public string ImageScaleFixedMode => Get("ImageScaleFixedMode");
+    public string OKButton => Get("OKButton");
 
     public string LanguageMenu => Get("LanguageMenu");
 

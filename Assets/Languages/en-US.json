@@ -37,6 +37,7 @@
   "MenuSaveAs": "Save _As...",
   "MenuCloseTab": "Close Current _Tab",
   "MenuAISettings": "AI _Settings...",
+  "MenuImageScaleSettings": "Image Scale _Settings...",
   "MenuExit": "E_xit",
   "MenuEdit": "_Edit",
   "MenuUndo": "_Undo",
@@ -107,6 +108,12 @@
   "AIEndpoint": "Endpoint",
   "AIDeploymentName": "Deployment Name",
   "LanguageMenu": "Language",
+
+  "ImageScaleTitle": "Image Scale Settings",
+  "ImageScaleDescription": "Set the image scale used when saving PNG or copying to clipboard.",
+  "ImageScaleAutoMode": "Auto (recommended): 1.5x-5.0x by diagram complexity",
+  "ImageScaleFixedMode": "Fixed scale",
+  "OKButton": "OK",
 
   "CheckUpdate": "Check for Updates",
   "CheckingUpdate": "Checking for updates...",

@@ -67,6 +67,10 @@ public partial class TabItem : ObservableObject
     [ObservableProperty]
     private byte[]? _cachedPngBytes;
 
+    /// <summary>生成 CachedPngBytes 时使用的导出倍率;-1 表示无有效缓存。</summary>
+    [ObservableProperty]
+    private double _cachedPngScale = -1;
+
     public string Title => IsModified ? $"{Header} *" : Header;
 
     public event EventHandler? ContentChanged;

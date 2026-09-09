@@ -46,6 +46,7 @@
                 <Separator/>
                 <MenuItem Header="{Binding MenuSettings}">
                     <MenuItem Header="{Binding MenuAISettings}" Command="{Binding OpenAISettingsCommand}"/>
+                    <MenuItem Header="{Binding MenuImageScaleSettings}" Command="{Binding OpenImageScaleSettingsCommand}"/>
                     <MenuItem Header="{Binding LanguageMenu}" ItemsSource="{Binding AvailableLanguages}">
                         <MenuItem.ItemTemplate>
                             <DataTemplate>

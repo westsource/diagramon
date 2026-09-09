@@ -37,6 +37,7 @@
   "MenuSaveAs": "另存为(_A)...",
   "MenuCloseTab": "关闭当前标签(_W)",
   "MenuAISettings": "AI 设置(_I)...",
+  "MenuImageScaleSettings": "图片倍率设置(_P)...",
   "MenuExit": "退出(_X)",
   "MenuEdit": "编辑(_E)",
   "MenuUndo": "撤销(_U)",
@@ -107,6 +108,12 @@
   "AIEndpoint": "Endpoint",
   "AIDeploymentName": "Deployment Name",
   "LanguageMenu": "语言",
+
+  "ImageScaleTitle": "图片倍率设置",
+  "ImageScaleDescription": "设置保存 PNG 或复制到剪贴板时使用的图片倍率。",
+  "ImageScaleAutoMode": "自动(推荐): 按图表复杂度在 1.5x ~ 5.0x 间调整",
+  "ImageScaleFixedMode": "固定倍率",
+  "OKButton": "确定",
 
   "CheckUpdate": "检查更新",
   "CheckingUpdate": "正在检查更新...",

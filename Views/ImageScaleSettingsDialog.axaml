@@ -1,0 +1,41 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:Mermaider.ViewModels"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        mc:Ignorable="d" d:DesignWidth="480" d:DesignHeight="240"
+        x:Class="Mermaider.Views.ImageScaleSettingsDialog"
+        x:DataType="vm:ImageScaleSettingsViewModel"
+        Title="{Binding Title}"
+        Width="480" Height="240"
+        CanResize="False"
+        WindowStartupLocation="CenterOwner">
+
+    <Design.DataContext>
+        <vm:ImageScaleSettingsViewModel/>
+    </Design.DataContext>
+
+    <Grid RowDefinitions="*,Auto" Margin="20">
+        <StackPanel Grid.Row="0" Spacing="14">
+            <TextBlock Text="{Binding Description}" TextWrapping="Wrap" FontSize="13" Foreground="#666666"/>
+
+            <RadioButton GroupName="ScaleMode" Content="{Binding AutoModeText}" IsChecked="{Binding UseAutoScale}"/>
+
+            <StackPanel Orientation="Horizontal" Spacing="10" Margin="24,0,0,0">
+                <RadioButton GroupName="ScaleMode" Content="{Binding FixedModeText}" IsChecked="{Binding UseFixedScale}" VerticalAlignment="Center"/>
+                <NumericUpDown Value="{Binding FixedScale}" Minimum="1.5" Maximum="5" Increment="0.5"
+                               FormatString="0.0" Width="110" IsEnabled="{Binding FixedScaleEnabled}"/>
+                <TextBlock Text="x" FontSize="14" VerticalAlignment="Center"/>
+            </StackPanel>
+        </StackPanel>
+
+        <StackPanel Grid.Row="1" Orientation="Horizontal" HorizontalAlignment="Right" Spacing="8">
+            <Button Content="{Binding CancelButton}" Width="80"
+                    HorizontalContentAlignment="Center" VerticalContentAlignment="Center"
+                    Command="{Binding CancelCommand}"/>
+            <Button Content="{Binding OKButton}" Width="80" Background="#3B82F6" Foreground="White"
+                    HorizontalContentAlignment="Center" VerticalContentAlignment="Center"
+                    Command="{Binding OKCommand}"/>
+        </StackPanel>
+    </Grid>
+</Window>
