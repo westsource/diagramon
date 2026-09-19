@@ -8,7 +8,7 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 
-namespace Mermaider.Services;
+namespace Diagramon.Services;
 
 public class MermaidService
 {

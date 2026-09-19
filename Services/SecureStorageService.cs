@@ -5,12 +5,12 @@ using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
 
-namespace Mermaider.Services;
+namespace Diagramon.Services;
 
 public static class SecureStorageService
 {
-    private static readonly byte[] Key = SHA256.HashData(Encoding.UTF8.GetBytes("Mermaider2024SecureStorageKey"));
-    private static readonly byte[] IV = SHA256.HashData(Encoding.UTF8.GetBytes("Mermaider2024SecureStorageIV")).Take(16).ToArray();
+    private static readonly byte[] Key = SHA256.HashData(Encoding.UTF8.GetBytes("Diagramon2024SecureStorageKey"));
+    private static readonly byte[] IV = SHA256.HashData(Encoding.UTF8.GetBytes("Diagramon2024SecureStorageIV")).Take(16).ToArray();
 
     public static string? Protect(string? plainText)
     {

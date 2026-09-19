@@ -3,7 +3,7 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using Avalonia.Media.Imaging;
 using AvaloniaEdit.Document;
 
-namespace Mermaider.Models;
+namespace Diagramon.Models;
 
 public partial class TabItem : ObservableObject
 {

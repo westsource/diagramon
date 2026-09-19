@@ -6,12 +6,12 @@ using Avalonia.Data.Converters;
 using Avalonia.Platform.Storage;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
-using Mermaider.Models;
-using Mermaider.Services;
-using Mermaider.Services.Localization;
-using Mermaider.Views;
+using Diagramon.Models;
+using Diagramon.Services;
+using Diagramon.Services.Localization;
+using Diagramon.Views;
 
-namespace Mermaider.ViewModels;
+namespace Diagramon.ViewModels;
 
 public partial class AISettingsViewModel : ViewModelBase
 {

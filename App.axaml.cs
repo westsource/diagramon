@@ -7,12 +7,12 @@ using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Markup.Xaml;
 using Avalonia.Threading;
 using AvaloniaWebView;
-using Mermaider.Services;
-using Mermaider.Services.Localization;
-using Mermaider.ViewModels;
-using Mermaider.Views;
+using Diagramon.Services;
+using Diagramon.Services.Localization;
+using Diagramon.ViewModels;
+using Diagramon.Views;
 
-namespace Mermaider;
+namespace Diagramon;
 
 public class App : Application
 {

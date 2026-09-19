@@ -7,10 +7,10 @@ using Avalonia.Controls.Primitives;
 using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Platform.Storage;
-using Mermaider.Services;
-using Mermaider.Services.Localization;
+using Diagramon.Services;
+using Diagramon.Services.Localization;
 
-namespace Mermaider.Views;
+namespace Diagramon.Views;
 
 public sealed class UpdateDialog : Window
 {
@@ -460,7 +460,7 @@ public sealed class UpdateDialog : Window
                 {
                     new FilePickerFileType("ZIP Archive") { Patterns = new[] { "*.zip" } }
                 },
-                SuggestedFileName = _zipFileName ?? "Mermaider-update.zip"
+                SuggestedFileName = _zipFileName ?? "Diagramon-update.zip"
             });
 
             if (file == null) return;

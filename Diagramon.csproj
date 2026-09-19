@@ -5,7 +5,7 @@
     <Nullable>enable</Nullable>
     <BuiltInComInteropSupport>true</BuiltInComInteropSupport>
     <ApplicationManifest>app.manifest</ApplicationManifest>
-    <ApplicationIcon>Assets\mermaider32.ico</ApplicationIcon>
+    <ApplicationIcon>Assets\diagramon32.ico</ApplicationIcon>
     <AvaloniaUseCompiledBindingsByDefault>true</AvaloniaUseCompiledBindingsByDefault>
     <!-- <PublishTrimmed>true</PublishTrimmed> -->
     <Version>2.0.260909.0</Version>

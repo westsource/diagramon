@@ -5,10 +5,10 @@ using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Media;
 using Avalonia.Data.Converters;
-using Mermaider.Models;
-using Mermaider.ViewModels;
+using Diagramon.Models;
+using Diagramon.ViewModels;
 
-namespace Mermaider.Views;
+namespace Diagramon.Views;
 
 public partial class AIPanel : UserControl
 {

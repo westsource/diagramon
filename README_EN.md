@@ -1,4 +1,4 @@
-﻿# Mermaider - Mermaid Diagram Editor
+﻿# Diagramon - Mermaid Diagram Editor
 
 A local Mermaid diagram editor built with C# Avalonia. Features code editing with syntax highlighting, real-time preview (pan/zoom/fit-to-viewport), syntax validation, high-resolution PNG export and clipboard copy, and an AI assistant for generating diagrams from natural language. **All rendering is done locally — no data uploaded.**
 
@@ -6,9 +6,9 @@ Version **v2.0.260513.0**
 
 ## Screenshots
 
-![Main Interface](screenshots/Mermaider_NELcF3ITQN.png)
+![Main Interface](screenshots/Diagramon_NELcF3ITQN.png)
 
-![AI Assistant](screenshots/Mermaider_fxJXInfYWk.png)
+![AI Assistant](screenshots/Diagramon_fxJXInfYWk.png)
 
 ## Features
 
@@ -19,7 +19,7 @@ Version **v2.0.260513.0**
 - **Debounced Rendering** - Auto-renders after 350ms of inactivity to avoid excessive refreshes
 - **Context Menu** - Right-click context menu: Undo, Redo, Cut, Copy, Paste, Select All
 - **Close Tab Confirmation** - Save / Don't Save / Cancel dialog when closing unsaved tabs; prompted on app exit for all modified tabs
-- **Crash Protection** - Unhandled exceptions are captured to `%LOCALAPPDATA%/Mermaider/crash.log`
+- **Crash Protection** - Unhandled exceptions are captured to `%LOCALAPPDATA%/Diagramon/crash.log`
 
 ### Real-time Preview
 - **JavaScript Injection** - Initial load via WebView file navigation; subsequent updates use CoreWebView2.ExecuteScriptAsync for zero-latency script injection
@@ -39,7 +39,7 @@ Version **v2.0.260513.0**
 
 ### File Operations
 - Create / Open / Save Mermaid files (`.mmd` / `.mermaid`)
-- Command-line argument support (`Mermaider.exe example.mmd`)
+- Command-line argument support (`Diagramon.exe example.mmd`)
 - Recent files history (up to 10 files) with **history dialog** (File → Recent Files → More...) supporting search filtering and double-click to open
 - Save confirmation dialog with Save / Don't Save / Cancel
 - Unsaved change detection on application exit, prompting for each modified file
@@ -67,8 +67,8 @@ Version **v2.0.260513.0**
   - API Key (AES encrypted), Base URL (auto-cleaned of trailing paths like `/chat/completions`)
   - Model ID, Max Tokens (default 4096, max 2,000,000), Temperature (default 0.7)
   - Azure OpenAI: Endpoint, Deployment Name
-- **Conversation Storage Path** - Configurable directory for AI conversation history (default: `%APPDATA%/Mermaider/Conversations`)
-- **Auto-save Layout** - Editor width, preview zoom, AI panel expansion state and height auto-saved to `%APPDATA%/Mermaider/settings.json`
+- **Conversation Storage Path** - Configurable directory for AI conversation history (default: `%APPDATA%/Diagramon/Conversations`)
+- **Auto-save Layout** - Editor width, preview zoom, AI panel expansion state and height auto-saved to `%APPDATA%/Diagramon/settings.json`
 
 ### Updates
 - **Auto Check** - Checks for updates on startup (24-hour cooldown, configurable); manifest URL is customizable
@@ -155,7 +155,7 @@ dotnet publish -c Release -r win-x64 --self-contained true -p:PublishSingleFile=
 
 ### Opening Files
 - Menu: File → Open (Ctrl+O)
-- Command line: `Mermaider.exe example.mmd`
+- Command line: `Diagramon.exe example.mmd`
 - Recent files: File → Recent Files → **More...** button for searchable history dialog
 - Supports `.mmd` and `.mermaid` extensions
 

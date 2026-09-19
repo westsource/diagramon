@@ -6,9 +6,9 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Threading.Tasks;
-using Mermaider.Models;
+using Diagramon.Models;
 
-namespace Mermaider.Services.AIService;
+namespace Diagramon.Services.AIService;
 
 public class OpenAIService : IAIService
 {

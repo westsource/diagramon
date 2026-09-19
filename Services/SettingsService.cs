@@ -3,9 +3,9 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
-using Mermaider.Models;
+using Diagramon.Models;
 
-namespace Mermaider.Services;
+namespace Diagramon.Services;
 
 public class AppSettings
 {
@@ -47,19 +47,19 @@ public class SettingsService
 
     private static readonly string SettingsPath = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-        "Mermaider",
+        "Diagramon",
         "settings.json"
     );
 
     private static readonly string RecentHistoryPath = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-        "Mermaider",
+        "Diagramon",
         "recent-history.json"
     );
 
     private static readonly string SecureConfigPath = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-        "Mermaider",
+        "Diagramon",
         "secure.config"
     );
 

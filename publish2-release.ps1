@@ -3,7 +3,7 @@
     [string]$GitHubToken,
     [string]$GiteeToken,
     [string]$Owner = "westsource",
-    [string]$Repo = "mermaider",
+    [string]$Repo = "diagramon",
     [switch]$Draft,
     [switch]$PreRelease,
     [switch]$SkipGitee,
@@ -26,7 +26,7 @@ if ($Help) {
   -GitHubToken    GitHub 个人访问令牌 (或设置环境变量 GITHUB_TOKEN)
   -GiteeToken     Gitee 私人令牌 (或设置环境变量 GITEE_TOKEN)
   -Owner          用户名 (默认: westsource)
-  -Repo           仓库名 (默认: mermaider)
+  -Repo           仓库名 (默认: diagramon)
   -Draft          创建 GitHub Release 为草稿
   -PreRelease     标记 GitHub Release 为预发布版本
   -SkipGitee      跳过 Gitee Release 创建
@@ -47,7 +47,7 @@ if ($Help) {
 
 # ========== 初始化路径 ==========
 $ProjectPath = $PSScriptRoot
-$CsprojPath = Join-Path $ProjectPath "Mermaider.csproj"
+$CsprojPath = Join-Path $ProjectPath "Diagramon.csproj"
 $DistPath = Join-Path $ProjectPath "dist"
 $ManifestPath = Join-Path $ProjectPath "update-manifest.json"
 
@@ -99,13 +99,13 @@ $ZipFileName = $ZipFile.Name
 $ZipFileSize = $ZipFile.Length
 
 Write-Host "============================================" -ForegroundColor Cyan
-Write-Host "  发布 Mermaider v$Version" -ForegroundColor Cyan
+Write-Host "  发布 Diagramon v$Version" -ForegroundColor Cyan
 Write-Host "  ZIP: $ZipFileName ($([math]::Round($ZipFileSize/1MB,2)) MB)" -ForegroundColor Cyan
 Write-Host "============================================" -ForegroundColor Cyan
 
 # ========== 构建发布说明 ==========
 $TagName = "v$Version"
-$ReleaseName = "Mermaider v$Version"
+$ReleaseName = "Diagramon v$Version"
 
 # 从 git log 获取更新日志（基于上一个 tag 或最近 10 条提交）
 $PreviousTag = git tag --list 'v*' --sort=-version:refname | Select-Object -First 1
@@ -123,8 +123,8 @@ $ReleaseNotesBody = @"
 ### 更新内容
 $($GitLog -join "`n")
 
-### 关于 Mermaider
-Mermaider 是一款本地 Mermaid 图表编辑器，支持实时预览、语法高亮、AI 辅助编写、多标签页编辑与高质量图片导出。
+### 关于 Diagramon
+Diagramon 是一款本地 Mermaid 图表编辑器，支持实时预览、语法高亮、AI 辅助编写、多标签页编辑与高质量图片导出。
 
 ### 系统要求
 - Windows 10/11 64位
@@ -247,8 +247,8 @@ $($GitLog -join "`n")
 ### 下载地址
 ⬇️ **[$ZipFileName]($DownloadUrl)**
 
-### 关于 Mermaider
-Mermaider 是一款本地 Mermaid 图表编辑器，支持实时预览、语法高亮、AI 辅助编写、多标签页编辑与高质量图片导出。
+### 关于 Diagramon
+Diagramon 是一款本地 Mermaid 图表编辑器，支持实时预览、语法高亮、AI 辅助编写、多标签页编辑与高质量图片导出。
 
 ### 系统要求
 - Windows 10/11 64位

@@ -8,10 +8,10 @@ using Avalonia.Controls.Templates;
 using Avalonia.Input;
 using Avalonia.Layout;
 using Avalonia.Media;
-using Mermaider.Models;
-using Mermaider.Services.Localization;
+using Diagramon.Models;
+using Diagramon.Services.Localization;
 
-namespace Mermaider.Views;
+namespace Diagramon.Views;
 
 public sealed class RecentHistoryDialog : Window
 {

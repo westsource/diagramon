@@ -1,9 +1,9 @@
 using System;
 using System.IO;
 using CommunityToolkit.Mvvm.ComponentModel;
-using Mermaider.Services.Localization;
+using Diagramon.Services.Localization;
 
-namespace Mermaider.Models;
+namespace Diagramon.Models;
 
 public partial class RecentFileItem : ObservableObject
 {

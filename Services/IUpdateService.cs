@@ -1,9 +1,9 @@
 using System;
 using System.Threading;
 using System.Threading.Tasks;
-using Mermaider.Models;
+using Diagramon.Models;
 
-namespace Mermaider.Services;
+namespace Diagramon.Services;
 
 public interface IUpdateService
 {

@@ -5,7 +5,7 @@ using System.Text.Json;
 using Avalonia;
 using Avalonia.Platform;
 
-namespace Mermaider.Services.Localization;
+namespace Diagramon.Services.Localization;
 
 public class LanguageInfo
 {
@@ -110,7 +110,7 @@ public sealed class LocalizationService
 
         try
         {
-            var assets = AssetLoader.GetAssets(new Uri("avares://Mermaider/Assets/Languages/"), null);
+            var assets = AssetLoader.GetAssets(new Uri("avares://Diagramon/Assets/Languages/"), null);
             
             foreach (var asset in assets)
             {
@@ -168,7 +168,7 @@ public sealed class LocalizationService
         
         try
         {
-            var uri = new Uri($"avares://Mermaider/Assets/Languages/{_currentLanguageCode}.json");
+            var uri = new Uri($"avares://Diagramon/Assets/Languages/{_currentLanguageCode}.json");
             using var stream = AssetLoader.Open(uri);
             using var reader = new StreamReader(stream);
             var json = reader.ReadToEnd();
@@ -192,7 +192,7 @@ public sealed class LocalizationService
 
     private void LoadFallbackStrings()
     {
-        _fallbackStrings["AppTitle"] = "Mermaider - Mermaid Diagram Editor";
+        _fallbackStrings["AppTitle"] = "Diagramon - Mermaid Diagram Editor";
         _fallbackStrings["Ready"] = "Ready";
         _fallbackStrings["Rendering"] = "Rendering preview...";
         _fallbackStrings["PreviewUpdated"] = "Preview updated";

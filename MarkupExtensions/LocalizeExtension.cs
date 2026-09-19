@@ -2,9 +2,9 @@ using System;
 using Avalonia.Data;
 using Avalonia.Markup.Xaml;
 using Avalonia.Markup.Xaml.MarkupExtensions;
-using Mermaider.Services.Localization;
+using Diagramon.Services.Localization;
 
-namespace Mermaider.MarkupExtensions;
+namespace Diagramon.MarkupExtensions;
 
 public class LocalizeExtension : MarkupExtension
 {

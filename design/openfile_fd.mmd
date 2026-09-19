@@ -129,8 +129,8 @@ flowchart TD
         CheckAttached -->|是| EnsureFiles["EnsurePreviewFilesReady()"]
 
         EnsureFiles --> CheckScriptExists{"_previewHtmlPath 已存在?"}
-        CheckScriptExists -->|否| CreateDir["创建临时目录<br/>%LOCALAPPDATA%/Mermaider/webpreview/"]
-        CreateDir --> CopyScript["从 avares://Mermaider/Assets/mermaid.min.js<br/>复制到临时目录"]
+        CheckScriptExists -->|否| CreateDir["创建临时目录<br/>%LOCALAPPDATA%/Diagramon/webpreview/"]
+        CreateDir --> CopyScript["从 avares://Diagramon/Assets/mermaid.min.js<br/>复制到临时目录"]
         CopyScript --> WritePreviewFile["File.WriteAllText(_previewHtmlPath, html, UTF-8)"]
         CheckScriptExists -->|是| WritePreviewFile
 

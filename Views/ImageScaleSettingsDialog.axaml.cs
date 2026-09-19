@@ -1,7 +1,7 @@
 using Avalonia.Controls;
-using Mermaider.ViewModels;
+using Diagramon.ViewModels;
 
-namespace Mermaider.Views;
+namespace Diagramon.Views;
 
 public partial class ImageScaleSettingsDialog : Window
 {

@@ -1,6 +1,6 @@
 using CommunityToolkit.Mvvm.ComponentModel;
 
-namespace Mermaider.ViewModels;
+namespace Diagramon.ViewModels;
 
 public class ViewModelBase : ObservableObject
 {

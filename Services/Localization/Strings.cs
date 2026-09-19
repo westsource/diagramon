@@ -1,4 +1,4 @@
-namespace Mermaider.Services.Localization;
+namespace Diagramon.Services.Localization;
 
 public class Strings
 {

@@ -12,16 +12,16 @@ $null = chcp 65001
 $OutputEncoding = [System.Text.Encoding]::UTF8
 
 $ProjectPath = $PSScriptRoot
-$CsprojPath = Join-Path $ProjectPath "Mermaider.csproj"
+$CsprojPath = Join-Path $ProjectPath "Diagramon.csproj"
 $PublishPath = Join-Path $ProjectPath "bin\Release\net10.0\$Runtime\publish"
 $DistPath = Join-Path $ProjectPath "dist"
 $BuildCountFile = Join-Path $ProjectPath ".build-count"
 
 if ($English) {
-    Write-Host "Building Mermaider..." -ForegroundColor Cyan
+    Write-Host "Building Diagramon..." -ForegroundColor Cyan
     Write-Host "Target platform: $Runtime" -ForegroundColor Gray
 } else {
-    Write-Host "正在打包 Mermaider..." -ForegroundColor Cyan
+    Write-Host "正在打包 Diagramon..." -ForegroundColor Cyan
     Write-Host "目标平台: $Runtime" -ForegroundColor Gray
 }
 
@@ -131,7 +131,7 @@ for (const m of ['cjs', 'esm']) {
   }
 }
 '@
-    $RevisionFile = Join-Path $env:TEMP "mermaider-revision.js"
+    $RevisionFile = Join-Path $env:TEMP "diagramon-revision.js"
     [System.IO.File]::WriteAllText($RevisionFile, $RevisionScript)
     Push-Location $ToolsSourcePath
     $BuildId = & $NodeExe $RevisionFile
@@ -162,7 +162,7 @@ try {
   process.stdout.write(path.join(cacheDir, 'chrome-headless-shell', platform + '-' + buildId, 'chrome-headless-shell-' + platform, 'chrome-headless-shell.exe'));
 }
 '@
-        $ComputeFile = Join-Path $env:TEMP "mermaider-compute.js"
+        $ComputeFile = Join-Path $env:TEMP "diagramon-compute.js"
         [System.IO.File]::WriteAllText($ComputeFile, $ComputeScript)
         $env:NODE_PATH = Join-Path $ToolsSourcePath "node_modules"
         $ShellExe = & $NodeExe $ComputeFile $BuildId $Platform $PuppeteerCacheDir
@@ -319,7 +319,7 @@ if (Test-Path $DistPath) {
 }
 New-Item -ItemType Directory -Path $DistPath -Force | Out-Null
 
-$ZipFileName = "Mermaider-$Version-$Runtime.zip"
+$ZipFileName = "Diagramon-$Version-$Runtime.zip"
 $ZipFilePath = Join-Path $DistPath $ZipFileName
 
 if ($English) {
@@ -378,7 +378,7 @@ if (Test-Path $ZipFilePath) {
         
         if ($Run) {
             Write-Host "`nLaunching application..." -ForegroundColor Cyan
-            Start-Process (Join-Path $PublishPath "Mermaider.exe")
+            Start-Process (Join-Path $PublishPath "Diagramon.exe")
         }
     } else {
         Write-Host "`n打包成功!" -ForegroundColor Green
@@ -390,7 +390,7 @@ if (Test-Path $ZipFilePath) {
         
         if ($Run) {
             Write-Host "`n启动程序..." -ForegroundColor Cyan
-            Start-Process (Join-Path $PublishPath "Mermaider.exe")
+            Start-Process (Join-Path $PublishPath "Diagramon.exe")
         }
     }
 } else {

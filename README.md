@@ -1,4 +1,4 @@
-﻿# Mermaider - Mermaid 图表编辑器
+﻿# Diagramon - Mermaid 图表编辑器
 
 一个基于 C# Avalonia 构建的本地 Mermaid 图表编辑器。支持代码编辑与语法高亮、实时预览（拖拽平移/滚轮缩放/双击适应）、语法检测、高清 PNG 导出与剪贴板复制，集成 AI 助手通过自然语言生成图表。**数据本地渲染，不上传**。
 
@@ -6,9 +6,9 @@
 
 ## 界面截图
 
-![主界面](screenshots/Mermaider_NELcF3ITQN.png)
+![主界面](screenshots/Diagramon_NELcF3ITQN.png)
 
-![AI助手](screenshots/Mermaider_fxJXInfYWk.png)
+![AI助手](screenshots/Diagramon_fxJXInfYWk.png)
 
 ## 功能特性
 
@@ -19,7 +19,7 @@
 - **智能防抖** - 输入后自动延迟 350ms 渲染，避免频繁刷新
 - **右键上下文菜单** - 编辑器右键菜单含撤销/重做/剪切/复制/粘贴/全选
 - **标签关闭确认** - 关闭未保存标签时弹出保存/不保存/取消对话框；退出程序时逐个确认所有未保存修改
-- **崩溃保护** - 自动捕获未处理异常，写入 `%LOCALAPPDATA%/Mermaider/crash.log`
+- **崩溃保护** - 自动捕获未处理异常，写入 `%LOCALAPPDATA%/Diagramon/crash.log`
 
 ### 实时预览
 - **JavaScript 注入更新** - 首次通过 WebView 加载 HTML，后续使用 CoreWebView2.ExecuteScriptAsync 注入 JS 直接更新，无文件导航延迟
@@ -40,7 +40,7 @@
 
 ### 文件操作
 - 新建 / 打开 / 保存 Mermaid 文件（`.mmd` / `.mermaid`）
-- 支持命令行参数打开文件（`Mermaider.exe example.mmd`）
+- 支持命令行参数打开文件（`Diagramon.exe example.mmd`）
 - 最近文件记录（最多 10 个），支持**最近历史对话框**（File → Recent Files → More...），含搜索过滤和双击打开
 - 关闭未保存标签时弹出保存确认（保存/不保存/取消）
 - 退出程序时检测所有未保存修改，逐个提示确认
@@ -68,8 +68,8 @@
   - API Key（AES 加密存储）、Base URL（自动清理末尾路径，如 `/chat/completions`）
   - Model ID、Max Tokens（默认 4096，最高 2000000）、Temperature（默认 0.7）
   - Azure OpenAI 专属：Endpoint、Deployment Name
-- **对话历史存储路径** - 可配置 AI 对话历史的磁盘存储位置（默认 `%APPDATA%/Mermaider/Conversations`）
-- **自动保存布局** - 编辑器宽度、预览缩放、AI 面板展开状态与高度等自动保存至 `%APPDATA%/Mermaider/settings.json`
+- **对话历史存储路径** - 可配置 AI 对话历史的磁盘存储位置（默认 `%APPDATA%/Diagramon/Conversations`）
+- **自动保存布局** - 编辑器宽度、预览缩放、AI 面板展开状态与高度等自动保存至 `%APPDATA%/Diagramon/settings.json`
 
 ### 更新
 - **启动时自动检查更新** - 程序启动时自动检测新版本（间隔 24 小时，可在设置中关闭），更新清单 URL 可配置
@@ -156,7 +156,7 @@ dotnet publish -c Release -r win-x64 --self-contained true -p:PublishSingleFile=
 
 ### 打开文件
 - 菜单栏：文件 → 打开（Ctrl+O）
-- 命令行参数：`Mermaider.exe example.mmd`
+- 命令行参数：`Diagramon.exe example.mmd`
 - 最近文件：文件 → 最近文件，底部 **More...** 按钮打开最近历史搜索框，支持搜索过滤与双击打开
 - 支持 `.mmd` 和 `.mermaid` 扩展名
 

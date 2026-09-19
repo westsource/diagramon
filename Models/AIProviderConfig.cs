@@ -1,4 +1,4 @@
-namespace Mermaider.Models;
+namespace Diagramon.Models;
 
 public enum AIProvider
 {

@@ -4,12 +4,12 @@ using System.Linq;
 using System.Threading.Tasks;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
-using Mermaider.Models;
-using Mermaider.Services;
-using Mermaider.Services.AIService;
-using Mermaider.Services.Localization;
+using Diagramon.Models;
+using Diagramon.Services;
+using Diagramon.Services.AIService;
+using Diagramon.Services.Localization;
 
-namespace Mermaider.ViewModels;
+namespace Diagramon.ViewModels;
 
 public partial class AIPanelViewModel : ViewModelBase
 {

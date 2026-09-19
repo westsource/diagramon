@@ -19,13 +19,13 @@ using Avalonia.Platform.Storage;
 using AvaloniaEdit.Highlighting;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
-using Mermaider.Models;
-using Mermaider.Services;
-using Mermaider.Services.Localization;
-using Mermaider.Views;
+using Diagramon.Models;
+using Diagramon.Services;
+using Diagramon.Services.Localization;
+using Diagramon.Views;
 using Window = Avalonia.Controls.Window;
 
-namespace Mermaider.ViewModels;
+namespace Diagramon.ViewModels;
 
 public partial class MainViewModel : ViewModelBase
 {
@@ -95,7 +95,7 @@ public partial class MainViewModel : ViewModelBase
         return "1.0.0.0";
     }
 
-    public string WindowTitle => $"Mermaider v{AppVersion} - {S.AppTitle.Split('-').Last().Trim()}";
+    public string WindowTitle => $"Diagramon v{AppVersion} - {S.AppTitle.Split('-').Last().Trim()}";
 
     public string MenuFile => S.MenuFile;
     public string MenuNew => S.MenuNew;
@@ -1287,7 +1287,7 @@ public partial class MainViewModel : ViewModelBase
     private void About()
     {
         var dialog = new AboutDialog(
-            "Mermaider",
+            "Diagramon",
             "本地 Mermaid 图表编辑器。支持代码编辑、语法高亮、实时预览、缩放拖拽、语法检测、图片导出；集成 AI 助手，可通过自然语言生成图表；支持多标签页多文件编辑；本地渲染，数据不上传。",
             "道荣（黄超）",
             AppVersion

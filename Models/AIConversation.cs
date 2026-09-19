@@ -1,7 +1,7 @@
 using System;
 using System.Collections.Generic;
 
-namespace Mermaider.Models;
+namespace Diagramon.Models;
 
 public class AIConversation
 {

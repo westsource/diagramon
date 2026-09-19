@@ -4,10 +4,10 @@ using System.Threading;
 using System.Threading.Tasks;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
-using Mermaider.Services;
-using Mermaider.Services.Localization;
+using Diagramon.Services;
+using Diagramon.Services.Localization;
 
-namespace Mermaider.ViewModels;
+namespace Diagramon.ViewModels;
 
 public partial class UpdateDialogViewModel : ObservableObject
 {
