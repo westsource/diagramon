@@ -1,11 +1,11 @@
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        xmlns:vm="using:Mermaider.ViewModels"
-        xmlns:models="using:Mermaider.Models"
+        xmlns:vm="using:Diagramon.ViewModels"
+        xmlns:models="using:Diagramon.Models"
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         mc:Ignorable="d" d:DesignWidth="600" d:DesignHeight="500"
-        x:Class="Mermaider.Views.AISettingsDialog"
+        x:Class="Diagramon.Views.AISettingsDialog"
         x:DataType="vm:AISettingsViewModel"
         Title="{Binding AISettingsTitle}"
         Width="600" Height="500"
@@ -123,7 +123,7 @@
                     <TextBlock Text="{Binding AIConversationStorage}" FontSize="14" FontWeight="SemiBold" Foreground="#333333"/>
                     <Grid ColumnDefinitions="*,Auto">
                         <TextBox Grid.Column="0" Text="{Binding ConversationStoragePath}"
-                                 Watermark="默认: %AppData%/Mermaider/Conversations"/>
+                                 Watermark="默认: %AppData%/Diagramon/Conversations"/>
                         <Button Grid.Column="1" Content="{Binding AIBrowse}" Width="60" Margin="8,0,0,0"
                                 HorizontalContentAlignment="Center" VerticalContentAlignment="Center"
                                 Command="{Binding BrowseStoragePathCommand}"/>

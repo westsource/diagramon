@@ -15,11 +15,11 @@ using Avalonia.Threading;
 using Avalonia.VisualTree;
 using AvaloniaEdit;
 using AvaloniaWebView;
-using Mermaider.Models;
-using Mermaider.ViewModels;
-using Mermaider.Views;
+using Diagramon.Models;
+using Diagramon.ViewModels;
+using Diagramon.Views;
 
-namespace Mermaider.Views;
+namespace Diagramon.Views;
 
 public partial class MainWindow : Window
 {
@@ -716,7 +716,7 @@ public partial class MainWindow : Window
     {
         var dir = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "Mermaider",
+            "Diagramon",
             "webpreview");
         if (!Directory.Exists(dir)) return;
         var cutoff = DateTime.Now.AddDays(-7);
@@ -740,14 +740,14 @@ public partial class MainWindow : Window
 
         _previewTempDir = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "Mermaider",
+            "Diagramon",
             "webpreview");
         Directory.CreateDirectory(_previewTempDir);
 
         var scriptPath = Path.Combine(_previewTempDir, "mermaid.min.js");
         if (!File.Exists(scriptPath))
         {
-            var scriptUri = new Uri("avares://Mermaider/Assets/mermaid.min.js");
+            var scriptUri = new Uri("avares://Diagramon/Assets/mermaid.min.js");
             using var scriptStream = AssetLoader.Open(scriptUri);
             using var fileStream = File.Create(scriptPath);
             scriptStream.CopyTo(fileStream);

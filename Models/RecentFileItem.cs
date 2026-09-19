@@ -1,18 +1,19 @@
 using System.IO;
 using CommunityToolkit.Mvvm.ComponentModel;
 
-namespace Mermaider.Models;
+namespace Diagramon.Models;
 
 public partial class RecentFileItem : ObservableObject
 {
-    [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(FileName))]
-    private string _filePath;
+    public IDocumentLocation Location { get; }
 
-    public string FileName => Path.GetFileName(FilePath);
+    public string FileName => Path.GetFileName(Location.DisplayPath);
 
-    public RecentFileItem(string filePath)
+    /// <summary>本地路径或云端文档名，用于菜单项的悬停提示。</summary>
+    public string DisplayPath => Location.DisplayPath;
+
+    public RecentFileItem(IDocumentLocation location)
     {
-        _filePath = filePath;
+        Location = location;
     }
 }

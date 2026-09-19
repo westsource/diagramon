@@ -3,7 +3,7 @@ using System.IO;
 using System.Threading.Tasks;
 using Avalonia.Platform.Storage;
 
-namespace Mermaider.Services;
+namespace Diagramon.Services;
 
 public class FileService
 {

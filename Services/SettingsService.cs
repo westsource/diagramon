@@ -3,16 +3,23 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
-using Mermaider.Models;
+using System.Text.Json.Serialization;
+using Diagramon.Models;
 
-namespace Mermaider.Services;
+namespace Diagramon.Services;
 
 public class AppSettings
 {
     public double EditorPreviewRatio { get; set; } = 0.5;
     public double PreviewZoom { get; set; } = 1.0;
     public string LastOpenDirectory { get; set; } = string.Empty;
-    public List<string> RecentFiles { get; set; } = new();
+
+    /// <summary>
+    /// 最近文件。以 <see cref="RecentEntry"/> 存储而非裸路径 —— 云端文档的身份是服务端 docId，
+    /// 无法用路径表达。旧格式（裸路径数组）由 <see cref="RecentEntryListConverter"/> 兼容读取。
+    /// </summary>
+    [JsonConverter(typeof(RecentEntryListConverter))]
+    public List<RecentEntry> RecentFiles { get; set; } = new();
 
     public List<AIModelConfig> ModelConfigs { get; set; } = new();
     public string? SelectedModelId { get; set; }
@@ -32,6 +39,15 @@ public class AppSettings
     public string? SkipVersion { get; set; }
     public string? LastUpdateCheckTime { get; set; }
     public string? UpdateManifestUrl { get; set; }
+
+    /// <summary>
+    /// 设备标识。注册 / 登录 / 刷新都要带，且必须<b>跨重启稳定</b> ——
+    /// 服务端把它与 refresh token 绑定，变了就会得到 401 device_mismatch。
+    /// </summary>
+    public string? DeviceId { get; set; }
+
+    /// <summary>云端服务地址（origin，不含 <c>/v1</c>）。默认指向本地开发服务。</summary>
+    public string ServiceBaseUrl { get; set; } = "http://127.0.0.1:8000";
 }
 
 public class SettingsService
@@ -40,13 +56,14 @@ public class SettingsService
 
     private static readonly string SettingsPath = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-        "Mermaider",
+        "Diagramon",
         "settings.json"
     );
 
-    private static readonly string SecureConfigPath = Path.Combine(
+    /// <summary>敏感值的独立存储文件（DPAPI 密文）。AuthService 也用它存 refresh token。</summary>
+    public static string SecureConfigPath { get; } = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-        "Mermaider",
+        "Diagramon",
         "secure.config"
     );
 
@@ -61,6 +78,22 @@ public class SettingsService
     {
         Settings.Language = languageCode;
         Save();
+    }
+
+    /// <summary>设备标识：首次调用时生成并持久化，之后跨重启返回同一个值。</summary>
+    /// <remarks>
+    /// 用 GUID 的 "N" 格式（32 个十六进制字符）：满足服务端 <c>device_id</c> 的 1–64 字符约束，
+    /// 且不含连字符，避免不同平台在格式化上的差异。
+    /// </remarks>
+    public string GetOrCreateDeviceId()
+    {
+        if (string.IsNullOrWhiteSpace(Settings.DeviceId))
+        {
+            Settings.DeviceId = Guid.NewGuid().ToString("N");
+            Save();
+        }
+
+        return Settings.DeviceId!;
     }
 
     public SettingsService()
@@ -253,8 +286,11 @@ public class SettingsService
     {
         if (string.IsNullOrEmpty(filePath) || !File.Exists(filePath)) return;
 
-        Settings.RecentFiles.Remove(filePath);
-        Settings.RecentFiles.Insert(0, filePath);
+        var location = new LocalDocumentLocation(filePath);
+
+        // 以 StableId 去重：同一文件的不同书写形式（大小写 / 相对路径）不会重复入列
+        Settings.RecentFiles.RemoveAll(entry => entry.StableId == location.StableId);
+        Settings.RecentFiles.Insert(0, new RecentEntry(location));
 
         if (Settings.RecentFiles.Count > MaxRecentFiles)
         {
@@ -266,18 +302,25 @@ public class SettingsService
 
     public void RemoveRecentFile(string filePath)
     {
-        if (Settings.RecentFiles.Remove(filePath))
+        var stableId = DocumentIdentity.Normalize(filePath) ?? filePath;
+
+        if (Settings.RecentFiles.RemoveAll(entry => entry.StableId == stableId) > 0)
         {
             Save();
         }
     }
 
+    /// <summary>剔除已不存在的本地文件；云端条目（Kind != "local"）不在此处校验。</summary>
     public void CleanInvalidRecentFiles()
     {
-        var validFiles = Settings.RecentFiles.Where(File.Exists).ToList();
-        if (validFiles.Count != Settings.RecentFiles.Count)
+        var countBefore = Settings.RecentFiles.Count;
+
+        Settings.RecentFiles = Settings.RecentFiles
+            .Where(entry => entry.Kind != "local" || File.Exists(entry.DisplayPath))
+            .ToList();
+
+        if (Settings.RecentFiles.Count != countBefore)
         {
-            Settings.RecentFiles = validFiles;
             Save();
         }
     }

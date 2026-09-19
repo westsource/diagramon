@@ -19,13 +19,14 @@ using Avalonia.Platform.Storage;
 using AvaloniaEdit.Highlighting;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
-using Mermaider.Models;
-using Mermaider.Services;
-using Mermaider.Services.Localization;
-using Mermaider.Views;
+using Diagramon.Models;
+using Diagramon.Services;
+using Diagramon.Services.Localization;
+using Diagramon.Services.Remote;
+using Diagramon.Views;
 using Window = Avalonia.Controls.Window;
 
-namespace Mermaider.ViewModels;
+namespace Diagramon.ViewModels;
 
 public partial class MainViewModel : ViewModelBase
 {
@@ -36,6 +37,8 @@ public partial class MainViewModel : ViewModelBase
     private readonly IStorageProvider _storageProvider;
     private readonly Window _ownerWindow;
     private readonly AIConversationService _conversationService;
+    private readonly AuthService _authService;
+    private readonly RemoteDocumentStore _documentStore;
     private Timer? _debounceTimer;
     private readonly object _timerLock = new();
     private readonly object _renderLock = new();
@@ -51,6 +54,15 @@ public partial class MainViewModel : ViewModelBase
     public static readonly IValueConverter TabFontWeightConverter = new FuncValueConverter<bool, FontWeight>(
         isSelected => isSelected ? FontWeight.Bold : FontWeight.Normal
     );
+
+    /// <summary>
+    /// 云端会话与账户操作。**未登录是默认态** ——
+    /// UI 按 <c>Auth.Session.IsCloudEntryVisible</c> 门控云端入口，而不是按网络可用性。
+    /// </summary>
+    public AuthService Auth => _authService;
+
+    /// <summary>云端文档存储。仅在 <c>Auth.Session.IsCloudEntryVisible</c> 为真时应被调用。</summary>
+    public RemoteDocumentStore Cloud => _documentStore;
 
     [ObservableProperty]
     private ObservableCollection<TabItem> _tabs = new();
@@ -95,7 +107,7 @@ public partial class MainViewModel : ViewModelBase
         return "1.0.0.0";
     }
 
-    public string WindowTitle => $"Mermaider v{AppVersion} - {S.AppTitle.Split('-').Last().Trim()}";
+    public string WindowTitle => $"Diagramon v{AppVersion} - {S.AppTitle.Split('-').Last().Trim()}";
 
     public string MenuFile => S.MenuFile;
     public string MenuNew => S.MenuNew;
@@ -122,6 +134,15 @@ public partial class MainViewModel : ViewModelBase
     public string CopyPreviewImage => S.CopyPreviewImage;
     public string NewTabTooltip => S.NewTabTooltip;
     public string LanguageMenu => S.LanguageMenu;
+
+    public string MenuAccount => S.MenuAccount;
+    public string MenuSignIn => S.MenuSignIn;
+    public string MenuSignOut => S.MenuSignOut;
+    public string CloudSaveToCloud => S.CloudSaveToCloud;
+    public string CloudDocuments => S.CloudDocuments;
+
+    /// <summary>已登录时在账户菜单里显示的当前账号。</summary>
+    public string AccountDisplayName => S.Format("AuthSignedInFormat", Auth.Session.DisplayName);
 
     public IReadOnlyDictionary<string, LanguageInfo> AvailableLanguages => LocalizationService.Instance.AvailableLanguages;
 
@@ -169,6 +190,12 @@ public partial class MainViewModel : ViewModelBase
         OnPropertyChanged(nameof(CopyPreviewImage));
         OnPropertyChanged(nameof(NewTabTooltip));
         OnPropertyChanged(nameof(LanguageMenu));
+        OnPropertyChanged(nameof(MenuAccount));
+        OnPropertyChanged(nameof(MenuSignIn));
+        OnPropertyChanged(nameof(MenuSignOut));
+        OnPropertyChanged(nameof(AccountDisplayName));
+        OnPropertyChanged(nameof(CloudSaveToCloud));
+        OnPropertyChanged(nameof(CloudDocuments));
         OnPropertyChanged(nameof(AvailableLanguages));
 
         AiAssistant?.RefreshLocalization();
@@ -265,7 +292,7 @@ public partial class MainViewModel : ViewModelBase
         OnPropertyChanged(nameof(ZoomText));
         OnPropertyChanged(nameof(CurrentTab));
 
-        AiAssistant?.SetCurrentFile(CurrentTab?.FilePath);
+        AiAssistant?.SetCurrentFile(CurrentTab?.LocalFilePath);
 
         if (CurrentTab != null)
         {
@@ -286,11 +313,13 @@ public partial class MainViewModel : ViewModelBase
         OnPropertyChanged(nameof(EditorPanelWidth));
     }
 
-    public MainViewModel(MermaidService mermaidService, FileService fileService, SettingsService settingsService, IUpdateService updateService, IStorageProvider storageProvider, Window ownerWindow)
+    public MainViewModel(MermaidService mermaidService, FileService fileService, SettingsService settingsService, AuthService authService, RemoteDocumentStore documentStore, IUpdateService updateService, IStorageProvider storageProvider, Window ownerWindow)
     {
         _mermaidService = mermaidService;
         _fileService = fileService;
         _settingsService = settingsService;
+        _authService = authService;
+        _documentStore = documentStore;
         _updateService = updateService;
         _storageProvider = storageProvider;
         _ownerWindow = ownerWindow;
@@ -303,9 +332,12 @@ public partial class MainViewModel : ViewModelBase
         RecentFiles.CollectionChanged += (_, _) => OnPropertyChanged(nameof(HasRecentFiles));
 
         _settingsService.CleanInvalidRecentFiles();
-        foreach (var file in settingsService.Settings.RecentFiles)
+        foreach (var entry in settingsService.Settings.RecentFiles)
         {
-            RecentFiles.Add(new RecentFileItem(file));
+            if (entry.ToLocation() is { } location)
+            {
+                RecentFiles.Add(new RecentFileItem(location));
+            }
         }
         OnPropertyChanged(nameof(HasRecentFiles));
 
@@ -314,6 +346,27 @@ public partial class MainViewModel : ViewModelBase
         AddNewTab();
 
         _ = CheckForUpdateOnStartupAsync();
+        _ = InitializeCloudAsync();
+    }
+
+    /// <summary>
+    /// 冷启动的云端初始化：先匿名取配置，再用已保存的 refresh token 尝试恢复会话。
+    /// </summary>
+    /// <remarks>
+    /// <b>完全在后台</b>：不等待鉴权结果、不阻塞 UI、不弹窗。
+    /// 未登录、离线、令牌失效都是正常结果，本地功能一概不受影响。
+    /// </remarks>
+    private async Task InitializeCloudAsync()
+    {
+        try
+        {
+            await _authService.GetConfigAsync();
+            await _authService.TryRestoreSessionAsync();
+        }
+        catch
+        {
+            // 网络不可达等：保持未登录态即可
+        }
     }
 
     private async Task CheckForUpdateOnStartupAsync()
@@ -695,7 +748,7 @@ public partial class MainViewModel : ViewModelBase
 
     private async Task<bool> SaveTabAsync(TabItem tab)
     {
-        if (string.IsNullOrEmpty(tab.FilePath))
+        if (string.IsNullOrEmpty(tab.LocalFilePath))
         {
             var filePath = await _fileService.SaveFileAsync(tab.Content, tab.Header);
             if (filePath == null)
@@ -703,11 +756,11 @@ public partial class MainViewModel : ViewModelBase
                 return false;
             }
 
-            tab.FilePath = filePath;
+            tab.Location = new LocalDocumentLocation(filePath);
         }
         else
         {
-            await _fileService.SaveFileToPathAsync(tab.Content, tab.FilePath);
+            await _fileService.SaveFileToPathAsync(tab.Content, tab.LocalFilePath);
         }
 
         tab.IsModified = false;
@@ -809,7 +862,7 @@ public partial class MainViewModel : ViewModelBase
             var tab = new TabItem
             {
                 Content = content,
-                FilePath = filePath
+                Location = string.IsNullOrEmpty(filePath) ? null : new LocalDocumentLocation(filePath)
             };
             tab.ContentChanged += OnTabContentChanged;
             tab.UpdateHeader();
@@ -837,7 +890,7 @@ public partial class MainViewModel : ViewModelBase
             var tab = new TabItem
             {
                 Content = content,
-                FilePath = filePath
+                Location = string.IsNullOrEmpty(filePath) ? null : new LocalDocumentLocation(filePath)
             };
             tab.ContentChanged += OnTabContentChanged;
             tab.UpdateHeader();
@@ -853,7 +906,14 @@ public partial class MainViewModel : ViewModelBase
     {
         if (item == null) return;
 
-        var filePath = item.FilePath;
+        // 云端条目尚未落地（阶段 A4）。当前 RecentEntry.ToLocation() 只产出本地位置，
+        // 因此这一分支暂时不可达；保留是为了 A4 接入时不遗漏。
+        if (item.Location is not LocalDocumentLocation local)
+        {
+            return;
+        }
+
+        var filePath = local.FilePath;
         if (string.IsNullOrEmpty(filePath) || !File.Exists(filePath))
         {
             RemoveFromRecentFiles(filePath);
@@ -861,7 +921,7 @@ public partial class MainViewModel : ViewModelBase
             return;
         }
 
-        var existingTab = Tabs.FirstOrDefault(t => t.FilePath == filePath);
+        var existingTab = Tabs.FirstOrDefault(t => t.Location?.StableId == local.StableId);
         if (existingTab != null)
         {
             SelectedTabIndex = Tabs.IndexOf(existingTab);
@@ -873,14 +933,15 @@ public partial class MainViewModel : ViewModelBase
 
     private void AddToRecentFiles(string filePath)
     {
-        var existing = RecentFiles.FirstOrDefault(r => r.FilePath == filePath);
+        var location = new LocalDocumentLocation(filePath);
+
+        var existing = RecentFiles.FirstOrDefault(r => r.Location.StableId == location.StableId);
         if (existing != null)
         {
             RecentFiles.Remove(existing);
         }
 
-        var item = new RecentFileItem(filePath);
-        RecentFiles.Insert(0, item);
+        RecentFiles.Insert(0, new RecentFileItem(location));
 
         while (RecentFiles.Count > SettingsService.MaxRecentFiles)
         {
@@ -895,7 +956,9 @@ public partial class MainViewModel : ViewModelBase
     {
         if (string.IsNullOrEmpty(filePath)) return;
 
-        var item = RecentFiles.FirstOrDefault(r => r.FilePath == filePath);
+        var stableId = DocumentIdentity.Normalize(filePath) ?? filePath;
+
+        var item = RecentFiles.FirstOrDefault(r => r.Location.StableId == stableId);
         if (item != null)
         {
             RecentFiles.Remove(item);
@@ -918,7 +981,7 @@ public partial class MainViewModel : ViewModelBase
         var filePath = await _fileService.SaveFileAsync(CurrentTab.Content, CurrentTab.Header);
         if (filePath == null) return;
 
-        CurrentTab.FilePath = filePath;
+        CurrentTab.Location = new LocalDocumentLocation(filePath);
         CurrentTab.IsModified = false;
         CurrentTab.UpdateHeader();
         AddToRecentFiles(filePath);
@@ -927,41 +990,15 @@ public partial class MainViewModel : ViewModelBase
 
     private bool TrySelectExistingTabByPath(string? filePath)
     {
-        if (string.IsNullOrWhiteSpace(filePath))
+        // 两边都规范化后比较，等价于原实现（GetFullPath + OrdinalIgnoreCase）。
+        // 规范化失败说明不是可用路径 —— 直接判定"无已打开标签"，不再做原串兜底比较。
+        var stableId = DocumentIdentity.Normalize(filePath);
+        if (stableId == null)
         {
             return false;
         }
 
-        string normalizedPath;
-        try
-        {
-            normalizedPath = Path.GetFullPath(filePath);
-        }
-        catch
-        {
-            normalizedPath = filePath;
-        }
-
-        var existingTab = Tabs.FirstOrDefault(tab =>
-        {
-            if (string.IsNullOrWhiteSpace(tab.FilePath))
-            {
-                return false;
-            }
-
-            try
-            {
-                return string.Equals(
-                    Path.GetFullPath(tab.FilePath),
-                    normalizedPath,
-                    StringComparison.OrdinalIgnoreCase
-                );
-            }
-            catch
-            {
-                return string.Equals(tab.FilePath, filePath, StringComparison.OrdinalIgnoreCase);
-            }
-        });
+        var existingTab = Tabs.FirstOrDefault(tab => tab.Location?.StableId == stableId);
 
         if (existingTab == null)
         {
@@ -1052,6 +1089,137 @@ public partial class MainViewModel : ViewModelBase
             await CloseTab(CurrentTab);
         }
     }
+
+    /// <summary>用户主动打开登录框。启动路径不调用它。</summary>
+    [RelayCommand]
+    private async Task ShowLogin()
+    {
+        var dialog = new LoginDialog(_authService);
+        await dialog.ShowDialog(_ownerWindow);
+        OnPropertyChanged(nameof(AccountDisplayName));
+    }
+
+    [RelayCommand]
+    private async Task SignOut()
+    {
+        await _authService.LogoutAsync();
+        OnPropertyChanged(nameof(AccountDisplayName));
+    }
+
+    /// <summary>
+    /// 保存当前标签页到云端：已是云端文档则就地更新（带乐观锁），否则新建。
+    /// </summary>
+    /// <remarks>
+    /// 契约 1 规定文档 id 由客户端生成（UUIDv7），因此新建时不需要先问服务端要 id。
+    /// </remarks>
+    [RelayCommand]
+    private async Task SaveToCloud()
+    {
+        var tab = CurrentTab;
+        if (tab == null) return;
+
+        var content = tab.Content;
+
+        var (id, name, version) = tab.Location is CloudDocumentLocation cloud
+            ? (Guid.Parse(cloud.StableId), cloud.DisplayName, tab.CloudVersion)
+            : (Guid.CreateVersion7(), tab.Header, (int?)null);
+
+        var result = await _documentStore.PutAsync(id, name, "mmd", content, version);
+
+        if (!result.Ok)
+        {
+            // 「写入过程中断流 / 杀进程后重试」：服务端在 409 里回带当前 contentHash。
+            // 与本地内容一致 → 上次写入其实已生效，按成功处理，不给用户看假冲突。
+            if (result.ErrorCode == RemoteDocumentStore.ErrorVersionConflict
+                && TryReadConflict(result.Details, out var serverHash, out var serverVersion)
+                && serverHash == RemoteDocumentStore.Sha256Hex(content))
+            {
+                ApplyCloudSaved(tab, id, name, serverVersion);
+                return;
+            }
+
+            StatusMessage = string.Format(S.CloudStatusErrorFormat, DescribeCloudError(result.ErrorCode));
+            return;
+        }
+
+        ApplyCloudSaved(tab, id, name, result.Value!.Version);
+    }
+
+    /// <summary>从云端打开（先列表后按 id 取值 —— 契约规定列表不含 content）。</summary>
+    [RelayCommand]
+    private async Task OpenFromCloud()
+    {
+        var picked = await CloudDocumentsDialog.PickAsync(_ownerWindow, _documentStore);
+        if (picked == null || !Guid.TryParse(picked.Id, out var id)) return;
+
+        var result = await _documentStore.GetAsync(id);
+        if (!result.Ok || result.Value == null)
+        {
+            StatusMessage = string.Format(S.CloudStatusErrorFormat, DescribeCloudError(result.ErrorCode));
+            return;
+        }
+
+        var doc = result.Value;
+
+        // v1 只处理内联文本；外置（blob 直传）分支不在本阶段范围内
+        if (doc.Content == null)
+        {
+            StatusMessage = string.Format(S.CloudStatusErrorFormat, S.AuthErrorGeneric);
+            return;
+        }
+
+        var tab = new TabItem
+        {
+            Content = doc.Content,
+            Location = new CloudDocumentLocation(doc.Id, doc.Name),
+            CloudVersion = doc.Version,
+        };
+        tab.ContentChanged += OnTabContentChanged;
+        tab.UpdateHeader();
+        Tabs.Add(tab);
+        SelectedTabIndex = Tabs.Count - 1;
+    }
+
+    private void ApplyCloudSaved(TabItem tab, Guid id, string name, int version)
+    {
+        tab.Location = new CloudDocumentLocation(id.ToString(), name);
+        tab.CloudVersion = version;
+        tab.IsModified = false;
+        tab.UpdateHeader();
+        StatusMessage = string.Format(S.CloudStatusSavedFormat, version);
+    }
+
+    /// <summary>从 409 的 details 里读出服务端当前 hash 与版本。</summary>
+    private static bool TryReadConflict(JsonElement? details, out string? contentHash, out int version)
+    {
+        contentHash = null;
+        version = 0;
+
+        if (details is not { ValueKind: JsonValueKind.Object } element)
+        {
+            return false;
+        }
+
+        if (element.TryGetProperty("contentHash", out var hash) && hash.ValueKind == JsonValueKind.String)
+        {
+            contentHash = hash.GetString();
+        }
+
+        if (element.TryGetProperty("version", out var v) && v.ValueKind == JsonValueKind.Number)
+        {
+            version = v.GetInt32();
+        }
+
+        return contentHash != null;
+    }
+
+    private static string DescribeCloudError(string? code) => code switch
+    {
+        "membership_required" => S.AuthFreePlanHint,
+        "not_found" => S.FileNotFound,
+        ApiClient.NetworkError => S.AuthErrorNetwork,
+        _ => string.Format(S.CloudStatusErrorFormat, code ?? S.AuthErrorGeneric),
+    };
 
     public bool HasUnsavedChanges => Tabs.Any(t => t.IsModified);
 
@@ -1150,7 +1318,7 @@ public partial class MainViewModel : ViewModelBase
     private void About()
     {
         var dialog = new AboutDialog(
-            "Mermaider",
+            "Diagramon",
             "本地 Mermaid 图表编辑器。支持代码编辑、语法高亮、实时预览、缩放拖拽、语法检测、图片导出；集成 AI 助手，可通过自然语言生成图表；支持多标签页多文件编辑；本地渲染，数据不上传。",
             "黄超（道荣）",
             AppVersion

@@ -1,6 +1,6 @@
 using System.IO;
 
-namespace Mermaider.Models;
+namespace Diagramon.Models;
 
 public class MermaidDocument
 {

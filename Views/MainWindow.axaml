@@ -1,17 +1,17 @@
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        xmlns:vm="using:Mermaider.ViewModels"
-        xmlns:models="using:Mermaider.Models"
-        xmlns:views="using:Mermaider.Views"
+        xmlns:vm="using:Diagramon.ViewModels"
+        xmlns:models="using:Diagramon.Models"
+        xmlns:views="using:Diagramon.Views"
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         xmlns:avaloniaEdit="clr-namespace:AvaloniaEdit;assembly=AvaloniaEdit"
         mc:Ignorable="d" d:DesignWidth="1200" d:DesignHeight="800"
-        x:Class="Mermaider.Views.MainWindow"
+        x:Class="Diagramon.Views.MainWindow"
         x:DataType="vm:MainViewModel"
         x:Name="root"
         Title="{Binding WindowTitle}"
-        Icon="/Assets/mermaider32.ico"
+        Icon="/Assets/diagramon32.ico"
         Width="1200" Height="800"
         MinWidth="800" MinHeight="600"
         Closed="OnClosed">
@@ -31,13 +31,20 @@
                           ItemsSource="{Binding RecentFiles}">
                     <MenuItem.ItemTemplate>
                         <DataTemplate x:DataType="models:RecentFileItem">
-                            <MenuItem Header="{Binding FileName}" 
-                                      ToolTip.Tip="{Binding FilePath}"
+                            <MenuItem Header="{Binding FileName}"
+                                      ToolTip.Tip="{Binding DisplayPath}"
                                       Command="{Binding #root.DataContext.OpenRecentFileCommand}"
                                       CommandParameter="{Binding}"/>
                         </DataTemplate>
                     </MenuItem.ItemTemplate>
                 </MenuItem>
+                <Separator IsVisible="{Binding Auth.Session.IsCloudEntryVisible}"/>
+                <MenuItem Header="{Binding CloudSaveToCloud}"
+                          IsVisible="{Binding Auth.Session.IsCloudEntryVisible}"
+                          Command="{Binding SaveToCloudCommand}"/>
+                <MenuItem Header="{Binding CloudDocuments}"
+                          IsVisible="{Binding Auth.Session.IsCloudEntryVisible}"
+                          Command="{Binding OpenFromCloudCommand}"/>
                 <Separator/>
                 <MenuItem Header="{Binding MenuSave}" InputGesture="Ctrl+S" Command="{Binding SaveFileCommand}"/>
                 <MenuItem Header="{Binding MenuSaveAs}" InputGesture="Ctrl+Shift+S" Command="{Binding SaveFileAsCommand}"/>
@@ -67,6 +74,18 @@
                 <MenuItem Header="{Binding MenuCopy}" InputGesture="Ctrl+C" Command="{Binding CopyCommand}" IsEnabled="{Binding CanCopyAction}"/>
                 <MenuItem Header="{Binding MenuPaste}" InputGesture="Ctrl+V" Command="{Binding PasteCommand}" IsEnabled="{Binding CanPasteAction}"/>
                 <MenuItem Header="{Binding MenuSelectAll}" InputGesture="Ctrl+A" Command="{Binding SelectAllCommand}" IsEnabled="{Binding CanSelectAllAction}"/>
+            </MenuItem>
+            <MenuItem Header="{Binding MenuAccount}">
+                <MenuItem Header="{Binding MenuSignIn}"
+                          IsVisible="{Binding !Auth.Session.IsSignedIn}"
+                          Command="{Binding ShowLoginCommand}"/>
+                <MenuItem Header="{Binding MenuSignOut}"
+                          IsVisible="{Binding Auth.Session.IsSignedIn}"
+                          Command="{Binding SignOutCommand}"/>
+                <Separator IsVisible="{Binding Auth.Session.IsSignedIn}"/>
+                <MenuItem Header="{Binding AccountDisplayName}"
+                          IsVisible="{Binding Auth.Session.IsSignedIn}"
+                          IsEnabled="False"/>
             </MenuItem>
             <MenuItem Header="{Binding MenuHelp}">
                 <MenuItem Header="{Binding MenuMermaidDocs}" Command="{Binding OpenMermaidDocsCommand}"/>

@@ -5,9 +5,9 @@ using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
-using Mermaider.Models;
+using Diagramon.Models;
 
-namespace Mermaider.Services;
+namespace Diagramon.Services;
 
 public class AIConversationService
 {
@@ -18,7 +18,7 @@ public class AIConversationService
     {
         _storagePath = customStoragePath ?? Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-            "Mermaider",
+            "Diagramon",
             "Conversations"
         );
 

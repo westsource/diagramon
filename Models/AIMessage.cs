@@ -1,6 +1,6 @@
 using System;
 
-namespace Mermaider.Models;
+namespace Diagramon.Models;
 
 public enum MessageRole
 {

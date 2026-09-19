@@ -5,7 +5,7 @@
     <Nullable>enable</Nullable>
     <BuiltInComInteropSupport>true</BuiltInComInteropSupport>
     <ApplicationManifest>app.manifest</ApplicationManifest>
-    <ApplicationIcon>Assets\mermaider32.ico</ApplicationIcon>
+    <ApplicationIcon>Assets\diagramon32.ico</ApplicationIcon>
     <AvaloniaUseCompiledBindingsByDefault>true</AvaloniaUseCompiledBindingsByDefault>
     <!-- <PublishTrimmed>true</PublishTrimmed> -->
     <Version>2.0.260503.3</Version>
@@ -21,6 +21,7 @@
     <PackageReference Include="Avalonia.ReactiveUI" Version="11.3.0" />
     <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.0" />
     <PackageReference Include="Avalonia.AvaloniaEdit" Version="11.4.1" />
+    <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="10.0.12" />
     <PackageReference Include="WebView.Avalonia" Version="11.0.0.1" />
     <PackageReference Include="WebView.Avalonia.Desktop" Version="11.0.0.1" />
   </ItemGroup>
@@ -40,12 +41,11 @@
     <_AvaloniaResourcesInputsCacheFilePath>$(IntermediateOutputPath)Avalonia\Resources.Inputs.cache</_AvaloniaResourcesInputsCacheFilePath>
   </PropertyGroup>
   <Target Name="CreateAvaloniaAvaloniaDir" BeforeTargets="_GenerateAvaloniaResourcesDependencyCache">
-    <Exec Command="mkdir &quot;$(IntermediateOutputPath)Avalonia\resources&quot; 2>nul" IgnoreExitCode="true" />
+    <Exec Command="mkdir &quot;$(IntermediateOutputPath)Avalonia\resources&quot; 2&gt;nul" IgnoreExitCode="true" />
   </Target>
 
   <!-- Workaround: framework-dependent builds (Debug) don't copy native WebView2Loader.dll from NuGet -->
   <Target Name="CopyWebView2LoaderNative" AfterTargets="Build" Condition="!Exists('$(OutputPath)WebView2Loader.dll') And '$(OS)' == 'Windows_NT'">
-    <Copy SourceFiles="$(NuGetPackageRoot)webview.avalonia.windows\11.0.0.1\runtimes\win-x64\native\WebView2Loader.dll"
-          DestinationFolder="$(OutputPath)" />
+    <Copy SourceFiles="$(NuGetPackageRoot)webview.avalonia.windows\11.0.0.1\runtimes\win-x64\native\WebView2Loader.dll" DestinationFolder="$(OutputPath)" />
   </Target>
 </Project>

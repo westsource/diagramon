@@ -2,7 +2,7 @@ param(
     [string]$Version,
     [string]$Token,
     [string]$Owner = "westsource",
-    [string]$Repo = "mermaider",
+    [string]$Repo = "diagramon",
     [switch]$Draft,
     [switch]$PreRelease,
     [switch]$Help
@@ -23,7 +23,7 @@ Gitee Release 发布脚本
   -Version    版本号 (如: 1.0.260426.0)，不指定则自动从 .csproj 读取
   -Token      Gitee 私人令牌 (也可设置环境变量 GITEE_TOKEN)
   -Owner      Gitee 用户名 (默认: westsource)
-  -Repo       仓库名 (默认: mermaider)
+  -Repo       仓库名 (默认: diagramon)
   -Draft      创建为草稿
   -PreRelease 标记为预发布版本
   -Help       显示帮助信息
@@ -41,7 +41,7 @@ Gitee Release 发布脚本
 }
 
 $ProjectPath = $PSScriptRoot
-$CsprojPath = Join-Path $ProjectPath "Mermaider.csproj"
+$CsprojPath = Join-Path $ProjectPath "Diagramon.csproj"
 $DistPath = Join-Path $ProjectPath "dist"
 
 # 获取版本号
@@ -77,12 +77,12 @@ if ($ZipFiles.Count -eq 0) {
     exit 1
 }
 
-Write-Host "准备发布 Mermaider v$Version 到 Gitee..." -ForegroundColor Cyan
+Write-Host "准备发布 Diagramon v$Version 到 Gitee..." -ForegroundColor Cyan
 Write-Host "仓库: $Owner/$Repo" -ForegroundColor Gray
 
 # 构建发布说明
 $ReleaseNotes = @"
-## Mermaider v$Version
+## Diagramon v$Version
 
 ### 功能特性
 - Mermaid 图表实时预览
@@ -98,7 +98,7 @@ $ReleaseNotes = @"
 ### 安装方式
 1. 下载 ZIP 压缩包
 2. 解压到任意目录
-3. 运行 Mermaider.exe
+3. 运行 Diagramon.exe
 
 ### 更新日志
 查看 [README.md](https://gitee.com/$Owner/$Repo/blob/main/README.md) 获取详细信息。
@@ -106,7 +106,7 @@ $ReleaseNotes = @"
 
 # 创建 Release
 $TagName = "v$Version"
-$ReleaseName = "Mermaider v$Version"
+$ReleaseName = "Diagramon v$Version"
 
 $Body = @{
     tag_name = $TagName

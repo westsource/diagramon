@@ -1,4 +1,4 @@
-# Mermaider - Mermaid 图表编辑器
+# Diagramon - Mermaid 图表编辑器
 
 一个基于 C# Avalonia 构建的本地 Mermaid 图表编辑器，支持代码编辑、语法高亮、实时预览、缩放拖拽、语法检测、图片导出与复制，集成 AI 助手通过自然语言生成图表，数据本地渲染不上传。
 
@@ -6,9 +6,9 @@
 
 ## 界面截图
 
-![主界面](screenshots/Mermaider_NELcF3ITQN.png)
+![主界面](screenshots/Diagramon_NELcF3ITQN.png)
 
-![AI助手](screenshots/Mermaider_fxJXInfYWk.png)
+![AI助手](screenshots/Diagramon_fxJXInfYWk.png)
 
 ## 功能特性
 
@@ -63,8 +63,8 @@
   - 名称、提供商（OpenAI / Azure OpenAI / Ollama / 自定义）
   - API Key、Base URL（自动清理末尾路径）、Model ID
   - Max Tokens（默认 4096）、Temperature（默认 0.7）
-- **对话历史存储路径** - 可配置 AI 对话历史的磁盘存储位置（默认 `%APPDATA%/Mermaider/Conversations`）
-- **自动保存布局** - 编辑器比例、缩放级别、AI 面板展开状态等自动保存至 `%APPDATA%/Mermaider/settings.json`
+- **对话历史存储路径** - 可配置 AI 对话历史的磁盘存储位置（默认 `%APPDATA%/Diagramon/Conversations`）
+- **自动保存布局** - 编辑器比例、缩放级别、AI 面板展开状态等自动保存至 `%APPDATA%/Diagramon/settings.json`
 
 ### 更新
 - **启动时自动检查更新** - 程序启动时自动检测新版本（间隔 24 小时，可在设置中关闭）
@@ -148,7 +148,7 @@ dotnet publish -c Release -r win-x64 --self-contained true -p:PublishSingleFile=
 ### 打开文件
 
 - 菜单栏：文件 → 打开（Ctrl+O）
-- 命令行参数：`Mermaider.exe example.mmd`
+- 命令行参数：`Diagramon.exe example.mmd`
 - 最近文件：文件 → 最近文件
 
 支持 .mmd 和 .mermaid 扩展名。

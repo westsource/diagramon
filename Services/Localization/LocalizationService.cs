@@ -5,7 +5,7 @@ using System.Text.Json;
 using Avalonia;
 using Avalonia.Platform;
 
-namespace Mermaider.Services.Localization;
+namespace Diagramon.Services.Localization;
 
 public class LanguageInfo
 {
@@ -110,7 +110,7 @@ public sealed class LocalizationService
 
         try
         {
-            var assets = AssetLoader.GetAssets(new Uri("avares://Mermaider/Assets/Languages/"), null);
+            var assets = AssetLoader.GetAssets(new Uri("avares://Diagramon/Assets/Languages/"), null);
             
             foreach (var asset in assets)
             {
@@ -168,7 +168,7 @@ public sealed class LocalizationService
         
         try
         {
-            var uri = new Uri($"avares://Mermaider/Assets/Languages/{_currentLanguageCode}.json");
+            var uri = new Uri($"avares://Diagramon/Assets/Languages/{_currentLanguageCode}.json");
             using var stream = AssetLoader.Open(uri);
             using var reader = new StreamReader(stream);
             var json = reader.ReadToEnd();
@@ -192,7 +192,7 @@ public sealed class LocalizationService
 
     private void LoadFallbackStrings()
     {
-        _fallbackStrings["AppTitle"] = "Mermaider - Mermaid Diagram Editor";
+        _fallbackStrings["AppTitle"] = "Diagramon - Mermaid Diagram Editor";
         _fallbackStrings["Ready"] = "Ready";
         _fallbackStrings["Rendering"] = "Rendering preview...";
         _fallbackStrings["PreviewUpdated"] = "Preview updated";
@@ -236,6 +236,46 @@ _fallbackStrings["MenuMermaidDocs"] = "_Mermaid Documentation...";
         _fallbackStrings["MenuAbout"] = "_About...";
         _fallbackStrings["MenuSettings"] = "_Settings...";
         _fallbackStrings["LanguageMenu"] = "Language";
+
+        _fallbackStrings["MenuAccount"] = "_Account";
+        _fallbackStrings["MenuSignIn"] = "_Sign in / Register...";
+        _fallbackStrings["MenuSignOut"] = "Sign _out";
+        _fallbackStrings["AuthTitle"] = "Sign in / Register";
+        _fallbackStrings["AuthEmail"] = "Email";
+        _fallbackStrings["AuthPassword"] = "Password";
+        _fallbackStrings["AuthSignIn"] = "Sign in";
+        _fallbackStrings["AuthRegister"] = "Register";
+        _fallbackStrings["AuthSwitchToRegister"] = "No account? Register";
+        _fallbackStrings["AuthSwitchToSignIn"] = "Have an account? Sign in";
+        _fallbackStrings["AuthClose"] = "Close";
+        _fallbackStrings["AuthWorking"] = "Working...";
+        _fallbackStrings["AuthSignedInFormat"] = "Signed in as {0}";
+        _fallbackStrings["AuthFreePlanHint"] = "Cloud storage requires a membership";
+        _fallbackStrings["AuthErrorInvalidCredentials"] = "Incorrect email or password";
+        _fallbackStrings["AuthErrorEmailTaken"] = "That email is already registered";
+        _fallbackStrings["AuthErrorWeakPassword"] = "Password too weak (at least 8 characters)";
+        _fallbackStrings["AuthErrorRateLimited"] = "Too many attempts, please try again later";
+        _fallbackStrings["AuthErrorValidation"] = "Invalid input";
+        _fallbackStrings["AuthErrorNetwork"] = "Cannot reach the cloud service";
+        _fallbackStrings["AuthErrorGeneric"] = "Operation failed, please try again";
+        _fallbackStrings["AuthErrorEmailNotVerified"] = "Account not activated yet - please check your inbox";
+        _fallbackStrings["AuthPendingTitle"] = "Verify your email";
+        _fallbackStrings["AuthPendingBodyFormat"] =
+            "We sent an activation link to {0}. Unverified accounts cannot sign in; the desktop app is unaffected and works fully without signing in.";
+        _fallbackStrings["AuthPendingTtlFormat"] = "The link is valid for {0} minutes.";
+        _fallbackStrings["AuthResend"] = "Resend activation email";
+        _fallbackStrings["AuthResent"] = "Sent. Any earlier link is now invalid - use the newest email.";
+
+        _fallbackStrings["CloudDocuments"] = "_Cloud documents...";
+        _fallbackStrings["CloudTitle"] = "Cloud documents";
+        _fallbackStrings["CloudSaveToCloud"] = "Save to _cloud";
+        _fallbackStrings["CloudEmpty"] = "No cloud documents yet";
+        _fallbackStrings["CloudDelete"] = "Delete";
+        _fallbackStrings["CloudRefresh"] = "Refresh";
+        _fallbackStrings["CloudConfirmDeleteTitle"] = "Delete cloud document";
+        _fallbackStrings["CloudConfirmDeleteFormat"] = "Delete \"{0}\"? This removes the cloud copy.";
+        _fallbackStrings["CloudStatusSavedFormat"] = "Saved to cloud (version {0})";
+        _fallbackStrings["CloudStatusErrorFormat"] = "Cloud operation failed: {0}";
     }
 
     private class LanguageFile

@@ -1,8 +1,8 @@
 using System.Collections.Generic;
 using System.Threading.Tasks;
-using Mermaider.Models;
+using Diagramon.Models;
 
-namespace Mermaider.Services.AIService;
+namespace Diagramon.Services.AIService;
 
 public interface IAIService
 {

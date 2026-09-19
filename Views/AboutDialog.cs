@@ -4,9 +4,9 @@ using Avalonia.Controls;
 using Avalonia.Interactivity;
 using Avalonia.Layout;
 using Avalonia.Media;
-using Mermaider.Services.Localization;
+using Diagramon.Services.Localization;
 
-namespace Mermaider.Views;
+namespace Diagramon.Views;
 
 public sealed class AboutDialog : Window
 {

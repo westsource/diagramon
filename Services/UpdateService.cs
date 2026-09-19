@@ -5,13 +5,13 @@ using System.Reflection;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
-using Mermaider.Models;
+using Diagramon.Models;
 
-namespace Mermaider.Services;
+namespace Diagramon.Services;
 
 public class UpdateService : IUpdateService
 {
-    private const string DefaultManifestUrl = "https://gitee.com/westsource/mermaider/raw/master/update-manifest.json";
+    private const string DefaultManifestUrl = "https://gitee.com/westsource/diagramon/raw/master/update-manifest.json";
 
     private readonly HttpClient _httpClient;
     private readonly SettingsService _settingsService;
@@ -21,7 +21,7 @@ public class UpdateService : IUpdateService
         _settingsService = settingsService;
         _httpClient = new HttpClient();
         _httpClient.Timeout = TimeSpan.FromSeconds(15);
-        _httpClient.DefaultRequestHeaders.UserAgent.ParseAdd("Mermaider");
+        _httpClient.DefaultRequestHeaders.UserAgent.ParseAdd("Diagramon");
     }
 
     public string GetCurrentVersion()

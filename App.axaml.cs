@@ -7,12 +7,13 @@ using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Markup.Xaml;
 using Avalonia.Threading;
 using AvaloniaWebView;
-using Mermaider.Services;
-using Mermaider.Services.Localization;
-using Mermaider.ViewModels;
-using Mermaider.Views;
+using Diagramon.Services;
+using Diagramon.Services.Localization;
+using Diagramon.Services.Remote;
+using Diagramon.ViewModels;
+using Diagramon.Views;
 
-namespace Mermaider;
+namespace Diagramon;
 
 public class App : Application
 {
@@ -39,11 +40,19 @@ public class App : Application
             var fileService = new FileService();
             IUpdateService updateService = new UpdateService(settingsService);
 
+            // 云端：一个共享 HTTP 出入口 + 认证 + 文档存储。
+            // 未登录是默认态 —— 这三者都可在无令牌下构造，且不阻塞启动。
+            var apiClient = new ApiClient(settingsService);
+            var authService = new AuthService(apiClient, settingsService);
+            var documentStore = new RemoteDocumentStore(apiClient, authService.TryRestoreSessionAsync);
+
             var mainWindow = new MainWindow();
             var viewModel = new MainViewModel(
                 mermaidService,
                 fileService,
                 settingsService,
+                authService,
+                documentStore,
                 updateService,
                 mainWindow.StorageProvider,
                 mainWindow
@@ -56,7 +65,10 @@ public class App : Application
             var args = Environment.GetCommandLineArgs();
             if (args.Length > 1 && File.Exists(args[1]))
             {
-                viewModel.OpenFileFromPath(args[1]).Wait();
+                // 不能在 UI 线程上 .Wait()：OpenFileFromPath 内部的 await 会把续体投回 UI 线程，
+                // 而 UI 线程正被 .Wait() 阻塞 → 死锁（应用启动即挂起、窗口永不出现）。
+                var startupPath = args[1];
+                Dispatcher.UIThread.Post(() => _ = viewModel.OpenFileFromPath(startupPath));
             }
             else
             {

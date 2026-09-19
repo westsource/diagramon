@@ -1,4 +1,4 @@
-namespace Mermaider.Services.Localization;
+namespace Diagramon.Services.Localization;
 
 public class Strings
 {
@@ -122,6 +122,47 @@ public class Strings
     public string DownloadCompleteMessage => Get("DownloadCompleteMessage");
     public string SkipVersion => Get("SkipVersion");
     public string RemindLater => Get("RemindLater");
+
+    // ---- 云端账户 ----
+    public string MenuAccount => Get("MenuAccount");
+    public string MenuSignIn => Get("MenuSignIn");
+    public string MenuSignOut => Get("MenuSignOut");
+    public string AuthTitle => Get("AuthTitle");
+    public string AuthEmail => Get("AuthEmail");
+    public string AuthPassword => Get("AuthPassword");
+    public string AuthSignIn => Get("AuthSignIn");
+    public string AuthRegister => Get("AuthRegister");
+    public string AuthSwitchToRegister => Get("AuthSwitchToRegister");
+    public string AuthSwitchToSignIn => Get("AuthSwitchToSignIn");
+    public string AuthClose => Get("AuthClose");
+    public string AuthWorking => Get("AuthWorking");
+    public string AuthSignedInFormat => Get("AuthSignedInFormat");
+    public string AuthFreePlanHint => Get("AuthFreePlanHint");
+    public string AuthErrorInvalidCredentials => Get("AuthErrorInvalidCredentials");
+    public string AuthErrorEmailTaken => Get("AuthErrorEmailTaken");
+    public string AuthErrorWeakPassword => Get("AuthErrorWeakPassword");
+    public string AuthErrorRateLimited => Get("AuthErrorRateLimited");
+    public string AuthErrorValidation => Get("AuthErrorValidation");
+    public string AuthErrorNetwork => Get("AuthErrorNetwork");
+    public string AuthErrorGeneric => Get("AuthErrorGeneric");
+    public string AuthErrorEmailNotVerified => Get("AuthErrorEmailNotVerified");
+    public string AuthPendingTitle => Get("AuthPendingTitle");
+    public string AuthPendingBodyFormat => Get("AuthPendingBodyFormat");
+    public string AuthPendingTtlFormat => Get("AuthPendingTtlFormat");
+    public string AuthResend => Get("AuthResend");
+    public string AuthResent => Get("AuthResent");
+
+    // ---- 云端文件 ----
+    public string CloudDocuments => Get("CloudDocuments");
+    public string CloudTitle => Get("CloudTitle");
+    public string CloudSaveToCloud => Get("CloudSaveToCloud");
+    public string CloudEmpty => Get("CloudEmpty");
+    public string CloudDelete => Get("CloudDelete");
+    public string CloudRefresh => Get("CloudRefresh");
+    public string CloudConfirmDeleteTitle => Get("CloudConfirmDeleteTitle");
+    public string CloudConfirmDeleteFormat => Get("CloudConfirmDeleteFormat");
+    public string CloudStatusSavedFormat => Get("CloudStatusSavedFormat");
+    public string CloudStatusErrorFormat => Get("CloudStatusErrorFormat");
 
     public string Get(string key)
     {

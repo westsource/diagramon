@@ -3,7 +3,7 @@ using System.Xml;
 using AvaloniaEdit.Highlighting;
 using AvaloniaEdit.Highlighting.Xshd;
 
-namespace Mermaider.Services;
+namespace Diagramon.Services;
 
 public static class MermaidHighlightingProvider
 {

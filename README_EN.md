@@ -1,4 +1,4 @@
-# Mermaider - Mermaid Diagram Editor
+# Diagramon - Mermaid Diagram Editor
 
 A local Mermaid diagram editor built with C# Avalonia, featuring code editing, syntax highlighting, real-time preview with zoom/pan/fit, syntax validation, image export and copy, and an AI assistant for generating diagrams via natural language. All rendering is done locally — no data uploaded.
 
@@ -6,9 +6,9 @@ A local Mermaid diagram editor built with C# Avalonia, featuring code editing, s
 
 ## Screenshots
 
-![Main Interface](screenshots/Mermaider_NELcF3ITQN.png)
+![Main Interface](screenshots/Diagramon_NELcF3ITQN.png)
 
-![AI Assistant](screenshots/Mermaider_fxJXInfYWk.png)
+![AI Assistant](screenshots/Diagramon_fxJXInfYWk.png)
 
 ## Features
 
@@ -65,7 +65,7 @@ A local Mermaid diagram editor built with C# Avalonia, featuring code editing, s
   - API Key, Base URL, Model ID
   - Max Tokens (default 4096), Temperature (default 0.7)
 - **Conversation Storage Path** - Configurable directory for AI conversation history files
-- **Auto-save Layout** - Editor/preview ratio, preview zoom, AI panel state (expanded/collapsed), AI panel height, and other settings automatically saved to `%APPDATA%/Mermaider/settings.json`
+- **Auto-save Layout** - Editor/preview ratio, preview zoom, AI panel state (expanded/collapsed), AI panel height, and other settings automatically saved to `%APPDATA%/Diagramon/settings.json`
 
 ### Update
 - **Auto Check on Startup** - Checks for updates automatically on startup (24-hour cooldown between checks, configurable)
@@ -150,7 +150,7 @@ dotnet publish -c Release -r win-x64 --self-contained true -p:PublishSingleFile=
 ### Opening Files
 
 - Menu: File → Open (Ctrl+O)
-- Command line: `Mermaider.exe example.mmd`
+- Command line: `Diagramon.exe example.mmd`
 - Recent files: File → Recent Files
 
 Supports .mmd and .mermaid extensions.
@@ -200,11 +200,11 @@ Enter or modify Mermaid code in the left editor panel. The right preview area up
   - Add new AI model configurations (name, provider, API key, base URL, model ID, max tokens, temperature)
   - Edit or delete existing model configs
   - Set the conversation history storage path
-- All settings are auto-saved to `%APPDATA%/Mermaider/settings.json`
+- All settings are auto-saved to `%APPDATA%/Diagramon/settings.json`
 
 ### Updates
 
-- **Auto Check**: On startup, Mermaider automatically checks for updates (24-hour cooldown)
+- **Auto Check**: On startup, Diagramon automatically checks for updates (24-hour cooldown)
 - **Skip Version**: Skip a specific version; no further notifications for that version
 - **Manual Check**: Help → Check for Updates
 - **Download**: When an update is available, click "Download Update" with real-time progress display

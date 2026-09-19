@@ -3,7 +3,7 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using Avalonia.Media.Imaging;
 using AvaloniaEdit.Document;
 
-namespace Mermaider.Models;
+namespace Diagramon.Models;
 
 public partial class TabItem : ObservableObject
 {
@@ -44,7 +44,21 @@ public partial class TabItem : ObservableObject
     }
 
     [ObservableProperty]
-    private string? _filePath;
+    [NotifyPropertyChangedFor(nameof(LocalFilePath))]
+    private IDocumentLocation? _location;
+
+    /// <summary>
+    /// 本地文件路径；云端文档为 null。
+    /// 仅"本地专属"操作使用（File.Exists、按路径保存），其余一律走 <see cref="Location"/>。
+    /// </summary>
+    public string? LocalFilePath => Location is LocalDocumentLocation local ? local.FilePath : null;
+
+    /// <summary>
+    /// 云端文档的当前版本，用于 <c>If-Match</c> 乐观锁。
+    /// 仅当 <see cref="Location"/> 是 <see cref="CloudDocumentLocation"/> 时有意义。
+    /// </summary>
+    [ObservableProperty]
+    private int? _cloudVersion;
 
     [ObservableProperty]
     private Bitmap? _previewImage;
@@ -73,9 +87,9 @@ public partial class TabItem : ObservableObject
 
     public void UpdateHeader()
     {
-        if (FilePath != null)
+        if (Location != null)
         {
-            Header = System.IO.Path.GetFileName(FilePath);
+            Header = System.IO.Path.GetFileName(Location.DisplayPath);
         }
         OnPropertyChanged(nameof(Title));
     }
