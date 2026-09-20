@@ -8,9 +8,9 @@
     <ApplicationIcon>Assets\diagramon32.ico</ApplicationIcon>
     <AvaloniaUseCompiledBindingsByDefault>true</AvaloniaUseCompiledBindingsByDefault>
     <!-- <PublishTrimmed>true</PublishTrimmed> -->
-    <Version>2.0.260503.3</Version>
+    <Version>2.0.260909.0</Version>
     <AssemblyVersion>2.0.0.0</AssemblyVersion>
-    <FileVersion>2.0.260.503</FileVersion>
+    <FileVersion>2.0.260.909</FileVersion>
   </PropertyGroup>
 
   <ItemGroup>
@@ -24,9 +24,13 @@
     <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="10.0.12" />
     <PackageReference Include="WebView.Avalonia" Version="11.0.0.1" />
     <PackageReference Include="WebView.Avalonia.Desktop" Version="11.0.0.1" />
+    <!-- Override transitive dependency to fix GHSA-xrw6-gwf8-vvr9 -->
+    <PackageReference Include="Tmds.DBus.Protocol" Version="0.93.0" />
   </ItemGroup>
 
   <ItemGroup>
+    <!-- tools/ is packaging resource (bundled node/mermaid CLI); its node_modules contains .cs files that must be excluded from compilation -->
+    <Compile Remove="tools\**" />
     <AvaloniaResource Include="Assets\**" />
     <Content Include="Assets\Languages\**">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>

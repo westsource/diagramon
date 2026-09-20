@@ -31,7 +31,7 @@
                           ItemsSource="{Binding RecentFiles}">
                     <MenuItem.ItemTemplate>
                         <DataTemplate x:DataType="models:RecentFileItem">
-                            <MenuItem Header="{Binding FileName}"
+                            <MenuItem Header="{Binding DisplayName}"
                                       ToolTip.Tip="{Binding DisplayPath}"
                                       Command="{Binding #root.DataContext.OpenRecentFileCommand}"
                                       CommandParameter="{Binding}"/>
@@ -53,6 +53,7 @@
                 <Separator/>
                 <MenuItem Header="{Binding MenuSettings}">
                     <MenuItem Header="{Binding MenuAISettings}" Command="{Binding OpenAISettingsCommand}"/>
+                    <MenuItem Header="{Binding MenuImageScaleSettings}" Command="{Binding OpenImageScaleSettingsCommand}"/>
                     <MenuItem Header="{Binding LanguageMenu}" ItemsSource="{Binding AvailableLanguages}">
                         <MenuItem.ItemTemplate>
                             <DataTemplate>
@@ -91,13 +92,13 @@
                 <MenuItem Header="{Binding MenuMermaidDocs}" Command="{Binding OpenMermaidDocsCommand}"/>
                 <Separator/>
                 <MenuItem Header="{Binding MenuCheckUpdate}" Command="{Binding CheckUpdateCommand}"/>
-                <Separator/>
                 <MenuItem Header="{Binding MenuAbout}" Command="{Binding AboutCommand}"/>
             </MenuItem>
         </Menu>
 
         <Grid Grid.Row="1" RowDefinitions="Auto,*">
-            <Border Grid.Row="0" Background="#F0F0F0" BorderBrush="#CCCCCC" BorderThickness="0,0,0,1">
+            <Border Grid.Row="0" Background="#F0F0F0" BorderBrush="#CCCCCC" BorderThickness="0,0,0,1" ClipToBounds="True"
+                    PointerWheelChanged="OnTabPointerWheelChanged">
                 <StackPanel Orientation="Horizontal">
                     <ItemsControl ItemsSource="{Binding Tabs}">
                         <ItemsControl.ItemsPanel>
@@ -134,10 +135,9 @@
                             </DataTemplate>
                         </ItemsControl.ItemTemplate>
                     </ItemsControl>
-                    
                     <Button Content="+" 
                             Width="28" Height="28"
-                            Margin="5,0,0,0"
+                            Margin="4,0,5,0"
                             FontSize="16"
                             FontWeight="Bold"
                             Padding="0"
@@ -153,17 +153,18 @@
                     <Border Grid.Column="0" Background="#FFFFFF" Width="{Binding EditorPanelWidth}" MinWidth="0"
                             IsVisible="{Binding IsEditorVisible}">
                         <Grid RowDefinitions="*,Auto,Auto">
-                            <avaloniaEdit:TextEditor Grid.Row="0" x:Name="CodeEditor"
-                                                     Document="{Binding #root.DataContext.CurrentTab.Document}"
-                                                     SyntaxHighlighting="{Binding MermaidHighlighting}"
-                                                     FontFamily="JetBrains Mono,Cascadia Code,Fira Code,Consolas,Menlo,Monaco,monospace"
-                                                     FontSize="14"
-                                                     Background="#FFFFFF"
-                                                     Foreground="#333333"
-                                                     BorderThickness="0"
-                                                     ShowLineNumbers="True"
-                                                     HorizontalScrollBarVisibility="Auto"
-                                                     VerticalScrollBarVisibility="Auto">
+                             <avaloniaEdit:TextEditor Grid.Row="0" x:Name="CodeEditor"
+                                                      Document="{Binding #root.DataContext.CurrentTab.Document}"
+                                                      SyntaxHighlighting="{Binding MermaidHighlighting}"
+                                                      FontFamily="JetBrains Mono,Cascadia Code,Fira Code,Consolas,Menlo,Monaco,monospace"
+                                                      FontSize="14"
+                                                      Background="#FFFFFF"
+                                                      Foreground="#333333"
+                                                      BorderThickness="0"
+                                                      ShowLineNumbers="True"
+                                                      WordWrap="True"
+                                                      HorizontalScrollBarVisibility="Auto"
+                                                      VerticalScrollBarVisibility="Auto">
                                 <avaloniaEdit:TextEditor.ContextMenu>
                                     <ContextMenu>
                                         <MenuItem Header="{Binding #root.DataContext.MenuUndo}" InputGesture="Ctrl+Z" Command="{Binding #root.DataContext.UndoCommand}" IsEnabled="{Binding #root.DataContext.CanUndoAction}"/>

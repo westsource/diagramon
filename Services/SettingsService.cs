@@ -12,6 +12,14 @@ public class AppSettings
 {
     public double EditorPreviewRatio { get; set; } = 0.5;
     public double PreviewZoom { get; set; } = 1.0;
+
+    public const double MinExportScale = 1.5;
+    public const double MaxExportScale = 10.0;
+
+    /// <summary>图片保存/拷贝倍率:true=使用 FixedExportScale,false=按复杂度自动(1.5x~5.0x)。</summary>
+    public bool UseFixedExportScale { get; set; }
+    public double FixedExportScale { get; set; } = 3.0;
+
     public string LastOpenDirectory { get; set; } = string.Empty;
 
     /// <summary>
@@ -60,6 +68,12 @@ public class SettingsService
         "settings.json"
     );
 
+    private static readonly string RecentHistoryPath = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+        "Diagramon",
+        "recent-history.json"
+    );
+
     /// <summary>敏感值的独立存储文件（DPAPI 密文）。AuthService 也用它存 refresh token。</summary>
     public static string SecureConfigPath { get; } = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
@@ -67,7 +81,95 @@ public class SettingsService
         "secure.config"
     );
 
+    private RecentHistoryData _recentHistory = new();
+
     public AppSettings Settings { get; private set; }
+
+    public IReadOnlyList<string> RecentFiles => _recentHistory.RecentFiles.AsReadOnly();
+
+    public SettingsService()
+    {
+        Settings = Load();
+        LoadRecentHistory();
+        LoadSecureValues();
+        EnsureDefaultModels();
+    }
+
+    private void LoadRecentHistory()
+    {
+        try
+        {
+            if (File.Exists(RecentHistoryPath))
+            {
+                var json = File.ReadAllText(RecentHistoryPath);
+                _recentHistory = JsonSerializer.Deserialize<RecentHistoryData>(json) ?? new RecentHistoryData();
+                return;
+            }
+        }
+        catch { }
+
+        // Migrate from old settings.json if present
+        MigrateRecentHistoryFromSettings();
+    }
+
+    private void MigrateRecentHistoryFromSettings()
+    {
+        try
+        {
+            if (File.Exists(SettingsPath))
+            {
+                var json = File.ReadAllText(SettingsPath);
+                var oldSettings = JsonSerializer.Deserialize<AppSettingsWithRecent>(json);
+                if (oldSettings != null && (oldSettings.RecentFiles.Count > 0 || oldSettings.RecentFileHistory.Count > 0))
+                {
+                    _recentHistory.RecentFiles = oldSettings.RecentFiles;
+                    _recentHistory.RecentFileHistory = oldSettings.RecentFileHistory;
+                    SaveRecentHistory();
+                    // Remove these fields from settings.json by re-saving without them
+                    SaveSettingsOnly();
+                }
+            }
+        }
+        catch { }
+    }
+
+    private void SaveRecentHistory()
+    {
+        try
+        {
+            var directory = Path.GetDirectoryName(RecentHistoryPath);
+            if (!string.IsNullOrEmpty(directory) && !Directory.Exists(directory))
+            {
+                Directory.CreateDirectory(directory);
+            }
+
+            var json = JsonSerializer.Serialize(_recentHistory, new JsonSerializerOptions
+            {
+                WriteIndented = true
+            });
+            File.WriteAllText(RecentHistoryPath, json);
+        }
+        catch { }
+    }
+
+    private void SaveSettingsOnly()
+    {
+        try
+        {
+            var directory = Path.GetDirectoryName(SettingsPath);
+            if (!string.IsNullOrEmpty(directory) && !Directory.Exists(directory))
+            {
+                Directory.CreateDirectory(directory);
+            }
+
+            var json = JsonSerializer.Serialize(Settings, new JsonSerializerOptions
+            {
+                WriteIndented = true
+            });
+            File.WriteAllText(SettingsPath, json);
+        }
+        catch { }
+    }
 
     public string? GetLanguageCode()
     {
@@ -94,13 +196,6 @@ public class SettingsService
         }
 
         return Settings.DeviceId!;
-    }
-
-    public SettingsService()
-    {
-        Settings = Load();
-        LoadSecureValues();
-        EnsureDefaultModels();
     }
 
     private void EnsureDefaultModels()
@@ -263,23 +358,8 @@ public class SettingsService
 
     public void Save()
     {
-        try
-        {
-            var directory = Path.GetDirectoryName(SettingsPath);
-            if (!string.IsNullOrEmpty(directory) && !Directory.Exists(directory))
-            {
-                Directory.CreateDirectory(directory);
-            }
-
-            var json = JsonSerializer.Serialize(Settings, new JsonSerializerOptions
-            {
-                WriteIndented = true
-            });
-            File.WriteAllText(SettingsPath, json);
-        }
-        catch
-        {
-        }
+        SaveSettingsOnly();
+        SaveRecentHistory();
     }
 
     public void AddRecentFile(string filePath)
@@ -292,11 +372,15 @@ public class SettingsService
         Settings.RecentFiles.RemoveAll(entry => entry.StableId == location.StableId);
         Settings.RecentFiles.Insert(0, new RecentEntry(location));
 
-        if (Settings.RecentFiles.Count > MaxRecentFiles)
+        _recentHistory.RecentFiles.Remove(filePath);
+        _recentHistory.RecentFiles.Insert(0, filePath);
+
+        if (_recentHistory.RecentFiles.Count > MaxRecentFiles)
         {
-            Settings.RecentFiles = Settings.RecentFiles.Take(MaxRecentFiles).ToList();
+            _recentHistory.RecentFiles = _recentHistory.RecentFiles.Take(MaxRecentFiles).ToList();
         }
 
+        AddToHistory(filePath);
         Save();
     }
 
@@ -307,6 +391,11 @@ public class SettingsService
         if (Settings.RecentFiles.RemoveAll(entry => entry.StableId == stableId) > 0)
         {
             Save();
+        }
+
+        if (_recentHistory.RecentFiles.Remove(filePath))
+        {
+            SaveRecentHistory();
         }
     }
 
@@ -323,5 +412,59 @@ public class SettingsService
         {
             Save();
         }
+
+        var validFiles = _recentHistory.RecentFiles.Where(File.Exists).ToList();
+        if (validFiles.Count != _recentHistory.RecentFiles.Count)
+        {
+            _recentHistory.RecentFiles = validFiles;
+            SaveRecentHistory();
+        }
     }
+
+    public void AddToHistory(string filePath)
+    {
+        if (string.IsNullOrEmpty(filePath)) return;
+
+        var existing = _recentHistory.RecentFileHistory.FirstOrDefault(e =>
+            string.Equals(e.FilePath, filePath, StringComparison.OrdinalIgnoreCase));
+        if (existing != null)
+        {
+            existing.LastOpenedTime = DateTime.Now;
+        }
+        else
+        {
+            _recentHistory.RecentFileHistory.Add(new RecentFileEntry
+            {
+                FilePath = filePath,
+                LastOpenedTime = DateTime.Now
+            });
+        }
+    }
+
+    public void AddToHistoryAndSave(string filePath)
+    {
+        AddToHistory(filePath);
+        SaveRecentHistory();
+    }
+
+    public List<RecentFileEntry> GetHistoryWithExistingFiles()
+    {
+        return _recentHistory.RecentFileHistory
+            .Where(e => File.Exists(e.FilePath))
+            .OrderByDescending(e => e.LastOpenedTime)
+            .ToList();
+    }
+}
+
+public class RecentHistoryData
+{
+    public List<string> RecentFiles { get; set; } = new();
+    public List<RecentFileEntry> RecentFileHistory { get; set; } = new();
+}
+
+// Used only for migration from old settings.json format
+internal class AppSettingsWithRecent
+{
+    public List<string> RecentFiles { get; set; } = new();
+    public List<RecentFileEntry> RecentFileHistory { get; set; } = new();
 }

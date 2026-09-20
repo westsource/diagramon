@@ -100,7 +100,7 @@
                             <Grid ColumnDefinitions="*,*">
                                 <StackPanel Grid.Column="0" Spacing="4">
                                     <TextBlock Text="Max Tokens" FontSize="11" Foreground="#888888"/>
-                                    <NumericUpDown Value="{Binding EditingMaxTokens}" Minimum="100" Maximum="32000" Width="120"/>
+                                    <NumericUpDown Value="{Binding EditingMaxTokens}" Minimum="100" Maximum="2000000" Width="240"/>
                                 </StackPanel>
                                 <StackPanel Grid.Column="1" Spacing="4" Margin="16,0,0,0">
                                     <TextBlock Text="Temperature" FontSize="11" Foreground="#888888"/>

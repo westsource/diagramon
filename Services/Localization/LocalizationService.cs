@@ -223,6 +223,7 @@ public sealed class LocalizationService
         _fallbackStrings["MenuSaveAs"] = "Save _As...";
         _fallbackStrings["MenuCloseTab"] = "Close Current _Tab";
         _fallbackStrings["MenuAISettings"] = "AI _Settings...";
+        _fallbackStrings["MenuImageScaleSettings"] = "Image Scale _Settings...";
         _fallbackStrings["MenuExit"] = "E_xit";
         _fallbackStrings["MenuEdit"] = "_Edit";
         _fallbackStrings["MenuUndo"] = "_Undo";
@@ -276,6 +277,12 @@ _fallbackStrings["MenuMermaidDocs"] = "_Mermaid Documentation...";
         _fallbackStrings["CloudConfirmDeleteFormat"] = "Delete \"{0}\"? This removes the cloud copy.";
         _fallbackStrings["CloudStatusSavedFormat"] = "Saved to cloud (version {0})";
         _fallbackStrings["CloudStatusErrorFormat"] = "Cloud operation failed: {0}";
+
+        _fallbackStrings["ImageScaleTitle"] = "Image Scale Settings";
+        _fallbackStrings["ImageScaleDescription"] = "Set the image scale used when saving PNG or copying to clipboard.";
+        _fallbackStrings["ImageScaleAutoMode"] = "Auto (recommended): 1.5x-5.0x by diagram complexity";
+        _fallbackStrings["ImageScaleFixedMode"] = "Fixed scale";
+        _fallbackStrings["OKButton"] = "OK";
     }
 
     private class LanguageFile

@@ -16,6 +16,9 @@
   "ZoomFormat": "缩放: {0}%",
   "ErrorFormat": "错误: {0}",
   "SyntaxErrorFormat": "语法错误: {0}",
+  "RenderErrorFormat": "渲染错误: {0}",
+  "ChromeNotFoundError": "缺少渲染组件（Chrome for Testing），无法生成图片。请重新安装应用或检查 tools 目录。",
+  "NodeNotFoundError": "缺少 Node.js 运行时，无法生成图片。请重新安装应用或检查 tools 目录。",
   "UnknownError": "未知错误",
   "AICodeApplied": "AI 生成的代码已应用",
   "CodeGenerated": "代码已生成",
@@ -32,6 +35,7 @@
   "MenuSaveAs": "另存为(_A)...",
   "MenuCloseTab": "关闭当前标签(_W)",
   "MenuAISettings": "AI 设置(_I)...",
+  "MenuImageScaleSettings": "图片倍率设置(_P)...",
   "MenuExit": "退出(_X)",
   "MenuEdit": "编辑(_E)",
   "MenuUndo": "撤销(_U)",
@@ -98,6 +102,12 @@
   "AIEndpoint": "Endpoint",
   "AIDeploymentName": "Deployment Name",
   "LanguageMenu": "语言",
+
+  "ImageScaleTitle": "图片倍率设置",
+  "ImageScaleDescription": "设置保存 PNG 或复制到剪贴板时使用的图片倍率。",
+  "ImageScaleAutoMode": "自动(推荐): 按图表复杂度在 1.5x ~ 5.0x 间调整",
+  "ImageScaleFixedMode": "固定倍率",
+  "OKButton": "确定",
   "CheckUpdate": "检查更新",
   "CheckingUpdate": "正在检查更新...",
   "UpdateAvailable": "发现新版本",
@@ -107,6 +117,7 @@
   "LatestVersion": "最新版本",
   "ReleaseNotes": "更新说明",
   "DownloadUpdate": "下载",
+  "DownloadInBrowser": "使用默认浏览器下载",
   "DownloadingUpdate": "正在下载...",
   "DownloadComplete": "下载完成！",
   "DownloadCompleteMessage": "更新包已保存至：\n{0}\n\n请关闭应用，解压 ZIP 文件并手动替换现有应用文件。",
@@ -189,5 +200,13 @@
   "CloudFolderNameSegmentTooLongFormat": "目录名的每一段不能超过 {0} 个字符",
   "CloudFolderNamePathTooLongFormat": "路径总长不能超过 {0} 个字符",
   "CloudFolderExists": "同名目录已存在",
-  "CloudFolderCreatedFormat": "已新建目录：{0}"
+  "CloudFolderCreatedFormat": "已新建目录：{0}",
+
+  "MenuRecentFilesMore": "更多...",
+  "RecentHistoryTitle": "打开历史",
+  "RecentHistoryFileName": "文件名",
+  "RecentHistoryOpenTime": "打开时间",
+  "RecentHistoryNoItems": "暂无打开历史",
+  "RecentHistorySearchPlaceholder": "搜索文件名...",
+  "RecentHistorySearchNoResults": "无匹配文件"
 }

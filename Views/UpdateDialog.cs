@@ -30,6 +30,7 @@ public sealed class UpdateDialog : Window
     private TextBlock _latestVersionLabel = null!;
     private TextBlock _releaseNotesBox = null!;
     private Button _downloadButton = null!;
+    private Button _downloadInBrowserButton = null!;
     private CheckBox _skipCheckBox = null!;
     private ProgressBar _progressBar = null!;
     private TextBlock _progressLabel = null!;
@@ -48,7 +49,7 @@ public sealed class UpdateDialog : Window
 
         Title = S.CheckUpdate;
         Width = 520;
-        Height = 480;
+        Height = 380;
         CanResize = false;
         ShowInTaskbar = false;
         WindowStartupLocation = WindowStartupLocation.CenterOwner;
@@ -149,9 +150,21 @@ public sealed class UpdateDialog : Window
         {
             Content = S.DownloadUpdate,
             MinWidth = 100,
-            Padding = new Thickness(16, 6)
+            Padding = new Thickness(16, 6),
+            HorizontalContentAlignment = HorizontalAlignment.Center,
+            HorizontalAlignment = HorizontalAlignment.Left
         };
         _downloadButton.Click += OnDownloadClick;
+
+        _downloadInBrowserButton = new Button
+        {
+            Content = S.DownloadInBrowser,
+            MinWidth = 100,
+            Padding = new Thickness(16, 6),
+            HorizontalContentAlignment = HorizontalAlignment.Center,
+            HorizontalAlignment = HorizontalAlignment.Left
+        };
+        _downloadInBrowserButton.Click += OnDownloadInBrowserClick;
 
         _skipCheckBox = new CheckBox
         {
@@ -167,6 +180,7 @@ public sealed class UpdateDialog : Window
             Children =
             {
                 _downloadButton,
+                _downloadInBrowserButton,
                 _skipCheckBox
             }
         };
@@ -229,7 +243,9 @@ public sealed class UpdateDialog : Window
         var retryButton = new Button
         {
             Content = S.CheckUpdate,
-            MinWidth = 100
+            MinWidth = 100,
+            HorizontalContentAlignment = HorizontalAlignment.Center,
+            HorizontalAlignment = HorizontalAlignment.Left
         };
         retryButton.Click += async (_, _) => await CheckForUpdatesAsync();
 
@@ -263,7 +279,9 @@ public sealed class UpdateDialog : Window
         var retryButton = new Button
         {
             Content = S.CheckUpdate,
-            MinWidth = 100
+            MinWidth = 100,
+            HorizontalContentAlignment = HorizontalAlignment.Center,
+            HorizontalAlignment = HorizontalAlignment.Left
         };
         retryButton.Click += async (_, _) => await CheckForUpdatesAsync();
 
@@ -483,6 +501,24 @@ public sealed class UpdateDialog : Window
         {
             ShowPanels();
             _errorPanel.IsVisible = true;
+        }
+    }
+
+    private void OnDownloadInBrowserClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        if (string.IsNullOrEmpty(_downloadUrl)) return;
+
+        try
+        {
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+            {
+                FileName = _downloadUrl,
+                UseShellExecute = true
+            });
+        }
+        catch
+        {
+            // fallback
         }
     }
 }

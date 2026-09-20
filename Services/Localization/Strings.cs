@@ -19,6 +19,9 @@ public class Strings
     public string ZoomFormat => Get("ZoomFormat");
     public string ErrorFormat => Get("ErrorFormat");
     public string SyntaxErrorFormat => Get("SyntaxErrorFormat");
+    public string RenderErrorFormat => Get("RenderErrorFormat");
+    public string ChromeNotFoundError => Get("ChromeNotFoundError");
+    public string NodeNotFoundError => Get("NodeNotFoundError");
     public string UnknownError => Get("UnknownError");
     public string AICodeApplied => Get("AICodeApplied");
     public string CodeGenerated => Get("CodeGenerated");
@@ -36,6 +39,7 @@ public class Strings
     public string MenuSaveAs => Get("MenuSaveAs");
     public string MenuCloseTab => Get("MenuCloseTab");
     public string MenuAISettings => Get("MenuAISettings");
+    public string MenuImageScaleSettings => Get("MenuImageScaleSettings");
     public string MenuExit => Get("MenuExit");
     public string MenuEdit => Get("MenuEdit");
     public string MenuUndo => Get("MenuUndo");
@@ -106,6 +110,12 @@ public class Strings
     public string AIEndpoint => Get("AIEndpoint");
     public string AIDeploymentName => Get("AIDeploymentName");
 
+    public string ImageScaleTitle => Get("ImageScaleTitle");
+    public string ImageScaleDescription => Get("ImageScaleDescription");
+    public string ImageScaleAutoMode => Get("ImageScaleAutoMode");
+    public string ImageScaleFixedMode => Get("ImageScaleFixedMode");
+    public string OKButton => Get("OKButton");
+
     public string LanguageMenu => Get("LanguageMenu");
 
     public string MenuCheckUpdate => Get("MenuCheckUpdate");
@@ -118,6 +128,7 @@ public class Strings
     public string LatestVersion => Get("LatestVersion");
     public string ReleaseNotes => Get("ReleaseNotes");
     public string DownloadUpdate => Get("DownloadUpdate");
+    public string DownloadInBrowser => Get("DownloadInBrowser");
     public string DownloadingUpdate => Get("DownloadingUpdate");
     public string DownloadComplete => Get("DownloadComplete");
     public string DownloadCompleteMessage => Get("DownloadCompleteMessage");
@@ -207,6 +218,15 @@ public class Strings
     public string CloudFolderNamePathTooLongFormat => Get("CloudFolderNamePathTooLongFormat");
     public string CloudFolderExists => Get("CloudFolderExists");
     public string CloudFolderCreatedFormat => Get("CloudFolderCreatedFormat");
+
+    // ---- 最近历史 ----
+    public string MenuRecentFilesMore => Get("MenuRecentFilesMore");
+    public string RecentHistoryTitle => Get("RecentHistoryTitle");
+    public string RecentHistoryFileName => Get("RecentHistoryFileName");
+    public string RecentHistoryOpenTime => Get("RecentHistoryOpenTime");
+    public string RecentHistoryNoItems => Get("RecentHistoryNoItems");
+    public string RecentHistorySearchPlaceholder => Get("RecentHistorySearchPlaceholder");
+    public string RecentHistorySearchNoResults => Get("RecentHistorySearchNoResults");
 
     public string Get(string key)
     {

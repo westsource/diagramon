@@ -287,6 +287,8 @@ FakesAssemblies/
 # Node.js Tools for Visual Studio
 .ntvs_analysis.dat
 node_modules/
+tools/puppeteer-cache/
+tools/node/node.exe
 
 # Visual Studio 6 build log
 *.plg
@@ -364,3 +366,6 @@ MigrationBackup/
 
 # Fody - auto-generated XML schema
 FodyWeavers.xsd
+
+# VS Code
+.vscode/

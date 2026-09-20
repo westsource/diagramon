@@ -132,6 +132,7 @@ public partial class MainViewModel : ViewModelBase
     public string MenuSaveAs => S.MenuSaveAs;
     public string MenuCloseTab => S.MenuCloseTab;
     public string MenuAISettings => S.MenuAISettings;
+    public string MenuImageScaleSettings => S.MenuImageScaleSettings;
     public string MenuExit => S.MenuExit;
     public string MenuEdit => S.MenuEdit;
     public string MenuUndo => S.MenuUndo;
@@ -188,6 +189,7 @@ public partial class MainViewModel : ViewModelBase
         OnPropertyChanged(nameof(MenuSaveAs));
         OnPropertyChanged(nameof(MenuCloseTab));
         OnPropertyChanged(nameof(MenuAISettings));
+        OnPropertyChanged(nameof(MenuImageScaleSettings));
         OnPropertyChanged(nameof(MenuExit));
         OnPropertyChanged(nameof(MenuEdit));
         OnPropertyChanged(nameof(MenuUndo));
@@ -272,7 +274,7 @@ public partial class MainViewModel : ViewModelBase
     [ObservableProperty]
     private AIPanelViewModel? _aiAssistant;
 
-    public bool HasRecentFiles => RecentFiles.Count > 0;
+    public bool HasRecentFiles => RecentFiles.Any(r => !r.IsMoreItem);
 
     public string ZoomText => string.Format(S.ZoomFormat, (int)(PreviewDisplayScale * 100));
 
@@ -353,6 +355,10 @@ public partial class MainViewModel : ViewModelBase
             {
                 RecentFiles.Add(new RecentFileItem(location));
             }
+        }
+        if (RecentFiles.Count > 0)
+        {
+            AppendMoreItem();
         }
         OnPropertyChanged(nameof(HasRecentFiles));
 
@@ -450,6 +456,28 @@ public partial class MainViewModel : ViewModelBase
         _ = dialog.ShowDialog(_ownerWindow);
     }
 
+    [RelayCommand]
+    private void OpenImageScaleSettings()
+    {
+        var dialog = new ImageScaleSettingsDialog(new ImageScaleSettingsViewModel(_settingsService, OnImageScaleSettingsSaved));
+        _ = dialog.ShowDialog(_ownerWindow);
+    }
+
+    private void OnImageScaleSettingsSaved()
+    {
+        // 导出倍率可能变化:作废所有标签页的缓存 PNG,并让当前页按新设置预生成
+        foreach (var tab in Tabs)
+        {
+            tab.CachedPngBytes = null;
+            tab.CachedPngScale = -1;
+        }
+
+        if (CurrentTab != null)
+        {
+            ScheduleBackgroundImageGeneration(CurrentTab);
+        }
+    }
+
     public void SaveSettings()
     {
         _settingsService.Settings.EditorPreviewRatio = EditorPreviewRatio;
@@ -503,6 +531,7 @@ public partial class MainViewModel : ViewModelBase
             tab.IsModified = true;
             tab.UpdateHeader();
             tab.CachedPngBytes = null;
+            tab.CachedPngScale = -1;
             ScheduleValidationAndRender(tab);
         }
     }
@@ -620,11 +649,48 @@ public partial class MainViewModel : ViewModelBase
             && tab.Content == contentSnapshot;
     }
 
+    private enum RenderErrorKind
+    {
+        Syntax,
+        Environment,
+    }
+
+    private static RenderErrorKind ClassifyRenderError(string? rawError)
+    {
+        if (string.IsNullOrWhiteSpace(rawError))
+        {
+            return RenderErrorKind.Environment;
+        }
+
+        // 渲染环境类错误（Chrome 缺失/无法启动、Node 缺失等），与图表语法无关
+        if (rawError.Contains("Could not find Chrome", StringComparison.OrdinalIgnoreCase) ||
+            rawError.Contains("Failed to launch the browser process", StringComparison.OrdinalIgnoreCase) ||
+            rawError.Contains("is not recognized", StringComparison.OrdinalIgnoreCase) ||
+            rawError.Contains("不是内部或外部命令", StringComparison.OrdinalIgnoreCase))
+        {
+            return RenderErrorKind.Environment;
+        }
+
+        return RenderErrorKind.Syntax;
+    }
+
     private static string BuildUserFriendlyError(string? rawError)
     {
         if (string.IsNullOrWhiteSpace(rawError))
         {
             return S.UnknownError;
+        }
+
+        if (rawError.Contains("Could not find Chrome", StringComparison.OrdinalIgnoreCase) ||
+            rawError.Contains("Failed to launch the browser process", StringComparison.OrdinalIgnoreCase))
+        {
+            return S.ChromeNotFoundError;
+        }
+
+        if (rawError.Contains("is not recognized", StringComparison.OrdinalIgnoreCase) ||
+            rawError.Contains("不是内部或外部命令", StringComparison.OrdinalIgnoreCase))
+        {
+            return S.NodeNotFoundError;
         }
 
         var lines = rawError
@@ -664,21 +730,24 @@ public partial class MainViewModel : ViewModelBase
             return null;
         }
 
-        if (tab.CachedPngBytes != null)
+        var elementCount = CountDiagramElements(tab.Content);
+        var scale = GetExportScale(elementCount);
+
+        if (tab.CachedPngBytes != null && Math.Abs(tab.CachedPngScale - scale) < 0.001)
         {
             return tab.CachedPngBytes;
         }
-
-        var elementCount = CountDiagramElements(tab.Content);
-        var scale = CalculateScale(elementCount);
 
         var result = await _mermaidService.RenderAndValidateAsync(tab.Content, scale);
         if (!result.Success || result.ImageData == null)
         {
             var shortError = BuildUserFriendlyError(result.ErrorMessage);
+            var kind = ClassifyRenderError(result.ErrorMessage);
             tab.HasError = true;
             tab.ErrorMessage = shortError;
-            StatusMessage = string.Format(S.SyntaxErrorFormat, shortError);
+            StatusMessage = kind == RenderErrorKind.Environment
+                ? string.Format(S.RenderErrorFormat, shortError)
+                : string.Format(S.SyntaxErrorFormat, shortError);
             return null;
         }
 
@@ -719,6 +788,17 @@ public partial class MainViewModel : ViewModelBase
         return 5.0;
     }
 
+    private double GetExportScale(int elementCount)
+    {
+        var settings = _settingsService.Settings;
+        if (settings.UseFixedExportScale)
+        {
+            return Math.Clamp(settings.FixedExportScale, AppSettings.MinExportScale, AppSettings.MaxExportScale);
+        }
+
+        return CalculateScale(elementCount);
+    }
+
     private void ScheduleBackgroundImageGeneration(TabItem tab)
     {
         if (!ReferenceEquals(tab, CurrentTab))
@@ -748,7 +828,7 @@ public partial class MainViewModel : ViewModelBase
         var contentSnapshot = tab.Content;
 
         var elementCount = CountDiagramElements(contentSnapshot);
-        var scale = CalculateScale(elementCount);
+        var scale = GetExportScale(elementCount);
 
         var result = await _mermaidService.RenderAndValidateAsync(contentSnapshot, scale);
 
@@ -758,14 +838,18 @@ public partial class MainViewModel : ViewModelBase
         if (ReferenceEquals(tab, CurrentTab) && tab.Content == contentSnapshot)
         {
             tab.CachedPngBytes = result.ImageData;
+            tab.CachedPngScale = scale;
         }
     }
 
     private async Task<bool> SaveTabAsync(TabItem tab)
     {
-        if (string.IsNullOrEmpty(tab.LocalFilePath))
+        var filePath = tab.LocalFilePath;
+        bool isNewFile = string.IsNullOrEmpty(filePath);
+
+        if (isNewFile)
         {
-            var filePath = await _fileService.SaveFileAsync(tab.Content, tab.Header);
+            filePath = await _fileService.SaveFileAsync(tab.Content, tab.Header);
             if (filePath == null)
             {
                 return false;
@@ -775,11 +859,17 @@ public partial class MainViewModel : ViewModelBase
         }
         else
         {
-            await _fileService.SaveFileToPathAsync(tab.Content, tab.LocalFilePath);
+            await _fileService.SaveFileToPathAsync(tab.Content, filePath!);
         }
 
         tab.IsModified = false;
         tab.UpdateHeader();
+
+        if (isNewFile && !string.IsNullOrEmpty(filePath))
+        {
+            AddToRecentFiles(filePath);
+        }
+
         StatusMessage = S.Saved;
         return true;
     }
@@ -921,6 +1011,12 @@ public partial class MainViewModel : ViewModelBase
     {
         if (item == null) return;
 
+        if (item.IsMoreItem)
+        {
+            await ShowRecentHistory();
+            return;
+        }
+
         // 云端条目尚未落地（阶段 A4）。当前 RecentEntry.ToLocation() 只产出本地位置，
         // 因此这一分支暂时不可达；保留是为了 A4 接入时不遗漏。
         if (item.Location is not LocalDocumentLocation local)
@@ -946,11 +1042,31 @@ public partial class MainViewModel : ViewModelBase
         await OpenFileFromPath(filePath);
     }
 
+    [RelayCommand]
+    private async Task ShowRecentHistory()
+    {
+        var history = _settingsService.GetHistoryWithExistingFiles();
+        if (history.Count == 0)
+        {
+            StatusMessage = S.RecentHistoryNoItems;
+            return;
+        }
+
+        var dialog = new RecentHistoryDialog(history);
+        var filePath = await dialog.ShowDialog<string?>(_ownerWindow);
+        if (!string.IsNullOrEmpty(filePath))
+        {
+            await OpenFileFromPath(filePath);
+        }
+    }
+
     private void AddToRecentFiles(string filePath)
     {
+        RemoveMoreItem();
+
         var location = new LocalDocumentLocation(filePath);
 
-        var existing = RecentFiles.FirstOrDefault(r => r.Location.StableId == location.StableId);
+        var existing = RecentFiles.FirstOrDefault(r => r.Location?.StableId == location.StableId);
         if (existing != null)
         {
             RecentFiles.Remove(existing);
@@ -963,23 +1079,44 @@ public partial class MainViewModel : ViewModelBase
             RecentFiles.RemoveAt(RecentFiles.Count - 1);
         }
 
+        AppendMoreItem();
+
         _settingsService.AddRecentFile(filePath);
         OnPropertyChanged(nameof(HasRecentFiles));
+    }
+
+    private void RemoveMoreItem()
+    {
+        var more = RecentFiles.FirstOrDefault(r => r.IsMoreItem);
+        if (more != null) RecentFiles.Remove(more);
+    }
+
+    private void AppendMoreItem()
+    {
+        RecentFiles.Add(RecentFileItem.CreateMoreItem());
     }
 
     private void RemoveFromRecentFiles(string? filePath)
     {
         if (string.IsNullOrEmpty(filePath)) return;
 
+        RemoveMoreItem();
+
         var stableId = DocumentIdentity.Normalize(filePath) ?? filePath;
 
-        var item = RecentFiles.FirstOrDefault(r => r.Location.StableId == stableId);
+        var item = RecentFiles.FirstOrDefault(r => r.Location?.StableId == stableId);
         if (item != null)
         {
             RecentFiles.Remove(item);
             _settingsService.RemoveRecentFile(filePath);
-            OnPropertyChanged(nameof(HasRecentFiles));
         }
+
+        if (RecentFiles.Count > 0)
+        {
+            AppendMoreItem();
+        }
+
+        OnPropertyChanged(nameof(HasRecentFiles));
     }
 
     [RelayCommand]
@@ -1338,7 +1475,7 @@ public partial class MainViewModel : ViewModelBase
         var dialog = new AboutDialog(
             "Diagramon",
             S.AboutDescription,
-            "黄超（道荣）",
+            "道荣（黄超）",
             AppVersion
         );
 
