@@ -1,6 +1,4 @@
 using System;
-using System.Collections.Generic;
-using System.Linq;
 using System.Threading.Tasks;
 using Avalonia;
 using Avalonia.Controls;
@@ -13,11 +11,12 @@ using Diagramon.Services.Remote;
 namespace Diagramon.Views;
 
 /// <summary>
-/// 云端文件管理：列出、打开、删除。
+/// 云端文件管理：左侧目录树 + 右侧当前目录的内容（打开、删除、刷新）。
 /// </summary>
 /// <remarks>
-/// 列表项只显示元数据 —— 契约规定 <c>List</c> 不返回 <c>content</c>，
-/// 内容在"打开"时按 id 单取。
+/// 左树来自 <c>GET /v1/folders</c>（显式 folders 行 ∪ 文档路径隐含的目录），所以<b>空目录</b>也看得见；
+/// 右栏只列当前目录的<b>直属</b>内容（子目录在前、文档在后），文档的 <c>content</c> 在"打开"时按 id 单取
+/// —— 契约规定列表不含内容。双击右栏的子目录进下一层，双击文档打开。
 /// </remarks>
 public sealed class CloudDocumentsDialog : Window
 {
@@ -26,12 +25,10 @@ public sealed class CloudDocumentsDialog : Window
     private static readonly IBrush NormalBrush = new SolidColorBrush(Color.Parse("#444444"));
 
     private readonly RemoteDocumentStore _store;
-    private readonly ListBox _list = new() { Margin = new Thickness(0, 0, 0, 8) };
+    private readonly CloudBrowserPane _browser;
     private readonly TextBlock _status = new() { TextWrapping = TextWrapping.Wrap, FontSize = 12 };
     private readonly Button _openButton;
     private readonly Button _deleteButton;
-
-    private List<DocumentListItemDto> _items = new();
 
     /// <summary>用户选择打开的文档；未选择则为 null。</summary>
     public DocumentListItemDto? Selected { get; private set; }
@@ -39,56 +36,59 @@ public sealed class CloudDocumentsDialog : Window
     public CloudDocumentsDialog(RemoteDocumentStore store)
     {
         _store = store;
+        _browser = new CloudBrowserPane(store, S.CloudFolderTreeTitle);
 
         Title = S.CloudTitle;
-        Width = 620;
-        Height = 460;
+        Width = 760;
+        Height = 540;
         CanResize = true;
         ShowInTaskbar = false;
         WindowStartupLocation = WindowStartupLocation.CenterOwner;
 
-        _openButton = MakeButton(S.AuthSignIn, 96);
+        _browser.LoadStarted += (_, _) => SetStatus(S.AuthWorking, isError: false);
+        _browser.Loaded += (_, _) => RefreshStatus();
+        _browser.Failed += (_, code) => ShowError(code);
+        _browser.SelectionChanged += (_, _) => UpdateButtons();
+        _browser.DocumentActivated += (_, _) => OpenSelected();
+
+        _openButton = MakeButton(S.CloudOpen, 96);
         _openButton.Click += (_, _) => OpenSelected();
 
         _deleteButton = MakeButton(S.CloudDelete, 88);
         _deleteButton.Click += async (_, _) => await DeleteSelectedAsync();
 
         var refreshButton = MakeButton(S.CloudRefresh, 88);
-        refreshButton.Click += async (_, _) => await ReloadAsync();
+        refreshButton.Click += async (_, _) => await _browser.ReloadAsync();
 
         var closeButton = MakeButton(S.AuthClose, 88);
         closeButton.IsCancel = true;
         closeButton.Click += (_, _) => Close();
 
-        _list.SelectionChanged += (_, _) => UpdateButtons();
-        _list.DoubleTapped += (_, _) => OpenSelected();
+        var buttons = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            HorizontalAlignment = HorizontalAlignment.Right,
+            Spacing = 8,
+            Children = { _deleteButton, refreshButton, _openButton, closeButton },
+        };
+        Grid.SetRow(buttons, 2);
+
+        var statusRow = new StackPanel
+        {
+            Margin = new Thickness(0, 10, 0, 0),
+            Children = { _status },
+        };
+        Grid.SetRow(statusRow, 1);
 
         Content = new Grid
         {
             RowDefinitions = RowDefinitions.Parse("*,Auto,Auto"),
             Margin = new Thickness(20),
-            Children =
-            {
-                _list,
-                new StackPanel
-                {
-                    [Grid.RowProperty] = 1,
-                    Orientation = Orientation.Horizontal,
-                    HorizontalAlignment = HorizontalAlignment.Right,
-                    Spacing = 8,
-                    Children = { _deleteButton, refreshButton, _openButton, closeButton },
-                },
-                new StackPanel
-                {
-                    [Grid.RowProperty] = 2,
-                    Margin = new Thickness(0, 10, 0, 0),
-                    Children = { _status },
-                },
-            },
+            Children = { _browser.View, statusRow, buttons },
         };
 
         UpdateButtons();
-        Opened += async (_, _) => await ReloadAsync();
+        Opened += async (_, _) => await _browser.ReloadAsync();
     }
 
     /// <summary>以模态方式打开，返回用户选择要打开的文档（取消返回 null）。</summary>
@@ -106,94 +106,82 @@ public sealed class CloudDocumentsDialog : Window
         HorizontalContentAlignment = HorizontalAlignment.Center,
     };
 
-    private async Task ReloadAsync()
+    private void RefreshStatus()
     {
-        SetStatus(S.AuthWorking, isError: false);
-        _openButton.IsEnabled = false;
-        _deleteButton.IsEnabled = false;
-
-        var result = await _store.ListAsync();
-
-        if (!result.Ok || result.Value == null)
+        if (_browser.CurrentFolder is not { } folder)
         {
-            _items = new List<DocumentListItemDto>();
-            _list.ItemsSource = new List<string> { DescribeError(result.ErrorCode) };
-            SetStatus(DescribeError(result.ErrorCode), isError: true);
             return;
         }
 
-        _items = result.Value.Items ?? new List<DocumentListItemDto>();
-        // 列表项用纯文本，SelectedIndex 与 _items 一一对应 —— 避免引入数据模板
-        _list.ItemsSource = _items
-            .Select(d => $"{d.Name}    v{d.Version}    {FormatSize(d.Size)}    {ShortenTime(d.UpdatedAt)}")
-            .ToList();
-
-        if (_items.Count == 0)
+        if (_browser.FolderCount == 0 && _browser.DocumentCount == 0)
         {
-            SetStatus(S.CloudEmpty, isError: false);
-        }
-        else
-        {
-            var quota = result.Value.Quota;
-            SetStatus(
-                quota == null
-                    ? $"{_items.Count}"
-                    : $"{_items.Count}    {FormatSize(quota.UsedBytes)} / {FormatSize(quota.QuotaBytes)}",
-                isError: false);
+            SetStatus(CloudFolderTree.DescribeEmptyContents(folder), isError: false);
+            return;
         }
 
+        var summary = string.Format(S.CloudStatusItemsFormat, _browser.FolderCount, _browser.DocumentCount);
+        if (_browser.Quota is { } quota)
+        {
+            summary += $"    {CloudFolderTree.DescribeQuota(quota)}";
+        }
+
+        SetStatus(summary, isError: false);
+    }
+
+    private void ShowError(string? code)
+    {
+        SetStatus(CloudErrorText.Describe(code), isError: true);
         UpdateButtons();
     }
 
     private void OpenSelected()
     {
-        var item = CurrentSelection();
-        if (item == null) return;
+        if (_browser.SelectedDocument is not { } document)
+        {
+            return;
+        }
 
-        Selected = item;
+        Selected = document;
         Close();
     }
 
     private async Task DeleteSelectedAsync()
     {
-        var item = CurrentSelection();
-        if (item == null) return;
+        if (_browser.SelectedDocument is not { } document)
+        {
+            return;
+        }
 
         var confirmed = await ConfirmAsync(
             this,
             S.CloudConfirmDeleteTitle,
-            string.Format(S.CloudConfirmDeleteFormat, item.Name),
+            string.Format(S.CloudConfirmDeleteFormat, document.Name),
             S.CloudDelete);
 
         if (!confirmed) return;
 
-        if (!Guid.TryParse(item.Id, out var id))
+        if (!Guid.TryParse(document.Id, out var id))
         {
-            SetStatus(DescribeError("validation_error"), isError: true);
+            SetStatus(CloudErrorText.Describe(RemoteDocumentStore.ErrorValidation), isError: true);
             return;
         }
 
         var result = await _store.DeleteAsync(id);
         if (!result.Ok)
         {
-            SetStatus(DescribeError(result.ErrorCode), isError: true);
+            SetStatus(CloudErrorText.Describe(result.ErrorCode), isError: true);
             return;
         }
 
-        await ReloadAsync();
-    }
-
-    private DocumentListItemDto? CurrentSelection()
-    {
-        var index = _list.SelectedIndex;
-        return index >= 0 && index < _items.Count ? _items[index] : null;
+        // 删掉一个目录里的最后一个文档，会让"由文档隐含"出来的目录整条消失，所以连树一起重来
+        await _browser.ReloadAsync();
     }
 
     private void UpdateButtons()
     {
-        var hasSelection = CurrentSelection() != null;
-        _openButton.IsEnabled = hasSelection;
-        _deleteButton.IsEnabled = hasSelection;
+        var isDocument = _browser.SelectedDocument != null;
+        _openButton.IsEnabled = isDocument;
+        _deleteButton.IsEnabled = isDocument;
     }
 
     private void SetStatus(string text, bool isError)
@@ -201,24 +189,6 @@ public sealed class CloudDocumentsDialog : Window
         _status.Text = text;
         _status.Foreground = isError ? ErrorBrush : NormalBrush;
     }
-
-    /// <summary>把线上错误码映射成本地化文案。</summary>
-    private static string DescribeError(string? code) => code switch
-    {
-        "membership_required" => S.AuthFreePlanHint,
-        "quota_exceeded" => S.AuthErrorGeneric,
-        "not_found" => S.FileNotFound,
-        ApiClient.NetworkError => S.AuthErrorNetwork,
-        _ => string.Format(S.CloudStatusErrorFormat, code ?? S.AuthErrorGeneric),
-    };
-
-    private static string FormatSize(long bytes) =>
-        bytes < 1024 ? $"{bytes} B"
-        : bytes < 1024 * 1024 ? $"{bytes / 1024.0:0.#} KB"
-        : $"{bytes / (1024.0 * 1024.0):0.##} MB";
-
-    private static string ShortenTime(string? iso) =>
-        DateTimeOffset.TryParse(iso, out var t) ? t.ToLocalTime().ToString("MM-dd HH:mm") : string.Empty;
 
     /// <summary>极简确认框 —— 只为避免为一次 yes/no 引入新依赖。</summary>
     private static async Task<bool> ConfirmAsync(Window owner, string title, string message, string okLabel)

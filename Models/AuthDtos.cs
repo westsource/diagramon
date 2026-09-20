@@ -156,6 +156,16 @@ public sealed class ConfigResponse
     public Dictionary<string, JsonElement>? FeatureFlags { get; set; }
 
     public string MinVersion { get; set; } = string.Empty;
+
+    /// <summary>
+    /// 密码最小长度（服务端权威值）。用于注册/改密码前的**前置校验**——
+    /// 客户端不硬编码，否则必然与服务端漂移。取不到时按 <see cref="FallbackMinPasswordLength"/> 保守处理。
+    /// </summary>
+    public int MinPasswordLength { get; set; }
+
+    /// <summary>拿不到 <c>/config</c> 时的兜底（离线冷启动）。服务端仍是最终裁决者。</summary>
+    public const int FallbackMinPasswordLength = 8;
+
     public List<AiAliasDto>? AiAliases { get; set; }
     public bool TelemetryEnabled { get; set; }
     public string? ServerTime { get; set; }

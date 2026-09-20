@@ -107,7 +107,22 @@ public partial class MainViewModel : ViewModelBase
         return "1.0.0.0";
     }
 
-    public string WindowTitle => $"Diagramon v{AppVersion} - {S.AppTitle.Split('-').Last().Trim()}";
+    /// <summary>标题栏：<c>Diagramon v&lt;版本&gt; - &lt;描述&gt;</c>。</summary>
+    /// <remarks>
+    /// <c>AppTitle</c> 形如「Diagramon - 多格式图表编辑器」，这里只取分隔符**之后**的部分。
+    /// 必须按「 - 」整串切、且只切一刀：描述自身可能含连字符（如 <c>Multi-format</c>），
+    /// 用 <c>Split('-')</c> 取末段会把它切成 <c>format Diagram Editor</c>。
+    /// </remarks>
+    public string WindowTitle => $"Diagramon v{AppVersion} - {AppTitleSuffix}";
+
+    private static string AppTitleSuffix
+    {
+        get
+        {
+            var parts = S.AppTitle.Split(" - ", 2, StringSplitOptions.None);
+            return (parts.Length == 2 ? parts[1] : S.AppTitle).Trim();
+        }
+    }
 
     public string MenuFile => S.MenuFile;
     public string MenuNew => S.MenuNew;
@@ -1120,11 +1135,20 @@ public partial class MainViewModel : ViewModelBase
 
         var content = tab.Content;
 
-        var (id, name, version) = tab.Location is CloudDocumentLocation cloud
+        var cloud = tab.Location as CloudDocumentLocation;
+        var (id, suggestedName, version) = cloud != null
             ? (Guid.Parse(cloud.StableId), cloud.DisplayName, tab.CloudVersion)
             : (Guid.CreateVersion7(), tab.Header, (int?)null);
 
-        var result = await _documentStore.PutAsync(id, name, "mmd", content, version);
+        // 目标路径默认是文档当前所在位置（新文档 = 根），文档名默认是当前云端名（新文档 = 标签页名）；
+        // 两者都可以改，取消选择即中止本次保存。
+        var target = await CloudPathPickerDialog.PickAsync(
+            _ownerWindow, _documentStore, S.CloudPathSaveTitle, S.CloudPathSaveLabel, cloud?.Path, suggestedName);
+        if (target == null) return;
+
+        // 改名不需要额外请求：PUT 的 name 就是服务端的改名入口（同一目录内重名 → 409 name_taken）
+        var result = await _documentStore.PutAsync(
+            id, target.Name, "mmd", content, version, path: target.Path, vaultId: cloud?.VaultId);
 
         if (!result.Ok)
         {
@@ -1134,7 +1158,7 @@ public partial class MainViewModel : ViewModelBase
                 && TryReadConflict(result.Details, out var serverHash, out var serverVersion)
                 && serverHash == RemoteDocumentStore.Sha256Hex(content))
             {
-                ApplyCloudSaved(tab, id, name, serverVersion);
+                ApplyCloudSaved(tab, id, target.Name, serverVersion, target.Path, cloud?.VaultId);
                 return;
             }
 
@@ -1142,7 +1166,7 @@ public partial class MainViewModel : ViewModelBase
             return;
         }
 
-        ApplyCloudSaved(tab, id, name, result.Value!.Version);
+        ApplyCloudSaved(tab, id, target.Name, result.Value!.Version, target.Path, cloud?.VaultId);
     }
 
     /// <summary>从云端打开（先列表后按 id 取值 —— 契约规定列表不含 content）。</summary>
@@ -1171,7 +1195,7 @@ public partial class MainViewModel : ViewModelBase
         var tab = new TabItem
         {
             Content = doc.Content,
-            Location = new CloudDocumentLocation(doc.Id, doc.Name),
+            Location = new CloudDocumentLocation(doc.Id, doc.Name, doc.Path, doc.VaultId),
             CloudVersion = doc.Version,
         };
         tab.ContentChanged += OnTabContentChanged;
@@ -1180,9 +1204,9 @@ public partial class MainViewModel : ViewModelBase
         SelectedTabIndex = Tabs.Count - 1;
     }
 
-    private void ApplyCloudSaved(TabItem tab, Guid id, string name, int version)
+    private void ApplyCloudSaved(TabItem tab, Guid id, string name, int version, string path, string? vaultId)
     {
-        tab.Location = new CloudDocumentLocation(id.ToString(), name);
+        tab.Location = new CloudDocumentLocation(id.ToString(), name, path, vaultId);
         tab.CloudVersion = version;
         tab.IsModified = false;
         tab.UpdateHeader();
@@ -1213,13 +1237,7 @@ public partial class MainViewModel : ViewModelBase
         return contentHash != null;
     }
 
-    private static string DescribeCloudError(string? code) => code switch
-    {
-        "membership_required" => S.AuthFreePlanHint,
-        "not_found" => S.FileNotFound,
-        ApiClient.NetworkError => S.AuthErrorNetwork,
-        _ => string.Format(S.CloudStatusErrorFormat, code ?? S.AuthErrorGeneric),
-    };
+    private static string DescribeCloudError(string? code) => CloudErrorText.Describe(code);
 
     public bool HasUnsavedChanges => Tabs.Any(t => t.IsModified);
 
@@ -1319,7 +1337,7 @@ public partial class MainViewModel : ViewModelBase
     {
         var dialog = new AboutDialog(
             "Diagramon",
-            "本地 Mermaid 图表编辑器。支持代码编辑、语法高亮、实时预览、缩放拖拽、语法检测、图片导出；集成 AI 助手，可通过自然语言生成图表；支持多标签页多文件编辑；本地渲染，数据不上传。",
+            S.AboutDescription,
             "黄超（道荣）",
             AppVersion
         );

@@ -6,11 +6,16 @@ namespace Diagramon.Models;
 /// 因此"先本地、后上云"时身份会从规范化路径变成 docId，AI 会话键随之改变，已有会话不跟随。
 /// v1 接受这一限制。
 /// </remarks>
-public sealed record CloudDocumentLocation(string DocumentId, string DisplayName) : IDocumentLocation
+public sealed record CloudDocumentLocation(
+    string DocumentId,
+    string DisplayName,
+    string Path = "",
+    string? VaultId = null) : IDocumentLocation
 {
     public string Kind => "cloud";
 
-    public string DisplayPath => DisplayName;
+    /// <summary>库内路径 + 名称；根目录下就是名称本身。</summary>
+    public string DisplayPath => Path.Length == 0 ? DisplayName : $"{Path}/{DisplayName}";
 
     public string StableId => DocumentId;
 

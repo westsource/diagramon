@@ -50,6 +50,7 @@ public class Strings
     public string MenuSettings => Get("MenuSettings");
 
     public string AboutTitle => Get("AboutTitle");
+    public string AboutDescription => Get("AboutDescription");
     public string AboutFeatures => Get("AboutFeatures");
     public string AboutAuthor => Get("AboutAuthor");
     public string AboutVersion => Get("AboutVersion");
@@ -130,6 +131,11 @@ public class Strings
     public string AuthTitle => Get("AuthTitle");
     public string AuthEmail => Get("AuthEmail");
     public string AuthPassword => Get("AuthPassword");
+    public string AuthConfirmPassword => Get("AuthConfirmPassword");
+    public string AuthErrorPasswordMismatch => Get("AuthErrorPasswordMismatch");
+    public string AuthErrorPasswordTooShortFormat => Get("AuthErrorPasswordTooShortFormat");
+    public string AuthErrorPasswordTooLongFormat => Get("AuthErrorPasswordTooLongFormat");
+    public string AuthErrorEmailFormat => Get("AuthErrorEmailFormat");
     public string AuthSignIn => Get("AuthSignIn");
     public string AuthRegister => Get("AuthRegister");
     public string AuthSwitchToRegister => Get("AuthSwitchToRegister");
@@ -163,6 +169,44 @@ public class Strings
     public string CloudConfirmDeleteFormat => Get("CloudConfirmDeleteFormat");
     public string CloudStatusSavedFormat => Get("CloudStatusSavedFormat");
     public string CloudStatusErrorFormat => Get("CloudStatusErrorFormat");
+    public string CloudOpen => Get("CloudOpen");
+    public string CloudStatusItemsFormat => Get("CloudStatusItemsFormat");
+    public string CloudColumnName => Get("CloudColumnName");
+    public string CloudColumnType => Get("CloudColumnType");
+    public string CloudColumnSize => Get("CloudColumnSize");
+    public string CloudColumnModified => Get("CloudColumnModified");
+    public string CloudTypeFolder => Get("CloudTypeFolder");
+
+    // ---- 云端多级路径 ----
+    public string CloudPathSaveTitle => Get("CloudPathSaveTitle");
+    public string CloudPathSaveLabel => Get("CloudPathSaveLabel");
+    public string CloudPathRoot => Get("CloudPathRoot");
+    public string CloudPathCurrentFormat => Get("CloudPathCurrentFormat");
+    public string CloudPathNoContent => Get("CloudPathNoContent");
+    public string CloudPathDocumentHint => Get("CloudPathDocumentHint");
+    public string CloudPathNewFolderPlaceholder => Get("CloudPathNewFolderPlaceholder");
+    public string CloudPathCreate => Get("CloudPathCreate");
+    public string CloudPathConfirm => Get("CloudPathConfirm");
+    public string CloudDocumentNameLabel => Get("CloudDocumentNameLabel");
+    public string CloudDocumentNameRequired => Get("CloudDocumentNameRequired");
+    public string CloudDocumentNameTooLongFormat => Get("CloudDocumentNameTooLongFormat");
+    public string CloudDocumentNameInvalid => Get("CloudDocumentNameInvalid");
+    public string CloudDocumentNameTaken => Get("CloudDocumentNameTaken");
+    public string CloudFolderTreeTitle => Get("CloudFolderTreeTitle");
+    public string CloudFolderEmpty => Get("CloudFolderEmpty");
+    public string CloudFolderDocsFormat => Get("CloudFolderDocsFormat");
+    public string CloudFolderSubdirs => Get("CloudFolderSubdirs");
+    public string CloudFolderNameRequired => Get("CloudFolderNameRequired");
+    public string CloudFolderNameInvalid => Get("CloudFolderNameInvalid");
+    public string CloudFolderNameRejected => Get("CloudFolderNameRejected");
+    public string CloudFolderNameBackslash => Get("CloudFolderNameBackslash");
+    public string CloudFolderNameControlChar => Get("CloudFolderNameControlChar");
+    public string CloudFolderNameDotSegment => Get("CloudFolderNameDotSegment");
+    public string CloudFolderNameEmptySegment => Get("CloudFolderNameEmptySegment");
+    public string CloudFolderNameSegmentTooLongFormat => Get("CloudFolderNameSegmentTooLongFormat");
+    public string CloudFolderNamePathTooLongFormat => Get("CloudFolderNamePathTooLongFormat");
+    public string CloudFolderExists => Get("CloudFolderExists");
+    public string CloudFolderCreatedFormat => Get("CloudFolderCreatedFormat");
 
     public string Get(string key)
     {

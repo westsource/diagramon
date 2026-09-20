@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Net;
 using System.Net.Http;
 using System.Text.Json;
@@ -272,11 +273,74 @@ public sealed class AuthService
     {
         LastErrorCode = result.ErrorCode ?? ApiClient.NetworkError;
         LastErrorDetail = result.ErrorDetail;
+        LastErrorFields = ExtractFields(result.Details);
+        LastErrorMinLength = ExtractInt(result.Details, "minLength");
+        LastErrorMaxLength = ExtractInt(result.Details, "maxLength");
+    }
+
+    /// <summary>服务端错误包络里 <c>details.minLength</c>（<c>weak_password</c> 的下限）；没有则为 null。</summary>
+    /// <remarks>
+    /// 服务端按分支只给其中一个：密码过短给 <c>minLength</c>、过长给 <c>maxLength</c>。
+    /// 表现层据此判断方向并给出**带准确数字**的文案，而不是硬编码的"至少 8 位"。
+    /// </remarks>
+    public int? LastErrorMinLength { get; private set; }
+
+    /// <summary>同上，<c>details.maxLength</c>。</summary>
+    public int? LastErrorMaxLength { get; private set; }
+
+    private static int? ExtractInt(JsonElement? details, string propertyName)
+    {
+        if (details is not { ValueKind: JsonValueKind.Object } obj)
+        {
+            return null;
+        }
+
+        return obj.TryGetProperty(propertyName, out var value)
+            && value.ValueKind == JsonValueKind.Number
+            && value.TryGetInt32(out var number)
+                ? number
+                : null;
+    }
+
+    /// <summary>
+    /// 服务端错误包络里 <c>details.fields</c> 指出的出错字段（如 <c>["email"]</c>）：没有则为空。
+    /// </summary>
+    /// <remarks>
+    /// 服务端在 422 里已经指明是哪个字段错了，但 <c>validation_error</c> 这个码本身分不出
+    /// "邮箱格式错"还是"密码太短"。表现层据此给出具体提示，而不是笼统的"输入不合法"。
+    /// </remarks>
+    public IReadOnlyList<string> LastErrorFields { get; private set; } = Array.Empty<string>();
+
+    private static IReadOnlyList<string> ExtractFields(JsonElement? details)
+    {
+        if (details is not { ValueKind: JsonValueKind.Object } obj)
+        {
+            return Array.Empty<string>();
+        }
+
+        if (!obj.TryGetProperty("fields", out var fields) || fields.ValueKind != JsonValueKind.Array)
+        {
+            return Array.Empty<string>();
+        }
+
+        var list = new List<string>();
+        foreach (var item in fields.EnumerateArray())
+        {
+            if (item.ValueKind == JsonValueKind.String)
+            {
+                list.Add(item.GetString()!);
+            }
+        }
+
+        return list;
     }
 
     private void ClearError()
     {
         LastErrorCode = null;
         LastErrorDetail = null;
+        LastErrorFields = Array.Empty<string>();
+        LastErrorMinLength = null;
+        LastErrorMaxLength = null;
     }
 }

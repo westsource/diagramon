@@ -192,7 +192,7 @@ public sealed class LocalizationService
 
     private void LoadFallbackStrings()
     {
-        _fallbackStrings["AppTitle"] = "Diagramon - Mermaid Diagram Editor";
+        _fallbackStrings["AppTitle"] = "Diagramon - Multi-format Diagram Editor";
         _fallbackStrings["Ready"] = "Ready";
         _fallbackStrings["Rendering"] = "Rendering preview...";
         _fallbackStrings["PreviewUpdated"] = "Preview updated";
@@ -253,7 +253,7 @@ _fallbackStrings["MenuMermaidDocs"] = "_Mermaid Documentation...";
         _fallbackStrings["AuthFreePlanHint"] = "Cloud storage requires a membership";
         _fallbackStrings["AuthErrorInvalidCredentials"] = "Incorrect email or password";
         _fallbackStrings["AuthErrorEmailTaken"] = "That email is already registered";
-        _fallbackStrings["AuthErrorWeakPassword"] = "Password too weak (at least 8 characters)";
+        _fallbackStrings["AuthErrorWeakPassword"] = "Password is too weak";
         _fallbackStrings["AuthErrorRateLimited"] = "Too many attempts, please try again later";
         _fallbackStrings["AuthErrorValidation"] = "Invalid input";
         _fallbackStrings["AuthErrorNetwork"] = "Cannot reach the cloud service";
