@@ -2,16 +2,33 @@ using System;
 using CommunityToolkit.Mvvm.ComponentModel;
 using Avalonia.Media.Imaging;
 using AvaloniaEdit.Document;
+using Diagramon.Services.Documents;
 
 namespace Diagramon.Models;
 
 public partial class TabItem : ObservableObject
 {
     [ObservableProperty]
-    private string _header = "未命名.mmd";
+    private string _header = string.Empty;
+
+    /// <summary>
+    /// 该标签页的文档格式 id（见 <c>DocumentFormatRegistry</c>）。默认值即注册表的回退格式，
+    /// 新建 / 打开 / 从云端打开时由 <c>MainViewModel</c> 显式赋值。
+    /// </summary>
+    [ObservableProperty]
+    private string _formatId = DocumentFormatRegistry.FallbackFormatId;
 
     [ObservableProperty]
     private bool _isModified;
+
+    /// <summary>
+    /// 挂起内容变更通知：为 true 时写入 <see cref="Content"/> 不触发 <see cref="ContentChanged"/>。
+    /// </summary>
+    /// <remarks>
+    /// 给内嵌图形编辑器（drawio autosave 回写）用：回写本身会触发一次重新渲染，
+    /// 而那次渲染又会回写 —— 必须能在回写期间断开这条回路。
+    /// </remarks>
+    public bool SuspendContentNotifications { get; set; }
 
     private TextDocument? _document;
     public TextDocument Document
@@ -21,13 +38,19 @@ public partial class TabItem : ObservableObject
             if (_document == null)
             {
                 _document = new TextDocument();
-                _document.TextChanged += (s, e) =>
-                {
-                    OnPropertyChanged(nameof(Content));
-                    ContentChanged?.Invoke(this, EventArgs.Empty);
-                };
+                _document.TextChanged += OnDocumentTextChanged;
             }
             return _document;
+        }
+    }
+
+    private void OnDocumentTextChanged(object? sender, EventArgs e)
+    {
+        OnPropertyChanged(nameof(Content));
+
+        if (!SuspendContentNotifications)
+        {
+            ContentChanged?.Invoke(this, EventArgs.Empty);
         }
     }
 
@@ -71,9 +94,6 @@ public partial class TabItem : ObservableObject
 
     [ObservableProperty]
     private bool _hasError;
-
-    [ObservableProperty]
-    private string _webPreviewHtml = string.Empty;
 
     [ObservableProperty]
     private bool _isSelected;

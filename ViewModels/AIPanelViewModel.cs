@@ -7,6 +7,7 @@ using CommunityToolkit.Mvvm.Input;
 using Diagramon.Models;
 using Diagramon.Services;
 using Diagramon.Services.AIService;
+using Diagramon.Services.Documents;
 using Diagramon.Services.Localization;
 
 namespace Diagramon.ViewModels;
@@ -17,7 +18,8 @@ public partial class AIPanelViewModel : ViewModelBase
     private readonly SettingsService _settingsService;
     private readonly AIConversationService _conversationService;
     private IAIService? _aiService;
-    private string? _currentFilePath;
+    private string? _currentStableId;
+    private string _currentFormatId = DocumentFormatRegistry.FallbackFormatId;
 
     [ObservableProperty]
     private ObservableCollection<AIMessage> _messages = new();
@@ -61,7 +63,8 @@ public partial class AIPanelViewModel : ViewModelBase
     public string AIRevert => S.AIRevert;
     public string AICodeGenerated => S.AICodeGenerated;
 
-    public event EventHandler<string>? CodeGenerated;
+    /// <summary>生成或回退的代码要写回编辑器；载荷带上生成时的格式 id，由承载方核对。</summary>
+    public event EventHandler<AICodeApplyRequest>? CodeGenerated;
     public event EventHandler? ToggleRequested;
     public event EventHandler? OpenSettingsRequested;
 
@@ -159,9 +162,19 @@ public partial class AIPanelViewModel : ViewModelBase
         }
     }
 
-    public void SetCurrentFile(string? filePath)
+    /// <summary>
+    /// 切换 AI 面板绑定的文档：<paramref name="stableId"/> 决定会话存档键（本地 = 规范化路径，
+    /// 云端 = 服务端文档 id），<paramref name="formatId"/> 决定系统提示词与代码围栏。
+    /// </summary>
+    public void SetCurrentDocument(string? stableId, string formatId)
     {
-        _currentFilePath = filePath;
+        if (stableId == _currentStableId && formatId == _currentFormatId)
+        {
+            return;
+        }
+
+        _currentStableId = stableId;
+        _currentFormatId = formatId;
         LoadConversation();
     }
 
@@ -169,7 +182,7 @@ public partial class AIPanelViewModel : ViewModelBase
     {
         Messages.Clear();
 
-        var conversation = _conversationService.GetOrCreateConversation(_currentFilePath);
+        var conversation = _conversationService.GetOrCreateConversation(_currentStableId);
         foreach (var message in conversation.Messages)
         {
             Messages.Add(message);
@@ -224,7 +237,10 @@ public partial class AIPanelViewModel : ViewModelBase
                 .Where(m => !m.IsLoading && m != loadingMessage)
                 .ToList();
 
-            var response = await _aiService.GenerateAsync(prompt, currentCode, history);
+            var response = await _aiService.GenerateAsync(prompt, currentCode, history, _currentFormatId);
+
+            // 记录生成时的格式：应用代码时据此判断当前标签页是否还是同一个格式
+            response.FormatId = _currentFormatId;
 
             var index = Messages.IndexOf(loadingMessage);
             if (index >= 0)
@@ -275,7 +291,7 @@ public partial class AIPanelViewModel : ViewModelBase
         if (message == null || string.IsNullOrEmpty(message.GeneratedCode))
             return;
 
-        CodeGenerated?.Invoke(this, message.GeneratedCode);
+        CodeGenerated?.Invoke(this, new AICodeApplyRequest(message.GeneratedCode, message.FormatId));
         StatusMessage = S.CodeGenerated;
     }
 
@@ -285,14 +301,14 @@ public partial class AIPanelViewModel : ViewModelBase
         if (message == null || string.IsNullOrEmpty(message.CodeBeforeGeneration))
             return;
 
-        CodeGenerated?.Invoke(this, message.CodeBeforeGeneration);
+        CodeGenerated?.Invoke(this, new AICodeApplyRequest(message.CodeBeforeGeneration, message.FormatId));
         StatusMessage = S.CodeReverted;
     }
 
     [RelayCommand]
     private void ClearHistory()
     {
-        _conversationService.ClearConversation(_currentFilePath);
+        _conversationService.ClearConversation(_currentStableId);
         Messages.Clear();
         OnPropertyChanged(nameof(HasMessages));
         StatusMessage = S.ConversationCleared;
@@ -306,7 +322,7 @@ public partial class AIPanelViewModel : ViewModelBase
 
     private void SaveConversation()
     {
-        var conversation = _conversationService.GetOrCreateConversation(_currentFilePath);
+        var conversation = _conversationService.GetOrCreateConversation(_currentStableId);
         conversation.Messages = Messages.ToList();
         _conversationService.SaveConversation(conversation);
     }

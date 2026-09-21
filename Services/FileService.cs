@@ -2,15 +2,21 @@ using System;
 using System.IO;
 using System.Threading.Tasks;
 using Avalonia.Platform.Storage;
+using Diagramon.Services.Documents;
+using Diagramon.Services.Localization;
 
 namespace Diagramon.Services;
 
 public class FileService
 {
+    private static readonly Strings S = Strings.Instance;
+
+    private readonly DocumentFormatRegistry _formats;
     private IStorageProvider? _storageProvider;
 
-    public FileService()
+    public FileService(DocumentFormatRegistry formats)
     {
+        _formats = formats;
     }
 
     public void SetStorageProvider(IStorageProvider storageProvider)
@@ -24,19 +30,9 @@ public class FileService
 
         var files = await _storageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
         {
-            Title = "打开 Mermaid 文件",
+            Title = S.OpenFileDialogTitle,
             AllowMultiple = false,
-            FileTypeFilter = new[]
-            {
-                new FilePickerFileType("Mermaid 文件")
-                {
-                    Patterns = new[] { "*.mmd", "*.mermaid" }
-                },
-                new FilePickerFileType("所有文件")
-                {
-                    Patterns = new[] { "*.*" }
-                }
-            }
+            FileTypeFilter = _formats.BuildOpenPickerTypes()
         });
 
         var file = files.Count > 0 ? files[0] : null;
@@ -63,19 +59,9 @@ public class FileService
 
         var file = await _storageProvider.SaveFilePickerAsync(new FilePickerSaveOptions
         {
-            Title = "保存 Mermaid 文件",
-            SuggestedFileName = defaultName ?? "未命名.mmd",
-            FileTypeChoices = new[]
-            {
-                new FilePickerFileType("Mermaid 文件")
-                {
-                    Patterns = new[] { "*.mmd" }
-                },
-                new FilePickerFileType("Mermaid 文件")
-                {
-                    Patterns = new[] { "*.mermaid" }
-                }
-            }
+            Title = S.SaveFileDialogTitle,
+            SuggestedFileName = defaultName ?? S.UntitledMermaidFileName,
+            FileTypeChoices = _formats.BuildSavePickerTypes()
         });
 
         if (file == null) return null;

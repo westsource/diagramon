@@ -1,0 +1,14 @@
+# Diagramon Excalidraw 离线资源版本 pin（tools/fetch-excalidraw.ps1 读这个文件）
+# 每行一条 key=版本号（语义化版本），'#' 起始为注释行；键名固定，缺少任一行脚本会报错退出。
+# 升级：改对应行后重跑 powershell -NoProfile -File tools\fetch-excalidraw.ps1
+#   excalidraw            @excalidraw/excalidraw（纯 ESM，必须用 esbuild 自打成 IIFE）
+#   mermaid-to-excalidraw @excalidraw/mermaid-to-excalidraw（Mermaid -> Excalidraw 转换器）
+#   mermaid               上面那个包的运行时依赖，单独 pin 住以免随 ^11.x 漂移
+#   react / react-dom     Excalidraw 的 peerDependencies（打进 bundle，不做 external）
+#   esbuild               打包器本身，跟着 pin 一起装
+excalidraw=0.18.1
+mermaid-to-excalidraw=2.2.2
+mermaid=11.17.2
+react=18.3.1
+react-dom=18.3.1
+esbuild=0.28.2

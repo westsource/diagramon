@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>Diagramon Excalidraw host</title>
+<link rel="stylesheet" href="./index.css">
+<style>
+  html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: #fff; }
+  #root { position: absolute; inset: 0; }
+  #boot { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+          font-family: "Segoe UI", "Microsoft YaHei", sans-serif; color: #888; font-size: 13px; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<div id="boot">正在载入 Excalidraw…</div>
+<script src="./offline-guard.js"></script>
+<script>
+  // 离线守卫（上一行）必须在 app.js 之前执行
+  // **离线硬要求**：Excalidraw 默认把字体等资源解析到它的 CDN 回退地址
+  // （esm.sh/@excalidraw/excalidraw@<ver>/dist/prod/…）。不设这个变量，画布会向公网取字体，
+  // 离线包就破了（方案 §6.2 的同类问题）。指向本页所在目录，`dist/prod/fonts/**` 就按相对路径命中。
+  window.EXCALIDRAW_ASSET_PATH = new URL("./", window.location.href).href;
+</script>
+<script src="./app.js"></script>
+<script>
+// ---------------------------------------------------------------------------
+// 这是我们自己的承载页（Excalidraw 是**库型**集成：不需要 iframe，也不需要 postMessage 协议，
+// 见方案 §12.4）。它做三件事：
+//   1) 把 Excalidraw 挂到 #root；
+//   2) 把画布变更（onChange）压进 window.__hostQueue，由 C# 侧轮询取走 —— 与 drawio 那条通道
+//      形状一致（宿主只要能执行脚本就能工作，不依赖 WebView 包装层的事件）；
+//   3) 暴露 window.__apply 供 C# 侧下发指令：setScene / loadMermaid / fit / export。
+// 内容真相始终是标签页里的 JSON 文本；本页只负责视图与事件。
+// ---------------------------------------------------------------------------
+(function () {
+  const out = {
+    state: 'booting',
+    queue: [],
+    api: null,
+    error: null
+  };
+  window.__hostState = out.state;
+  window.__hostQueue = out.queue;
+  window.__hostError = null;
+
+  function report(name, payload) {
+    // 按属性重读并自愈：宿主取走消息时可能替换/清空这个数组，
+    // 页面若持有旧引用，后续事件会静默丢失。
+    if (!Array.isArray(window.__hostQueue)) { window.__hostQueue = []; }
+    window.__hostQueue.push(JSON.stringify(Object.assign({ event: name }, payload || {})));
+  }
+
+  function fail(message) {
+    out.error = String(message);
+    window.__hostError = out.error;
+    document.getElementById('boot').textContent = out.error;
+    report('error', { message: out.error });
+  }
+
+  // C# → 页面
+  // 挂载完成前收到的指令先排队：`Show()` 会在导航后立刻下发 setScene，
+  // 而 Excalidraw 的挂载是异步的 —— 直接丢弃会让"打开文件"变成空白画布。
+  const pendingCommands = [];
+
+  function applyCommand(msg) {
+    if (msg.action === 'setScene') {
+      const scene = typeof msg.scene === 'string' ? JSON.parse(msg.scene) : msg.scene;
+      messages.pending = scene;               // 记下最近一次外部载入，避免立刻回写成"用户修改"
+      out.api.updateScene({ elements: scene.elements || [], appState: scene.appState || {} });
+      window.__excalidrawApi = out.api;
+      suppressEchoes(scene.elements || []);
+      return true;
+    }
+
+    if (msg.action === 'loadMermaid') {
+      return window.ExcalidrawApp.convertMermaid(msg.source).then(function (converted) {
+        messages.pending = { elements: converted.elements || [] };
+        out.api.updateScene({ elements: converted.elements || [] });
+        suppressEchoes(converted.elements || []);
+        report('loaded', { count: (converted.elements || []).length });
+        return true;
+      }).catch(function (e) {
+        fail('Mermaid 转换失败: ' + (e && e.message ? e.message : e));
+        return false;
+      });
+    }
+
+    if (msg.action === 'export') {
+      return window.ExcalidrawApp
+        .exportPng({ scale: msg.scale || 2, transparent: msg.transparent !== false })
+        .then(function (dataUri) { report('export', { format: 'png', data: dataUri }); return true; })
+        .catch(function (e) { report('export', { format: 'png', data: null, message: String(e && e.message || e) }); return false; });
+    }
+
+    return false;
+  }
+
+  window.__apply = function (command) {
+    let msg;
+    try {
+      msg = typeof command === 'string' ? JSON.parse(command) : command;
+    } catch (e) {
+      fail(e && e.message ? e.message : String(e));
+      return false;
+    }
+
+    if (!out.api) {
+      pendingCommands.push(msg);
+      return false;
+    }
+
+    try {
+      return applyCommand(msg);
+    } catch (e) {
+      fail(e && e.message ? e.message : String(e));
+      return false;
+    }
+  };
+
+  function flushPendingCommands() {
+    while (pendingCommands.length > 0) {
+      const msg = pendingCommands.shift();
+      try { applyCommand(msg); } catch (e) { fail(e && e.message ? e.message : String(e)); }
+    }
+  }
+
+  // 外部载入期间抑制回写：Excalidraw 的 onChange 在 updateScene 之后也会触发
+  const messages = { pending: null, suppressUntil: 0 };
+
+  // 基线签名：最近一次"外部载入完成 / 已上报"的场景指纹。
+  // 用途是挡掉两类**回声**：挂载完成时的空场景 onChange，以及外部 setScene 之后的再次触发 ——
+  // 否则宿主会在"只是打开文件"时把标签页正文覆写成空场景（并标脏）。
+  // 初值取空场景的签名：Excalidraw 挂载完成时会用空场景触发一次 onChange，
+  // 那一次不是用户变更，绝不能回写（否则打开文件的瞬间正文就被清空）。
+  let baseline = "[]";
+
+  function sceneSignature(elements) {
+    return JSON.stringify((elements || []).map(function (e) {
+      return [e.id, e.version, e.versionNonce, e.isDeleted ? 1 : 0];
+    }));
+  }
+
+  function setBaseline(elements) {
+    baseline = sceneSignature(elements);
+  }
+
+  // 外部载入之后的"回声抑制窗口"：Excalidraw 收到 updateScene 后会**规范化**元素
+  // （补 index、改 versionNonce/updated），规范化本身又会再触发一次 onChange。
+  // 只在"第一次回声"上对齐基线是不够的 —— 那次对齐的是**入参**签名，规范化后的签名与它不同，
+  // 于是第二次回声会被当成用户改动，把"只是打开文件"变成"已修改"。这里显式压住一小段时间，
+  // 并在窗口结束时把基线重新对齐到画布**当前**的元素。
+  const ECHO_SUPPRESS_MS = 900;
+
+  function suppressEchoes(elements) {
+    messages.pending = null;
+    messages.suppressUntil = Date.now() + ECHO_SUPPRESS_MS;
+    setBaseline(elements);
+
+    setTimeout(function () {
+      try {
+        if (out.api) { setBaseline(out.api.getSceneElements()); }
+      } catch (e) {
+      }
+      messages.suppressUntil = Date.now() + 150;
+    }, ECHO_SUPPRESS_MS - 200);
+  }
+
+  function onCanvasChange(elements, appState) {
+    const signature = sceneSignature(elements);
+
+    if (messages.pending || Date.now() < messages.suppressUntil) {
+      messages.pending = null;
+      baseline = signature;
+      return;
+    }
+
+    if (signature === baseline) {
+      return;                                  // 与基线一致 → 不是真实变更
+    }
+
+    baseline = signature;
+    report('scene', { elements: elements, appState: filterAppState(appState) });
+  }
+
+  function filterAppState(appState) {
+    // 只留可持久化的少量字段，避免把瞬态（如选中/hover）写进文档
+    return {
+      viewBackgroundColor: appState.viewBackgroundColor,
+      gridSize: appState.gridSize,
+      currentItemStrokeColor: appState.currentItemStrokeColor,
+      currentItemBackgroundColor: appState.currentItemBackgroundColor
+    };
+  }
+
+  const ready = window.ExcalidrawApp && typeof window.ExcalidrawApp.mount === 'function';
+  if (!ready) {
+    fail('Excalidraw bundle 未加载：缺少 window.ExcalidrawApp.mount');
+    return;
+  }
+
+  Promise.resolve(window.ExcalidrawApp.mount(document.getElementById('root'), onCanvasChange))
+    .then(function (api) {
+      out.api = api;
+      out.state = 'ready';
+      window.__hostState = 'ready';
+      window.__excalidrawApi = api;
+      document.getElementById('boot').style.display = 'none';
+      report('ready');
+      flushPendingCommands();
+    })
+    .catch(function (e) {
+      fail('Excalidraw 挂载失败: ' + (e && e.message ? e.message : e));
+    });
+})();
+</script>
+</body>
+</html>

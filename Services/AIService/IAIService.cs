@@ -8,5 +8,5 @@ public interface IAIService
 {
     string ProviderName { get; }
     bool IsConfigured { get; }
-    Task<AIMessage> GenerateAsync(string prompt, string? currentCode, List<AIMessage> history);
+    Task<AIMessage> GenerateAsync(string prompt, string? currentCode, List<AIMessage> history, string formatId);
 }

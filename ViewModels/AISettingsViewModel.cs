@@ -66,7 +66,23 @@ public partial class AISettingsViewModel : ViewModelBase
 
     public bool IsApiKeyRequired => EditingProvider != AIProvider.Ollama;
 
-    public bool IsBaseUrlRequired => EditingProvider is AIProvider.Custom or AIProvider.Ollama;
+    /// <summary>
+    /// 是否需要填 Base URL。
+    /// </summary>
+    /// <remarks>
+    /// **OpenAI 也要显示**：该 provider 走的就是 OpenAI 兼容协议，<c>OpenAIService</c> 在没有
+    /// BaseUrl 时才回退到官方端点 <c>https://api.openai.com/v1</c>，因此指向 DeepSeek / 通义 /
+    /// 自建网关等兼容端点时必须能改。只把 Azure 排除在外 —— 它用的是 Endpoint + Deployment Name。
+    /// </remarks>
+    public bool IsBaseUrlRequired => EditingProvider != AIProvider.AzureOpenAI;
+
+    /// <summary>
+    /// Base URL 的占位提示。OpenAI 档必须说明"留空 = 官方端点"，
+    /// 否则用户不知道空值代表什么（这正是把 DeepSeek 配成 OpenAI 档却打不通的常见原因）。
+    /// </summary>
+    public string BaseUrlWatermark => EditingProvider == AIProvider.OpenAI
+        ? S.AIBaseUrlOfficialHint
+        : "https://api.example.com/v1";
 
     public bool IsAzureConfig => EditingProvider == AIProvider.AzureOpenAI;
 
@@ -117,6 +133,7 @@ public partial class AISettingsViewModel : ViewModelBase
         OnPropertyChanged(nameof(IsApiKeyRequired));
         OnPropertyChanged(nameof(IsBaseUrlRequired));
         OnPropertyChanged(nameof(IsAzureConfig));
+        OnPropertyChanged(nameof(BaseUrlWatermark));
 
         if (value == AIProvider.Ollama && string.IsNullOrEmpty(EditingBaseUrl))
         {

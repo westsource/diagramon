@@ -6,6 +6,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Threading.Tasks;
 using Diagramon.Models;
+using Diagramon.Services.AIService.Prompting;
 
 namespace Diagramon.Services.AIService;
 
@@ -25,7 +26,7 @@ public class AzureOpenAIService : IAIService
         _httpClient = new HttpClient();
     }
 
-    public async Task<AIMessage> GenerateAsync(string prompt, string? currentCode, List<AIMessage> history)
+    public async Task<AIMessage> GenerateAsync(string prompt, string? currentCode, List<AIMessage> history, string formatId)
     {
         if (!IsConfigured)
         {
@@ -40,7 +41,7 @@ public class AzureOpenAIService : IAIService
 
         var endpoint = _config.Endpoint!.TrimEnd('/');
         var url = $"{endpoint}/openai/deployments/{_config.DeploymentName}/chat/completions?api-version=2024-02-15-preview";
-        var messages = BuildMessages(prompt, currentCode, history);
+        var messages = BuildMessages(prompt, currentCode, history, formatId);
 
         var requestBody = new
         {
@@ -76,13 +77,13 @@ public class AzureOpenAIService : IAIService
             });
 
             var generatedContent = result?.Choices?[0]?.Message?.Content?.Trim() ?? string.Empty;
-            var mermaidCode = ExtractMermaidCode(generatedContent);
+            var diagramCode = AiPromptCatalog.ExtractCode(generatedContent, formatId);
 
             return new AIMessage
             {
                 Role = MessageRole.Assistant,
                 Content = generatedContent,
-                GeneratedCode = mermaidCode,
+                GeneratedCode = diagramCode,
                 CodeBeforeGeneration = currentCode,
                 IsLoading = false
             };
@@ -99,11 +100,11 @@ public class AzureOpenAIService : IAIService
         }
     }
 
-    private List<object> BuildMessages(string prompt, string? currentCode, List<AIMessage> history)
+    private List<object> BuildMessages(string prompt, string? currentCode, List<AIMessage> history, string formatId)
     {
         var messages = new List<object>();
 
-        var systemPrompt = BuildSystemPrompt(currentCode);
+        var systemPrompt = AiPromptCatalog.SystemPromptFor(formatId, currentCode);
         messages.Add(new { role = "system", content = systemPrompt });
 
         foreach (var msg in history)
@@ -121,50 +122,6 @@ public class AzureOpenAIService : IAIService
         messages.Add(new { role = "user", content = prompt });
 
         return messages;
-    }
-
-    private string BuildSystemPrompt(string? currentCode)
-    {
-        var prompt = @"你是一个专业的 Mermaid 图表代码生成助手。你的任务是根据用户的自然语言描述生成或修改 Mermaid 代码。
-
-规则：
-1. 只返回 Mermaid 代码，不要包含其他解释文字
-2. 代码必须符合 Mermaid 语法规范
-3. 如果用户要求修改现有代码，请基于现有代码进行修改
-4. 如果用户描述不清晰，生成一个合理的默认图表
-5. 支持的图表类型：流程图、时序图、类图、状态图、甘特图、饼图、ER图等
-
-返回格式：直接返回 Mermaid 代码，不要使用代码块标记。";
-
-        if (!string.IsNullOrWhiteSpace(currentCode))
-        {
-            prompt += $"\n\n当前 Mermaid 代码：\n{currentCode}";
-        }
-
-        return prompt;
-    }
-
-    private string? ExtractMermaidCode(string content)
-    {
-        if (string.IsNullOrWhiteSpace(content))
-            return null;
-
-        var codeBlockMatch = System.Text.RegularExpressions.Regex.Match(content, @"```\s*(?:mermaid)?\s*([\s\S]*?)```");
-        if (codeBlockMatch.Success)
-        {
-            return codeBlockMatch.Groups[1].Value.Trim();
-        }
-
-        var trimmed = content.Trim();
-        if (trimmed.StartsWith("graph ") || trimmed.StartsWith("sequenceDiagram") ||
-            trimmed.StartsWith("classDiagram") || trimmed.StartsWith("stateDiagram") ||
-            trimmed.StartsWith("gantt") || trimmed.StartsWith("pie") ||
-            trimmed.StartsWith("erDiagram") || trimmed.StartsWith("flowchart"))
-        {
-            return trimmed;
-        }
-
-        return trimmed;
     }
 
     private string? ExtractErrorMessage(string responseContent)

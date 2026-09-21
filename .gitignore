@@ -289,6 +289,13 @@ FakesAssemblies/
 node_modules/
 tools/puppeteer-cache/
 tools/node/node.exe
+# Graphviz WASM 渲染资源（由 tools/fetch-graphviz.ps1 生成，体积较大，不入库）
+tools/graphviz/
+# drawio webapp 离线资源（由 tools/fetch-drawio.ps1 拉取并裁剪，体积较大，不入库）
+tools/drawio/
+# Excalidraw 离线 bundle（由 tools/fetch-excalidraw.ps1 用 esbuild 打包生成，体积较大，不入库）
+# 注意：上面的 tools/excalidraw-host/（承载页）要入库，两者不是一回事。
+tools/excalidraw/
 
 # Visual Studio 6 build log
 *.plg

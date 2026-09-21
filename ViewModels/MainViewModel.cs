@@ -21,16 +21,24 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Diagramon.Models;
 using Diagramon.Services;
+using Diagramon.Services.Documents;
+using Diagramon.Services.Documents.Formats;
 using Diagramon.Services.Localization;
+using Diagramon.Services.Preview;
 using Diagramon.Services.Remote;
 using Diagramon.Views;
 using Window = Avalonia.Controls.Window;
+
+// Avalonia.Media 也有一个 RenderOptions（位图渲染参数），这里指的是文档渲染参数。
+using RenderOptions = Diagramon.Services.Documents.RenderOptions;
 
 namespace Diagramon.ViewModels;
 
 public partial class MainViewModel : ViewModelBase
 {
     private readonly MermaidService _mermaidService;
+    private readonly DocumentFormatRegistry _formats;
+    private readonly PreviewSurfaceHost _previewSurfaces = new();
     private readonly FileService _fileService;
     private readonly SettingsService _settingsService;
     private readonly IUpdateService _updateService;
@@ -91,8 +99,28 @@ public partial class MainViewModel : ViewModelBase
     [ObservableProperty]
     private string _statusMessage = Strings.Instance.Ready;
 
+    /// <summary>
+    /// 承载页 URL：<c>file://</c>（随包 JS）或 loopback 的 <c>http://127.0.0.1:&lt;端口&gt;…</c>（WASM）。
+    /// </summary>
     [ObservableProperty]
-    private string _currentPreviewHtml = BuildPreviewHtml(string.Empty);
+    private string _currentPreviewUrl = string.Empty;
+
+    /// <summary>
+    /// 承载面身份（格式 id）。它变了说明换了页面（换格式），承载层要重新导航；
+    /// 没变则一律走增量脚本 —— 重建页面会把页内的渲染器重载一遍（DOT 的 WASM 尤其贵）。
+    /// </summary>
+    [ObservableProperty]
+    private string _currentPreviewSurfaceKey = string.Empty;
+
+    /// <summary>内容 / 布局变化时的增量更新脚本。</summary>
+    [ObservableProperty]
+    private string _currentUpdateScript = string.Empty;
+
+    /// <summary>
+    /// 承载面刷新计数器。承载层只认这一个信号，避免 URL 与脚本两个通知之间的竞态。
+    /// </summary>
+    [ObservableProperty]
+    private int _currentPreviewRevision;
 
     public string AppVersion { get; } = GetDisplayVersion();
 
@@ -214,6 +242,9 @@ public partial class MainViewModel : ViewModelBase
         OnPropertyChanged(nameof(CloudSaveToCloud));
         OnPropertyChanged(nameof(CloudDocuments));
         OnPropertyChanged(nameof(AvailableLanguages));
+        OnPropertyChanged(nameof(NewTabChoices));
+        OnPropertyChanged(nameof(LayoutLabel));
+        OnPropertyChanged(nameof(CurrentLayoutChoices));
 
         AiAssistant?.RefreshLocalization();
     }
@@ -274,13 +305,168 @@ public partial class MainViewModel : ViewModelBase
     [ObservableProperty]
     private AIPanelViewModel? _aiAssistant;
 
+    /// <summary>待执行的"Mermaid → 图形编辑器"转换请求（一次性，由承载层取走）。</summary>
+    private (TabItem Tab, string Source)? _pendingMermaidImport;
+
     public bool HasRecentFiles => RecentFiles.Any(r => !r.IsMoreItem);
 
     public string ZoomText => string.Format(S.ZoomFormat, (int)(PreviewDisplayScale * 100));
 
     public double PreviewDisplayScale => PreviewZoom * PreviewFitScale;
 
-    public IHighlightingDefinition MermaidHighlighting { get; } = MermaidHighlightingProvider.Create();
+    /// <summary>当前标签页的格式（<c>null</c> / 未知 id 时取注册表回退格式）。</summary>
+    public IDocumentFormat CurrentFormat => _formats.Get(CurrentTab?.FormatId);
+
+    /// <summary>当前格式的语法高亮定义；切换标签页时界面重新绑定。</summary>
+    public IHighlightingDefinition? CurrentHighlighting => CurrentFormat.Highlighting;
+
+    /// <summary>当前格式可选布局的本地化列表；空列表时界面不显示布局选择器。</summary>
+    public IReadOnlyList<LayoutChoice> CurrentLayoutChoices => CurrentFormat.LayoutOptions
+        .Select(option => new LayoutChoice(option.Id, FormatDisplayName(option.DisplayNameKey)))
+        .ToList();
+
+    public bool HasLayoutOptions => CurrentLayoutChoices.Count > 0;
+
+    /// <summary>当前格式是否有文本面（编辑器）。</summary>
+    public bool IsTextSurface => CurrentFormat.Surface is DocumentSurfaceKind.TextWithPreview
+        or DocumentSurfaceKind.TextWithEmbeddedApp
+        or DocumentSurfaceKind.TextOnly;
+
+    /// <summary>编辑器区是否可见（用户开关 × 当前格式是否有文本面）。</summary>
+    public bool IsEditorSurfaceVisible => IsEditorVisible && IsTextSurface;
+
+    /// <summary>文本预览区是否可见。</summary>
+    public bool IsPreviewSurfaceVisible => CurrentFormat.Surface is DocumentSurfaceKind.TextWithPreview
+        or DocumentSurfaceKind.TextWithEmbeddedApp;
+
+    /// <summary>内嵌图形编辑器（drawio 画布）是否可见。</summary>
+    public bool IsEmbeddedAppVisible => CurrentFormat.Surface is DocumentSurfaceKind.EmbeddedApp
+        or DocumentSurfaceKind.TextWithEmbeddedApp;
+
+    /// <summary>当前格式是否提供 AI 助手（drawio 不提供：图形画布不是文本 DSL）。</summary>
+    public bool IsAiPanelAvailable => CurrentFormat.SupportsAiAssistant;
+
+    /// <summary>AI 面板是否显示（格式支持 × 用户展开）。</summary>
+    public bool IsAiPanelVisible => IsAiPanelAvailable && AiAssistant?.IsExpanded == true;
+
+    /// <summary>AI 折叠条是否显示（格式支持 × 用户收起）。</summary>
+    public bool IsAiToggleBarVisible => IsAiPanelAvailable && AiAssistant?.IsExpanded != true;
+
+    /// <summary>当前格式能否转成图形编辑器文档（单向，目前只有 Mermaid 具备该能力）。</summary>
+    public bool CanConvertMermaid => CurrentFormat.SupportsGraphImport;
+
+    public string MenuConvertToDrawio => S.MenuConvertToDrawio;
+
+    public string MenuConvertToExcalidraw => S.MenuConvertToExcalidraw;
+
+    public string LayoutLabel => S.LayoutLabel;
+
+    /// <summary>File → New 的格式列表：注册表数据驱动，加格式不需要改界面。</summary>
+    public IReadOnlyList<NewTabChoice> NewTabChoices => _formats.All
+        .Select(format => new NewTabChoice(format.Id, FormatDisplayName(format.DisplayNameKey)))
+        .ToList();
+
+    /// <summary>本地化显示名；取不到译文时回退 key 本身（DOT 的引擎名就是 key）。</summary>
+    private static string FormatDisplayName(string key)
+    {
+        var name = S.Get(key);
+        return string.IsNullOrWhiteSpace(name) ? key : name;
+    }
+
+    [ObservableProperty]
+    private LayoutChoice? _selectedLayoutChoice;
+
+    /// <summary>每个格式各自记住布局选择（同一个格式的不同标签页共享）。</summary>
+    private readonly Dictionary<string, string> _layoutByFormat = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>程序性回填选择器时不要触发重新渲染。</summary>
+    private bool _suppressLayoutChange;
+
+    partial void OnSelectedLayoutChoiceChanged(LayoutChoice? value)
+    {
+        if (value == null || _suppressLayoutChange)
+        {
+            return;
+        }
+
+        _layoutByFormat[CurrentFormat.Id] = value.Id;
+        RefreshPreview(CurrentTab);
+    }
+
+    /// <summary>当前格式生效的布局取值；未选过时取该格式的默认布局。</summary>
+    private string? SelectedLayoutId(IDocumentFormat format)
+    {
+        if (_layoutByFormat.TryGetValue(format.Id, out var id))
+        {
+            return id;
+        }
+
+        return format.LayoutOptions.FirstOrDefault(option => option.IsDefault)?.Id;
+    }
+
+    /// <summary>把布局选择器同步到当前格式（切标签页 / 换语言时调用）。</summary>
+    private void SyncLayoutChoice()
+    {
+        var choices = CurrentLayoutChoices;
+        var current = SelectedLayoutId(CurrentFormat);
+
+        _suppressLayoutChange = true;
+        try
+        {
+            SelectedLayoutChoice = choices.FirstOrDefault(choice => choice.Id == current)
+                ?? choices.FirstOrDefault();
+        }
+        finally
+        {
+            _suppressLayoutChange = false;
+        }
+    }
+
+    private RenderOptions BuildRenderOptions(IDocumentFormat format)
+    {
+        return new RenderOptions(Layout: SelectedLayoutId(format));
+    }
+
+    /// <summary>
+    /// 清掉承载面状态：切到内嵌应用格式时用，避免把上一个文本格式的增量脚本推给隐藏的预览页。
+    /// </summary>
+    private void ClearPreviewSurface()
+    {
+        CurrentPreviewUrl = string.Empty;
+        CurrentPreviewSurfaceKey = string.Empty;
+        CurrentUpdateScript = string.Empty;
+        CurrentPreviewRevision++;
+    }
+
+    /// <summary>
+    /// 把当前内容 / 布局写进承载面。**页面只在换格式时重新导航**，其余一律走增量脚本。
+    /// </summary>
+    private void RefreshPreview(TabItem? tab)
+    {
+        if (tab == null || !ReferenceEquals(tab, CurrentTab))
+        {
+            return;
+        }
+
+        var format = _formats.Get(tab.FormatId);
+
+        if (format.Surface == DocumentSurfaceKind.EmbeddedApp)
+        {
+            return;
+        }
+
+        var options = BuildRenderOptions(format);
+        var surface = _previewSurfaces.GetOrPrepare(format);
+
+        // 页面上总是写入当前内容：这样后续任何一次导航（换格式、换标签页）都能直接显示最新内容，
+        // 而已经载入的页面不会被这次写盘影响 —— 它的更新走 CurrentUpdateScript。
+        PreviewSurfaceHost.WritePage(surface, format.Renderer.BuildSurfaceHtml(tab.Content, options));
+
+        CurrentPreviewUrl = surface.Url;
+        CurrentPreviewSurfaceKey = format.Id;
+        CurrentUpdateScript = format.Renderer.BuildUpdateScript(tab.Content, options);
+        CurrentPreviewRevision++;
+    }
 
     public TabItem? CurrentTab => SelectedTabIndex >= 0 && SelectedTabIndex < Tabs.Count ? Tabs[SelectedTabIndex] : null;
 
@@ -307,32 +493,49 @@ public partial class MainViewModel : ViewModelBase
         ResetEditorState();
         OnPropertyChanged(nameof(PreviewDisplayScale));
         OnPropertyChanged(nameof(ZoomText));
-        OnPropertyChanged(nameof(CurrentTab));
-
-        AiAssistant?.SetCurrentFile(CurrentTab?.LocalFilePath);
+        NotifyCurrentFormatChanged();
 
         if (CurrentTab != null)
         {
-            if (!string.IsNullOrWhiteSpace(CurrentTab.WebPreviewHtml))
-            {
-                CurrentPreviewHtml = CurrentTab.WebPreviewHtml;
-            }
-            else
-            {
-                CurrentPreviewHtml = string.Empty;
-            }
             ScheduleValidationAndRender(CurrentTab);
         }
+    }
+
+    /// <summary>
+    /// 当前标签页换了：格式、高亮、布局选择器与 AI 会话键都要跟着换。
+    /// </summary>
+    private void NotifyCurrentFormatChanged()
+    {
+        OnPropertyChanged(nameof(CurrentTab));
+        OnPropertyChanged(nameof(CurrentFormat));
+        OnPropertyChanged(nameof(CurrentHighlighting));
+        OnPropertyChanged(nameof(CurrentLayoutChoices));
+        OnPropertyChanged(nameof(HasLayoutOptions));
+        OnPropertyChanged(nameof(IsTextSurface));
+        OnPropertyChanged(nameof(IsEditorSurfaceVisible));
+        OnPropertyChanged(nameof(IsPreviewSurfaceVisible));
+        OnPropertyChanged(nameof(IsEmbeddedAppVisible));
+        OnPropertyChanged(nameof(IsAiPanelAvailable));
+        OnPropertyChanged(nameof(IsAiPanelVisible));
+        OnPropertyChanged(nameof(IsAiToggleBarVisible));
+        OnPropertyChanged(nameof(CanConvertMermaid));
+
+        SyncLayoutChoice();
+
+        // AI 会话键用 StableId（本地 = 规范化路径，云端 = 服务端 id）；格式 id 决定提示词与代码围栏。
+        AiAssistant?.SetCurrentDocument(CurrentTab?.Location?.StableId, CurrentFormat.Id);
     }
 
     partial void OnIsEditorVisibleChanged(bool value)
     {
         OnPropertyChanged(nameof(EditorPanelWidth));
+        OnPropertyChanged(nameof(IsEditorSurfaceVisible));
     }
 
-    public MainViewModel(MermaidService mermaidService, FileService fileService, SettingsService settingsService, AuthService authService, RemoteDocumentStore documentStore, IUpdateService updateService, IStorageProvider storageProvider, Window ownerWindow)
+    public MainViewModel(MermaidService mermaidService, DocumentFormatRegistry formats, FileService fileService, SettingsService settingsService, AuthService authService, RemoteDocumentStore documentStore, IUpdateService updateService, IStorageProvider storageProvider, Window ownerWindow)
     {
         _mermaidService = mermaidService;
+        _formats = formats;
         _fileService = fileService;
         _settingsService = settingsService;
         _authService = authService;
@@ -430,15 +633,91 @@ public partial class MainViewModel : ViewModelBase
         AiAssistant.GetCurrentCode = () => CurrentTab?.Content;
         AiAssistant.CodeGenerated += OnAICodeGenerated;
         AiAssistant.OpenSettingsRequested += OnOpenAISettingsRequested;
+
+        // AI 面板的展开状态由它自己持有，这里只跟着刷新"面板/折叠条谁可见"
+        AiAssistant.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName == nameof(AIPanelViewModel.IsExpanded))
+            {
+                OnPropertyChanged(nameof(IsAiPanelVisible));
+                OnPropertyChanged(nameof(IsAiToggleBarVisible));
+            }
+        };
     }
 
-    private void OnAICodeGenerated(object? sender, string code)
+    private void OnAICodeGenerated(object? sender, AICodeApplyRequest request)
     {
-        if (CurrentTab != null)
+        var tab = CurrentTab;
+        if (tab == null)
         {
-            CurrentTab.Content = code;
-            StatusMessage = S.AICodeApplied;
+            return;
         }
+
+        // 生成后用户可能切到了别的格式的标签页：把 DOT 代码灌进 Mermaid 文档是错的，宁可不应用。
+        var format = _formats.Get(tab.FormatId);
+        if (request.FormatId != null && !string.Equals(request.FormatId, format.Id, StringComparison.OrdinalIgnoreCase))
+        {
+            StatusMessage = S.AICodeFormatMismatch;
+            return;
+        }
+
+        tab.Content = request.Code;
+        StatusMessage = S.AICodeApplied;
+    }
+
+    /// <summary>
+    /// 把当前 Mermaid 图转成一个新的 drawio 标签页（方案 Phase 4）。
+    /// </summary>
+    /// <remarks>
+    /// **单向**：drawio 只提供 mermaid → 图形这一个方向，画布上的改动不会回写 Mermaid 源码，
+    /// 因此原标签页保持打开、转换结果另开新标签页，界面文案也明说"不可逆"。
+    /// 真正的载入动作由承载层在显示新标签页时执行（<see cref="TryTakeMermaidImport"/>）。
+    /// </remarks>
+    [RelayCommand]
+    private void ConvertMermaidToDrawio() => ConvertMermaidTo(DrawioFormat.FormatId);
+
+    /// <summary>把当前 Mermaid 图转成一个新的 Excalidraw 标签页（方案 Phase 6）。</summary>
+    [RelayCommand]
+    private void ConvertMermaidToExcalidraw() => ConvertMermaidTo(ExcalidrawFormat.FormatId);
+
+    private void ConvertMermaidTo(string targetFormatId)
+    {
+        var source = CurrentTab;
+        if (source == null || !CurrentFormat.SupportsGraphImport)
+        {
+            return;
+        }
+
+        var target = _formats.Get(targetFormatId);
+        var tab = new TabItem
+        {
+            FormatId = target.Id,
+            Header = FormatDisplayName(target.DefaultFileNameKey),
+            Content = target.CreateDefaultContent(),
+        };
+        tab.ContentChanged += OnTabContentChanged;
+
+        // 先登记转换请求再选中新标签页：承载层在显示它的那一刻需要读到这份源码
+        _pendingMermaidImport = (tab, source.Content);
+
+        Tabs.Add(tab);
+        SelectTab(Tabs.Count - 1, forceNotify: true);
+
+        StatusMessage = S.ConvertToDrawioDone;
+    }
+
+    /// <summary>承载层在显示图形编辑器标签页时取走一次性的 Mermaid 导入请求。</summary>
+    public bool TryTakeMermaidImport(TabItem tab, out string source)
+    {
+        if (_pendingMermaidImport is { } pending && ReferenceEquals(pending.Tab, tab))
+        {
+            source = pending.Source;
+            _pendingMermaidImport = null;
+            return true;
+        }
+
+        source = string.Empty;
+        return false;
     }
 
     private void OnOpenAISettingsRequested(object? sender, EventArgs e)
@@ -486,13 +765,32 @@ public partial class MainViewModel : ViewModelBase
         _settingsService.Save();
     }
 
+    /// <summary>窗口关闭：释放承载面宿主持有的 loopback 端口。</summary>
+    public void Shutdown()
+    {
+        _previewSurfaces.Dispose();
+    }
+
     [RelayCommand]
     private void AddNewTab()
     {
+        AddNewTab(_formats.Fallback);
+    }
+
+    /// <summary>按格式 id 新建标签页（File → New 的子项）。</summary>
+    [RelayCommand]
+    private void AddNewTabOfFormat(string? formatId)
+    {
+        AddNewTab(_formats.Get(formatId));
+    }
+
+    private void AddNewTab(IDocumentFormat format)
+    {
         var tab = new TabItem
         {
-            Header = S.NewTabTitle,
-            Content = GetDefaultMermaidCode()
+            FormatId = format.Id,
+            Header = FormatDisplayName(format.DefaultFileNameKey),
+            Content = format.CreateDefaultContent()
         };
         tab.ContentChanged += OnTabContentChanged;
         Tabs.Add(tab);
@@ -511,14 +809,10 @@ public partial class MainViewModel : ViewModelBase
                 Tabs[i].IsSelected = (i == index);
             }
 
-            OnPropertyChanged(nameof(CurrentTab));
+            NotifyCurrentFormatChanged();
 
             if (CurrentTab != null)
             {
-                if (!string.IsNullOrWhiteSpace(CurrentTab.WebPreviewHtml))
-                {
-                    CurrentPreviewHtml = CurrentTab.WebPreviewHtml;
-                }
                 ScheduleValidationAndRender(CurrentTab);
             }
         }
@@ -565,14 +859,37 @@ public partial class MainViewModel : ViewModelBase
             return;
         }
 
+        var format = _formats.Get(tab.FormatId);
+
+        // 内嵌图形编辑器（drawio）不进文本预览管线：画布由 DrawioDocumentHost 自己驱动，
+        // 这里若继续跑 Mermaid 校验会把它当成坏语法反复报错（方案 §4.6 的循环复现点）。
+        if (format.Surface == DocumentSurfaceKind.EmbeddedApp)
+        {
+            CancelActiveRender();
+            ClearPreviewSurface();
+
+            // 状态栏文案归承载层（MainWindow.SyncEmbeddedAppSurface）：它才知道画布资源是否就绪。
+            // 这里若写"就绪"，会在 350ms 防抖后把"缺少运行时资源"这类指引覆盖掉。
+            return;
+        }
+
         if (string.IsNullOrWhiteSpace(tab.Content))
         {
             CancelActiveRender();
-            tab.WebPreviewHtml = BuildPreviewHtml(string.Empty);
+            RefreshPreview(tab);
             tab.HasError = false;
             tab.ErrorMessage = null;
-            CurrentPreviewHtml = tab.WebPreviewHtml;
             StatusMessage = S.Ready;
+            return;
+        }
+
+        // 页面内渲染的格式（DOT）：语法错误由渲染器在页面里显示，C# 侧不做子进程校验。
+        if (!format.UsesMermaidCliExport)
+        {
+            RefreshPreview(tab);
+            tab.HasError = false;
+            tab.ErrorMessage = null;
+            StatusMessage = S.PreviewUpdated;
             return;
         }
 
@@ -594,8 +911,7 @@ public partial class MainViewModel : ViewModelBase
 
             tab.HasError = false;
             tab.ErrorMessage = null;
-            tab.WebPreviewHtml = BuildPreviewHtml(contentSnapshot);
-            CurrentPreviewHtml = tab.WebPreviewHtml;
+            RefreshPreview(tab);
             StatusMessage = S.PreviewUpdated;
             ScheduleBackgroundImageGeneration(tab);
         }
@@ -608,8 +924,7 @@ public partial class MainViewModel : ViewModelBase
             var shortError = BuildUserFriendlyError(ex.Message);
             tab.HasError = true;
             tab.ErrorMessage = shortError;
-            tab.WebPreviewHtml = BuildErrorPreviewHtml(shortError);
-            CurrentPreviewHtml = tab.WebPreviewHtml;
+            RefreshPreview(tab);
             StatusMessage = string.Format(S.ErrorFormat, shortError);
         }
         finally
@@ -730,12 +1045,48 @@ public partial class MainViewModel : ViewModelBase
             return null;
         }
 
-        var elementCount = CountDiagramElements(tab.Content);
-        var scale = GetExportScale(elementCount);
+        var format = _formats.Get(tab.FormatId);
+
+        if (format.Surface == DocumentSurfaceKind.EmbeddedApp)
+        {
+            var embeddedScale = GetInPageExportScale();
+
+            if (tab.CachedPngBytes != null && Math.Abs(tab.CachedPngScale - embeddedScale) < 0.001)
+            {
+                return tab.CachedPngBytes;
+            }
+
+            var embeddedBytes = await RenderEmbeddedImageAsync(tab, embeddedScale);
+            if (embeddedBytes == null)
+            {
+                return null;
+            }
+
+            tab.CachedPngBytes = embeddedBytes;
+            tab.CachedPngScale = embeddedScale;
+            return embeddedBytes;
+        }
+
+        var scale = format.UsesMermaidCliExport
+            ? GetExportScale(CountDiagramElements(tab.Content))
+            : GetInPageExportScale();
 
         if (tab.CachedPngBytes != null && Math.Abs(tab.CachedPngScale - scale) < 0.001)
         {
             return tab.CachedPngBytes;
+        }
+
+        if (!format.UsesMermaidCliExport)
+        {
+            var bytes = await RenderInPageImageAsync(tab, format, scale);
+            if (bytes == null)
+            {
+                return null;
+            }
+
+            tab.CachedPngBytes = bytes;
+            tab.CachedPngScale = scale;
+            return bytes;
         }
 
         var result = await _mermaidService.RenderAndValidateAsync(tab.Content, scale);
@@ -799,9 +1150,90 @@ public partial class MainViewModel : ViewModelBase
         return CalculateScale(elementCount);
     }
 
+    /// <summary>
+    /// 页面内导出的倍率：固定档用设置值，自动档取 3.0。
+    /// </summary>
+    /// <remarks>
+    /// 自动档那套"按元素数自适应 1.5x~5.0x"的启发式是为 <c>mmdc</c> 位图导出定的
+    /// （见 <see cref="CalculateScale"/>），对在页面内栅格化的矢量渲染器没有依据，
+    /// 因此不套用 —— 倍率只影响输出位图分辨率，矢量源头始终是渲染器的 SVG。
+    /// </remarks>
+    private double GetInPageExportScale()
+    {
+        var settings = _settingsService.Settings;
+        return settings.UseFixedExportScale
+            ? Math.Clamp(settings.FixedExportScale, AppSettings.MinExportScale, AppSettings.MaxExportScale)
+            : 3.0;
+    }
+
+    /// <summary>
+    /// 让内嵌图形编辑器在画布内导出位图（drawio：页面内渲染，**零子进程**）。
+    /// </summary>
+    private async Task<byte[]?> RenderEmbeddedImageAsync(TabItem tab, double scale)
+    {
+        if (_ownerWindow is not MainWindow window)
+        {
+            StatusMessage = string.Format(S.ErrorFormat, S.UnknownError);
+            return null;
+        }
+
+        var result = await window.ExportEmbeddedImageAsync("png", scale, transparent: true);
+        if (!result.Success || result.Data == null)
+        {
+            var shortError = BuildUserFriendlyError(result.Error);
+            tab.HasError = true;
+            tab.ErrorMessage = shortError;
+            StatusMessage = string.Format(S.RenderErrorFormat, shortError);
+            return null;
+        }
+
+        tab.HasError = false;
+        tab.ErrorMessage = null;
+        return result.Data;
+    }
+
+    /// <summary>
+    /// 在预览页内栅格化当前内容（DOT：SVG → canvas → PNG，**零子进程**）。
+    /// </summary>
+    private async Task<byte[]?> RenderInPageImageAsync(TabItem tab, IDocumentFormat format, double scale)
+    {
+        var options = new RenderOptions(Scale: scale, Layout: SelectedLayoutId(format));
+        var script = format.Renderer.BuildExportScript(tab.Content, options);
+
+        if (script == null)
+        {
+            StatusMessage = string.Format(S.ErrorFormat, S.UnknownError);
+            return null;
+        }
+
+        if (_ownerWindow is not MainWindow window)
+        {
+            StatusMessage = string.Format(S.ErrorFormat, S.UnknownError);
+            return null;
+        }
+
+        var result = await window.RenderInPageImageAsync(script, format.Id);
+        if (!result.Success || result.Data == null)
+        {
+            var shortError = BuildUserFriendlyError(result.Error);
+            tab.HasError = true;
+            tab.ErrorMessage = shortError;
+            StatusMessage = string.Format(S.RenderErrorFormat, shortError);
+            return null;
+        }
+
+        tab.HasError = false;
+        tab.ErrorMessage = null;
+        return result.Data;
+    }
+
     private void ScheduleBackgroundImageGeneration(TabItem tab)
     {
         if (!ReferenceEquals(tab, CurrentTab))
+            return;
+
+        // 只有走 mmdc 的格式需要预生成缓存；页面内导出的格式按需渲染即可（零子进程）。
+        if (!_formats.Get(tab.FormatId).UsesMermaidCliExport)
             return;
 
         lock (_timerLock)
@@ -842,7 +1274,8 @@ public partial class MainViewModel : ViewModelBase
         }
     }
 
-    private async Task<bool> SaveTabAsync(TabItem tab)
+    /// <summary>保存标签页（内嵌图形编辑器触发保存时也走这里）。</summary>
+    public async Task<bool> SaveTabAsync(TabItem tab)
     {
         var filePath = tab.LocalFilePath;
         bool isNewFile = string.IsNullOrEmpty(filePath);
@@ -966,6 +1399,7 @@ public partial class MainViewModel : ViewModelBase
 
             var tab = new TabItem
             {
+                FormatId = _formats.Resolve(filePath).Id,
                 Content = content,
                 Location = string.IsNullOrEmpty(filePath) ? null : new LocalDocumentLocation(filePath)
             };
@@ -994,6 +1428,7 @@ public partial class MainViewModel : ViewModelBase
         {
             var tab = new TabItem
             {
+                FormatId = _formats.Resolve(filePath).Id,
                 Content = content,
                 Location = string.IsNullOrEmpty(filePath) ? null : new LocalDocumentLocation(filePath)
             };
@@ -1285,7 +1720,7 @@ public partial class MainViewModel : ViewModelBase
 
         // 改名不需要额外请求：PUT 的 name 就是服务端的改名入口（同一目录内重名 → 409 name_taken）
         var result = await _documentStore.PutAsync(
-            id, target.Name, "mmd", content, version, path: target.Path, vaultId: cloud?.VaultId);
+            id, target.Name, _formats.Get(tab.FormatId).CloudFormatIds[0], content, version, path: target.Path, vaultId: cloud?.VaultId);
 
         if (!result.Ok)
         {
@@ -1331,6 +1766,7 @@ public partial class MainViewModel : ViewModelBase
 
         var tab = new TabItem
         {
+            FormatId = _formats.ResolveCloudFormat(doc.Format).Id,
             Content = doc.Content,
             Location = new CloudDocumentLocation(doc.Id, doc.Name, doc.Path, doc.VaultId),
             CloudVersion = doc.Version,
@@ -1569,228 +2005,13 @@ public partial class MainViewModel : ViewModelBase
         IsEditorVisible = !IsEditorVisible;
     }
 
-    private static string GetDefaultMermaidCode()
-    {
-        return @"graph TD
-    A[开始] --> B{判断}
-    B -->|是| C[处理A]
-    B -->|否| D[处理B]
-    C --> E[结束]
-    D --> E";
-    }
-
     public void SetInitialContent()
     {
         if (CurrentTab != null)
         {
-            CurrentTab.Content = @"graph TD
-    A[开始] --> B{判断}
-    B -->|是| C[处理A]
-    B -->|否| D[处理B]
-    C --> E[结束]
-    D --> E";
+            CurrentTab.Content = CurrentFormat.CreateDefaultContent();
             CurrentTab.IsModified = false;
             CurrentTab.UpdateHeader();
         }
-    }
-
-    private static string BuildPreviewHtml(string mermaidCode)
-    {
-        var mermaidCodeJson = JsonSerializer.Serialize(mermaidCode ?? string.Empty);
-        return $$"""
-<!doctype html>
-<html lang="zh-CN">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1">
-  <style>
-    html, body {
-      margin: 0;
-      padding: 0;
-      width: 100%;
-      height: 100%;
-      background: #fff;
-      overflow: hidden;
-      font-family: "Segoe UI", "Microsoft YaHei", sans-serif;
-    }
-    #root {
-      width: 100%;
-      height: 100%;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      overflow: hidden;
-      box-sizing: border-box;
-      cursor: grab;
-      touch-action: none;
-      user-select: none;
-      background: #fff;
-    }
-    #diagram svg {
-      display: block;
-    }
-    .error {
-      color: #b42318;
-      background: #fef3f2;
-      border: 1px solid #fecdca;
-      border-radius: 8px;
-      padding: 12px;
-      white-space: pre-wrap;
-      max-width: 100%;
-    }
-  </style>
-</head>
-<body>
-  <div id="root"><div id="diagram"></div></div>
-  <script src="./mermaid.min.js"></script>
-  <script>
-    const root = document.getElementById('root');
-    const target = document.getElementById('diagram');
-    let scale = 1;
-    let offsetX = 0;
-    let offsetY = 0;
-    let dragging = false;
-    let lastX = 0;
-    let lastY = 0;
-    const minScale = 0.2;
-    const maxScale = 30;
-
-    function applyTransform() {
-      target.style.transform = `translate(${offsetX}px, ${offsetY}px) scale(${scale})`;
-      target.style.transformOrigin = 'center center';
-    }
-
-    function fitToViewport() {
-      scale = 1;
-      offsetX = 0;
-      offsetY = 0;
-      applyTransform();
-
-      const rootRect = root.getBoundingClientRect();
-      const diagramRect = target.getBoundingClientRect();
-      if (rootRect.width <= 0 || rootRect.height <= 0 || diagramRect.width <= 0 || diagramRect.height <= 0) {
-        return;
-      }
-
-      const padding = 24;
-      const fitScaleX = Math.max(0.01, (rootRect.width - padding) / diagramRect.width);
-      const fitScaleY = Math.max(0.01, (rootRect.height - padding) / diagramRect.height);
-      const fitScale = Math.min(fitScaleX, fitScaleY);
-      scale = Math.max(minScale, Math.min(maxScale, fitScale));
-      applyTransform();
-    }
-
-    function showError(message) {
-      const safeMessage = String(message ?? '').replace(/[<>&]/g, s => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;' }[s]));
-      target.innerHTML = `<pre class="error">${safeMessage}</pre>`;
-    }
-
-    async function renderDiagram(code) {
-      try {
-        if (!code || !code.trim()) {
-          target.innerHTML = '';
-          return;
-        }
-        if (!window.mermaid) {
-          showError('mermaid.js 暂未加载，请稍候');
-          return;
-        }
-        mermaid.initialize({ startOnLoad: false, securityLevel: 'loose', theme: 'default' });
-        const id = `mermaid-${Date.now()}`;
-        const container = document.createElement('div');
-        container.style.position = 'absolute';
-        container.style.top = '-9999px';
-        container.style.left = '-9999px';
-        document.body.appendChild(container);
-        const { svg } = await mermaid.render(id, code, container);
-        target.innerHTML = svg;
-        container.remove();
-        requestAnimationFrame(() => fitToViewport());
-      } catch (err) {
-        showError(err && err.message ? err.message : err);
-      }
-    }
-
-    root.addEventListener('pointerdown', (e) => {
-      if (e.button !== 0) return;
-      dragging = true;
-      lastX = e.clientX;
-      lastY = e.clientY;
-      root.style.cursor = 'grabbing';
-      root.setPointerCapture(e.pointerId);
-    });
-
-    root.addEventListener('pointermove', (e) => {
-      if (!dragging) return;
-      const dx = e.clientX - lastX;
-      const dy = e.clientY - lastY;
-      lastX = e.clientX;
-      lastY = e.clientY;
-      offsetX += dx;
-      offsetY += dy;
-      applyTransform();
-    });
-
-    root.addEventListener('pointerup', (e) => {
-      dragging = false;
-      root.style.cursor = 'grab';
-      if (root.hasPointerCapture(e.pointerId)) {
-        root.releasePointerCapture(e.pointerId);
-      }
-    });
-
-    root.addEventListener('wheel', (e) => {
-      e.preventDefault();
-      const oldScale = scale;
-      const zoomStep = e.deltaY < 0 ? 1.1 : 0.9;
-      scale = Math.max(minScale, Math.min(maxScale, scale * zoomStep));
-      if (Math.abs(scale - oldScale) < 1e-6) return;
-
-      const rect = root.getBoundingClientRect();
-      const cx = e.clientX - rect.left - rect.width / 2;
-      const cy = e.clientY - rect.top - rect.height / 2;
-      const ratio = scale / oldScale;
-      offsetX -= cx * (ratio - 1);
-      offsetY -= cy * (ratio - 1);
-      applyTransform();
-    }, { passive: false });
-
-    root.addEventListener('dblclick', () => {
-      fitToViewport();
-    });
-
-    renderDiagram({{mermaidCodeJson}});
-  </script>
-</body>
-</html>
-""";
-    }
-
-    private static string BuildErrorPreviewHtml(string errorMessage)
-    {
-        var escaped = System.Net.WebUtility.HtmlEncode(errorMessage);
-        return $$"""
-<!doctype html>
-<html lang="zh-CN">
-<head>
-  <meta charset="utf-8">
-  <style>
-    html, body { margin: 0; background: #fff; font-family: "Segoe UI", "Microsoft YaHei", sans-serif; }
-    .error {
-      color: #b42318;
-      background: #fef3f2;
-      border: 1px solid #fecdca;
-      border-radius: 8px;
-      margin: 16px;
-      padding: 12px;
-      white-space: pre-wrap;
-    }
-  </style>
-</head>
-<body>
-  <pre class="error">{{escaped}}</pre>
-</body>
-</html>
-""";
     }
 }

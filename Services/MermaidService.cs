@@ -23,16 +23,9 @@ public class MermaidService
 
     public MermaidService()
     {
-        var appDir = AppContext.BaseDirectory;
-        
-        var possiblePaths = new[]
-        {
-            Path.Combine(appDir, "tools", "mmdc.cmd"),
-            Path.Combine(appDir, "..", "..", "..", "tools", "mmdc.cmd"),
-            Path.Combine(appDir, "..", "..", "..", "..", "..", "tools", "mmdc.cmd"),
-        };
-
-        _mmdcPath = possiblePaths.FirstOrDefault(File.Exists) ?? Path.Combine(appDir, "tools", "mmdc.cmd");
+        // 定位逻辑统一在 AppPaths（与 Graphviz / drawio 的资源定位共用一份回退列表）
+        _mmdcPath = AppPaths.FindInTools("mmdc.cmd")
+            ?? Path.Combine(AppPaths.BaseDirectory, "tools", "mmdc.cmd");
         _toolsDir = Path.GetDirectoryName(_mmdcPath) ?? "";
     }
 

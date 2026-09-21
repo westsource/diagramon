@@ -1,6 +1,6 @@
-# Diagramon - Mermaid 图表编辑器
+# Diagramon - 多格式图表编辑器
 
-一个基于 C# Avalonia 构建的本地 Mermaid 图表编辑器。支持代码编辑与语法高亮、实时预览（拖拽平移/滚轮缩放/双击适应）、语法检测、高清 PNG 导出与剪贴板复制，集成 AI 助手通过自然语言生成图表。**数据本地渲染，不上传**。
+一个基于 C# Avalonia 构建的本地多格式图表编辑器。当前支持 **Mermaid**（`.mmd` / `.mermaid`）与 **Graphviz DOT**（`.dot` / `.gv`），后续将支持 drawio 与 Excalidraw。支持代码编辑与语法高亮、实时预览（拖拽平移/滚轮缩放/双击适应）、语法检测、高清 PNG 导出与剪贴板复制，集成 AI 助手通过自然语言生成图表。**数据本地渲染，不上传**。
 
 版本 **v2.0.260513.0**
 
@@ -13,7 +13,7 @@
 ## 功能特性
 
 ### 代码编辑
-- **语法高亮** - 内置自定义 Mermaid 语法高亮定义（Xshd），覆盖关键字、指令、节点ID、边标签、参与者名、类成员等
+- **语法高亮** - 每种格式自带 Xshd 高亮定义：Mermaid 覆盖关键字、指令、节点ID、边标签、参与者名、类成员等；DOT 覆盖关键字、属性名、边运算符、字符串、注释（`//` `/* */` 与行首 `#`）等
 - **查找替换** - 集成 SearchPanel，支持代码查找/替换
 - **多标签页** - 支持多文件独立编辑，每个标签页带关闭按钮，标签页间支持鼠标滚轮切换
 - **智能防抖** - 输入后自动延迟 350ms 渲染，避免频繁刷新
@@ -28,6 +28,7 @@
 - **滚轮缩放** - 鼠标滚轮缩放（以光标为中心），缩放范围 20% ~ 3000%，状态栏同步显示百分比
 - **双击适应** - 双击预览区自动适配视口
 - **错误显示** - 预览区友好显示语法错误信息
+- **布局引擎切换** - DOT 标签页在状态栏右侧显示布局选择器（`dot` / `neato` / `fdp` / `sfdp` / `twopi` / `circo`），切换走增量更新、**不重载 WASM**；Mermaid 标签页不显示该选择器
 - **状态栏** - 底部状态栏左侧显示状态信息（就绪/渲染中/已保存/错误提示等），右侧显示缩放百分比
 - **编辑器切换** - 点击分隔条中的三角形按钮（▶/◀）隐藏/显示编辑器，获得全屏预览
 - **渲染缓存** - LRU 缓存（最多 32 条）+ 预览后后台自动生成 PNG 图片
@@ -37,17 +38,37 @@
 - **保存图片** - 点击预览区右上角浮动保存按钮，导出高清 PNG 图片（支持 PNG/JPEG）
 - **复制图片** - 点击预览区右上角浮动复制按钮，将图表以 PNG 格式复制到系统剪贴板
 - **自适应缩放** - 导出时根据图表复杂度（节点、边、子图数量）自动计算最优缩放比例（1.5x ~ 5.0x）
+- **按格式分派导出** - Mermaid 走 Mermaid CLI（`mmdc`）；DOT 在预览页内完成 `渲染 → SVG → canvas → PNG`，**零子进程**，且输出透明底 PNG
 
 ### 文件操作
-- 新建 / 打开 / 保存 Mermaid 文件（`.mmd` / `.mermaid`）
-- 支持命令行参数打开文件（`Diagramon.exe example.mmd`）
+- 新建（文件 → 新建，按格式选择）/ 打开 / 保存 Mermaid 文件（`.mmd` / `.mermaid`）、Graphviz DOT 文件（`.dot` / `.gv`）、drawio 文件（`.drawio`）与 Excalidraw 文件（`.excalidraw`）
+- 未知扩展名回退为 Mermaid 处理（不会报错）
+- 支持命令行参数打开文件（`Diagramon.exe example.mmd`、`Diagramon.exe diagram.dot`、`Diagramon.exe flow.drawio`）
 - 最近文件记录（最多 10 个），支持**最近历史对话框**（File → Recent Files → More...），含搜索过滤和双击打开
 - 关闭未保存标签时弹出保存确认（保存/不保存/取消）
 - 退出程序时检测所有未保存修改，逐个提示确认
 - 首次打开文件后自动保存至最近文件历史
 
+### drawio 图形编辑（`.drawio`）
+- **画布即编辑器** - drawio 标签页由独立 WebView 承载（懒创建、切走不销毁，保住撤销历史），编辑器与预览区自动让位给画布
+- **文件仍是 XML 文本** - `.drawio` 就是 mxfile XML，画布只是它的视图；磁盘上仍是可 diff、可版本控制的文本，保存/另存为/最近文件走同一条链路
+- **自动回写** - 画布上的改动（drawio 的 autosave）回写到标签页正文，标题立即带 `*`；回写走挂起通知，**不会**触发文本渲染管线
+- **离线自托管** - drawio 运行时随包分发（`tools/drawio`，由 `tools/fetch-drawio.ps1` 按白名单裁剪），页面由进程内 loopback origin 提供；附加图形库与模板里的外部图片在拉取期被**下载到包内**并改写成相对路径，Google 字体与外部集成（Drive / MathJax / 服务端导出）在构建期被关掉，全程零外部请求
+- **导出** - 与文本格式并列：点预览区的保存/复制图片按钮，由画布在页面内栅格化，**零子进程**
+- **Mermaid → drawio 转换** - 文件 → 转换为 drawio 图（不可逆）：把当前 Mermaid 源码交给 drawio 自己的解析器，转换结果**另开新标签页**，原 `.mmd` 标签页保持不动
+- **与文本格式共存** - `.drawio` 与 `.mmd` / `.dot` 标签页可同时打开、自由切换，互不影响；drawio 标签页不显示 AI 助手与布局选择器
+
+### Excalidraw 手绘风编辑（`.excalidraw`）
+- **库型集成** - Excalidraw 是在我方承载页里当场实例化的库（不是 iframe 协议型集成），因此没有消息握手；页面与运行时同样由进程内 loopback origin 提供
+- **文件是 JSON 文本** - `.excalidraw` 就是 Excalidraw 的场景 JSON，画布只是它的视图；保存 / 另存为 / 最近文件走同一条链路
+- **自动回写** - 画布变更（拖拽时每帧触发）先入队、按 150ms 合并后回写标签页正文，且挂起文本变更通知；文档里只保留可持久化的少量 appState 字段（选中/hover 这类瞬态不落盘）
+- **离线优先** - 构建期设 `EXCALIDRAW_ASSET_PATH` 指向随包目录，字体不从 CDN 取；运行时零外部请求
+- **离线守卫** - 承载页在应用脚本之前打补丁：非本机 origin 的 `fetch`/`XHR`/`Image`/`sendBeacon` 一律拒绝，并把每次拦截显示到状态栏（避免某个功能偷偷联网这类上游回归）
+- **Mermaid → Excalidraw** - 文件 → 转换为 Excalidraw 图（不可逆）：转换由页面内的 `@excalidraw/mermaid-to-excalidraw` 完成，结果另开新标签页
+- **新增构建步骤** - 上游没有可直接 `<script>` 引用的产物，因此多了 `tools/fetch-excalidraw.ps1`（npm 取包 + esbuild 打包 + 清单校验）
+
 ### AI 助手
-- **自然语言生成** - 描述你想要的图表，AI 自动生成 Mermaid 代码
+- **自然语言生成** - 描述你想要的图表，AI 按当前标签页的格式生成代码（Mermaid / DOT 各有对应的系统提示词与代码围栏提取）
 - **多模型支持** - OpenAI、Azure OpenAI、Ollama（本地 LLM）、自定义 API（兼容 OpenAI 协议的任意后端）
 - **模型快速切换** - 输入框旁的下拉菜单可快速切换已配置的 AI 模型
 - **一键应用与回退** - AI 生成的代码可直接应用到编辑器，支持回退撤销
@@ -108,8 +129,9 @@
 - **UI 框架**: Avalonia UI 11.3.0、Fluent Theme
 - **架构模式**: MVVM (CommunityToolkit.Mvvm 8.4.0)
 - **代码编辑器**: AvaloniaEdit 11.4.1
-- **预览渲染**: Mermaid.js（通过 WebView（WebView.Avalonia 11.0.0.1）实时渲染）
-- **图片导出**: Mermaid CLI（嵌入式 Node.js 工具，用于高清 PNG 导出）
+- **预览渲染**: Mermaid.js（随包 JS，经 `file://` 承载）与 Graphviz 16.1.0 WASM（`@hpcc-js/wasm-graphviz`，经本地 loopback 真实 origin 承载）
+- **图形编辑**: drawio（自托管 embed 模式）与 Excalidraw（库型集成，esbuild 打包），两者都由本地 loopback origin 承载
+- **图片导出**: Mermaid 走 Mermaid CLI（嵌入式 Node.js 工具）；DOT 在页面内 `SVG → canvas → PNG`（零子进程）
 - **WebView**: WebView.Avalonia 11.0.0.1（CoreWebView2）
 - **图标字体**: Inter Font
 
@@ -121,10 +143,19 @@
 ### 运行打包版本
 - Windows 系统（需内置 WebView2 运行时，Windows 10/11 已预装）
 - 无需安装 Node.js 或其他依赖，Self-Contained 双击即可运行
+- 发布脚本会在打包前校验 Graphviz 渲染资源（`tools/graphviz/graphviz.js`）存在且哈希匹配，缺失则报错退出，不产出残包
 
 ## 构建项目
 
 ### 开发模式
+
+首次构建前先取渲染资源（这些目录不入库，由脚本拉取并校验哈希）：
+
+```powershell
+powershell -File tools\fetch-graphviz.ps1   # DOT 渲染器（@hpcc-js/wasm-graphviz）
+powershell -File tools\fetch-drawio.ps1     # drawio 运行时（按白名单裁剪）
+powershell -File tools\fetch-excalidraw.ps1  # Excalidraw 运行时（npm + esbuild 打包）
+```
 
 ```bash
 dotnet restore
@@ -248,6 +279,9 @@ dotnet publish -c Release -r win-x64 --self-contained true -p:PublishSingleFile=
 
 - [Avalonia UI](https://avaloniaui.net/) - 跨平台 UI 框架
 - [AvaloniaEdit](https://github.com/AvaloniaUI/AvaloniaEdit) - 代码编辑器控件（含 SearchPanel）
+- [Graphviz](https://graphviz.org/) / [@hpcc-js/wasm-graphviz](https://github.com/hpcc-systems/hpcc-js-wasm) - Graphviz 16.1.0 WASM 渲染引擎（DOT 预览与导出，Apache-2.0）
+- [drawio](https://github.com/jgraph/drawio) - 图形编辑器（`.drawio` 的画布，自托管 embed 模式，Apache-2.0）
+- [Excalidraw](https://github.com/excalidraw/excalidraw) - 手绘风图形编辑器（`.excalidraw` 的画布，MIT）
 - [Mermaid.js](https://mermaid.js.org/) - Mermaid 图表渲染引擎（预览）
 - [Mermaid CLI](https://github.com/mermaid-js/mermaid-cli) - Mermaid 图表渲染引擎（高清 PNG 导出）
 - [WebView.Avalonia](https://github.com/AvaloniaUI/AvaloniaWebView) - WebView 控件

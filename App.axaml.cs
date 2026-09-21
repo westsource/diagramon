@@ -8,6 +8,8 @@ using Avalonia.Markup.Xaml;
 using Avalonia.Threading;
 using AvaloniaWebView;
 using Diagramon.Services;
+using Diagramon.Services.Documents;
+using Diagramon.Services.Documents.Formats;
 using Diagramon.Services.Localization;
 using Diagramon.Services.Remote;
 using Diagramon.ViewModels;
@@ -37,7 +39,17 @@ public class App : Application
 
             LocalizationService.Initialize(settingsService.GetLanguageCode());
 
-            var fileService = new FileService();
+            // 格式注册表：界面与文件解析的**唯一**格式分派点（方案 §4.1）。
+            // 项目没有 DI 容器，照现状手工组装；加格式只改这一行。
+            var formats = new DocumentFormatRegistry(
+            [
+                new MermaidFormat(),
+                new DotFormat(),
+                new DrawioFormat(),
+                new ExcalidrawFormat(),
+            ]);
+
+            var fileService = new FileService(formats);
             IUpdateService updateService = new UpdateService(settingsService);
 
             // 云端：一个共享 HTTP 出入口 + 认证 + 文档存储。
@@ -49,6 +61,7 @@ public class App : Application
             var mainWindow = new MainWindow();
             var viewModel = new MainViewModel(
                 mermaidService,
+                formats,
                 fileService,
                 settingsService,
                 authService,

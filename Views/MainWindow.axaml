@@ -25,7 +25,15 @@
     <Grid RowDefinitions="Auto,*,Auto">
         <Menu Grid.Row="0">
             <MenuItem Header="{Binding MenuFile}">
-                <MenuItem Header="{Binding MenuNew}" InputGesture="Ctrl+N" Command="{Binding NewFileCommand}"/>
+                <MenuItem Header="{Binding MenuNew}" ItemsSource="{Binding NewTabChoices}">
+                    <MenuItem.ItemTemplate>
+                        <DataTemplate x:DataType="vm:NewTabChoice">
+                            <MenuItem Header="{Binding DisplayName}"
+                                      Command="{Binding #root.DataContext.AddNewTabOfFormatCommand}"
+                                      CommandParameter="{Binding FormatId}"/>
+                        </DataTemplate>
+                    </MenuItem.ItemTemplate>
+                </MenuItem>
                 <MenuItem Header="{Binding MenuOpen}" InputGesture="Ctrl+O" Command="{Binding OpenFileCommand}"/>
                 <MenuItem Header="{Binding MenuRecentFiles}" IsEnabled="{Binding HasRecentFiles}"
                           ItemsSource="{Binding RecentFiles}">
@@ -48,6 +56,13 @@
                 <Separator/>
                 <MenuItem Header="{Binding MenuSave}" InputGesture="Ctrl+S" Command="{Binding SaveFileCommand}"/>
                 <MenuItem Header="{Binding MenuSaveAs}" InputGesture="Ctrl+Shift+S" Command="{Binding SaveFileAsCommand}"/>
+                <Separator/>
+                <MenuItem Header="{Binding MenuConvertToDrawio}"
+                          IsVisible="{Binding CanConvertMermaid}"
+                          Command="{Binding ConvertMermaidToDrawioCommand}"/>
+                <MenuItem Header="{Binding MenuConvertToExcalidraw}"
+                          IsVisible="{Binding CanConvertMermaid}"
+                          Command="{Binding ConvertMermaidToExcalidrawCommand}"/>
                 <Separator/>
                 <MenuItem Header="{Binding MenuCloseTab}" InputGesture="Ctrl+W" Command="{Binding CloseCurrentTabCommand}"/>
                 <Separator/>
@@ -150,12 +165,12 @@
 
             <Border Grid.Row="1" Background="#FFFFFF">
                 <Grid x:Name="WorkspaceGrid" ColumnDefinitions="Auto,Auto,*" SizeChanged="OnWorkspaceSizeChanged" ClipToBounds="False">
-                    <Border Grid.Column="0" Background="#FFFFFF" Width="{Binding EditorPanelWidth}" MinWidth="0"
-                            IsVisible="{Binding IsEditorVisible}">
+                     <Border Grid.Column="0" Background="#FFFFFF" Width="{Binding EditorPanelWidth}" MinWidth="0"
+                            IsVisible="{Binding IsEditorSurfaceVisible}">
                         <Grid RowDefinitions="*,Auto,Auto">
                              <avaloniaEdit:TextEditor Grid.Row="0" x:Name="CodeEditor"
                                                       Document="{Binding #root.DataContext.CurrentTab.Document}"
-                                                      SyntaxHighlighting="{Binding MermaidHighlighting}"
+                                                      SyntaxHighlighting="{Binding #root.DataContext.CurrentHighlighting}"
                                                       FontFamily="JetBrains Mono,Cascadia Code,Fira Code,Consolas,Menlo,Monaco,monospace"
                                                       FontSize="14"
                                                       Background="#FFFFFF"
@@ -180,7 +195,7 @@
                             </avaloniaEdit:TextEditor>
 
                             <Border Grid.Row="1" Background="#E8E8E8" Height="4"
-                                    IsVisible="{Binding AiAssistant.IsExpanded}"
+                                    IsVisible="{Binding IsAiPanelVisible}"
                                     Cursor="SizeNorthSouth"
                                     PointerPressed="OnAIPanelSplitterPointerPressed"
                                     PointerMoved="OnAIPanelSplitterPointerMoved"
@@ -192,13 +207,13 @@
                             <Border Grid.Row="2" Background="#F8F8F8" BorderBrush="#E0E0E0" BorderThickness="0,1,0,0"
                                     MinHeight="50"
                                     Height="{Binding AiAssistant.PanelHeight}"
-                                    IsVisible="{Binding AiAssistant.IsExpanded}">
+                                    IsVisible="{Binding IsAiPanelVisible}">
                                 <views:AIPanel DataContext="{Binding AiAssistant}"/>
                             </Border>
 
                             <Border Grid.Row="2" Background="#F5F5F5" BorderBrush="#E0E0E0" BorderThickness="0,1,0,0"
                                     Height="28" Padding="8,4"
-                                    IsVisible="{Binding !AiAssistant.IsExpanded}"
+                                    IsVisible="{Binding IsAiToggleBarVisible}"
                                     Cursor="Hand"
                                     PointerPressed="OnAIPanelTogglePointerPressed">
                                 <Grid ColumnDefinitions="Auto,*">
@@ -215,6 +230,7 @@
                             Grid.Column="1"
                             Width="6"
                             Background="#E0E0E0"
+                            IsVisible="{Binding IsTextSurface}"
                             Cursor="SizeWestEast"
                             PointerPressed="OnSplitterPointerPressed"
                             PointerMoved="OnSplitterPointerMoved"
@@ -225,6 +241,7 @@
                             VerticalAlignment="Center" HorizontalAlignment="Center"
                             Width="12" Height="24"
                             Background="#D6D6D6"
+                            IsVisible="{Binding IsTextSurface}"
                             CornerRadius="4"
                             Cursor="Hand"
                             Tapped="OnToggleTriangleTapped">
@@ -239,9 +256,10 @@
                     </Border>
 
                     <Border Grid.Column="2" Background="#F8F8F8" MinWidth="480">
-                        <Grid>
+                        <Grid x:Name="PreviewColumn">
                             <Border x:Name="PreviewGrid"
                                     Background="#F8F8F8"
+                                    IsVisible="{Binding IsPreviewSurfaceVisible}"
                                     ClipToBounds="True">
                                 <Border x:Name="PreviewWebHost"
                                         HorizontalAlignment="Stretch"
@@ -250,10 +268,15 @@
                                         BorderThickness="0"/>
                             </Border>
 
+                            <Border x:Name="EmbeddedAppHost"
+                                    Background="#FFFFFF"
+                                    IsVisible="{Binding IsEmbeddedAppVisible}"
+                                    ClipToBounds="True"/>
+
                             <Popup IsOpen="True"
                                    IsLightDismissEnabled="False"
                                    Placement="AnchorAndGravity"
-                                   PlacementTarget="{Binding #PreviewGrid}"
+                                   PlacementTarget="{Binding #PreviewColumn}"
                                    PlacementAnchor="TopRight"
                                    PlacementGravity="BottomLeft"
                                    HorizontalOffset="-12"
@@ -295,9 +318,23 @@
         </Grid>
 
         <Border Grid.Row="2" Background="#F0F0F0" BorderBrush="#CCCCCC" BorderThickness="0,1,0,0" Padding="5,2">
-            <Grid ColumnDefinitions="Auto,*,Auto">
+            <Grid ColumnDefinitions="Auto,*,Auto,Auto,Auto">
                 <TextBlock Grid.Column="0" Text="{Binding StatusMessage}" Foreground="#666666" VerticalAlignment="Center"/>
-                <TextBlock Grid.Column="2" Text="{Binding ZoomText}" Foreground="#666666" VerticalAlignment="Center" Margin="10,0,0,0"/>
+                <TextBlock Grid.Column="2" Text="{Binding LayoutLabel}"
+                           Foreground="#666666" VerticalAlignment="Center" Margin="10,0,4,0"
+                           IsVisible="{Binding HasLayoutOptions}"/>
+                <ComboBox Grid.Column="3"
+                          MinWidth="96"
+                          IsVisible="{Binding HasLayoutOptions}"
+                          ItemsSource="{Binding CurrentLayoutChoices}"
+                          SelectedItem="{Binding SelectedLayoutChoice}">
+                    <ComboBox.ItemTemplate>
+                        <DataTemplate x:DataType="vm:LayoutChoice">
+                            <TextBlock Text="{Binding DisplayName}"/>
+                        </DataTemplate>
+                    </ComboBox.ItemTemplate>
+                </ComboBox>
+                <TextBlock Grid.Column="4" Text="{Binding ZoomText}" Foreground="#666666" VerticalAlignment="Center" Margin="10,0,0,0"/>
             </Grid>
         </Border>
     </Grid>

@@ -1,13 +1,11 @@
-using System.IO;
-using System.Xml;
 using AvaloniaEdit.Highlighting;
-using AvaloniaEdit.Highlighting.Xshd;
+using Diagramon.Services.Highlighting;
 
 namespace Diagramon.Services;
 
 public static class MermaidHighlightingProvider
 {
-    private const string MermaidXshd = """
+    public const string MermaidXshd = """
 <?xml version="1.0" encoding="utf-8"?>
 <SyntaxDefinition name="Mermaid" extensions=".mmd;.mermaid" xmlns="http://icsharpcode.net/sharpdevelop/syntaxdefinition/2008">
   <Color name="Comment" foreground="#6A9955" />
@@ -48,8 +46,6 @@ public static class MermaidHighlightingProvider
 
     public static IHighlightingDefinition Create()
     {
-        using var stringReader = new StringReader(MermaidXshd);
-        using var xmlReader = XmlReader.Create(stringReader);
-        return HighlightingLoader.Load(xmlReader, HighlightingManager.Instance);
+        return XshdLoader.Create(MermaidXshd);
     }
 }

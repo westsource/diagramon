@@ -80,7 +80,7 @@
 
                         <StackPanel Spacing="4" IsVisible="{Binding IsBaseUrlRequired}">
                             <TextBlock Text="Base URL" FontSize="12" Foreground="#666666"/>
-                            <TextBox Text="{Binding EditingBaseUrl}" Watermark="https://api.example.com/v1"/>
+                            <TextBox Text="{Binding EditingBaseUrl}" Watermark="{Binding BaseUrlWatermark}"/>
                         </StackPanel>
 
                         <StackPanel Spacing="4" IsVisible="{Binding IsAzureConfig}">

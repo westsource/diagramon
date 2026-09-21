@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>Diagramon drawio host</title>
+<style>
+  html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: #fff; }
+  iframe { margin: 0; padding: 0; border: 0; width: 100%; height: 100%; display: block; }
+</style>
+</head>
+<body>
+<!--
+  这是属于 Diagramon 的资产，不是 drawio 的（见方案 §4.5 / §8.4.1）。
+
+  为什么必须有这一层外壳页：drawio 的 embed 初始化被 `parent != window` 门控
+  （js/diagramly/App.js 的 initializeEmbedMode / EditorUi.js 的消息监听），
+  若把 drawio 的 index.html 直接当顶级文档载入，整段 embed 初始化会被跳过 ——
+  页面看起来正常，但消息协议完全不通。因此必须由同源的 iframe 承载 drawio。
+
+  消息通道（两个方向都不做二次 JSON 编码，载荷始终是**字符串**）：
+    drawio → 外壳 : window.postMessage(JSON.stringify(msg), '*')
+    外壳 → C#     : 追加进 window.__hostQueue（宿主轮询取走；队列会被清空后返回）
+    C# → 外壳     : 宿主执行 window.__apply(str)
+    外壳 → drawio : frame.postMessage(str, '*')
+  队列同时被消费与转发是刻意的：宿主只要能执行脚本（已验证可用）就能工作，
+  不依赖 WebView 包装层是否暴露消息事件。
+-->
+<iframe id="dl" src="./index.html?embed=1&proto=json&spin=1&noExitBtn=1&libraries=1&ui=min&noSaveBtn=0"></iframe>
+<script>
+  // 离线守卫不在这里：drawio 跑在 iframe 里，宿主页的补丁管不到它的 realm。
+  // 守卫由 tools/fetch-drawio.ps1 注入到 drawio 自己的 index.html（tools/offline-guard/offline-guard.js）。
+  // 刻意**不带 `configure=1`**：实测（真 drawio v31.4.6 + 本文凭页）带该参数时 drawio 会先发
+  // {"event":"configure"} 并**停在那里等宿主回 action:configure**，`init` 永不到来 —— 承载层会一直
+  // 空着。我们的离线加固不靠 configure 回包，而是在拉取期改 PreConfig.js（禁服务端导出 / gapi /
+  // 数学渲染，见 tools/fetch-drawio.ps1），因此直接跳过这个握手。
+  //
+  // 同样**不带 `saveAndExit=1`**：带上它时画布里的保存会回 `{"event":"save", "exit":true}`，
+  // 语义是"保存完请宿主关掉承载面"。本应用里 drawio 就是标签页的编辑器，没有"退出嵌入"这回事，
+  // 因此保持普通保存语义（`save` 只写回 + 落盘），`noExitBtn=1` 继续把退出按钮藏掉。
+  const frameElement = document.getElementById('dl');
+  const frame = () => frameElement.contentWindow;
+
+  window.__hostQueue = [];
+  window.__hostState = 'awaiting-init';
+
+  // C# → drawio
+  // 入口名与 Excalidraw 承载页保持一致（`window.__apply`）：宿主侧统一用 EmbeddedProtocol.DeliverScript，
+  // 两个页面若各叫各的名字（曾经这里是 `__deliver`），宿主就会把动作投到一个不存在的函数上而**静默丢失** ——
+  // 表现为 drawio 永远停在 Loading。
+  window.__apply = (payload) => {
+    try {
+      frame().postMessage(payload, '*');
+      return true;
+    } catch (e) {
+      return false;
+    }
+  };
+
+  // drawio → C#
+  window.addEventListener('message', (evt) => {
+    if (evt.source !== frame()) return;
+    if (typeof evt.data !== 'string') return;
+
+    try {
+      const parsed = JSON.parse(evt.data);
+      if (parsed && typeof parsed.event === 'string') {
+        window.__hostState = parsed.event;
+      }
+    } catch (e) {
+      // 非 JSON 载荷照样转交，由 C# 侧决定怎么处理
+    }
+
+    window.__hostQueue.push(evt.data);
+
+    // 若宿主换用消息事件通道，这里也顺带投递一次；通道不存在时静默忽略。
+    try {
+      if (window.chrome && window.chrome.webview && window.chrome.webview.postMessage) {
+        window.chrome.webview.postMessage(evt.data);
+      }
+    } catch (e) {
+    }
+  });
+</script>
+</body>
+</html>

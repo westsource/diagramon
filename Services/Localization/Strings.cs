@@ -24,12 +24,32 @@ public class Strings
     public string NodeNotFoundError => Get("NodeNotFoundError");
     public string UnknownError => Get("UnknownError");
     public string AICodeApplied => Get("AICodeApplied");
+    public string AICodeFormatMismatch => Get("AICodeFormatMismatch");
     public string CodeGenerated => Get("CodeGenerated");
     public string CodeReverted => Get("CodeReverted");
     public string ConversationCleared => Get("ConversationCleared");
     public string CannotOpenLink => Get("CannotOpenLink");
-    public string NewTabTitle => Get("NewTabTitle");
-    public string UntitledTab => Get("UntitledTab");
+    // ---- 格式与文件对话框 ----
+    public string FormatMermaid => Get("FormatMermaid");
+    public string FormatDot => Get("FormatDot");
+    public string FormatDrawio => Get("FormatDrawio");
+    public string UntitledDrawioFileName => Get("UntitledDrawioFileName");
+    public string DrawioRendererMissing => Get("DrawioRendererMissing");
+    public string MenuConvertToDrawio => Get("MenuConvertToDrawio");
+    public string ConvertToDrawioDone => Get("ConvertToDrawioDone");
+    public string FormatExcalidraw => Get("FormatExcalidraw");
+    public string UntitledExcalidrawFileName => Get("UntitledExcalidrawFileName");
+    public string ExcalidrawRuntimeMissing => Get("ExcalidrawRuntimeMissing");
+    public string MenuConvertToExcalidraw => Get("MenuConvertToExcalidraw");
+    public string UntitledMermaidFileName => Get("UntitledMermaidFileName");
+    public string UntitledDotFileName => Get("UntitledDotFileName");
+    public string FileTypeFormatLabel => Get("FileTypeFormatLabel");
+    public string FileTypeAllSupported => Get("FileTypeAllSupported");
+    public string FileTypeAllFiles => Get("FileTypeAllFiles");
+    public string OpenFileDialogTitle => Get("OpenFileDialogTitle");
+    public string SaveFileDialogTitle => Get("SaveFileDialogTitle");
+    public string LayoutLabel => Get("LayoutLabel");
+    public string DotRendererMissing => Get("DotRendererMissing");
 
     public string MenuFile => Get("MenuFile");
     public string MenuNew => Get("MenuNew");
@@ -77,6 +97,9 @@ public class Strings
     public string AIConfigAzureApiKey => Get("AIConfigAzureApiKey");
     public string AIConfigOllama => Get("AIConfigOllama");
     public string AIConfigBaseUrl => Get("AIConfigBaseUrl");
+
+    /// <summary>OpenAI 档 Base URL 的占位提示（说明留空 = 官方端点）。</summary>
+    public string AIBaseUrlOfficialHint => Get("AIBaseUrlOfficialHint");
     public string AIConfigComplete => Get("AIConfigComplete");
     public string AIReadyFormat => Get("AIReadyFormat");
     public string AIGenerating => Get("AIGenerating");

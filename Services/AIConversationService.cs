@@ -25,9 +25,17 @@ public class AIConversationService
         EnsureDirectoryExists();
     }
 
-    public AIConversation GetOrCreateConversation(string? filePath)
+    /// <summary>
+    /// 取（或建）某个文档的对话。入参是**稳定身份**（<c>IDocumentLocation.StableId</c>）而不是文件路径：
+    /// 本地身份 = 规范化路径，云端身份 = 服务端文档 id，两者都直接进 sha256 当作存档文件名。
+    /// </summary>
+    /// <remarks>
+    /// 改造前这里自己把路径 <c>GetFullPath().ToLowerInvariant()</c> 再哈希；
+    /// 规范化上移到 <c>DocumentIdentity.Normalize</c> 后，本地场景的哈希**逐字节不变**，已有会话文件无需迁移。
+    /// </remarks>
+    public AIConversation GetOrCreateConversation(string? stableId)
     {
-        var fileHash = ComputeFileHash(filePath);
+        var fileHash = ComputeFileHash(stableId);
         var cacheKey = fileHash ?? "default";
 
         if (_cache.TryGetValue(cacheKey, out var cached))
@@ -41,7 +49,7 @@ public class AIConversationService
             conversation = new AIConversation
             {
                 Id = Guid.NewGuid().ToString(),
-                FilePath = filePath,
+                FilePath = stableId,
                 FileHash = fileHash,
                 Messages = new List<AIMessage>(),
                 CreatedAt = DateTime.Now,
@@ -78,9 +86,9 @@ public class AIConversationService
         }
     }
 
-    public void DeleteConversation(string? filePath)
+    public void DeleteConversation(string? stableId)
     {
-        var fileHash = ComputeFileHash(filePath);
+        var fileHash = ComputeFileHash(stableId);
         if (string.IsNullOrEmpty(fileHash)) return;
 
         var conversationPath = Path.Combine(_storagePath, $"{fileHash}.json");
@@ -97,16 +105,16 @@ public class AIConversationService
         }
     }
 
-    public void AddMessage(string? filePath, AIMessage message)
+    public void AddMessage(string? stableId, AIMessage message)
     {
-        var conversation = GetOrCreateConversation(filePath);
+        var conversation = GetOrCreateConversation(stableId);
         conversation.Messages.Add(message);
         SaveConversation(conversation);
     }
 
-    public void UpdateMessage(string? filePath, AIMessage message)
+    public void UpdateMessage(string? stableId, AIMessage message)
     {
-        var conversation = GetOrCreateConversation(filePath);
+        var conversation = GetOrCreateConversation(stableId);
         var index = conversation.Messages.FindIndex(m => m.Id == message.Id);
         if (index >= 0)
         {
@@ -115,9 +123,9 @@ public class AIConversationService
         }
     }
 
-    public void ClearConversation(string? filePath)
+    public void ClearConversation(string? stableId)
     {
-        var conversation = GetOrCreateConversation(filePath);
+        var conversation = GetOrCreateConversation(stableId);
         conversation.Messages.Clear();
         conversation.UpdatedAt = DateTime.Now;
         SaveConversation(conversation);
@@ -184,15 +192,19 @@ public class AIConversationService
         return null;
     }
 
-    private string? ComputeFileHash(string? filePath)
+    /// <summary>
+    /// 稳定身份 → 会话存档文件名。**不做路径规范化** —— 规范化由 <c>DocumentIdentity.Normalize</c>
+    /// 在构造 <c>StableId</c> 时完成，这里再规范化一次对云端身份（服务端 id）是错的（会被当成相对路径解析）。
+    /// 非法/空身份返回 <c>null</c>，落进原来的 <c>default</c> 桶。
+    /// </summary>
+    private static string? ComputeFileHash(string? stableId)
     {
-        if (string.IsNullOrWhiteSpace(filePath)) return null;
+        if (string.IsNullOrWhiteSpace(stableId)) return null;
 
         try
         {
-            var normalizedPath = Path.GetFullPath(filePath).ToLowerInvariant();
             using var sha256 = SHA256.Create();
-            var bytes = sha256.ComputeHash(Encoding.UTF8.GetBytes(normalizedPath));
+            var bytes = sha256.ComputeHash(Encoding.UTF8.GetBytes(stableId));
             return Convert.ToHexString(bytes).ToLowerInvariant();
         }
         catch
