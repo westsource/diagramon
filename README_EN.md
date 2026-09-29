@@ -1,8 +1,10 @@
 # Diagramon - Multi-format Diagram Editor
 
-A local multi-format diagram editor built with C# Avalonia. Currently supports **Mermaid** (`.mmd` / `.mermaid`) and **Graphviz DOT** (`.dot` / `.gv`); drawio and Excalidraw are next. Features code editing with syntax highlighting, real-time preview (pan/zoom/fit-to-viewport), syntax validation, high-resolution PNG export and clipboard copy, and an AI assistant for generating diagrams from natural language. **All rendering is done locally — no data uploaded.**
+A **local-first** multi-format diagram editor built with C# Avalonia. Supports **Mermaid** (`.mmd` / `.mermaid`), **Graphviz DOT** (`.dot` / `.gv`), **drawio** (`.drawio`) and **Excalidraw** (`.excalidraw`) — all four can be edited and previewed live. Features code editing with syntax highlighting, real-time preview (pan/zoom/fit-to-viewport), syntax validation, high-resolution PNG export and clipboard copy, plus an AI assistant that works either with your own API key (BYOK) or through the membership cloud gateway (including **image recognition**: pick a screenshot → diagram code).
 
-Version **v2.0.260513.0**
+**Rendering and syntax checking happen entirely on this machine** (Node and Chrome headless ship inside the package; no external requests). Only when you **actively use AI** are the relevant code/image sent to the model service: BYOK talks straight to your own upstream, membership goes through the Diagramon cloud gateway.
+
+Version **v2.0.260929.0**
 
 ## Screenshots
 
@@ -68,6 +70,10 @@ Version **v2.0.260513.0**
 ### AI Assistant
 - **Natural Language Generation** - Describe your diagram in plain language; the AI generates code for the current tab (separate system prompts and code-fence extraction for Mermaid and DOT)
 - **Multi-model Support** - OpenAI, Azure OpenAI, Ollama (local LLMs), Custom API (any OpenAI-compatible backend)
+- **Membership cloud gateway (Diagramon Cloud)** - Sign in and call models through the server gateway; the credential is the current access token (**fetched per request, never persisted**), usage is measured in *credits*, and your remaining balance is shown in the UI
+- **Image recognition** - Pick a diagram screenshot and get code back for the current format; one click applies it as a drawio tab (reusing the local mermaid → drawio conversion)
+- **Automatic model tier** - With "Auto (recommended)" selected, the **server picks the tier from the request content** (an image routes to the vision tier); the UI always reports which tier was actually used
+- **Render-error auto-fix** - If the generated code fails to render locally, the error text is sent back to the model for one automatic fix (a second real call; can be switched off in settings)
 - **Model Selector** - Dropdown to quickly switch between configured models
 - **One-click Apply & Revert** - Apply generated code to the editor; revert to undo
 - **Persistent Conversations** - Conversation history saved per file (SHA256 hash of file path); storage path is configurable
@@ -78,7 +84,7 @@ Version **v2.0.260513.0**
 - **Draggable Splitter** - Adjustable splitter between chat history and input area (80px ~ 320px)
 - **Settings (⚙)** - Open AI settings dialog for model management
 - **Clear History (🗑)** - Clear current conversation with one click
-- **API Key Security** - AES-encrypted storage in separate `secure.config` file, isolated from main settings
+- **API Key Security** - Stored with **Windows DPAPI** (per-user encryption) in a separate `secure.config` file, isolated from main settings; **never written in plaintext into `settings.json`**
 
 ### Settings
 - **Language** - File → Settings → Language to switch between en-US and zh-CN; auto-detected on first launch
@@ -114,7 +120,7 @@ Version **v2.0.260513.0**
 - Preview rendering uses `CoreWebView2.ExecuteScriptAsync` for JS injection, bypassing file:// URL cache and navigation issues; initial load via Navigate to local HTML file
 - AI Base URL auto-cleaned (removes trailing `/chat/completions`, `/v1/chat/completions`, `/api/chat`, etc.)
 - Preview temp files cleaned at startup (only keeps files from the last 7 days)
-- API Keys stored in AES-encrypted `secure.config`, separate from main settings
+- API Keys stored with **Windows DPAPI** encryption in `secure.config`, separate from main settings
 - Render cache uses LRU strategy (max 32 entries) with SHA256 content hashing
 - Export scale adapts based on element count (nodes/edges/subgraphs determine 1.5x ~ 5.0x)
 - Code editor uses AvaloniaEdit with custom Mermaid syntax highlighting (Xshd definition)

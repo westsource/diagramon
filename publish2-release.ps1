@@ -124,7 +124,14 @@ $ReleaseNotesBody = @"
 $($GitLog -join "`n")
 
 ### 关于 Diagramon
-Diagramon 是一款本地 Mermaid 图表编辑器，支持实时预览、语法高亮、AI 辅助编写、多标签页编辑与高质量图片导出。
+Diagramon 是一款**本地优先的多格式图表编辑器**：Mermaid / Graphviz DOT / drawio / Excalidraw 都可编辑并实时预览，
+渲染全部在本机完成（随包内置 Node 与 Chrome headless，无外部请求）。
+
+- **AI 辅助**：既可用自有 API Key 直连（BYOK），也可走会员云网关 ——
+  支持**图片识别**（选图/截图 → 图表代码）与渲染报错自动修正一次；不确定用哪档模型时选「自动」即可
+- **编辑**：多标签页、语法高亮、查找替换、最近历史
+- **导出**：高质量 PNG（导出倍率可选）与复制到剪贴板
+- **会员**：云端文档存储（逐文档显式上传，多机同步）
 
 ### 系统要求
 - Windows 10/11 64位
@@ -248,7 +255,14 @@ $($GitLog -join "`n")
 ⬇️ **[$ZipFileName]($DownloadUrl)**
 
 ### 关于 Diagramon
-Diagramon 是一款本地 Mermaid 图表编辑器，支持实时预览、语法高亮、AI 辅助编写、多标签页编辑与高质量图片导出。
+Diagramon 是一款**本地优先的多格式图表编辑器**：Mermaid / Graphviz DOT / drawio / Excalidraw 都可编辑并实时预览，
+渲染全部在本机完成（随包内置 Node 与 Chrome headless，无外部请求）。
+
+- **AI 辅助**：既可用自有 API Key 直连（BYOK），也可走会员云网关 ——
+  支持**图片识别**（选图/截图 → 图表代码）与渲染报错自动修正一次；不确定用哪档模型时选「自动」即可
+- **编辑**：多标签页、语法高亮、查找替换、最近历史
+- **导出**：高质量 PNG（导出倍率可选）与复制到剪贴板
+- **会员**：云端文档存储（逐文档显式上传，多机同步）
 
 ### 系统要求
 - Windows 10/11 64位

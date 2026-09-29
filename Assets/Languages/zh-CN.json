@@ -69,7 +69,7 @@
   "MenuCheckUpdate": "检查更新(_U)...",
   "MenuSettings": "设置(_S)...",
   "AboutTitle": "关于",
-  "AboutDescription": "多格式图表编辑器：编辑、实时预览和图片导出与复制，可以通过自然语言让AI助手生成图表。当前支持 Mermaid（.mmd / .mermaid）与 Graphviz DOT（.dot / .gv），接下来将支持 drawio 与 Excalidraw",
+  "AboutDescription": "本地优先的多格式图表编辑器：编辑、实时预览、图片导出与复制。支持 Mermaid（.mmd / .mermaid）、Graphviz DOT（.dot / .gv）、drawio（.drawio）与 Excalidraw（.excalidraw）。AI 助手可用自有 API Key 直连，也可走会员云网关（含图片识别）。渲染与语法检查全部在本机完成。",
   "AboutFeatures": "功能",
   "AboutAuthor": "作者",
   "AboutVersion": "版本",

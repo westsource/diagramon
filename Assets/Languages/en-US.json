@@ -69,7 +69,7 @@
   "MenuCheckUpdate": "Check for _Updates...",
   "MenuSettings": "_Settings...",
   "AboutTitle": "About",
-  "AboutDescription": "Multi-format diagram editor: editing, live preview, and image export/copy, with an AI assistant that generates diagrams from natural language. Currently supports Mermaid (.mmd / .mermaid) and Graphviz DOT (.dot / .gv); drawio and Excalidraw are next.",
+  "AboutDescription": "Local-first multi-format diagram editor: editing, live preview, image export and copy. Supports Mermaid (.mmd / .mermaid), Graphviz DOT (.dot / .gv), drawio (.drawio) and Excalidraw (.excalidraw). The AI assistant works with your own API key or through the membership cloud gateway (including image recognition). Rendering and syntax checks run entirely on this machine.",
   "AboutFeatures": "Features",
   "AboutAuthor": "Author",
   "AboutVersion": "Version",

@@ -1,8 +1,10 @@
 # Diagramon - 多格式图表编辑器
 
-一个基于 C# Avalonia 构建的本地多格式图表编辑器。当前支持 **Mermaid**（`.mmd` / `.mermaid`）与 **Graphviz DOT**（`.dot` / `.gv`），后续将支持 drawio 与 Excalidraw。支持代码编辑与语法高亮、实时预览（拖拽平移/滚轮缩放/双击适应）、语法检测、高清 PNG 导出与剪贴板复制，集成 AI 助手通过自然语言生成图表。**数据本地渲染，不上传**。
+一个基于 C# Avalonia 构建的**本地优先**多格式图表编辑器。支持 **Mermaid**（`.mmd` / `.mermaid`）、**Graphviz DOT**（`.dot` / `.gv`）、**drawio**（`.drawio`）与 **Excalidraw**（`.excalidraw`），四种格式都可编辑并实时预览。具备代码编辑与语法高亮、实时预览（拖拽平移/滚轮缩放/双击适应）、语法检测、高清 PNG 导出与剪贴板复制；集成 AI 助手，既可用自有 API Key 直连（BYOK），也可走会员云网关（含**图片识别**：选图/截图 → 图表代码）。
 
-版本 **v2.0.260513.0**
+**图表渲染与语法检查全部在本机完成**（随包内置 Node 与 Chrome headless，无外部请求）。只有你**主动使用 AI** 时，相关代码/图片才会发送到对应的模型服务：BYOK 直连你自己的上游，会员走 Diagramon 云网关。
+
+版本 **v2.0.260929.0**
 
 ## 界面截图
 
@@ -70,6 +72,10 @@
 ### AI 助手
 - **自然语言生成** - 描述你想要的图表，AI 按当前标签页的格式生成代码（Mermaid / DOT 各有对应的系统提示词与代码围栏提取）
 - **多模型支持** - OpenAI、Azure OpenAI、Ollama（本地 LLM）、自定义 API（兼容 OpenAI 协议的任意后端）
+- **会员云端网关（Diagramon 云）** - 用账号登录即可调用服务端网关；凭据是当前 access token（**每次现取、不落盘**），额度按「信用点」计，可在界面看到本月剩余
+- **图片识别（识图）** - 选一张图表截图即可逆向成当前格式的代码；也可一键「应用为 drawio」图形（复用本地 mermaid → drawio 转换）
+- **自动选档（推荐）** - 模型下拉选「自动」时由**服务端按请求内容选档**（含图 → 识图档）；界面会如实标出本次实际用的是哪一档
+- **渲染报错自动修正** - 生成结果在本机渲染失败时，把**报错原文**发回模型修正一次（这是第二次真实调用，可在设置中关闭）
 - **模型快速切换** - 输入框旁的下拉菜单可快速切换已配置的 AI 模型
 - **一键应用与回退** - AI 生成的代码可直接应用到编辑器，支持回退撤销
 - **对话历史持久化** - 按文件（文件路径 SHA256 哈希）保存对话记录，支持连续多轮对话；存储路径可配置
@@ -80,7 +86,7 @@
 - **可拖拽分隔** - 聊天历史与输入区之间可拖拽调整高度（80px ~ 320px）
 - **设置图标（⚙）** - 打开 AI 设置对话框管理模型
 - **清空对话（🗑）** - 一键清空当前对话
-- **API Key 安全存储** - API Key 使用 AES 加密独立存储于 `secure.config`，不与主设置混存
+- **API Key 安全存储** - API Key 使用 **Windows DPAPI**（按当前用户加密）独立存储于 `secure.config`，不与主设置混存；**不会明文写进 `settings.json`**
 
 ### 设置
 - **语言切换** - 文件 → 设置 → 语言 子菜单切换界面语言；首次启动自动检测系统语言（en-US / zh-CN）
@@ -115,7 +121,7 @@
 - 预览渲染使用 `CoreWebView2.ExecuteScriptAsync` 注入 JavaScript，绕过 file:// URL 缓存与导航限制，首次加载使用 Navigate 打开本地 HTML 文件
 - AI 配置的 Base URL 自动清洗（自动移除末尾的 `/chat/completions`、`/v1/chat/completions`、`/api/chat` 等路径）
 - 预览临时文件启动时自动清理（仅保留最近 7 天）
-- API Key 使用 AES 加密独立存储于 `secure.config` 文件，不与主设置混存
+- API Key 使用 **Windows DPAPI**（按当前用户加密）独立存储于 `secure.config` 文件，不与主设置混存
 - 渲染缓存采用 LRU 策略，最多 32 条，基于内容 SHA256 哈希
 - 导出缩放根据图表元素数量自适应（节点/边/子图计数决定 1.5x ~ 5.0x 倍率）
 - 代码编辑器使用 AvaloniaEdit，集成自定义 Mermaid 语法高亮（Xshd 定义）
@@ -233,7 +239,7 @@ dotnet publish -c Release -r win-x64 --self-contained true -p:PublishSingleFile=
 - **语言切换**：文件 → 设置 → 语言，选择界面语言。首次启动自动检测系统语言
 - **AI 模型管理**：文件 → 设置 → AI 设置（或点击 AI 面板中的 ⚙ 图标），可添加、编辑、删除 AI 模型配置，配置项包括：
   - 模型名称、提供商（OpenAI / Azure OpenAI / Ollama / 自定义 API）
-  - API Key（AES 加密）、Base URL（自动清理多余路径后缀）、Model ID
+  - API Key（DPAPI 加密）、Base URL（自动清理多余路径后缀）、Model ID
   - Max Tokens（1~2000000）、Temperature（0.0~2.0）
   - Azure OpenAI 专属：Endpoint、Deployment Name
 - **对话历史路径**：在 AI 设置中配置对话历史文件的存储位置
