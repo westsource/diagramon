@@ -325,21 +325,50 @@ else {
 Write-Host "`n正在提交并推送更新..." -ForegroundColor Cyan
 
 # 暂存已修改的文件
-git add $CsprojPath $ManifestPath 2>&1 | Out-Null
-git commit -m "chore: bump version to v$Version and update manifest" 2>&1 | Out-Null
+git -C $ProjectPath add $CsprojPath $ManifestPath 2>&1 | Out-Null
+git -C $ProjectPath commit -m "chore: bump version to v$Version and update manifest" 2>&1 | Out-Null
 
 # 创建本地 tag
-git tag -f $TagName 2>&1 | Out-Null
+git -C $ProjectPath tag -f $TagName 2>&1 | Out-Null
 
-# 先推送到 Gitee (确保 tag 在 Gitee 上存在, 否则 Gitee Release API 会失败)
-Write-Host "  推送到 Gitee (origin)..." -ForegroundColor Gray
-git push origin master 2>&1 | Out-Null
-git push origin $TagName 2>&1 | Out-Null
+# 远端按 URL 识别, 不按名字猜 —— 本仓库 origin=GitHub、gitee=Gitee,
+# 但克隆方式不同名字就会不同; 旧版写死 "origin"(当成 Gitee) 与 "github"(不存在)
+# 且用 | Out-Null 吞掉报错, 于是发布时"推送成功"其实是空操作。
+function Get-RemoteByHost {
+    param([string]$HostName)
+    $hit = git -C $ProjectPath remote -v |
+        Where-Object { $_ -match "\s\(fetch\)" -and $_ -match [regex]::Escape($HostName) } |
+        ForEach-Object { ($_ -split "\s+")[0] } | Select-Object -First 1
+    if (-not $hit) { Write-Host "  找不到指向 $HostName 的远端, 无法发布" -ForegroundColor Red; exit 1 }
+    return $hit
+}
 
-# 再推送到 GitHub
-Write-Host "  推送到 GitHub (mirror)..." -ForegroundColor Gray
-git push github master 2>&1 | Out-Null
-git push github $TagName 2>&1 | Out-Null
+function Push-Ref {
+    param([string]$RemoteName, [string]$Refspec, [string]$Why, [switch]$Force)
+    Write-Host "  → $RemoteName $Refspec ($Why)" -ForegroundColor Gray
+    $pushArgs = @("push"); if ($Force) { $pushArgs += "--force" }
+    $pushArgs += @($RemoteName, $Refspec)
+    git -C $ProjectPath @pushArgs
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "  推送失败: git $($pushArgs -join ' ')" -ForegroundColor Red
+        exit 1
+    }
+}
+
+$GitHubRemote = Get-RemoteByHost "github.com"
+$GiteeRemote = Get-RemoteByHost "gitee.com"
+
+# 两条分支的 README 命名不同(内容一字不差), 以满足两边首页默认语言:
+#   GitHub ← main          : README.md = 英文, README.zh-CN.md = 中文
+#   Gitee  ← gitee-master  : README.md = 中文, README_EN.md  = 英文
+# 改 README 内容时两条分支都要改。
+Push-Ref $GitHubRemote "main" "GitHub 默认英文 README"
+Push-Ref $GiteeRemote "gitee-master:master" "Gitee 默认中文 README"
+
+# tag: 创建 release 时平台可能已按当时的 HEAD 自动建过 tag, 这里强制对齐到发布提交,
+# 否则 release 的源码归档会停在上一个提交(版本号还没 bump 的那次)。
+Push-Ref $GitHubRemote $TagName "发布 tag" -Force
+Push-Ref $GiteeRemote $TagName "发布 tag" -Force
 
 # ========== 完成 ==========
 Write-Host "`n============================================" -ForegroundColor Green
