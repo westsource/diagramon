@@ -56,7 +56,8 @@
                 <Separator/>
                 <MenuItem Header="{Binding MenuSave}" InputGesture="Ctrl+S" Command="{Binding SaveFileCommand}"/>
                 <MenuItem Header="{Binding MenuSaveAs}" InputGesture="Ctrl+Shift+S" Command="{Binding SaveFileAsCommand}"/>
-                <Separator/>
+                <!-- 分隔线跟着它引出的"转换"组一起隐藏：否则非 Mermaid 标签页下会与下一条分隔线挤成两道线 -->
+                <Separator IsVisible="{Binding CanConvertMermaid}"/>
                 <MenuItem Header="{Binding MenuConvertToDrawio}"
                           IsVisible="{Binding CanConvertMermaid}"
                           Command="{Binding ConvertMermaidToDrawioCommand}"/>
@@ -268,10 +269,10 @@
                                         BorderThickness="0"/>
                             </Border>
 
-                            <Border x:Name="EmbeddedAppHost"
-                                    Background="#FFFFFF"
-                                    IsVisible="{Binding IsEmbeddedAppVisible}"
-                                    ClipToBounds="True"/>
+                            <Panel x:Name="EmbeddedAppHost"
+                                   Background="#FFFFFF"
+                                   IsVisible="{Binding IsEmbeddedAppVisible}"
+                                   ClipToBounds="True"/>
 
                             <Popup IsOpen="True"
                                    IsLightDismissEnabled="False"

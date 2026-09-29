@@ -6,7 +6,7 @@ using Avalonia.Controls;
 using Avalonia.Interactivity;
 using Avalonia.Layout;
 using Avalonia.Media;
-using Diagramon.Models;
+using Avalonia.Platform.Storage;
 using Diagramon.Services;
 using Diagramon.Services.Localization;
 using Diagramon.Services.Remote;
@@ -14,22 +14,26 @@ using Diagramon.Services.Remote;
 namespace Diagramon.Views;
 
 /// <summary>
-/// 登录 / 注册对话框。
+/// 登录对话框。
 /// </summary>
 /// <remarks>
+/// <para>
 /// <b>只由用户主动打开</b> —— 启动路径不得构造它（未登录是正常状态，见 §8.0 首要约束）。
 /// 关闭时无论成功与否都不影响本地功能：调用方用 <see cref="Succeeded"/> 决定是否更新提示。
+/// </para>
+/// <para>
+/// <b>注册不在客户端做</b>：「去注册」按钮直接把用户送去官网注册页（见
+/// <see cref="OnRegisterOnWebClick"/>）。此前这里有一套"切到注册模式"的内嵌表单，
+/// 与网页端是同一件事的第二份实现 —— 邮箱激活、重发、条款文案都要两处同步，已删除。
+/// </para>
 /// </remarks>
 public sealed class LoginDialog : Window
 {
     /// <summary>服务端错误码：账号未激活。与 <c>invalid_credentials</c> 严格区分。</summary>
     private const string ErrorCodeEmailNotVerified = "email_not_verified";
 
-    /// <summary>登录模式的窗口高度。</summary>
+    /// <summary>窗口高度。</summary>
     private const double SignInHeight = 330;
-
-    /// <summary>注册模式的窗口高度：比登录多一行"确认密码"（标签 + 输入框）。</summary>
-    private const double RegisterHeight = SignInHeight + 66;
 
     private static readonly Strings S = Strings.Instance;
     private static readonly IBrush ErrorBrush = new SolidColorBrush(Color.Parse("#C42B1C"));
@@ -39,32 +43,14 @@ public sealed class LoginDialog : Window
     private readonly TextBox _emailBox;
     private readonly TextBox _passwordBox;
 
-    /// <summary>确认密码：**仅注册模式**可见。</summary>
-    /// <remarks>
-    /// 桌面端密码框是掩码、且没有"显示密码"开关，盲打两遍能挡住绝大多数输错；
-    /// Web 注册页早就有这个字段，加它是把两端拉平。
-    /// </remarks>
-    private readonly TextBox _passwordConfirmBox;
-
-    /// <summary>确认密码的标签。与输入框一起显隐，所以要单独持有引用。</summary>
-    private readonly TextBlock _confirmLabel;
     private readonly TextBlock _errorText;
     private readonly Button _primaryButton;
     private readonly Button _switchButton;
     private readonly Button _resendButton;
 
-    /// <summary>注册后"待邮箱激活"面板：替换掉整个表单区（此时表单已无事可做）。</summary>
     private readonly StackPanel _formPanel;
-    private readonly StackPanel _pendingPanel;
-    private readonly TextBlock _pendingBody;
-    private readonly TextBlock _pendingTtl;
 
-    private bool _isRegisterMode;
-
-    /// <summary>是否停在"待激活"状态。用于让 <see cref="SetBusy"/> 不去复活已隐藏的主按钮。</summary>
-    private bool _pendingMode;
-
-    /// <summary>本次会话是否已通过登录/注册进入已登录态。</summary>
+    /// <summary>本次会话是否已登录成功。</summary>
     public bool Succeeded => _auth.Session.IsSignedIn;
 
     public LoginDialog(AuthService auth)
@@ -80,15 +66,6 @@ public sealed class LoginDialog : Window
 
         _emailBox = new TextBox { Watermark = S.AuthEmail, Margin = new Thickness(0, 0, 0, 12) };
         _passwordBox = new TextBox { PasswordChar = '•', Watermark = S.AuthPassword, Margin = new Thickness(0, 0, 0, 12) };
-        _passwordConfirmBox = new TextBox
-        {
-            PasswordChar = '•',
-            Watermark = S.AuthConfirmPassword,
-            Margin = new Thickness(0, 0, 0, 12),
-            IsVisible = false,   // 初始为登录模式
-        };
-        _confirmLabel = Label(S.AuthConfirmPassword);
-        _confirmLabel.IsVisible = false;
         _errorText = new TextBlock { Foreground = ErrorBrush, TextWrapping = TextWrapping.Wrap, IsVisible = false, Margin = new Thickness(0, 0, 0, 8) };
 
         _primaryButton = new Button
@@ -102,11 +79,11 @@ public sealed class LoginDialog : Window
 
         _switchButton = new Button
         {
-            Content = S.AuthSwitchToRegister,
+            Content = S.AuthRegisterOnWeb,
             MinWidth = 150,
             HorizontalContentAlignment = HorizontalAlignment.Center,
         };
-        _switchButton.Click += (_, _) => ToggleMode();
+        _switchButton.Click += OnRegisterOnWebClick;
 
         _resendButton = new Button
         {
@@ -128,7 +105,6 @@ public sealed class LoginDialog : Window
 
         _emailBox.TextChanged += (_, _) => UpdatePrimaryEnabled();
         _passwordBox.TextChanged += (_, _) => UpdatePrimaryEnabled();
-        _passwordConfirmBox.TextChanged += (_, _) => UpdatePrimaryEnabled();
 
         _formPanel = new StackPanel
         {
@@ -138,23 +114,7 @@ public sealed class LoginDialog : Window
                 _emailBox,
                 Label(S.AuthPassword),
                 _passwordBox,
-                _confirmLabel,
-                _passwordConfirmBox,
                 _errorText,
-            },
-        };
-
-        _pendingBody = new TextBlock { TextWrapping = TextWrapping.Wrap };
-        _pendingTtl = new TextBlock { IsVisible = false, Opacity = 0.7, TextWrapping = TextWrapping.Wrap };
-        _pendingPanel = new StackPanel
-        {
-            IsVisible = false,
-            Spacing = 6,
-            Children =
-            {
-                new TextBlock { Text = S.AuthPendingTitle, FontWeight = FontWeight.SemiBold },
-                _pendingBody,
-                _pendingTtl,
             },
         };
 
@@ -165,7 +125,6 @@ public sealed class LoginDialog : Window
             Children =
             {
                 _formPanel,
-                _pendingPanel,
                 new StackPanel
                 {
                     [Grid.RowProperty] = 1,
@@ -189,25 +148,47 @@ public sealed class LoginDialog : Window
         Margin = new Thickness(0, 0, 0, 4),
     };
 
-    private void ToggleMode()
+    /// <summary>
+    /// 「去注册」→ <b>打开系统浏览器跳到官网注册页</b>。
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// 注册**不在客户端做**：邮箱激活、重发、以及条款/隐私文案都在网页端，
+    /// 客户端再实现一份就是第三个要同步的地方（服务端 / 网页 / 桌面端）。
+    /// </para>
+    /// <para>
+    /// 地址**由配置的服务端地址推导**（<see cref="AuthService.ServiceSiteUrl"/> + <c>/register</c>），
+    /// 不硬编码域名 —— 联调、私有部署、自建换服务器时这个按钮自动跟着走。
+    /// </para>
+    /// <para>
+    /// 打不开浏览器时**把地址显示出来**让用户自己复制：静默失败等于按了没反应。
+    /// </para>
+    /// </remarks>
+    private async void OnRegisterOnWebClick(object? sender, RoutedEventArgs e)
     {
-        _isRegisterMode = !_isRegisterMode;
-        _primaryButton.Content = _isRegisterMode ? S.AuthRegister : S.AuthSignIn;
-        _switchButton.Content = _isRegisterMode ? S.AuthSwitchToSignIn : S.AuthSwitchToRegister;
+        var url = $"{_auth.ServiceSiteUrl}/register";
 
-        // 确认密码只有注册才需要；窗口高度随之伸缩，避免登录模式下方多出一块空白
-        _confirmLabel.IsVisible = _isRegisterMode;
-        _passwordConfirmBox.IsVisible = _isRegisterMode;
-        _passwordConfirmBox.Text = string.Empty;
-        Height = _isRegisterMode ? RegisterHeight : SignInHeight;
+        try
+        {
+            var launcher = TopLevel.GetTopLevel(this)?.Launcher;
+            if (launcher is not null && await launcher.LaunchUriAsync(new Uri(url)))
+            {
+                return;
+            }
 
-        HideError();
+            ShowError(string.Format(S.AuthRegisterOpenFailedFormat, url));
+        }
+        catch (Exception ex)
+        {
+            // 例如系统没有默认浏览器 / 关联被劫持：把地址与原因一起给出来
+            ShowError($"{string.Format(S.AuthRegisterOpenFailedFormat, url)}（{ex.Message}）");
+        }
     }
 
     /// <summary>空输入直接禁用主按钮 —— 这是可用性提示，不是校验（密码规则以服务端为准，避免两端漂移）。</summary>
     private void UpdatePrimaryEnabled()
     {
-        _primaryButton.IsEnabled = !_pendingMode && HasInput();
+        _primaryButton.IsEnabled = HasInput();
     }
 
     private bool HasInput() =>
@@ -219,34 +200,12 @@ public sealed class LoginDialog : Window
         var password = _passwordBox.Text ?? string.Empty;
         if (email.Length == 0 || password.Length == 0) return;
 
-        // 注册才做前置校验：登录不该在客户端拦任何东西（否则规则一漂移就登不进去）
-        if (_isRegisterMode && ValidateBeforeSubmit(email, password) is { } problem)
-        {
-            ShowError(problem);
-            return;
-        }
-
+        // **登录不做任何前置校验**：客户端拦一次就多一条会与服务端漂移的规则，
+        // 而规则一漂移就会出现"本地拦住了服务端本来接受的输入"——用户连明确错误都拿不到。
         SetBusy(true);
 
         try
         {
-            if (_isRegisterMode)
-            {
-                var result = await _auth.RegisterAsync(email, password);
-                switch (result.Outcome)
-                {
-                    case RegisterOutcome.Active:
-                        Close();
-                        return;
-                    case RegisterOutcome.PendingVerification:
-                        EnterPendingMode(result);
-                        return;
-                    default:
-                        ShowError(DescribeError(_auth.LastErrorCode));
-                        return;
-                }
-            }
-
             if (await _auth.LoginAsync(email, password))
             {
                 Close();
@@ -294,83 +253,7 @@ public sealed class LoginDialog : Window
         }
     }
 
-    /// <summary>切到"待邮箱激活"状态：表单已无事可做，整块换成去邮箱的指引。</summary>
-    private void EnterPendingMode(RegisterResult result)
-    {
-        _pendingMode = true;
 
-        var masked = string.IsNullOrEmpty(result.EmailMasked)
-            ? _emailBox.Text?.Trim() ?? string.Empty
-            : result.EmailMasked;
-        _pendingBody.Text = string.Format(S.AuthPendingBodyFormat, masked);
-
-        if (result.VerifyTtlSeconds is > 0)
-        {
-            _pendingTtl.Text = string.Format(S.AuthPendingTtlFormat, result.VerifyTtlSeconds.Value / 60);
-            _pendingTtl.IsVisible = true;
-        }
-
-        _formPanel.IsVisible = false;
-        _pendingPanel.IsVisible = true;
-        _primaryButton.IsVisible = false;
-        _switchButton.IsVisible = false;
-        _resendButton.IsVisible = true;
-        HideError();
-
-        // 表单区换成指引后需要多一点竖向空间
-        Height = 380;
-    }
-
-    /// <summary>
-    /// 注册前的前置校验：**只做廉价、且与服务端不会漂移的检查**。
-    /// </summary>
-    /// <remarks>
-    /// <para>
-    /// 刻意**不**在客户端复刻服务端的邮箱正则：如果客户端比服务端严，用户会被本地拦住、
-    /// 连服务端的明确错误都拿不到。邮箱的形态判断留给服务端 —— 它现在会在
-    /// <c>details.fields</c> 里指明 <c>email</c>，由错误文案精确呈现。
-    /// </para>
-    /// <para>
-    /// 这里的三条都不会漂移：两次密码一致是纯本地的；最小长度取自服务端 <c>/config</c>；
-    /// "含 @" 是服务端规则的**子集**，永远不会比服务端更严。
-    /// </para>
-    /// </remarks>
-    /// <returns>通过返回 <c>null</c>；否则返回给用户看的文案。</returns>
-    private string? ValidateBeforeSubmit(string email, string password)
-    {
-        if (_isRegisterMode && password != (_passwordConfirmBox.Text ?? string.Empty))
-        {
-            return S.AuthErrorPasswordMismatch;
-        }
-
-        // 只要求"含 @"：这是服务端规则的子集，不可能误拦服务端会接受的输入
-        if (!email.Contains('@'))
-        {
-            return S.AuthErrorEmailFormat;
-        }
-
-        if (password.Length < MinPasswordLength)
-        {
-            return string.Format(S.AuthErrorPasswordTooShortFormat, MinPasswordLength);
-        }
-
-        return null;
-    }
-
-    /// <summary>
-    /// 最小密码长度：以服务端 <c>/config</c> 下发的值为准（拿不到时用兜底值）。
-    /// </summary>
-    /// <remarks>
-    /// 从服务端取而不是硬编码 —— 硬编码必然与服务端的 <c>MIN_PASSWORD_LENGTH</c> 漂移。
-    /// </remarks>
-    private int MinPasswordLength
-    {
-        get
-        {
-            var fromServer = _auth.Config?.MinPasswordLength ?? 0;
-            return fromServer > 0 ? fromServer : ConfigResponse.FallbackMinPasswordLength;
-        }
-    }
 
     private void SetBusy(bool busy)
     {
@@ -379,14 +262,8 @@ public sealed class LoginDialog : Window
         _switchButton.IsEnabled = !busy;
         _resendButton.IsEnabled = !busy;
 
-        // 待激活状态下主按钮已隐藏，别在这里把它复活
-        if (!_pendingMode)
-        {
-            _primaryButton.Content = busy
-                ? S.AuthWorking
-                : _isRegisterMode ? S.AuthRegister : S.AuthSignIn;
-            _primaryButton.IsEnabled = !busy && HasInput();
-        }
+        _primaryButton.Content = busy ? S.AuthWorking : S.AuthSignIn;
+        _primaryButton.IsEnabled = !busy && HasInput();
 
         if (busy)
         {

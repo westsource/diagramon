@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
@@ -31,6 +32,9 @@ public sealed class ApiClient : IDisposable
     /// <summary>本地码：连不上服务端、或响应体无法解析。服务端不会有这个码。</summary>
     public const string NetworkError = "network_unreachable";
 
+    /// <summary>本地码：**按请求超时**（区别于"连不上"）。服务端不会有这个码。</summary>
+    public const string TimeoutError = "request_timeout";
+
     private readonly HttpClient _http;
     private readonly SettingsService _settings;
 
@@ -46,14 +50,25 @@ public sealed class ApiClient : IDisposable
 
     public string BaseUrl => _settings.Settings.ServiceBaseUrl.TrimEnd('/');
 
+    /// <param name="timeout">
+    /// 覆盖本次请求的超时。缺省用客户端级的 30 秒；**AI 调用必须显式给更长** ——
+    /// 一次生成几十秒是常态，30 秒会把正常请求判成失败。
+    /// </param>
     public async Task<ApiResult<T>> SendAsync<T>(
         HttpMethod method,
         string path,
         object? body = null,
         bool authenticated = true,
         string? ifMatch = null,
-        CancellationToken cancellationToken = default)
+        TimeSpan? timeout = null,
+        CancellationToken cancellationToken = default,
+        IReadOnlyDictionary<string, string>? extraHeaders = null)
     {
+        // 按请求超时：`HttpClient.Timeout` 是**每客户端**的，不能为一次 AI 调用改全局值
+        // （那会让文档接口也等上几分钟）。用链接的 CTS 只影响本次请求。
+        using var cts = timeout is { } limit ? CreateLinkedWithTimeout(cancellationToken, limit) : null;
+        var token = cts?.Token ?? cancellationToken;
+
         try
         {
             using var request = new HttpRequestMessage(method, BaseUrl + path);
@@ -74,8 +89,16 @@ public sealed class ApiClient : IDisposable
                 request.Headers.TryAddWithoutValidation("If-Match", ifMatch);
             }
 
-            using var response = await _http.SendAsync(request, cancellationToken);
-            var text = await response.Content.ReadAsStringAsync(cancellationToken);
+            if (extraHeaders != null)
+            {
+                foreach (var (name, value) in extraHeaders)
+                {
+                    request.Headers.TryAddWithoutValidation(name, value);
+                }
+            }
+
+            using var response = await _http.SendAsync(request, token);
+            var text = await response.Content.ReadAsStringAsync(token);
 
             if (response.IsSuccessStatusCode)
             {
@@ -106,10 +129,23 @@ public sealed class ApiClient : IDisposable
                 error?.Details,
                 response.StatusCode);
         }
+        catch (TaskCanceledException) when (cts is { IsCancellationRequested: true } && !cancellationToken.IsCancellationRequested)
+        {
+            // **只有按请求超时才会走到这里**（客户端级 30 秒超时时 `cts` 为 null，走下面那条）。
+            // 与"连不上"分开报：AI 生成几十秒是常态，把它说成"无法连接云端服务"会误导排查方向。
+            return new ApiResult<T>(false, default, TimeoutError, "请求超时", null, 0);
+        }
         catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
         {
             return new ApiResult<T>(false, default, NetworkError, ex.Message, null, 0);
         }
+    }
+
+    private static CancellationTokenSource CreateLinkedWithTimeout(CancellationToken outer, TimeSpan timeout)
+    {
+        var cts = CancellationTokenSource.CreateLinkedTokenSource(outer);
+        cts.CancelAfter(timeout);
+        return cts;
     }
 
     public void Dispose() => _http.Dispose();

@@ -53,7 +53,7 @@ Version **v2.0.260513.0**
 - **Automatic write-back** - canvas edits (drawio's autosave) are written back into the tab body and the title gets a `*`; the write-back suspends change notifications and never enters the text render pipeline
 - **Self-hosted offline runtime** - drawio ships with the app (`tools/drawio`, pruned by `tools/fetch-drawio.ps1`) and is served over an in-process loopback origin; additional shape libraries and externally hosted template images are downloaded into the package and rewritten to relative paths at fetch time, while Google fonts and external integrations (Drive, MathJax, server-side export) are disabled - zero external requests end to end
 - **Export** - side by side with the text formats: the save/copy image buttons make the canvas rasterize in-page, **zero subprocess**
-- **Mermaid → drawio conversion** - File → Convert to drawio diagram (one-way): the current Mermaid source is handed to drawio's own parser and the result opens in a **new** tab, leaving the original `.mmd` tab untouched
+- **Mermaid → drawio conversion** - File → Convert to drawio diagram: the current Mermaid source is handed to drawio's own parser and the result opens in a **new** tab, leaving the original `.mmd` tab untouched (one-way: canvas edits never write back to the Mermaid source)
 - **Coexists with text formats** - `.drawio`, `.mmd` and `.dot` tabs can be open at once and switched freely; drawio tabs hide the AI assistant and the layout picker
 
 ### Excalidraw hand-drawn editing (`.excalidraw`)
@@ -62,7 +62,7 @@ Version **v2.0.260513.0**
 - **Automatic write-back** - canvas changes (fired per frame while dragging) are queued, coalesced on a 150 ms tick and written back into the tab body with change notifications suspended; only the small persistable slice of appState is stored (transient selection/hover state is not)
 - **Offline first** - `EXCALIDRAW_ASSET_PATH` is pinned to the bundled directory at build time so fonts never come from a CDN; zero external requests at runtime
 - **Offline guard** - the carrier page patches networking before any app script runs: cross-origin `fetch`/`XHR`/`Image`/`sendBeacon` are refused and every block is surfaced in the status bar (catches upstream regressions where a feature starts phoning home)
-- **Mermaid → Excalidraw** - File → Convert to Excalidraw diagram (one-way): conversion runs in-page through `@excalidraw/mermaid-to-excalidraw` and the result opens in a new tab
+- **Mermaid → Excalidraw** - File → Convert to Excalidraw diagram: conversion runs in-page through `@excalidraw/mermaid-to-excalidraw` and the result opens in a new tab (one-way: canvas edits never write back to the Mermaid source)
 - **New build step** - upstream ships no `<script>`-able artifact, so `tools/fetch-excalidraw.ps1` (npm install + esbuild bundle + manifest verification) is part of the toolchain now
 
 ### AI Assistant

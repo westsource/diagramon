@@ -10,21 +10,6 @@ using Diagramon.Services.Remote;
 
 namespace Diagramon.Services;
 
-/// <summary>注册的三种结局。</summary>
-public enum RegisterOutcome
-{
-    /// <summary>账号立即可用，令牌已写入会话。</summary>
-    Active,
-
-    /// <summary>账号待邮箱激活，**令牌未发放**；调用方应引导用户去邮箱。</summary>
-    PendingVerification,
-
-    /// <summary>失败，原因见 <see cref="AuthService.LastErrorCode"/>。</summary>
-    Failed,
-}
-
-/// <summary>注册结果。仅 <see cref="RegisterOutcome.PendingVerification"/> 时携带后两个字段。</summary>
-public sealed record RegisterResult(RegisterOutcome Outcome, string? EmailMasked, int? VerifyTtlSeconds);
 
 /// <summary>
 /// 云端服务客户端：匿名配置下发、注册、登录、令牌刷新、登出。
@@ -48,7 +33,30 @@ public sealed class AuthService
     private readonly ApiClient _api;
     private readonly SettingsService _settings;
 
+    /// <summary>刷新互斥（见 <see cref="TryRestoreSessionAsync"/> 的 remarks）。</summary>
+    private readonly SemaphoreSlim _refreshGate = new(1, 1);
+
     public AuthSession Session { get; } = new();
+
+    /// <summary>
+    /// 当前 access token（只读）。**只驻内存**，不落盘。
+    /// </summary>
+    /// <remarks>
+    /// 云 AI provider（<c>CloudAIService</c>）每次请求都从这里取，而不是把它存进
+    /// <c>AIModelConfig.ApiKey</c> —— 那个字段会被明文写进 <c>settings.json</c>，
+    /// 而 access token 是**账号凭据**且只有 30 分钟寿命。
+    /// </remarks>
+    public string? CurrentAccessToken => _api.AccessToken;
+
+    /// <summary>
+    /// 造一个「带令牌的请求」发送器（401 → 静默刷新一次 → 重试一次）。
+    /// </summary>
+    /// <remarks>
+    /// 放在这里而不是让调用方自己拼：**只有一处知道该怎么建它**，也就只有一处需要保证
+    /// "刷新是串行的"（见 <see cref="TryRestoreSessionAsync"/>）。云端文档与云端 AI 各持一个实例
+    /// —— 发送器本身无状态，共用的是同一个 <c>ApiClient</c>（连接池）与同一把刷新闸门。
+    /// </remarks>
+    public AuthenticatedSender CreateSender() => new(_api, TryRestoreSessionAsync);
 
     /// <summary>最近一次失败的服务端错误码（如 <c>invalid_credentials</c>）。成功时清空。</summary>
     public string? LastErrorCode { get; private set; }
@@ -58,6 +66,43 @@ public sealed class AuthService
 
     /// <summary>最近一次成功的 <c>GET /v1/config</c> 结果；未取到时为 null。</summary>
     public ConfigResponse? Config { get; private set; }
+
+    /// <summary>
+    /// 服务端**站点根地址**（已去掉尾部斜杠）—— 用来把用户送去网页端（注册、账号页…）。
+    /// </summary>
+    /// <remarks>
+    /// <b>不在客户端硬编码官网域名</b>：注册页就长在用户配置的那个服务端上，
+    /// 所以换服务器（联调、私有部署、自建）时「去注册」按钮自动跟着走，不需要改代码。
+    /// 路径 <c>/register</c> 是用户端页面（与 <c>/login</c>、<c>/account</c> 同一套 SSR 页面）。
+    /// </remarks>
+    public string ServiceSiteUrl => _settings.Settings.ServiceBaseUrl.TrimEnd('/');
+
+    /// <summary>
+    /// 服务端是否认识**保留别名** <c>auto</c>（`/config.featureFlags.autoAlias`）。
+    /// </summary>
+    /// <remarks>
+    /// <b>必须探测，不能假定</b>：新客户端发 <c>auto</c> 打到**老服务端**会得到
+    /// 400「未知的模型别名」。拿不到 `/config`（离线、或老服务端没有这个键）时按 <c>false</c> ——
+    /// 保守，宁可少一个选项，也不发出对方不认识的模型名。
+    /// </remarks>
+    public bool SupportsAutoAlias =>
+        Config?.FeatureFlags?.TryGetValue("autoAlias", out var flag) == true
+        && flag.ValueKind == JsonValueKind.True;
+
+    /// <summary>
+    /// **本账号可用**的 AI 别名（<c>GET /v1/ai/models</c>）。
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// 与 <see cref="ConfigResponse.AiAliases"/>（<c>/v1/config</c>，**全量目录**、匿名可读）刻意分开：
+    /// 目录回答"平台有哪些模型"，这份回答"<b>你能用哪些</b>"。面板列模型、判断识图入口是否可用，
+    /// 都必须用这一份 —— 拿全量目录去渲染会让免费用户看到一个点了就 403 的选项。
+    /// </para>
+    /// <para>
+    /// 拉不到时保留上一次的结果而不是清空：网络抖一下不该让用户的模型列表凭空消失。
+    /// </para>
+    /// </remarks>
+    public IReadOnlyList<AiModelDto> AiModels { get; private set; } = Array.Empty<AiModelDto>();
 
     public AuthService(ApiClient api, SettingsService settings)
     {
@@ -99,47 +144,31 @@ public sealed class AuthService
     }
 
     /// <summary>
-    /// 注册。**必须按状态码分派**：201 才是"账号已可用并发放令牌"，202 是"待邮箱激活、无令牌"。
+    /// 拉一次"本账号可用的 AI 别名"。未登录时直接返回 false（这不是错误）。
     /// </summary>
-    /// <remarks>
-    /// 这里刻意先收成 <see cref="JsonElement"/>，等看到状态码再决定按哪种包络解析 ——
-    /// 若直接 <c>SendAsync&lt;AuthResponse&gt;</c>，202 会被当成 2xx 成功，反序列化出一份
-    /// 字段全为默认值的包络（空令牌），进而误判为登录成功。
-    /// </remarks>
-    public async Task<RegisterResult> RegisterAsync(
-        string email, string password, CancellationToken cancellationToken = default)
+    public async Task<bool> RefreshAiModelsAsync(CancellationToken cancellationToken = default)
     {
-        var body = new RegisterRequest
+        if (!Session.IsSignedIn)
         {
-            Email = email,
-            Password = password,
-            Device = BuildDevice(),
-        };
-
-        var result = await _api.SendAsync<JsonElement>(
-            HttpMethod.Post, "/v1/auth/register", body, authenticated: false, cancellationToken: cancellationToken);
-
-        if (result.Ok && result.Status == HttpStatusCode.Accepted)
-        {
-            var pending = Deserialize<RegisterPendingResponse>(result.Value);
-            // 服务端既没发令牌、也没吊销任何既有会话，所以这里既不 Apply 也不 ClearLocalSession：
-            // 注册失败/待激活都不该把已登录的用户踢下线（与原 AuthenticateAsync 的失败语义一致）。
-            ClearError();
-            return new RegisterResult(
-                RegisterOutcome.PendingVerification, pending?.EmailMasked, pending?.VerifyTtlSeconds);
+            AiModels = Array.Empty<AiModelDto>();
+            return false;
         }
 
-        var auth = result.Ok ? Deserialize<AuthResponse>(result.Value) : null;
-        if (auth == null)
+        var result = await _api.SendAsync<AiModelListDto>(
+            HttpMethod.Get, "/v1/ai/models", authenticated: true, cancellationToken: cancellationToken);
+
+        if (!result.Ok || result.Value == null)
         {
-            SetError(result);
-            return new RegisterResult(RegisterOutcome.Failed, null, null);
+            // 保留旧值（见 AiModels 的 remarks）
+            return false;
         }
 
-        Apply(auth);
-        ClearError();
-        return new RegisterResult(RegisterOutcome.Active, null, null);
+        AiModels = result.Value.Data;
+        return true;
     }
+
+    /// <summary>
+    /// 注册。**必须按状态码分派**：201 才是"账号已可用并发放令牌"，202 是"待邮箱激活、无令牌"。
 
     /// <summary>
     /// 重发激活邮件。服务端**恒返回 204**（不泄露账号是否存在），
@@ -180,8 +209,29 @@ public sealed class AuthService
     /// <summary>
     /// 用已保存的 refresh token 恢复会话。没有令牌、或令牌已失效，都只是返回 false —— 不设错误。
     /// </summary>
-    /// <remarks>本方法同时充当文档接口 401 后的"静默刷新"回调。</remarks>
+    /// <remarks>
+    /// <para>本方法同时充当文档接口 401 后的"静默刷新"回调。</para>
+    /// <para>
+    /// <b>串行化是必需的，不是优化</b>：服务端的 refresh 是**轮换 + 重用检测**（检测到重用即吊销整条
+    /// family 会话）。原先只有文档接口一个刷新消费者，撞车概率低；云 AI（<c>CloudAIService</c>）
+    /// 成为第二个消费者后，"文档 401 刷新"与"AI 401 刷新"并发就会**把用户整个会话吊销**
+    /// —— 表现为突然被登出。所以这里加互斥，两条路径共用。
+    /// </para>
+    /// </remarks>
     public async Task<bool> TryRestoreSessionAsync(CancellationToken cancellationToken = default)
+    {
+        await _refreshGate.WaitAsync(cancellationToken);
+        try
+        {
+            return await RestoreSessionCoreAsync(cancellationToken);
+        }
+        finally
+        {
+            _refreshGate.Release();
+        }
+    }
+
+    private async Task<bool> RestoreSessionCoreAsync(CancellationToken cancellationToken)
     {
         var refreshToken = LoadRefreshToken();
         if (string.IsNullOrEmpty(refreshToken))
@@ -261,6 +311,9 @@ public sealed class AuthService
         _api.AccessToken = null;
         SecureStorageService.SaveProtectedValue(RefreshTokenKey, null, SettingsService.SecureConfigPath);
         Session.Clear();
+
+        // 别名列表是**按账号**拉的：登出后必须清掉，否则换账号登录会短暂看到上一个账号的模型
+        AiModels = Array.Empty<AiModelDto>();
     }
 
     private void StoreRefreshToken(string token) =>

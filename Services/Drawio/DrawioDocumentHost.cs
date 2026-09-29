@@ -8,6 +8,7 @@ using Avalonia.Threading;
 using Diagramon.Models;
 using Diagramon.Services.Documents;
 using Diagramon.Services.Embedded;
+using Diagramon.Services.Localization;
 using Diagramon.Services.Preview;
 using TabItem = Diagramon.Models.TabItem;
 
@@ -38,6 +39,8 @@ namespace Diagramon.Services.Drawio;
 /// </remarks>
 public sealed class DrawioDocumentHost : IEmbeddedDocumentHost
 {
+    private static readonly Strings S = Strings.Instance;
+
     /// <summary>该宿主服务的格式 id（与 <c>DrawioFormat.FormatId</c> 一致）。</summary>
     public string FormatId => Documents.Formats.DrawioFormat.FormatId;
 
@@ -174,7 +177,7 @@ public sealed class DrawioDocumentHost : IEmbeddedDocumentHost
     {
         if (!_ready || _currentTab == null)
         {
-            return new RendererResult(false, null, "drawio 承载面尚未就绪");
+            return new RendererResult(false, null, string.Format(S.EmbeddedCanvasNotReadyFormat, S.FormatDrawio));
         }
 
         var waiter = new TaskCompletionSource<RendererResult>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -186,7 +189,7 @@ public sealed class DrawioDocumentHost : IEmbeddedDocumentHost
 
         if (completed != waiter.Task)
         {
-            return new RendererResult(false, null, "drawio 导出超时");
+            return new RendererResult(false, null, string.Format(S.EmbeddedExportTimeoutFormat, S.FormatDrawio));
         }
 
         return await waiter.Task;
@@ -202,7 +205,7 @@ public sealed class DrawioDocumentHost : IEmbeddedDocumentHost
         var directory = DrawioDirectory;
         if (directory == null)
         {
-            ErrorReported?.Invoke(this, "缺少 drawio 渲染资源");
+            ErrorReported?.Invoke(this, S.DrawioRendererMissing);
             return;
         }
 
@@ -256,7 +259,7 @@ public sealed class DrawioDocumentHost : IEmbeddedDocumentHost
             var probe = (await _bridge.ExecuteScriptAsync(EmbeddedProtocol.ReadyProbeScript))?.Trim();
             if (probe != "true")
             {
-                ErrorReported?.Invoke(this, "drawio 承载页缺少消息入口 window.__apply，动作无法送达（承载页与宿主协议不一致）");
+                ErrorReported?.Invoke(this, string.Format(S.EmbeddedHostEntryMissingFormat, S.FormatDrawio));
             }
         }
 
@@ -343,7 +346,7 @@ public sealed class DrawioDocumentHost : IEmbeddedDocumentHost
             var url = message.Extra != null && message.Extra.TryGetValue("url", out var u) && u.ValueKind == JsonValueKind.String
                 ? u.GetString()
                 : null;
-            ErrorReported?.Invoke(this, $"已拦截外部请求（离线模式）: {url}");
+            ErrorReported?.Invoke(this, string.Format(S.OfflineRequestBlockedFormat, url));
             return;
         }
 
@@ -381,7 +384,7 @@ public sealed class DrawioDocumentHost : IEmbeddedDocumentHost
                 break;
 
             case "error":
-                ErrorReported?.Invoke(this, message.Message ?? "drawio 报告了一个错误");
+                ErrorReported?.Invoke(this, message.Message ?? S.DrawioHostErrorFallback);
                 break;
 
             case "load":
@@ -428,7 +431,7 @@ public sealed class DrawioDocumentHost : IEmbeddedDocumentHost
 
         if (string.IsNullOrEmpty(data) || separator < 0)
         {
-            waiter.TrySetResult(new RendererResult(false, null, message.Message ?? "drawio 导出结果缺少图像数据"));
+            waiter.TrySetResult(new RendererResult(false, null, message.Message ?? S.DrawioExportMissingData));
             return;
         }
 

@@ -1,5 +1,17 @@
+using System.ComponentModel;
+
 namespace Diagramon.Services.Localization;
 
+/// <summary>
+/// 本地化文案的统一访问器（<c>Strings.Instance.Foo</c> / <c>S.Foo</c>）。
+/// </summary>
+/// <remarks>
+/// 刻意保持"纯读取器"：不实现 <see cref="INotifyPropertyChanged"/>、不提供索引器。
+/// 界面文案一律走"ViewModel 暴露属性 + XAML 绑定"这**一条**约定（切语言时
+/// ViewModel 用 <c>OnPropertyChanged("")</c> 整表失效，见 <c>MainViewModel.OnLanguageChanged</c>）。
+/// 旁边那个只给 XAML 直取词条用的 <c>MarkupExtensions.LocalizeExtension</c> 至今没有任何调用点，
+/// 也不要用它——两套取值约定并存正是"漏刷新"的来源。
+/// </remarks>
 public class Strings
 {
     public static readonly Strings Instance = new();
@@ -23,6 +35,50 @@ public class Strings
     public string ChromeNotFoundError => Get("ChromeNotFoundError");
     public string NodeNotFoundError => Get("NodeNotFoundError");
     public string UnknownError => Get("UnknownError");
+    // ---- AI：云端 provider 与错误文案（错误码 → 文案；服务端 message 是中文硬编码，不能直接展示）----
+    public string AICloudProviderName => Get("AICloudProviderName");
+    public string AICloudSignInRequired => Get("AICloudSignInRequired");
+    public string AIErrorMembershipRequired => Get("AIErrorMembershipRequired");
+    public string AIErrorQuotaExceeded => Get("AIErrorQuotaExceeded");
+    public string AIErrorRateLimitedFormat => Get("AIErrorRateLimitedFormat");
+    public string AIErrorValidation => Get("AIErrorValidation");
+    public string AIErrorUpstream => Get("AIErrorUpstream");
+    public string AIErrorServiceUnavailable => Get("AIErrorServiceUnavailable");
+    public string AIErrorModelNotIncluded => Get("AIErrorModelNotIncluded");
+    public string AIErrorVisionNotSupported => Get("AIErrorVisionNotSupported");
+    public string AIErrorImageTooLarge => Get("AIErrorImageTooLarge");
+    public string AIPickImage => Get("AIPickImage");
+    public string AIAutoModel => Get("AIAutoModel");
+    public string AIUsedTierFormat => Get("AIUsedTierFormat");
+    public string AIPickImageTooltip => Get("AIPickImageTooltip");
+    public string AIClearImageTooltip => Get("AIClearImageTooltip");
+    public string AIImageAttached => Get("AIImageAttached");
+    public string AIImageAttachedFormat => Get("AIImageAttachedFormat");
+    public string AIImageDefaultPrompt => Get("AIImageDefaultPrompt");
+    public string AIApplyAsDrawio => Get("AIApplyAsDrawio");
+    public string AIApplyAsDrawioTooltip => Get("AIApplyAsDrawioTooltip");
+    public string AIVisionNeedsCloud => Get("AIVisionNeedsCloud");
+    public string AIImageReadFailedFormat => Get("AIImageReadFailedFormat");
+    public string AiVisionNoticeTitle => Get("AiVisionNoticeTitle");
+    public string AiVisionNoticeBody => Get("AiVisionNoticeBody");
+    public string AiVisionNoticeDoNotAsk => Get("AiVisionNoticeDoNotAsk");
+    public string AiVisionNoticeContinue => Get("AiVisionNoticeContinue");
+    public string AIRenderRetryStatus => Get("AIRenderRetryStatus");
+    public string AIRenderRetryPrompt => Get("AIRenderRetryPrompt");
+    public string AIRenderFeedbackToggle => Get("AIRenderFeedbackToggle");
+    public string AIServiceUrlLabel => Get("AIServiceUrlLabel");
+    public string AIServiceUrlHint => Get("AIServiceUrlHint");
+    public string AITestConnection => Get("AITestConnection");
+    public string AITestOk => Get("AITestOk");
+    public string AITestFailFormat => Get("AITestFailFormat");
+    public string AITestInvalidUrl => Get("AITestInvalidUrl");
+    public string AIRenderFeedbackHint => Get("AIRenderFeedbackHint");
+    public string AIErrorTimeout => Get("AIErrorTimeout");
+    public string AIErrorNetwork => Get("AIErrorNetwork");
+    public string AIErrorOutputTruncated => Get("AIErrorOutputTruncated");
+    public string AIAliasLabel => Get("AIAliasLabel");
+    public string AICloudHint => Get("AICloudHint");
+
     public string AICodeApplied => Get("AICodeApplied");
     public string AICodeFormatMismatch => Get("AICodeFormatMismatch");
     public string CodeGenerated => Get("CodeGenerated");
@@ -36,7 +92,7 @@ public class Strings
     public string UntitledDrawioFileName => Get("UntitledDrawioFileName");
     public string DrawioRendererMissing => Get("DrawioRendererMissing");
     public string MenuConvertToDrawio => Get("MenuConvertToDrawio");
-    public string ConvertToDrawioDone => Get("ConvertToDrawioDone");
+    public string ConvertToGraphDone => Get("ConvertToGraphDone");
     public string FormatExcalidraw => Get("FormatExcalidraw");
     public string UntitledExcalidrawFileName => Get("UntitledExcalidrawFileName");
     public string ExcalidrawRuntimeMissing => Get("ExcalidrawRuntimeMissing");
@@ -165,15 +221,12 @@ public class Strings
     public string AuthTitle => Get("AuthTitle");
     public string AuthEmail => Get("AuthEmail");
     public string AuthPassword => Get("AuthPassword");
-    public string AuthConfirmPassword => Get("AuthConfirmPassword");
-    public string AuthErrorPasswordMismatch => Get("AuthErrorPasswordMismatch");
     public string AuthErrorPasswordTooShortFormat => Get("AuthErrorPasswordTooShortFormat");
     public string AuthErrorPasswordTooLongFormat => Get("AuthErrorPasswordTooLongFormat");
     public string AuthErrorEmailFormat => Get("AuthErrorEmailFormat");
     public string AuthSignIn => Get("AuthSignIn");
-    public string AuthRegister => Get("AuthRegister");
-    public string AuthSwitchToRegister => Get("AuthSwitchToRegister");
-    public string AuthSwitchToSignIn => Get("AuthSwitchToSignIn");
+    public string AuthRegisterOnWeb => Get("AuthRegisterOnWeb");
+    public string AuthRegisterOpenFailedFormat => Get("AuthRegisterOpenFailedFormat");
     public string AuthClose => Get("AuthClose");
     public string AuthWorking => Get("AuthWorking");
     public string AuthSignedInFormat => Get("AuthSignedInFormat");
@@ -186,9 +239,6 @@ public class Strings
     public string AuthErrorNetwork => Get("AuthErrorNetwork");
     public string AuthErrorGeneric => Get("AuthErrorGeneric");
     public string AuthErrorEmailNotVerified => Get("AuthErrorEmailNotVerified");
-    public string AuthPendingTitle => Get("AuthPendingTitle");
-    public string AuthPendingBodyFormat => Get("AuthPendingBodyFormat");
-    public string AuthPendingTtlFormat => Get("AuthPendingTtlFormat");
     public string AuthResend => Get("AuthResend");
     public string AuthResent => Get("AuthResent");
 
@@ -250,6 +300,33 @@ public class Strings
     public string RecentHistoryNoItems => Get("RecentHistoryNoItems");
     public string RecentHistorySearchPlaceholder => Get("RecentHistorySearchPlaceholder");
     public string RecentHistorySearchNoResults => Get("RecentHistorySearchNoResults");
+
+    // ---- 承载面 / 预览 / 宿主通道 ----
+    public string EmbeddedCanvasNotReadyFormat => Get("EmbeddedCanvasNotReadyFormat");
+    public string EmbeddedExportTimeoutFormat => Get("EmbeddedExportTimeoutFormat");
+    public string EmbeddedHostEntryMissingFormat => Get("EmbeddedHostEntryMissingFormat");
+    public string OfflineRequestBlockedFormat => Get("OfflineRequestBlockedFormat");
+    public string DrawioHostErrorFallback => Get("DrawioHostErrorFallback");
+    public string DrawioExportMissingData => Get("DrawioExportMissingData");
+    public string ExcalidrawHostErrorFallback => Get("ExcalidrawHostErrorFallback");
+    public string ExcalidrawExportMissingData => Get("ExcalidrawExportMissingData");
+    public string WebViewInitFailed => Get("WebViewInitFailed");
+    public string WebViewPreviewFailedFormat => Get("WebViewPreviewFailedFormat");
+    public string WebViewNavigationUnsupported => Get("WebViewNavigationUnsupported");
+    public string CanvasHostNotCreated => Get("CanvasHostNotCreated");
+    public string PreviewWebViewNotReady => Get("PreviewWebViewNotReady");
+    public string PreviewSurfaceFormatMismatch => Get("PreviewSurfaceFormatMismatch");
+    public string PreviewSurfaceNotReady => Get("PreviewSurfaceNotReady");
+    public string InPageExportTimeout => Get("InPageExportTimeout");
+    public string InPageExportFailed => Get("InPageExportFailed");
+    public string ExportMissingPngData => Get("ExportMissingPngData");
+
+    // ---- AI 设置：字段标签与存储路径占位 ----
+    public string AIApiKeyLabel => Get("AIApiKeyLabel");
+    public string AIBaseUrlLabel => Get("AIBaseUrlLabel");
+    public string AIMaxTokensLabel => Get("AIMaxTokensLabel");
+    public string AITemperatureLabel => Get("AITemperatureLabel");
+    public string AIConversationStorageWatermarkFormat => Get("AIConversationStorageWatermarkFormat");
 
     public string Get(string key)
     {

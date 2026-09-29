@@ -33,6 +33,36 @@ public sealed class DotFormat : IDocumentFormat
 
     public bool SupportsAiAssistant => true;
 
+    /// <summary>Graphviz DOT 的系统提示词。与 Mermaid 一样是调过的文案，别顺手改措辞。</summary>
+    private const string SystemPrompt =
+        "你是一个专业的 Graphviz DOT 图表代码生成助手。你的任务是根据用户的自然语言描述生成或修改 Graphviz DOT 代码。\n\n" +
+        "规则：\n" +
+        "1. 只返回 DOT 代码，不要包含其他解释文字\n" +
+        "2. 代码必须符合 Graphviz DOT 语法规范，顶层必须是 digraph 或 graph\n" +
+        "3. 如果用户要求修改现有代码，请基于现有代码进行修改\n" +
+        "4. 如果用户描述不清晰，生成一个合理的默认图\n" +
+        "5. 布局引擎通过代码里的 rankdir/splines 等属性表达即可，不要输出布局引擎名字\n\n" +
+        "返回格式：直接返回 DOT 代码，不要使用代码块标记。";
+
+    /// <summary>识图的系统提示词（V2）。</summary>
+    private const string VisionPrompt =
+        "你是一个图表识别助手。用户会给出一张图表截图，请把它逆向成 Graphviz DOT 源码。\n" +
+        "规则：\n" +
+        "1. 只输出代码，不要任何解释文字\n" +
+        "2. **只画图中确实存在的元素与连线**，不要补充你没看到的东西\n" +
+        "3. 标签文字**原样保留**（不翻译、不改写、不替用户纠正错别字）\n" +
+        "4. 尽量保持原有方向（从上到下 / 从左到右）与分组\n" +
+        "5. 无法辨认的文字用「?」占位，不要编造内容\n" +
+        "6. 顶层必须是 digraph 或 graph，符合 DOT 语法\n" +
+        "返回格式：直接返回代码，不要使用代码块标记。";
+
+    public AiPromptSet Ai { get; } = new(
+        "Graphviz DOT",
+        SystemPrompt,
+        VisionPrompt,
+        "当前 DOT 代码：",
+        @"```\s*(?:dot|graphviz)?\s*([\s\S]*?)```");
+
     public IDocumentRenderer Renderer { get; } = new DotWasmRenderer();
 
     /// <summary>

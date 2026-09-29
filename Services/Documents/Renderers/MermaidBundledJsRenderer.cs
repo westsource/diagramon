@@ -109,15 +109,25 @@ public sealed class MermaidBundledJsRenderer : IDocumentRenderer
       applyTransform();
     }
 
+    // 渲染报错的**页面级约定**（V2-8，方案 §6.10）：与 window.__export 同一套路 ——
+    // 承载层轮询这个变量取值。三态：undefined = 渲染中，null = 成功，字符串 = 报错原文。
+    // 之所以要有"渲染中"这一态：只靠"有没有值"分不清"还没渲染完"和"渲染好了"。
+    function setDiagramError(value) {
+      window.__diagramError = value;
+    }
+
     function showError(message) {
       const safeMessage = String(message ?? '').replace(/[<>&]/g, s => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;' }[s]));
       target.innerHTML = `<pre class="error">${safeMessage}</pre>`;
+      setDiagramError(safeMessage);
     }
 
     async function renderDiagram(code) {
+      setDiagramError(undefined);
       try {
         if (!code || !code.trim()) {
           target.innerHTML = '';
+          setDiagramError(null);
           return;
         }
         if (!window.mermaid) {
@@ -134,6 +144,7 @@ public sealed class MermaidBundledJsRenderer : IDocumentRenderer
         const { svg } = await mermaid.render(id, code, container);
         target.innerHTML = svg;
         container.remove();
+        setDiagramError(null);
         requestAnimationFrame(() => fitToViewport());
       } catch (err) {
         showError(err && err.message ? err.message : err);

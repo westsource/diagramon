@@ -37,8 +37,19 @@ public partial class MainWindow : Window
     private Grid? _workspaceGrid;
     private Border? _splitterBorder;
     private Border? _previewGrid;
-    private Border? _embeddedAppHost;
+    private Panel? _embeddedAppHost;
     private readonly Dictionary<string, IEmbeddedDocumentHost> _embeddedHosts = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// 每个内嵌格式**专属**的承载容器（懒创建，常驻）。
+    /// </summary>
+    /// <remarks>
+    /// 不能所有格式共用一个 <see cref="Border"/>：<c>Border.Child</c> 只有一个，后挂的格式会把先挂的
+    /// WebView 挤出可视树 —— WebView2 的原生窗口随之销毁，而宿主只在首次 <c>Attach</c> 时挂载，
+    /// 切回来就永远是一片空白（新建 drawio 标签 → 新建 Excalidraw 标签 → 切回 drawio 可复现）。
+    /// 每个格式一个容器后，WebView 只挂一次、只切显隐，原生窗口被"停到屏外"而不是销毁。
+    /// </remarks>
+    private readonly Dictionary<string, Border> _embeddedContainers = new(StringComparer.OrdinalIgnoreCase);
     private WebView? _previewWebViewControl;
     private MethodInfo? _webViewNavigateMethod;
     private PropertyInfo? _webViewSourceProperty;
@@ -330,7 +341,7 @@ public partial class MainWindow : Window
         _workspaceGrid = this.FindControl<Grid>("WorkspaceGrid");
         _splitterBorder = this.FindControl<Border>("SplitterBorder");
         _previewGrid = this.FindControl<Border>("PreviewGrid");
-        _embeddedAppHost = this.FindControl<Border>("EmbeddedAppHost");
+        _embeddedAppHost = this.FindControl<Panel>("EmbeddedAppHost");
 
         if (_codeEditor != null)
         {
@@ -700,7 +711,7 @@ public partial class MainWindow : Window
 
         if (!EnsureWebViewReady())
         {
-            _viewModel.StatusMessage = "WebView 初始化失败，无法显示实时预览";
+            _viewModel.StatusMessage = Strings.Instance.WebViewInitFailed;
             return;
         }
 
@@ -737,7 +748,7 @@ public partial class MainWindow : Window
         }
         catch (Exception ex)
         {
-            _viewModel.StatusMessage = $"WebView 预览失败: {ex.Message}";
+            _viewModel.StatusMessage = string.Format(Strings.Instance.WebViewPreviewFailedFormat, ex.Message);
         }
     }
 
@@ -795,13 +806,17 @@ public partial class MainWindow : Window
             }
         }
 
-        throw new InvalidOperationException("当前 WebView 版本不支持可用导航方式（Navigate/Source/Url）。");
+        throw new InvalidOperationException(Strings.Instance.WebViewNavigationUnsupported);
     }
 
     /// <summary>
-    /// 让内嵌图形编辑器（drawio）与当前标签页同步：该显示时懒创建承载面并载入文档，
+    /// 让内嵌图形编辑器（drawio / Excalidraw）与当前标签页同步：该显示时懒创建承载面并载入文档，
     /// 否则只隐藏（**不销毁** —— 重建要数秒且会丢撤销历史，方案 §4.7）。
     /// </summary>
+    /// <remarks>
+    /// 每个格式有**自己的**承载容器（<see cref="_embeddedContainers"/>）：WebView2 的原生窗口
+    /// 一旦挂进可视树就不能再被搬走，共用容器会让"后打开的格式"把前一个挤出可视树。
+    /// </remarks>
     private void SyncEmbeddedAppSurface()
     {
         if (_viewModel == null)
@@ -817,6 +832,11 @@ public partial class MainWindow : Window
             if (!string.Equals(existing.FormatId, activeFormatId, StringComparison.OrdinalIgnoreCase))
             {
                 existing.Hide();
+
+                if (_embeddedContainers.TryGetValue(existing.FormatId, out var inactive))
+                {
+                    inactive.IsVisible = false;
+                }
             }
         }
 
@@ -844,7 +864,10 @@ public partial class MainWindow : Window
             return;
         }
 
-        host.Attach(_embeddedAppHost);
+        // 该格式**自己的**容器：WebView 只在这里挂一次，之后只切显隐（见 _embeddedContainers 的注释）
+        var container = GetOrCreateEmbeddedContainer(activeFormatId);
+        container.IsVisible = true;
+        host.Attach(container);
 
         // 一次性转换请求：这批是"由 Mermaid 转换过来"的标签页时，交给画布自己的 mermaid 导入器
         if (_viewModel.TryTakeMermaidImport(tab, out var mermaidSource))
@@ -900,6 +923,23 @@ public partial class MainWindow : Window
         return host;
     }
 
+    /// <summary>
+    /// 取某个格式专属的承载容器（不存在则懒创建）。容器常驻，之后只切 <c>IsVisible</c>：
+    /// 宿主与它的 WebView 绑定一次就不再搬家，原生窗口得以保留（见 <see cref="_embeddedContainers"/>）。
+    /// </summary>
+    private Border GetOrCreateEmbeddedContainer(string formatId)
+    {
+        if (_embeddedContainers.TryGetValue(formatId, out var existing))
+        {
+            return existing;
+        }
+
+        var container = new Border { ClipToBounds = true };
+        _embeddedAppHost?.Children.Add(container);
+        _embeddedContainers[formatId] = container;
+        return container;
+    }
+
     /// <summary>资源缺失时的指引文案（按格式给具体脚本名，比"缺资源"这种泛化提示可操作）。</summary>
     private static string DescribeMissingRuntime(string formatId)
     {
@@ -917,7 +957,7 @@ public partial class MainWindow : Window
         var activeFormatId = _viewModel?.CurrentFormat.Id;
         if (activeFormatId == null || !_embeddedHosts.TryGetValue(activeFormatId, out var host))
         {
-            return new RendererResult(false, null, "画布承载面尚未创建");
+            return new RendererResult(false, null, Strings.Instance.CanvasHostNotCreated);
         }
 
         return await host.ExportImageAsync(format, scale, transparent);
@@ -1074,12 +1114,12 @@ public partial class MainWindow : Window
     {
         if (_viewModel == null || !EnsureWebViewReady() || _previewWebViewControl == null)
         {
-            return new RendererResult(false, null, "WebView 未就绪");
+            return new RendererResult(false, null, Strings.Instance.PreviewWebViewNotReady);
         }
 
         if (!string.Equals(_viewModel.CurrentPreviewSurfaceKey, surfaceKey, StringComparison.Ordinal))
         {
-            return new RendererResult(false, null, "预览承载面与目标格式不一致");
+            return new RendererResult(false, null, Strings.Instance.PreviewSurfaceFormatMismatch);
         }
 
         if (!string.Equals(_loadedSurfaceKey, surfaceKey, StringComparison.Ordinal))
@@ -1089,7 +1129,7 @@ public partial class MainWindow : Window
 
         if (!await WaitForSurfaceReadyAsync(10000))
         {
-            return new RendererResult(false, null, "预览承载面尚未就绪");
+            return new RendererResult(false, null, Strings.Instance.PreviewSurfaceNotReady);
         }
 
         await InvokeScriptAsync(exportScript);
@@ -1106,7 +1146,66 @@ public partial class MainWindow : Window
             await Task.Delay(150);
         }
 
-        return new RendererResult(false, null, "页面内导出超时");
+        return new RendererResult(false, null, Strings.Instance.InPageExportTimeout);
+    }
+
+    /// <summary>
+    /// 把一段代码渲染进预览页，并取回**渲染报错原文**（V2-8，方案 §6.10）。
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// 复用与 <see cref="RenderInPageImageAsync"/> **完全相同**的页面级约定与就绪判据：
+    /// 注入更新脚本 → 轮询页面变量。区别只在取的是 <c>window.__diagramError</c> 而不是 <c>__export</c>。
+    /// </para>
+    /// <para>
+    /// 页面变量是三态的：<c>undefined</c> = 还在渲染，<c>null</c> = 渲染成功，字符串 = 报错原文。
+    /// 必须区分"渲染中"与"成功" —— 只判"有没有值"会把渲染中误判成成功。
+    /// </para>
+    /// <para>
+    /// 返回 <c>null</c> 覆盖两种"不算模型的问题"的情况：渲染成功，或页面没起来/超时。
+    /// 后者不该让模型去"修正" —— 那不是它的错。
+    /// </para>
+    /// </remarks>
+    public async Task<string?> RenderPreviewAndGetErrorAsync(string updateScript, string surfaceKey)
+    {
+        if (_viewModel == null || !EnsureWebViewReady() || _previewWebViewControl == null)
+        {
+            return null;
+        }
+
+        if (!string.Equals(_viewModel.CurrentPreviewSurfaceKey, surfaceKey, StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        if (!string.Equals(_loadedSurfaceKey, surfaceKey, StringComparison.Ordinal))
+        {
+            NavigatePreviewSurface(_viewModel.CurrentPreviewUrl, surfaceKey);
+        }
+
+        if (!await WaitForSurfaceReadyAsync(10000))
+        {
+            return null;
+        }
+
+        await InvokeScriptAsync(updateScript);
+
+        var deadline = DateTime.UtcNow.AddSeconds(30);
+        while (DateTime.UtcNow < deadline)
+        {
+            var value = await EvaluateStringAsync(
+                "window.__diagramError === undefined ? null : (window.__diagramError || '')");
+
+            // null = 还在渲染（继续等）；"" = 渲染成功；其余 = 报错原文
+            if (value != null)
+            {
+                return value.Length == 0 ? null : value;
+            }
+
+            await Task.Delay(150);
+        }
+
+        return null;
     }
 
     private static RendererResult ParseExportResult(string json)
@@ -1124,7 +1223,7 @@ public partial class MainWindow : Window
                 var error = root.TryGetProperty("error", out var errorElement)
                     && errorElement.ValueKind == System.Text.Json.JsonValueKind.String
                     ? errorElement.GetString()
-                    : "页面内导出失败";
+                    : Strings.Instance.InPageExportFailed;
 
                 return new RendererResult(false, null, error);
             }
@@ -1135,7 +1234,7 @@ public partial class MainWindow : Window
 
             if (string.IsNullOrEmpty(dataUri) || separator < 0)
             {
-                return new RendererResult(false, null, "导出结果缺少 PNG 数据");
+                return new RendererResult(false, null, Strings.Instance.ExportMissingPngData);
             }
 
             var bytes = Convert.FromBase64String(dataUri[(separator + marker.Length)..]);

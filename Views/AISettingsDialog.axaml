@@ -74,12 +74,12 @@
                         </StackPanel>
 
                         <StackPanel Spacing="4" IsVisible="{Binding IsApiKeyRequired}">
-                            <TextBlock Text="API Key" FontSize="12" Foreground="#666666"/>
+                            <TextBlock Text="{Binding AIApiKeyLabel}" FontSize="12" Foreground="#666666"/>
                             <TextBox Text="{Binding EditingApiKey}" PasswordChar="●" Watermark="sk-..."/>
                         </StackPanel>
 
                         <StackPanel Spacing="4" IsVisible="{Binding IsBaseUrlRequired}">
-                            <TextBlock Text="Base URL" FontSize="12" Foreground="#666666"/>
+                            <TextBlock Text="{Binding AIBaseUrlLabel}" FontSize="12" Foreground="#666666"/>
                             <TextBox Text="{Binding EditingBaseUrl}" Watermark="{Binding BaseUrlWatermark}"/>
                         </StackPanel>
 
@@ -90,20 +90,37 @@
                             <TextBox Text="{Binding EditingDeploymentName}"/>
                         </StackPanel>
 
-                        <StackPanel Spacing="4">
+                        <StackPanel Spacing="4" IsVisible="{Binding !IsCloudConfig}">
                             <TextBlock Text="{Binding AIModelId}" FontSize="12" Foreground="#666666"/>
                             <TextBox Text="{Binding EditingModelId}" Watermark="gpt-4o"/>
+                        </StackPanel>
+
+                        <!-- 「Diagramon 云」的模型是别名，从服务端下发的目录里选：
+                             让人手打别名既容易写错，也拿不到运营改过的显示名。 -->
+                        <StackPanel Spacing="4" IsVisible="{Binding IsCloudConfig}">
+                            <TextBlock Text="{Binding AIAliasLabel}" FontSize="12" Foreground="#666666"/>
+                            <ComboBox ItemsSource="{Binding AliasChoices}"
+                                      SelectedItem="{Binding SelectedAlias}"
+                                      HorizontalAlignment="Stretch">
+                                <ComboBox.ItemTemplate>
+                                    <DataTemplate>
+                                        <TextBlock Text="{Binding DisplayName}"/>
+                                    </DataTemplate>
+                                </ComboBox.ItemTemplate>
+                            </ComboBox>
+                            <TextBlock Text="{Binding AICloudHint}" FontSize="11" Foreground="#888888"
+                                       TextWrapping="Wrap"/>
                         </StackPanel>
 
                         <StackPanel Spacing="4">
                             <TextBlock Text="{Binding AIAdvancedOptions}" FontSize="12" Foreground="#666666"/>
                             <Grid ColumnDefinitions="*,*">
                                 <StackPanel Grid.Column="0" Spacing="4">
-                                    <TextBlock Text="Max Tokens" FontSize="11" Foreground="#888888"/>
+                                    <TextBlock Text="{Binding AIMaxTokensLabel}" FontSize="11" Foreground="#888888"/>
                                     <NumericUpDown Value="{Binding EditingMaxTokens}" Minimum="100" Maximum="2000000" Width="240"/>
                                 </StackPanel>
                                 <StackPanel Grid.Column="1" Spacing="4" Margin="16,0,0,0">
-                                    <TextBlock Text="Temperature" FontSize="11" Foreground="#888888"/>
+                                    <TextBlock Text="{Binding AITemperatureLabel}" FontSize="11" Foreground="#888888"/>
                                     <NumericUpDown Value="{Binding EditingTemperature}" Minimum="0" Maximum="2" Increment="0.1" Width="120"/>
                                 </StackPanel>
                             </Grid>
@@ -123,11 +140,36 @@
                     <TextBlock Text="{Binding AIConversationStorage}" FontSize="14" FontWeight="SemiBold" Foreground="#333333"/>
                     <Grid ColumnDefinitions="*,Auto">
                         <TextBox Grid.Column="0" Text="{Binding ConversationStoragePath}"
-                                 Watermark="默认: %AppData%/Diagramon/Conversations"/>
+                                 Watermark="{Binding ConversationStorageWatermark}"/>
                         <Button Grid.Column="1" Content="{Binding AIBrowse}" Width="60" Margin="8,0,0,0"
                                 HorizontalContentAlignment="Center" VerticalContentAlignment="Center"
                                 Command="{Binding BrowseStoragePathCommand}"/>
                     </Grid>
+                </StackPanel>
+
+                <StackPanel Spacing="6">
+                    <TextBlock Text="{Binding AIServiceUrlLabel}" FontSize="14" FontWeight="SemiBold" Foreground="#333333"/>
+                    <Grid ColumnDefinitions="*,Auto,Auto">
+                        <TextBox Grid.Column="0" Text="{Binding ServiceBaseUrl}"
+                                 Watermark="http://127.0.0.1:8000"/>
+                        <Button Grid.Column="1" Content="{Binding AITestConnection}" Width="90" Margin="8,0,0,0"
+                                HorizontalContentAlignment="Center" VerticalContentAlignment="Center"
+                                IsEnabled="{Binding !IsTestingConnection}"
+                                Command="{Binding TestConnectionCommand}"/>
+                    </Grid>
+                    <TextBlock Text="{Binding AIServiceUrlHint}" TextWrapping="Wrap"
+                               FontSize="11" Foreground="#888888"/>
+                    <TextBlock Text="{Binding ConnectionStatus}" TextWrapping="Wrap"
+                               FontSize="11" Foreground="#059669"
+                               IsVisible="{Binding ConnectionStatus, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"/>
+                </StackPanel>
+
+                <StackPanel Spacing="6">
+                    <CheckBox Content="{Binding AIRenderFeedbackToggle}"
+                              IsChecked="{Binding RenderFeedbackRetry}"
+                              FontSize="13"/>
+                    <TextBlock Text="{Binding AIRenderFeedbackHint}" TextWrapping="Wrap"
+                               FontSize="11" Foreground="#888888" Margin="24,0,0,0"/>
                 </StackPanel>
             </StackPanel>
         </ScrollViewer>

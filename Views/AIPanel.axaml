@@ -68,6 +68,13 @@
                                                 CornerRadius="4" Cursor="Hand"
                                                 Command="{Binding $parent[ItemsControl].((vm:AIPanelViewModel)DataContext).ApplyCodeCommand}"
                                                 CommandParameter="{Binding}"/>
+                                        <Button Content="{Binding $parent[ItemsControl].((vm:AIPanelViewModel)DataContext).AIApplyAsDrawio}" FontSize="10" Padding="6,2"
+                                                Background="#EDE9FE" BorderThickness="0"
+                                                CornerRadius="4" Cursor="Hand"
+                                                IsVisible="{Binding $parent[ItemsControl].((vm:AIPanelViewModel)DataContext).CanApplyAsDrawio}"
+                                                ToolTip.Tip="{Binding $parent[ItemsControl].((vm:AIPanelViewModel)DataContext).AIApplyAsDrawioTooltip}"
+                                                Command="{Binding $parent[ItemsControl].((vm:AIPanelViewModel)DataContext).ApplyAsDrawioCommand}"
+                                                CommandParameter="{Binding}"/>
                                         <Button Content="{Binding $parent[ItemsControl].((vm:AIPanelViewModel)DataContext).AIRevert}" FontSize="10" Padding="6,2"
                                                 Background="#FFF3E0" BorderThickness="0"
                                                 CornerRadius="4" Cursor="Hand"
@@ -103,8 +110,30 @@
             </Border>
 
             <Border Grid.Row="2" x:Name="ChatInputArea" Background="#FFFFFF" BorderBrush="#E0E0E0" BorderThickness="0,1,0,0" Padding="8,6">
-                <Grid RowDefinitions="*,Auto">
-                    <TextBox Grid.Row="0" 
+                <Grid RowDefinitions="Auto,*,Auto">
+                    <!-- 待发图片：只在选了图时出现。图片只在内存里（不落盘、不进会话记录） -->
+                    <Border Grid.Row="0" Margin="0,0,0,6" Padding="6" CornerRadius="6"
+                            Background="#F1F5F9" BorderBrush="#E2E8F0" BorderThickness="1"
+                            IsVisible="{Binding HasPendingImage}">
+                        <Grid ColumnDefinitions="Auto,*,Auto">
+                            <Border Grid.Column="0" Width="48" Height="48" CornerRadius="4"
+                                    Background="White" ClipToBounds="True">
+                                <Image Source="{Binding PendingImagePreview}" Stretch="Uniform"/>
+                            </Border>
+                            <TextBlock Grid.Column="1" Margin="8,0" VerticalAlignment="Center"
+                                       FontSize="11" Foreground="#64748B"
+                                       TextWrapping="Wrap" Text="{Binding StatusMessage}"/>
+                            <Button Grid.Column="2" Content="✕" Width="24" Height="24"
+                                    FontSize="11" Padding="0"
+                                    CornerRadius="12" BorderThickness="0"
+                                    Background="#E2E8F0" Foreground="#475569"
+                                    Cursor="Hand"
+                                    ToolTip.Tip="{Binding AIClearImageTooltip}"
+                                    Command="{Binding ClearImageCommand}"/>
+                        </Grid>
+                    </Border>
+
+                    <TextBox Grid.Row="1" 
                               x:Name="InputTextBox"
                               Text="{Binding InputText}"
                               Watermark="{Binding AIInputPlaceholder}"
@@ -117,8 +146,23 @@
                               BorderBrush="#D0D0D0"
                               KeyDown="OnInputKeyDown"/>
                     
-                    <Grid Grid.Row="1" ColumnDefinitions="*,Auto,Auto" Margin="0,6,0,0">
-                        <ComboBox Grid.Column="1"
+                    <Grid Grid.Row="2" ColumnDefinitions="Auto,*,Auto,Auto" Margin="0,6,0,0">
+                        <!-- 选图：只有云网关能识图，其余 provider 下按钮不可用 -->
+                        <Button Grid.Column="0"
+                                Content="{Binding AIPickImage}"
+                                Height="28" Padding="10,0"
+                                FontSize="12"
+                                HorizontalContentAlignment="Center"
+                                VerticalContentAlignment="Center"
+                                CornerRadius="6"
+                                Background="#F1F5F9" Foreground="#334155"
+                                BorderThickness="0"
+                                Cursor="Hand"
+                                ToolTip.Tip="{Binding AIPickImageTooltip}"
+                                Command="{Binding PickImageCommand}"
+                                IsEnabled="{Binding SupportsVision}"/>
+
+                        <ComboBox Grid.Column="2"
                                   MinWidth="180"
                                   Height="28"
                                   Padding="8,0"
@@ -134,7 +178,7 @@
                             </ComboBox.ItemTemplate>
                         </ComboBox>
                         
-                        <Button Grid.Column="2" Content="{Binding AISend}"
+                        <Button Grid.Column="3" Content="{Binding AISend}"
                                 Width="60" Height="28" Margin="8,0,0,0"
                                 FontSize="12"
                                 HorizontalContentAlignment="Center"

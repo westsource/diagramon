@@ -19,6 +19,8 @@ public partial class AuthSession : ObservableObject
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(HasCloudStorage))]
+    [NotifyPropertyChangedFor(nameof(HasAiCredits))]
+    [NotifyPropertyChangedFor(nameof(AiCreditRemainingMicros))]
     private MembershipDto? _membership;
 
     /// <summary>
@@ -39,6 +41,17 @@ public partial class AuthSession : ObservableObject
 
     /// <summary>是否已获得云端存储权益。免费计划 <c>cloudStorage=false</c>，此时入口可见但动作应提示升级。</summary>
     public bool HasCloudStorage => Membership?.CloudStorage == true;
+
+    /// <summary>当前套餐是否含 AI 调用权益（三件套之二）。</summary>
+    /// <remarks>
+    /// 与 <see cref="HasCloudStorage"/> 同一姿态：**入口不隐藏、动作给提示** ——
+    /// 免费用户也能看见「Diagramon 云」，点了会得到"当前套餐不含 AI 信用点"，
+    /// 这既是 upsell，也与既有的云端入口策略一致。
+    /// </remarks>
+    public bool HasAiCredits => Membership?.Ai?.Enabled == true;
+
+    /// <summary>本周期剩余 AI 信用点（微信用点）；无权益时为 0。</summary>
+    public long AiCreditRemainingMicros => Membership?.Ai?.CreditRemainingMicros ?? 0;
 
     public string DisplayName => User?.DisplayName ?? User?.Email ?? User?.Phone ?? string.Empty;
 

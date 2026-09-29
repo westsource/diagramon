@@ -91,6 +91,26 @@ public sealed class TokensDto
     public string? RefreshExpiresAt { get; set; }
 }
 
+/// <summary>
+/// 套餐里的 AI 权益（三件套之二）。金额是**整数微信用点**（1e-6 元）。
+/// </summary>
+/// <remarks>
+/// 服务端刻意不返回"剩余"，而是给"总额度 + 已用" —— 充值是加在总额度上的，所以客户端算
+/// <c>CreditMonthlyMicros - CreditUsedMicros</c> 得到的剩余**在任何时候都成立**
+/// （充值不会让"已用"变成负数）。
+/// </remarks>
+public sealed class AiCreditDto
+{
+    public bool Enabled { get; set; }
+    public long CreditMonthlyMicros { get; set; }
+    public long CreditUsedMicros { get; set; }
+    public string? PeriodStart { get; set; }
+    public string? PeriodEnd { get; set; }
+
+    /// <summary>本周期剩余额度（微信用点）。允许为负：单次调用可以小幅透支（服务端有单请求成本上界）。</summary>
+    public long CreditRemainingMicros => CreditMonthlyMicros - CreditUsedMicros;
+}
+
 public sealed class MembershipDto
 {
     public string PlanId { get; set; } = string.Empty;
@@ -100,6 +120,13 @@ public sealed class MembershipDto
     public string? ExpiresAt { get; set; }
     public long QuotaBytes { get; set; }
     public long UsedBytes { get; set; }
+
+    /// <summary>三件套之二（AI 生成 + 图片识别）的额度快照。</summary>
+    /// <remarks>
+    /// 老服务端不带这个字段时为 <c>null</c>，派生属性一律按"无 AI 权益"处理（<c>?.Enabled == true</c>），
+    /// 不要直接解引用。
+    /// </remarks>
+    public AiCreditDto? Ai { get; set; }
 }
 
 /// <summary>register / login / refresh 的统一包络。</summary>
@@ -138,6 +165,26 @@ public sealed class AiAliasDto
 {
     public string Id { get; set; } = string.Empty;
     public string DisplayName { get; set; } = string.Empty;
+}
+
+/// <summary>
+/// <c>GET /v1/ai/models</c> 的一项：**当前账号可用**的别名（区别于 <c>/config</c> 的全量目录）。
+/// </summary>
+public sealed class AiModelDto
+{
+    public string Id { get; set; } = string.Empty;
+    public string DisplayName { get; set; } = string.Empty;
+
+    /// <summary>该别名背后是否有支持图片的上游 —— 决定"识图"入口是否可用。</summary>
+    public bool SupportsVision { get; set; }
+
+    public int? MaxOutput { get; set; }
+}
+
+public sealed class AiModelListDto
+{
+    public string Object { get; set; } = "list";
+    public List<AiModelDto> Data { get; set; } = new();
 }
 
 public sealed class AnnouncementDto

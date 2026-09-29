@@ -52,6 +52,9 @@ public sealed class DrawioFormat : IDocumentFormat
     /// </summary>
     public bool SupportsAiAssistant => false;
 
+    /// <summary>无 AI 能力：图形编辑器不产源码，AI 生成的文本无处可落（<c>AiPromptSet.None</c>）。</summary>
+    public AiPromptSet Ai => AiPromptSet.None;
+
     public IDocumentRenderer Renderer => NoPreviewRenderer.Instance;
 
     /// <summary>drawio 自己带布局（层级/树/有机），不走我们的布局选择器。</summary>

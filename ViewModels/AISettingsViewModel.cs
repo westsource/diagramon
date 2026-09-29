@@ -1,6 +1,9 @@
 using System;
+using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Linq;
+using System.Net.Http;
+using System.Text.Json;
 using System.Threading.Tasks;
 using Avalonia.Data.Converters;
 using Avalonia.Platform.Storage;
@@ -19,6 +22,7 @@ public partial class AISettingsViewModel : ViewModelBase
     private readonly SettingsService _settingsService;
     private readonly IStorageProvider? _storageProvider;
     private readonly Action? _onSaved;
+    private readonly AuthService? _authService;
 
     [ObservableProperty]
     private ObservableCollection<AIModelConfig> _modelConfigs = new();
@@ -64,7 +68,133 @@ public partial class AISettingsViewModel : ViewModelBase
 
     public ObservableCollection<AIProvider> ProviderTypes { get; } = new(Enum.GetValues<AIProvider>());
 
-    public bool IsApiKeyRequired => EditingProvider != AIProvider.Ollama;
+    /// <summary>「Diagramon 云」可选的模型别名（来自 <c>/v1/config</c> 的 <c>aiAliases</c>）。</summary>
+    public ObservableCollection<AiAliasDto> AliasChoices { get; } = new();
+
+    [ObservableProperty]
+    private AiAliasDto? _selectedAlias;
+
+    partial void OnSelectedAliasChanged(AiAliasDto? value)
+    {
+        // 下拉是唯一入口：选中即写回 ModelId（持久化字段仍是一个字符串别名）
+        if (value is not null)
+        {
+            EditingModelId = value.Id;
+        }
+    }
+
+    /// <summary>
+    /// 是否是「Diagramon 云」条目。
+    /// </summary>
+    /// <remarks>
+    /// 该条目**不需要** Key 与 BaseUrl：地址固定为服务端地址，凭据是当前 access token（不落盘）。
+    /// 把它显示成"填 Key 的 provider"会诱导用户把自己的令牌粘进去 —— 那正是 C1 要避免的落盘路径。
+    /// </remarks>
+    public bool IsCloudConfig => EditingProvider == AIProvider.DiagramonCloud;
+
+    /// <summary>
+    /// 「渲染报错时自动修正一次」（V2-8，D34）。
+    /// </summary>
+    /// <remarks>
+    /// 这是本方案里唯一会**静默产生第二次计费**的功能，所以开关必须显眼、说明必须写明这一点 ——
+    /// 用户看到账单上两笔扣费时，得能立刻找到并关掉它。
+    /// </remarks>
+    [ObservableProperty]
+    private bool _renderFeedbackRetry = true;
+
+    public string AIRenderFeedbackToggle => S.AIRenderFeedbackToggle;
+    public string AIServiceUrlLabel => S.AIServiceUrlLabel;
+    public string AIServiceUrlHint => S.AIServiceUrlHint;
+    public string AITestConnection => S.AITestConnection;
+
+    /// <summary>
+    /// 云端服务地址（可改）。
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// 此前只能手改 <c>settings.json</c>（默认 <c>http://127.0.0.1:8000</c>），联调换服务器要改文件、重启 —— 
+    /// 所以给它一个输入框。<b>默认值刻意保持本机地址</b>：仓库里不写任何具体部署地址，
+    /// 测试环境的域名由使用者在界面上填（或已存在 settings.json 里）。
+    /// </para>
+    /// <para>
+    /// 改地址后**必须重新登录**：令牌是按服务器签发的，旧令牌在新服务器上无效
+    /// （客户端会走静默刷新 → 失败 → 回到未登录态，不会崩，但用户要知道为什么）。
+    /// </para>
+    /// </remarks>
+    [ObservableProperty]
+    private string _serviceBaseUrl = string.Empty;
+
+    /// <summary>测试连接的结果（成功/失败文案）。</summary>
+    [ObservableProperty]
+    private string _connectionStatus = string.Empty;
+
+    [ObservableProperty]
+    private bool _isTestingConnection;
+
+    /// <summary>
+    /// 探测 <c>GET /v1/config</c>（**匿名可调**）—— 与客户端冷启动走的第一个请求同一条路。
+    /// </summary>
+    [RelayCommand]
+    private async Task TestConnection()
+    {
+        var url = NormalizeServiceUrl(ServiceBaseUrl);
+        if (url is null)
+        {
+            ConnectionStatus = S.AITestInvalidUrl;
+            return;
+        }
+
+        IsTestingConnection = true;
+        try
+        {
+            using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
+            var response = await http.GetAsync(url + "/v1/config");
+
+            if (!response.IsSuccessStatusCode)
+            {
+                ConnectionStatus = string.Format(S.AITestFailFormat, $"HTTP {(int)response.StatusCode}");
+                return;
+            }
+
+            using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+            var minVersion = document.RootElement.TryGetProperty("minVersion", out var value)
+                ? value.GetString()
+                : null;
+
+            ConnectionStatus = string.Format(S.AITestOk, minVersion ?? "-");
+        }
+        catch (Exception ex)
+        {
+            ConnectionStatus = string.Format(S.AITestFailFormat, ex.Message);
+        }
+        finally
+        {
+            IsTestingConnection = false;
+        }
+    }
+
+    /// <summary>
+    /// 规范化服务地址：去掉尾部斜杠；非法（非 http/https、空）返回 <c>null</c>。
+    /// </summary>
+    /// <remarks>
+    /// 空值**合法**（= 用 <c>SettingsService</c> 的默认本机地址），由调用方区分"空"与"非法"。
+    /// </remarks>
+    private static string? NormalizeServiceUrl(string? raw)
+    {
+        var trimmed = (raw ?? string.Empty).Trim().TrimEnd('/');
+        if (trimmed.Length == 0)
+        {
+            return null;
+        }
+
+        return trimmed.StartsWith("http://", StringComparison.OrdinalIgnoreCase)
+            || trimmed.StartsWith("https://", StringComparison.OrdinalIgnoreCase)
+                ? trimmed
+                : null;
+    }
+    public string AIRenderFeedbackHint => S.AIRenderFeedbackHint;
+
+    public bool IsApiKeyRequired => EditingProvider is not (AIProvider.Ollama or AIProvider.DiagramonCloud);
 
     /// <summary>
     /// 是否需要填 Base URL。
@@ -74,7 +204,7 @@ public partial class AISettingsViewModel : ViewModelBase
     /// BaseUrl 时才回退到官方端点 <c>https://api.openai.com/v1</c>，因此指向 DeepSeek / 通义 /
     /// 自建网关等兼容端点时必须能改。只把 Azure 排除在外 —— 它用的是 Endpoint + Deployment Name。
     /// </remarks>
-    public bool IsBaseUrlRequired => EditingProvider != AIProvider.AzureOpenAI;
+    public bool IsBaseUrlRequired => EditingProvider is not (AIProvider.AzureOpenAI or AIProvider.DiagramonCloud);
 
     /// <summary>
     /// Base URL 的占位提示。OpenAI 档必须说明"留空 = 官方端点"，
@@ -95,6 +225,8 @@ public partial class AISettingsViewModel : ViewModelBase
     public string AIModelName => S.AIModelName;
     public string AIServiceType => S.AIServiceType;
     public string AIModelId => S.AIModelId;
+    public string AIAliasLabel => S.AIAliasLabel;
+    public string AICloudHint => S.AICloudHint;
     public string AIAdvancedOptions => S.AIAdvancedOptions;
     public string AIConversationStorage => S.AIConversationStorage;
     public string AIBrowse => S.AIBrowse;
@@ -104,17 +236,43 @@ public partial class AISettingsViewModel : ViewModelBase
     public string SaveButton => S.SaveButton;
     public string CancelButton => S.CancelButton;
 
-    public AISettingsViewModel() : this(new SettingsService(), null, null)
+    public AISettingsViewModel() : this(new SettingsService(), null, null, null)
     {
     }
 
-    public AISettingsViewModel(SettingsService settingsService, IStorageProvider? storageProvider, Action? onSaved)
+    public AISettingsViewModel(
+        SettingsService settingsService,
+        IStorageProvider? storageProvider,
+        Action? onSaved,
+        AuthService? authService = null)
     {
         _settingsService = settingsService;
         _storageProvider = storageProvider;
         _onSaved = onSaved;
+        _authService = authService;
 
+        LoadAliasChoices();
+        RenderFeedbackRetry = _settingsService.Settings.AiRenderFeedbackRetry;
+        ServiceBaseUrl = _settingsService.Settings.ServiceBaseUrl;
         LoadSettings();
+    }
+
+    /// <summary>
+    /// 填「Diagramon 云」的别名候选。
+    /// </summary>
+    /// <remarks>
+    /// 取自 <c>GET /v1/config</c> 的 <c>aiAliases</c>（**全量目录**，匿名可读）——
+    /// 客户端靠它把"模型"变成可选项，而不是让人手打别名。
+    /// 「这个账号到底能用哪些」由带令牌的 <c>GET /v1/ai/models</c> 回答；不在本档的别名会在调用时
+    /// 得到 403「当前套餐不含该模型，升级后可用」（文案见 <c>AiErrorText</c>）。
+    /// </remarks>
+    private void LoadAliasChoices()
+    {
+        AliasChoices.Clear();
+        foreach (var alias in _authService?.Config?.AiAliases ?? new List<AiAliasDto>())
+        {
+            AliasChoices.Add(alias);
+        }
     }
 
     private void LoadSettings()
@@ -127,6 +285,16 @@ public partial class AISettingsViewModel : ViewModelBase
 
         ConversationStoragePath = _settingsService.Settings.ConversationStoragePath ?? string.Empty;
     }
+
+    /// <summary>存储路径输入框的占位提示：显示**真实的**默认目录（不把路径写死在译文里）。</summary>
+    public string ConversationStorageWatermark =>
+        string.Format(S.AIConversationStorageWatermarkFormat, AIConversationService.DefaultStoragePath);
+
+    // 编辑面板里这几个字段标签原是 XAML 里的英文硬编码，现在走与其它标签同一条链路
+    public string AIApiKeyLabel => S.AIApiKeyLabel;
+    public string AIBaseUrlLabel => S.AIBaseUrlLabel;
+    public string AIMaxTokensLabel => S.AIMaxTokensLabel;
+    public string AITemperatureLabel => S.AITemperatureLabel;
 
     partial void OnEditingProviderChanged(AIProvider value)
     {
@@ -249,6 +417,13 @@ public partial class AISettingsViewModel : ViewModelBase
     {
         _settingsService.Settings.ModelConfigs = ModelConfigs.ToList();
         _settingsService.Settings.ConversationStoragePath = ConversationStoragePath;
+        _settingsService.Settings.AiRenderFeedbackRetry = RenderFeedbackRetry;
+
+        // 空 = 保持默认（本机）；非空才写回。非法地址在测试连接时已提示，这里不静默改写。
+        if (NormalizeServiceUrl(ServiceBaseUrl) is { } url)
+        {
+            _settingsService.Settings.ServiceBaseUrl = url;
+        }
 
         foreach (var config in ModelConfigs)
         {

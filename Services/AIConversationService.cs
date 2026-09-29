@@ -14,13 +14,16 @@ public class AIConversationService
     private string _storagePath;
     private readonly Dictionary<string, AIConversation> _cache = new();
 
+    /// <summary>未配置自定义目录时使用的默认对话存档目录（界面的占位提示也用它，避免文案里写死路径）。</summary>
+    public static string DefaultStoragePath { get; } = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+        "Diagramon",
+        "Conversations"
+    );
+
     public AIConversationService(string? customStoragePath = null)
     {
-        _storagePath = customStoragePath ?? Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-            "Diagramon",
-            "Conversations"
-        );
+        _storagePath = customStoragePath ?? DefaultStoragePath;
 
         EnsureDirectoryExists();
     }

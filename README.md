@@ -55,7 +55,7 @@
 - **自动回写** - 画布上的改动（drawio 的 autosave）回写到标签页正文，标题立即带 `*`；回写走挂起通知，**不会**触发文本渲染管线
 - **离线自托管** - drawio 运行时随包分发（`tools/drawio`，由 `tools/fetch-drawio.ps1` 按白名单裁剪），页面由进程内 loopback origin 提供；附加图形库与模板里的外部图片在拉取期被**下载到包内**并改写成相对路径，Google 字体与外部集成（Drive / MathJax / 服务端导出）在构建期被关掉，全程零外部请求
 - **导出** - 与文本格式并列：点预览区的保存/复制图片按钮，由画布在页面内栅格化，**零子进程**
-- **Mermaid → drawio 转换** - 文件 → 转换为 drawio 图（不可逆）：把当前 Mermaid 源码交给 drawio 自己的解析器，转换结果**另开新标签页**，原 `.mmd` 标签页保持不动
+- **Mermaid → drawio 转换** - 文件 → 转换为 drawio 图：把当前 Mermaid 源码交给 drawio 自己的解析器，转换结果**另开新标签页**，原 `.mmd` 标签页保持不动（单向：画布上的改动不回写 Mermaid 源码）
 - **与文本格式共存** - `.drawio` 与 `.mmd` / `.dot` 标签页可同时打开、自由切换，互不影响；drawio 标签页不显示 AI 助手与布局选择器
 
 ### Excalidraw 手绘风编辑（`.excalidraw`）
@@ -64,7 +64,7 @@
 - **自动回写** - 画布变更（拖拽时每帧触发）先入队、按 150ms 合并后回写标签页正文，且挂起文本变更通知；文档里只保留可持久化的少量 appState 字段（选中/hover 这类瞬态不落盘）
 - **离线优先** - 构建期设 `EXCALIDRAW_ASSET_PATH` 指向随包目录，字体不从 CDN 取；运行时零外部请求
 - **离线守卫** - 承载页在应用脚本之前打补丁：非本机 origin 的 `fetch`/`XHR`/`Image`/`sendBeacon` 一律拒绝，并把每次拦截显示到状态栏（避免某个功能偷偷联网这类上游回归）
-- **Mermaid → Excalidraw** - 文件 → 转换为 Excalidraw 图（不可逆）：转换由页面内的 `@excalidraw/mermaid-to-excalidraw` 完成，结果另开新标签页
+- **Mermaid → Excalidraw** - 文件 → 转换为 Excalidraw 图：转换由页面内的 `@excalidraw/mermaid-to-excalidraw` 完成，结果另开新标签页（单向：画布上的改动不回写 Mermaid 源码）
 - **新增构建步骤** - 上游没有可直接 `<script>` 引用的产物，因此多了 `tools/fetch-excalidraw.ps1`（npm 取包 + esbuild 打包 + 清单校验）
 
 ### AI 助手

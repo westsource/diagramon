@@ -1,0 +1,39 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:Diagramon.ViewModels"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        mc:Ignorable="d" d:DesignWidth="520" d:DesignHeight="300"
+        x:Class="Diagramon.Views.AiVisionNoticeDialog"
+        x:DataType="vm:AiVisionNoticeViewModel"
+        Title="{Binding Title}"
+        Width="520" Height="300"
+        CanResize="False"
+        WindowStartupLocation="CenterOwner">
+
+    <Design.DataContext>
+        <vm:AiVisionNoticeViewModel/>
+    </Design.DataContext>
+
+    <Grid RowDefinitions="Auto,*,Auto" Margin="20">
+        <TextBlock Grid.Row="0" Text="{Binding Title}" FontSize="15" FontWeight="SemiBold"/>
+
+        <ScrollViewer Grid.Row="1" Margin="0,12,0,0">
+            <TextBlock Text="{Binding Body}" TextWrapping="Wrap" FontSize="13" Foreground="#4B5563"
+                       LineHeight="20"/>
+        </ScrollViewer>
+
+        <Grid Grid.Row="2" ColumnDefinitions="*,Auto,Auto" Margin="0,16,0,0">
+            <CheckBox Grid.Column="0" Content="{Binding DoNotAskText}"
+                      IsChecked="{Binding DoNotAskAgain}" VerticalAlignment="Center"/>
+
+            <Button Grid.Column="1" Content="{Binding CancelButton}" Width="80" Margin="0,0,8,0"
+                    HorizontalContentAlignment="Center" VerticalContentAlignment="Center"
+                    Command="{Binding CancelCommand}"/>
+            <Button Grid.Column="2" Content="{Binding ContinueButton}" Width="120"
+                    Background="#3B82F6" Foreground="White"
+                    HorizontalContentAlignment="Center" VerticalContentAlignment="Center"
+                    Command="{Binding ContinueCommand}"/>
+        </Grid>
+    </Grid>
+</Window>

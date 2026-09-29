@@ -7,6 +7,7 @@ using Avalonia.Controls;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
 using AvaloniaWebView;
+using Diagramon.Services.Localization;
 
 namespace Diagramon.Services.Embedded;
 
@@ -100,7 +101,7 @@ internal sealed class WebViewBridge
             }
         }
 
-        throw new InvalidOperationException("当前 WebView 版本不支持可用导航方式（Navigate/Source/Url）。");
+        throw new InvalidOperationException(Strings.Instance.WebViewNavigationUnsupported);
     }
 
     /// <summary>执行脚本并取回原始返回值（WebView2 会把返回值 JSON 序列化）。失败返回 <c>null</c>。</summary>

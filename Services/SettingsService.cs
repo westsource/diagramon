@@ -34,6 +34,24 @@ public class AppSettings
 
     public string? ConversationStoragePath { get; set; }
     public bool AIPanelExpanded { get; set; }
+
+    /// <summary>
+    /// 是否已同意"图片会上传到服务端"的首次告知（D25）。
+    /// </summary>
+    /// <remarks>
+    /// 默认 <c>false</c> = 还没告知过 → 首次选图时弹一次；用户勾"不再提示"后才置 <c>true</c>。
+    /// 存 settings 而不是内存：告知是"对这台机器上的这个用户说过一次"，重启不该再弹。
+    /// </remarks>
+    public bool AiVisionNoticeAccepted { get; set; }
+
+    /// <summary>
+    /// 是否允许"按渲染报错自动修正"（V2-8，D34）。
+    /// </summary>
+    /// <remarks>
+    /// <b>默认开</b>：这是本方案里唯一会<b>静默产生第二次计费</b>的功能，所以必须能关
+    /// ——用户看到账单上两笔扣费时，得有个开关可以立刻停掉。
+    /// </remarks>
+    public bool AiRenderFeedbackRetry { get; set; } = true;
     public double AIPanelHeight { get; set; } = 200;
 
     public AIProvider SelectedProvider { get; set; } = AIProvider.OpenAI;
@@ -93,6 +111,35 @@ public class SettingsService
         LoadRecentHistory();
         LoadSecureValues();
         EnsureDefaultModels();
+        StripLegacyPlaintextKeys();
+    }
+
+    /// <summary>
+    /// 清掉旧版本残留在 <c>settings.json</c> 里的**明文 API Key**。
+    /// </summary>
+    /// <remarks>
+    /// 加了 <c>[JsonIgnore]</c> 之后，下一次 <c>Save()</c> 自然就不会再写它；但用户可能很久不打开
+    /// 设置面板 —— 而明文凭据留在磁盘上不是"以后会好的"问题。所以启动时主动清一次。
+    /// </remarks>
+    private void StripLegacyPlaintextKeys()
+    {
+        try
+        {
+            if (!File.Exists(SettingsPath))
+            {
+                return;
+            }
+
+            var json = File.ReadAllText(SettingsPath);
+            if (json.Contains("\"ApiKey\"", StringComparison.Ordinal))
+            {
+                SaveSettingsOnly();
+            }
+        }
+        catch
+        {
+            // 清理失败不影响启动：下次保存仍会写掉（[JsonIgnore] 已经生效）
+        }
     }
 
     private void LoadRecentHistory()
@@ -266,6 +313,45 @@ public class SettingsService
     {
         if (string.IsNullOrEmpty(modelId)) return null;
         return Settings.ModelConfigs.FirstOrDefault(c => c.Id == modelId);
+    }
+
+    /// <summary>
+    /// 确保存在一条「Diagramon 云」模型配置；已有则**原样不动**。返回是否新加了一条。
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// 为什么要自动补：云条目是 AI 面板里云模型的唯一来源（面板只展开**已存在**的云配置）。
+    /// 以前新用户登录后面板里空无一物，得自己进设置「添加模型」、再在下拉里找到「Diagramon 云」——
+    /// 而"能用云端"恰恰是他刚登录的原因，这是把配置工作推给了用户。
+    /// </para>
+    /// <para>
+    /// 自动加它是**零风险**的：云条目不需要 Key 也不需要 BaseUrl（凭据是当前 access token，不落盘），
+    /// 所以不存在"自动写进了一个凭据"。幂等：已有就返回 <c>false</c> 且不动它（用户可能自己改过）。
+    /// </para>
+    /// </remarks>
+    /// <param name="modelId">
+    /// 默认模型名：认保留别名 <c>auto</c> 的服务端填 `auto`（服务端按内容选档）；
+    /// 老服务端不认识它（发了会 400），调用方应退回默认档名。
+    /// </param>
+    /// <param name="displayName">
+    /// 显示名由**调用方**传入（`S.AICloudProviderName`）—— 本类是低层持久化，不该依赖本地化。
+    /// </param>
+    public bool EnsureCloudProvider(string modelId, string displayName)
+    {
+        if (Settings.ModelConfigs.Any(m => m.Provider == AIProvider.DiagramonCloud))
+        {
+            return false;
+        }
+
+        Settings.ModelConfigs.Add(new AIModelConfig
+        {
+            Name = displayName,
+            Provider = AIProvider.DiagramonCloud,
+            ModelId = modelId,
+            IsEnabled = true,
+        });
+        Save();
+        return true;
     }
 
     public void AddModelConfig(AIModelConfig config)

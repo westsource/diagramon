@@ -13,7 +13,7 @@
 </head>
 <body>
 <div id="root"></div>
-<div id="boot">正在载入 Excalidraw…</div>
+<div id="boot"></div>
 <script src="./offline-guard.js"></script>
 <script>
   // 离线守卫（上一行）必须在 app.js 之前执行
@@ -34,6 +34,29 @@
 // 内容真相始终是标签页里的 JSON 文本；本页只负责视图与事件。
 // ---------------------------------------------------------------------------
 (function () {
+  // 承载页自产的可见文案（boot 覆盖层 + 失败横幅）：页面访问不到应用的语言表，
+  // 由宿主在导航 URL 上带 `?lang=<code>`（见 ExcalidrawDocumentHost.EnsureNavigated）。
+  // 认不出就按英文 —— 与 LocalizationService 的默认语言一致。
+  const PAGE_TEXTS = {
+    'zh-CN': {
+      boot: '正在载入 Excalidraw…',
+      mermaidFailed: 'Mermaid 转换失败: ',
+      bundleMissing: 'Excalidraw bundle 未加载：缺少 window.ExcalidrawApp.mount',
+      mountFailed: 'Excalidraw 挂载失败: '
+    },
+    'en-US': {
+      boot: 'Loading Excalidraw…',
+      mermaidFailed: 'Mermaid conversion failed: ',
+      bundleMissing: 'Excalidraw bundle not loaded: window.ExcalidrawApp.mount is missing',
+      mountFailed: 'Failed to mount Excalidraw: '
+    }
+  };
+  const requested = (new URLSearchParams(window.location.search).get('lang') || '').toLowerCase();
+  const T = requested.startsWith('zh') ? PAGE_TEXTS['zh-CN'] : PAGE_TEXTS['en-US'];
+
+  const boot = document.getElementById('boot');
+  if (boot) { boot.textContent = T.boot; }
+
   const out = {
     state: 'booting',
     queue: [],
@@ -70,7 +93,13 @@
       out.api.updateScene({ elements: scene.elements || [], appState: scene.appState || {} });
       window.__excalidrawApi = out.api;
       suppressEchoes(scene.elements || []);
+      ensureViewportVisible();                // 载入文档 = 视图由这份文档决定，不沿用上一份的视口
       return true;
+    }
+
+    if (msg.action === 'ensureVisible') {
+      // 标签页重新激活时由宿主下发：视口若在内容之外（或空文档停在奇怪视口）就拉回来
+      return ensureViewportVisible();
     }
 
     if (msg.action === 'loadMermaid') {
@@ -78,10 +107,11 @@
         messages.pending = { elements: converted.elements || [] };
         out.api.updateScene({ elements: converted.elements || [] });
         suppressEchoes(converted.elements || []);
+        ensureViewportVisible();
         report('loaded', { count: (converted.elements || []).length });
         return true;
       }).catch(function (e) {
-        fail('Mermaid 转换失败: ' + (e && e.message ? e.message : e));
+        fail(T.mermaidFailed + (e && e.message ? e.message : e));
         return false;
       });
     }
@@ -193,9 +223,81 @@
     };
   }
 
+  // --------------------------------------------------------------------------
+  // 视口归一化。
+  //
+  // 背景：文档里只存上面那 4 个 appState 字段 —— **不含 zoom / scrollX / scrollY**。
+  // 也就是说视口是**页面级瞬态**，不随文档走。于是当画布被缩放/平移到一个看不到内容的位置
+  // （或空文档被缩放到 412% 之类）时，切到别的标签页再切回来、或把这份文档重新载入，
+  // 页面会原样保留那个视口 —— 用户看到的就是"一片纯白 + Scroll back to content"，
+  // 而文档本身毫发无损。这里把它变成确定性行为：
+  //   空场景            → 100% + 原点（没有内容可看，任何其它视口都只是噪声）
+  //   有内容但视口看不到 → 拉回内容（保留当前缩放，与 Excalidraw 打开文件的行为一致）
+  //   看得到内容        → 一律不动（尊重用户自己的视角）
+  // --------------------------------------------------------------------------
+  function visibleElements() {
+    try {
+      return (out.api.getSceneElements() || []).filter(function (e) { return e && !e.isDeleted; });
+    } catch (e) {
+      return [];
+    }
+  }
+
+  function sceneContentBounds(elements) {
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    elements.forEach(function (e) {
+      const x = Number(e.x), y = Number(e.y);
+      if (!isFinite(x) || !isFinite(y)) { return; }
+      const w = isFinite(Number(e.width)) ? Number(e.width) : 0;
+      const h = isFinite(Number(e.height)) ? Number(e.height) : 0;
+      minX = Math.min(minX, x); minY = Math.min(minY, y);
+      maxX = Math.max(maxX, x + w); maxY = Math.max(maxY, y + h);
+    });
+    if (!isFinite(minX)) { return null; }
+    return { minX: minX, minY: minY, maxX: maxX, maxY: maxY };
+  }
+
+  function viewportSceneBounds() {
+    const st = out.api.getAppState() || {};
+    const zoom = st.zoom && isFinite(Number(st.zoom.value)) && Number(st.zoom.value) > 0 ? Number(st.zoom.value) : 1;
+    const w = isFinite(Number(st.width)) ? Number(st.width) : 0;
+    const h = isFinite(Number(st.height)) ? Number(st.height) : 0;
+    const scrollX = isFinite(Number(st.scrollX)) ? Number(st.scrollX) : 0;
+    const scrollY = isFinite(Number(st.scrollY)) ? Number(st.scrollY) : 0;
+    return { minX: -scrollX, minY: -scrollY, maxX: -scrollX + w / zoom, maxY: -scrollY + h / zoom };
+  }
+
+  function intersects(a, b) {
+    return a.minX <= b.maxX && b.minX <= a.maxX && a.minY <= b.maxY && b.minY <= a.maxY;
+  }
+
+  function ensureViewportVisible() {
+    if (!out.api) { return 'no-api'; }
+
+    const elements = visibleElements();
+    if (elements.length === 0) {
+      out.api.updateScene({ appState: { zoom: { value: 1 }, scrollX: 0, scrollY: 0 } });
+      return 'reset';
+    }
+
+    const content = sceneContentBounds(elements);
+    if (!content) { return 'no-bounds'; }
+
+    if (intersects(viewportSceneBounds(), content)) {
+      return 'kept';
+    }
+
+    try {
+      out.api.scrollToContent(elements, { fitToContent: false, animate: false });
+    } catch (e) {
+      return 'scroll-failed';
+    }
+    return 'scrolled';
+  }
+
   const ready = window.ExcalidrawApp && typeof window.ExcalidrawApp.mount === 'function';
   if (!ready) {
-    fail('Excalidraw bundle 未加载：缺少 window.ExcalidrawApp.mount');
+    fail(T.bundleMissing);
     return;
   }
 
@@ -210,7 +312,7 @@
       flushPendingCommands();
     })
     .catch(function (e) {
-      fail('Excalidraw 挂载失败: ' + (e && e.message ? e.message : e));
+      fail(T.mountFailed + (e && e.message ? e.message : e));
     });
 })();
 </script>

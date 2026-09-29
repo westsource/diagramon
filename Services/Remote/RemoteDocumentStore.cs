@@ -18,7 +18,8 @@ namespace Diagramon.Services.Remote;
 /// <b>不暴露任何同步语义</b>（无 outbox / 本地索引 / 冲突副本）—— v1 的云端只是"另一个保存位置"。
 /// </para>
 /// <para>
-/// 所有方法在 <b>401</b> 时会静默刷新一次令牌并重试一次；刷新失败则把 401 原样返回，
+/// 所有方法在 <b>401</b> 时会静默刷新一次令牌并重试一次（语义在 <see cref="AuthenticatedSender"/>，
+/// 与云端 AI 共用同一份实现）；刷新失败则把 401 原样返回，
 /// 由调用方切回未登录态（未登录是正常状态，不是错误）。
 /// </para>
 /// </remarks>
@@ -34,12 +35,14 @@ public sealed class RemoteDocumentStore
     public const string ErrorNameTaken = "name_taken";
 
     private readonly ApiClient _api;
-    private readonly Func<CancellationToken, Task<bool>> _refreshAsync;
+
+    /// <summary>401 → 静默刷新一次 → 重试一次（语义与云端 AI 共用，见 <see cref="AuthenticatedSender"/>）。</summary>
+    private readonly AuthenticatedSender _sender;
 
     public RemoteDocumentStore(ApiClient api, Func<CancellationToken, Task<bool>> refreshAsync)
     {
         _api = api;
-        _refreshAsync = refreshAsync;
+        _sender = new AuthenticatedSender(api, refreshAsync);
     }
 
     /// <summary>
@@ -83,8 +86,7 @@ public sealed class RemoteDocumentStore
         if (recursive) query += "&recursive=true";
         if (!string.IsNullOrEmpty(vaultId)) query += $"&vaultId={Uri.EscapeDataString(vaultId)}";
 
-        return SendWithRetryAsync<DocumentListResponse>(() =>
-            _api.SendAsync<DocumentListResponse>(HttpMethod.Get, "/v1/documents" + query, cancellationToken: cancellationToken));
+        return _sender.SendAsync<DocumentListResponse>(HttpMethod.Get, "/v1/documents" + query, cancellationToken: cancellationToken);
     }
 
     /// <summary>
@@ -96,15 +98,13 @@ public sealed class RemoteDocumentStore
     {
         var query = string.IsNullOrEmpty(vaultId) ? "" : $"?vaultId={Uri.EscapeDataString(vaultId)}";
 
-        return SendWithRetryAsync<FolderListResponse>(() =>
-            _api.SendAsync<FolderListResponse>(HttpMethod.Get, "/v1/folders" + query, cancellationToken: cancellationToken));
+        return _sender.SendAsync<FolderListResponse>(HttpMethod.Get, "/v1/folders" + query, cancellationToken: cancellationToken);
     }
 
     /// <summary>取单个文档：内联给 <c>content</c>，外置给预签名 <c>blob</c>。</summary>
     public Task<ApiResult<DocumentResponse>> GetAsync(Guid documentId, CancellationToken cancellationToken = default)
     {
-        return SendWithRetryAsync(() =>
-            _api.SendAsync<DocumentResponse>(HttpMethod.Get, $"/v1/documents/{documentId}", cancellationToken: cancellationToken));
+        return _sender.SendAsync<DocumentResponse>(HttpMethod.Get, $"/v1/documents/{documentId}", cancellationToken: cancellationToken);
     }
 
     /// <summary>
@@ -144,11 +144,10 @@ public sealed class RemoteDocumentStore
         };
 
         var url = $"/v1/documents/{documentId}" + (force ? "?force=true" : "");
-        return SendWithRetryAsync(() =>
-            _api.SendAsync<DocumentPutResponse>(
+        return _sender.SendAsync<DocumentPutResponse>(
                 HttpMethod.Put, url, body,
                 ifMatch: ifMatch?.ToString(),
-                cancellationToken: cancellationToken));
+                cancellationToken: cancellationToken);
     }
 
     /// <summary>改名（不动路径）。</summary>
@@ -157,9 +156,8 @@ public sealed class RemoteDocumentStore
     {
         var body = new DocumentPatchRequest { Name = newName };
 
-        return SendWithRetryAsync(() =>
-            _api.SendAsync<DocumentResponse>(
-                HttpMethod.Patch, $"/v1/documents/{documentId}", body, cancellationToken: cancellationToken));
+        return _sender.SendAsync<DocumentResponse>(
+                HttpMethod.Patch, $"/v1/documents/{documentId}", body, cancellationToken: cancellationToken);
     }
 
     /// <summary>移动（改名不动、只换路径）。</summary>
@@ -168,9 +166,8 @@ public sealed class RemoteDocumentStore
     {
         var body = new DocumentPatchRequest { Path = NormalizePath(path) };
 
-        return SendWithRetryAsync(() =>
-            _api.SendAsync<DocumentResponse>(
-                HttpMethod.Patch, $"/v1/documents/{documentId}", body, cancellationToken: cancellationToken));
+        return _sender.SendAsync<DocumentResponse>(
+                HttpMethod.Patch, $"/v1/documents/{documentId}", body, cancellationToken: cancellationToken);
     }
 
     /// <summary>整目录移动/改名（folders 行与 documents 行一起做前缀改写）。</summary>
@@ -185,8 +182,7 @@ public sealed class RemoteDocumentStore
             VaultId = vaultId,
         };
 
-        return SendWithRetryAsync(() =>
-            _api.SendAsync<FolderMoveResponse>(HttpMethod.Patch, "/v1/folders", body, cancellationToken: cancellationToken));
+        return _sender.SendAsync<FolderMoveResponse>(HttpMethod.Patch, "/v1/folders", body, cancellationToken: cancellationToken);
     }
 
     /// <summary>
@@ -202,8 +198,7 @@ public sealed class RemoteDocumentStore
             VaultId = vaultId,
         };
 
-        return SendWithRetryAsync(() =>
-            _api.SendAsync<FolderDto>(HttpMethod.Post, "/v1/folders", body, cancellationToken: cancellationToken));
+        return _sender.SendAsync<FolderDto>(HttpMethod.Post, "/v1/folders", body, cancellationToken: cancellationToken);
     }
 
     /// <summary>
@@ -216,15 +211,13 @@ public sealed class RemoteDocumentStore
         var query = $"?path={Uri.EscapeDataString(NormalizePath(path))}";
         if (!string.IsNullOrEmpty(vaultId)) query += $"&vaultId={Uri.EscapeDataString(vaultId)}";
 
-        return SendWithRetryAsync(() =>
-            _api.SendAsync<object>(HttpMethod.Delete, "/v1/folders" + query, cancellationToken: cancellationToken));
+        return _sender.SendAsync<object>(HttpMethod.Delete, "/v1/folders" + query, cancellationToken: cancellationToken);
     }
 
     /// <summary>软删（墓碑）。幂等 —— 已删除或不存在同样成功。</summary>
     public Task<ApiResult<object>> DeleteAsync(Guid documentId, CancellationToken cancellationToken = default)
     {
-        return SendWithRetryAsync(() =>
-            _api.SendAsync<object>(HttpMethod.Delete, $"/v1/documents/{documentId}", cancellationToken: cancellationToken));
+        return _sender.SendAsync<object>(HttpMethod.Delete, $"/v1/documents/{documentId}", cancellationToken: cancellationToken);
     }
 
     /// <summary>内容哈希，与服务端的 <c>contentHash</c> 同算法（sha256 的十六进制小写）。</summary>
@@ -233,22 +226,4 @@ public sealed class RemoteDocumentStore
         return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(content))).ToLowerInvariant();
     }
 
-    /// <summary>
-    /// 401 → 静默刷新一次 → 重试一次。其余错误直接返回。
-    /// </summary>
-    private async Task<ApiResult<T>> SendWithRetryAsync<T>(Func<Task<ApiResult<T>>> send)
-    {
-        var result = await send();
-        if (result.Status != HttpStatusCode.Unauthorized)
-        {
-            return result;
-        }
-
-        if (!await _refreshAsync(CancellationToken.None))
-        {
-            return result;
-        }
-
-        return await send();
-    }
 }

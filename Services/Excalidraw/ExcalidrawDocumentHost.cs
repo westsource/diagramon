@@ -8,6 +8,7 @@ using Avalonia.Threading;
 using Diagramon.Models;
 using Diagramon.Services.Documents;
 using Diagramon.Services.Embedded;
+using Diagramon.Services.Localization;
 using Diagramon.Services.Preview;
 using TabItem = Diagramon.Models.TabItem;
 
@@ -29,6 +30,8 @@ namespace Diagramon.Services.Excalidraw;
 /// </remarks>
 public sealed class ExcalidrawDocumentHost : IEmbeddedDocumentHost
 {
+    private static readonly Strings S = Strings.Instance;
+
     /// <summary>该宿主服务的格式 id（与 <c>ExcalidrawFormat.FormatId</c> 一致）。</summary>
     public string FormatId => Documents.Formats.ExcalidrawFormat.FormatId;
 
@@ -119,6 +122,11 @@ public sealed class ExcalidrawDocumentHost : IEmbeddedDocumentHost
 
         if (ReferenceEquals(tab, _loadedTab) && string.Equals(tab.Content, _loadedJson, StringComparison.Ordinal))
         {
+            // 同一份文档、内容没变 → 不重载（保住画布自己的撤销历史与视角）。但视口是**页面级瞬态**
+            // （文档只存 viewBackgroundColor/gridSize 等 4 个字段，不含 zoom/scroll），
+            // 若它停在看不到内容的位置，切回来就是"一片纯白 + Scroll back to content"。
+            // 这里让承载页确认一次：空文档归位到 100%/原点，视口离开内容就拉回来，看得到内容则不动。
+            SendCommand(new { action = "ensureVisible" });
             StartPolling();
             return;
         }
@@ -152,7 +160,7 @@ public sealed class ExcalidrawDocumentHost : IEmbeddedDocumentHost
     {
         if (!_ready || _currentTab == null)
         {
-            return new RendererResult(false, null, "Excalidraw 承载面尚未就绪");
+            return new RendererResult(false, null, string.Format(S.EmbeddedCanvasNotReadyFormat, S.FormatExcalidraw));
         }
 
         var waiter = new TaskCompletionSource<RendererResult>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -164,7 +172,7 @@ public sealed class ExcalidrawDocumentHost : IEmbeddedDocumentHost
 
         if (completed != waiter.Task)
         {
-            return new RendererResult(false, null, "Excalidraw 导出超时");
+            return new RendererResult(false, null, string.Format(S.EmbeddedExportTimeoutFormat, S.FormatExcalidraw));
         }
 
         return await waiter.Task;
@@ -180,12 +188,16 @@ public sealed class ExcalidrawDocumentHost : IEmbeddedDocumentHost
         var directory = RuntimeDirectory;
         if (directory == null)
         {
-            ErrorReported?.Invoke(this, "缺少 Excalidraw 运行时资源");
+            ErrorReported?.Invoke(this, S.ExcalidrawRuntimeMissing);
             return;
         }
 
         _server ??= LoopbackStaticServer.Start([("/excalidraw/", directory)]);
-        _bridge.Navigate($"{_server.BaseUrl}/excalidraw/index.html");
+
+        // 带上应用当前语言：承载页的 boot/失败横幅是页面自产的文案，页面访问不到应用的语言表
+        // （见 tools/excalidraw-host/index.html 的 PAGE_TEXTS）。
+        var language = Uri.EscapeDataString(LocalizationService.Instance.CurrentLanguageCode);
+        _bridge.Navigate($"{_server.BaseUrl}/excalidraw/index.html?lang={language}");
         _navigated = true;
 
         if (_currentTab != null)
@@ -233,7 +245,7 @@ public sealed class ExcalidrawDocumentHost : IEmbeddedDocumentHost
             var probe = (await _bridge.ExecuteScriptAsync(EmbeddedProtocol.ReadyProbeScript))?.Trim();
             if (probe != "true")
             {
-                ErrorReported?.Invoke(this, "Excalidraw 承载页缺少消息入口 window.__apply，命令无法送达（承载页与宿主协议不一致）");
+                ErrorReported?.Invoke(this, string.Format(S.EmbeddedHostEntryMissingFormat, S.FormatExcalidraw));
             }
         }
 
@@ -317,11 +329,11 @@ public sealed class ExcalidrawDocumentHost : IEmbeddedDocumentHost
                     // 离线守卫拦下的外部请求：不静默吞掉（说明有代码路径想联网）
                     case "external-blocked":
                         var blockedUrl = root.TryGetProperty("url", out var u) ? u.GetString() : null;
-                        ErrorReported?.Invoke(this, $"已拦截外部请求（离线模式）: {blockedUrl}");
+                        ErrorReported?.Invoke(this, string.Format(S.OfflineRequestBlockedFormat, blockedUrl));
                         break;
 
                     case "error":
-                        ErrorReported?.Invoke(this, root.TryGetProperty("message", out var m) ? m.GetString() ?? "Excalidraw 报错" : "Excalidraw 报错");
+                        ErrorReported?.Invoke(this, root.TryGetProperty("message", out var m) ? m.GetString() ?? S.ExcalidrawHostErrorFallback : S.ExcalidrawHostErrorFallback);
                         break;
                 }
             }
@@ -402,7 +414,7 @@ public sealed class ExcalidrawDocumentHost : IEmbeddedDocumentHost
         if (string.IsNullOrEmpty(data) || separator < 0)
         {
             var message = root.TryGetProperty("message", out var m) ? m.GetString() : null;
-            waiter.TrySetResult(new RendererResult(false, null, message ?? "Excalidraw 导出结果缺少图像数据"));
+            waiter.TrySetResult(new RendererResult(false, null, message ?? S.ExcalidrawExportMissingData));
             return;
         }
 

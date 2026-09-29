@@ -37,6 +37,12 @@ public interface IDocumentFormat
     /// <summary>该格式是否提供 AI 生成能力。</summary>
     bool SupportsAiAssistant { get; }
 
+    /// <summary>
+    /// 该格式的 AI 提示词素材（提示词属于格式，见 <see cref="AiPromptSet"/>）。
+    /// 无 AI 能力的格式返回 <see cref="AiPromptSet.None"/>。
+    /// </summary>
+    AiPromptSet Ai { get; }
+
     /// <summary>渲染器：预览页 + 增量更新 + 页面内导出。</summary>
     IDocumentRenderer Renderer { get; }
 
@@ -53,8 +59,8 @@ public interface IDocumentFormat
     /// 该格式的源码是否能被图形编辑器导入（目前只有 Mermaid：drawio 与 Excalidraw 都提供 mermaid 解析器）。
     /// </summary>
     /// <remarks>
-    /// 这是**单向**能力：图形编辑器只提供 mermaid → 图形这一个方向，没有反向导出，
-    /// 因此界面必须把"不可逆"写在明面上（见 <c>MenuConvertToDrawio</c> 文案）。
+    /// 这是**单向**能力：图形编辑器只提供 mermaid → 图形这一个方向，没有反向导出。
+    /// 该语义不写进菜单文案，改由转换完成后的状态栏提示说明（见 <c>ConvertToGraphDone</c>）。
     /// </remarks>
     bool SupportsGraphImport { get; }
 

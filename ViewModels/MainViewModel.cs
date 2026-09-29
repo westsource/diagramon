@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.ComponentModel;
 using System.Collections.ObjectModel;
 using System.IO;
 using System.Linq;
@@ -206,45 +207,10 @@ public partial class MainViewModel : ViewModelBase
 
     private void OnLanguageChanged()
     {
-        OnPropertyChanged(nameof(CurrentLanguageCode));
-        OnPropertyChanged(nameof(WindowTitle));
-        OnPropertyChanged(nameof(ZoomText));
-        OnPropertyChanged(nameof(MenuFile));
-        OnPropertyChanged(nameof(MenuNew));
-        OnPropertyChanged(nameof(MenuOpen));
-        OnPropertyChanged(nameof(MenuRecentFiles));
-        OnPropertyChanged(nameof(MenuSave));
-        OnPropertyChanged(nameof(MenuSaveAs));
-        OnPropertyChanged(nameof(MenuCloseTab));
-        OnPropertyChanged(nameof(MenuAISettings));
-        OnPropertyChanged(nameof(MenuImageScaleSettings));
-        OnPropertyChanged(nameof(MenuExit));
-        OnPropertyChanged(nameof(MenuEdit));
-        OnPropertyChanged(nameof(MenuUndo));
-        OnPropertyChanged(nameof(MenuRedo));
-        OnPropertyChanged(nameof(MenuCut));
-        OnPropertyChanged(nameof(MenuCopy));
-        OnPropertyChanged(nameof(MenuPaste));
-        OnPropertyChanged(nameof(MenuSelectAll));
-        OnPropertyChanged(nameof(MenuHelp));
-        OnPropertyChanged(nameof(MenuMermaidDocs));
-        OnPropertyChanged(nameof(MenuCheckUpdate));
-        OnPropertyChanged(nameof(MenuAbout));
-        OnPropertyChanged(nameof(MenuSettings));
-        OnPropertyChanged(nameof(SavePreviewImage));
-        OnPropertyChanged(nameof(CopyPreviewImage));
-        OnPropertyChanged(nameof(NewTabTooltip));
-        OnPropertyChanged(nameof(LanguageMenu));
-        OnPropertyChanged(nameof(MenuAccount));
-        OnPropertyChanged(nameof(MenuSignIn));
-        OnPropertyChanged(nameof(MenuSignOut));
-        OnPropertyChanged(nameof(AccountDisplayName));
-        OnPropertyChanged(nameof(CloudSaveToCloud));
-        OnPropertyChanged(nameof(CloudDocuments));
-        OnPropertyChanged(nameof(AvailableLanguages));
-        OnPropertyChanged(nameof(NewTabChoices));
-        OnPropertyChanged(nameof(LayoutLabel));
-        OnPropertyChanged(nameof(CurrentLayoutChoices));
+        // 整表失效（空字符串是 INotifyPropertyChanged 约定的"所有属性都变了"）。
+        // 这里原来是手写枚举的 39 个属性名，实际漏了 MenuConvertToDrawio/MenuConvertToExcalidraw ——
+        // 被漏掉的属性切语言后会一直停在旧语言，而"漏没漏"没人能一眼看出来。改成整表失效后不可能再漏。
+        OnPropertyChanged(string.Empty);
 
         AiAssistant?.RefreshLocalization();
     }
@@ -629,10 +595,22 @@ public partial class MainViewModel : ViewModelBase
 
     private void InitializeAIPanelViewModel()
     {
-        AiAssistant = new AIPanelViewModel(_settingsService, _conversationService);
+        AiAssistant = new AIPanelViewModel(
+            _settingsService, _conversationService, _authService, _storageProvider, _formats);
         AiAssistant.GetCurrentCode = () => CurrentTab?.Content;
         AiAssistant.CodeGenerated += OnAICodeGenerated;
+        AiAssistant.ApplyAsDrawioRequested += OnAIApplyAsDrawioRequested;
+        AiAssistant.ConfirmVisionUpload = ConfirmVisionUploadAsync;
+        AiAssistant.ProbeRenderError = ProbeRenderErrorAsync;
         AiAssistant.OpenSettingsRequested += OnOpenAISettingsRequested;
+
+        // 菜单里的账号标题**跟着会话走**，而不是只跟着两个按钮走。
+        //
+        // 曾经只在「登录对话框关闭」和「登出」两处手动通知 `AccountDisplayName` ——
+        // 于是**启动时的静默恢复会话**（有 refresh token，不经对话框）不会刷新它，
+        // 标题就一直停在启动那一刻算出来的值（未登录 → 空名 → 菜单里只剩"已登录："）。
+        // 实测就是这么被发现的：会话明明是好的（`Session.DisplayName = "Admin"`），界面却不显示。
+        _authService.Session.PropertyChanged += OnSessionChanged;
 
         // AI 面板的展开状态由它自己持有，这里只跟着刷新"面板/折叠条谁可见"
         AiAssistant.PropertyChanged += (_, e) =>
@@ -666,11 +644,85 @@ public partial class MainViewModel : ViewModelBase
     }
 
     /// <summary>
+    /// 把一段代码渲染进预览页并取回报错原文（V2-8）。
+    /// </summary>
+    /// <remarks>
+    /// 返回 <c>null</c> = 没报错，或**无法判定**（页面没起来、格式不对、超时）——
+    /// 后几种不是模型的错，不该触发"自动修正"（那会白花一次调用）。
+    /// </remarks>
+    private async Task<string?> ProbeRenderErrorAsync(string code)
+    {
+        var tab = CurrentTab;
+        var format = CurrentFormat;
+
+        if (tab == null || _ownerWindow is not MainWindow window || !format.SupportsAiAssistant)
+        {
+            return null;
+        }
+
+        var script = format.Renderer.BuildUpdateScript(
+            code, new RenderOptions(Layout: SelectedLayoutId(format)));
+
+        return await window.RenderPreviewAndGetErrorAsync(script, format.Id);
+    }
+
+    /// <summary>
+    /// 首次选图前的告知（D25）：弹一次，用户勾"不再提示"后写进 settings。
+    /// </summary>
+    /// <remarks>
+    /// 已告知过就直接放行 —— 每次选图都弹会让这个功能没法用。
+    /// 取消时**不**写 settings：用户只是这一次不想传，不代表以后都别问。
+    /// </remarks>
+    private async Task<bool> ConfirmVisionUploadAsync()
+    {
+        if (_settingsService.Settings.AiVisionNoticeAccepted)
+        {
+            return true;
+        }
+
+        var viewModel = new AiVisionNoticeViewModel();
+        await new AiVisionNoticeDialog(viewModel).ShowDialog(_ownerWindow);
+
+        if (!viewModel.Confirmed)
+        {
+            return false;
+        }
+
+        if (viewModel.DoNotAskAgain)
+        {
+            _settingsService.Settings.AiVisionNoticeAccepted = true;
+            _settingsService.Save();
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// 「应用为 drawio」：先按普通通路落到当前标签页，再复用现有 mermaid → drawio 转换。
+    /// </summary>
+    /// <remarks>
+    /// <b>不新增转换代码</b>（方案 §6.6 第 6 步）：<c>ConvertMermaidTo</c> 读的就是"当前标签页的内容"，
+    /// 所以顺序不能反 —— 必须先写进标签页再转换。格式不匹配时 <see cref="OnAICodeGenerated"/>
+    /// 会提前返回并给出提示，此时**不要**继续转换（否则会把上一版内容转成一个新标签页，误导用户）。
+    /// </remarks>
+    private void OnAIApplyAsDrawioRequested(object? sender, AICodeApplyRequest request)
+    {
+        OnAICodeGenerated(sender, request);
+
+        if (CurrentTab?.Content != request.Code)
+        {
+            return;
+        }
+
+        ConvertMermaidTo(DrawioFormat.FormatId);
+    }
+
+    /// <summary>
     /// 把当前 Mermaid 图转成一个新的 drawio 标签页（方案 Phase 4）。
     /// </summary>
     /// <remarks>
     /// **单向**：drawio 只提供 mermaid → 图形这一个方向，画布上的改动不会回写 Mermaid 源码，
-    /// 因此原标签页保持打开、转换结果另开新标签页，界面文案也明说"不可逆"。
+    /// 因此原标签页保持打开、转换结果另开新标签页；单向语义由状态栏提示说明，不写进菜单文案。
     /// 真正的载入动作由承载层在显示新标签页时执行（<see cref="TryTakeMermaidImport"/>）。
     /// </remarks>
     [RelayCommand]
@@ -703,7 +755,7 @@ public partial class MainViewModel : ViewModelBase
         Tabs.Add(tab);
         SelectTab(Tabs.Count - 1, forceNotify: true);
 
-        StatusMessage = S.ConvertToDrawioDone;
+        StatusMessage = string.Format(S.ConvertToGraphDone, FormatDisplayName(target.DisplayNameKey));
     }
 
     /// <summary>承载层在显示图形编辑器标签页时取走一次性的 Mermaid 导入请求。</summary>
@@ -731,7 +783,7 @@ public partial class MainViewModel : ViewModelBase
         var dialog = new AISettingsDialog(new AISettingsViewModel(_settingsService, _storageProvider, () =>
         {
             AiAssistant?.RefreshConfiguration();
-        }));
+        }, _authService));
         _ = dialog.ShowDialog(_ownerWindow);
     }
 
@@ -1677,20 +1729,61 @@ public partial class MainViewModel : ViewModelBase
         }
     }
 
+    /// <summary>
+    /// 会话字段一变就刷新受它影响的界面状态。
+    /// </summary>
+    /// <remarks>
+    /// 只跟 <c>User</c> 与 <c>Membership</c>：前者是账号标题的数据源
+    /// （显示名 → 邮箱 → 手机号 的兜底链），后者是"会员/额度"那类展示的数据源。
+    /// **不要在这里顺手刷新一切** —— 每次 401 静默刷新都会走一遍，多刷的是白工。
+    /// </remarks>
+    private void OnSessionChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName is not (nameof(AuthSession.User) or nameof(AuthSession.Membership)))
+        {
+            return;
+        }
+
+        OnPropertyChanged(nameof(AccountDisplayName));
+
+        // **登录成功**时（含启动的静默恢复）补云条目 + 拉本档别名。
+        //
+        // 两条路都必须走：点对话框登录、以及启动时用 refresh token 的静默恢复 ——
+        // 后者以前只刷新标题（连别名列表都不拉），于是**重启后 AI 面板里看不到云端模型**，
+        // 得再点一次登录才会出现。放在这里就一处覆盖两条路。
+        if (e.PropertyName == nameof(AuthSession.User) && _authService.Session.IsSignedIn)
+        {
+            EnsureCloudProvider();
+            _ = AiAssistant?.RefreshCloudModelsAsync();
+        }
+    }
+
+    /// <summary>
+    /// 登录后补云条目：默认模型名按服务端能力选（认 `auto` 就发 `auto`，否则退回默认档名）。
+    /// </summary>
+    private void EnsureCloudProvider()
+    {
+        _settingsService.EnsureCloudProvider(
+            _authService.SupportsAutoAlias ? "auto" : "mermaid-default",
+            S.AICloudProviderName);
+    }
+
     /// <summary>用户主动打开登录框。启动路径不调用它。</summary>
     [RelayCommand]
     private async Task ShowLogin()
     {
         var dialog = new LoginDialog(_authService);
         await dialog.ShowDialog(_ownerWindow);
-        OnPropertyChanged(nameof(AccountDisplayName));
+
+        // 登录后的收尾（补云条目、拉本档别名）由 `OnSessionChanged` 统一做 ——
+        // 那条路同时覆盖"启动时静默恢复会话"，这里再写一遍就会漏掉后者。
     }
 
     [RelayCommand]
     private async Task SignOut()
     {
+        // 通知由 `OnSessionChanged` 统一发（`Clear()` 把 User 置空 → 标题回到未登录态）
         await _authService.LogoutAsync();
-        OnPropertyChanged(nameof(AccountDisplayName));
     }
 
     /// <summary>

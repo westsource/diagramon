@@ -554,10 +554,22 @@ function Test-ExcalidrawAssets {
 }
 
 function Get-LicensePairs {
-    # 把「包名 -> 许可证标识」统一成有序表：构建路径传进来的是 hashtable，
-    # 清单回读路径传进来的是 ConvertFrom-Json 出来的 PSCustomObject，两者都走 .PSObject.Properties。
+    # 把「包名 -> 许可证标识」统一成有序表。
+    # 输入有两种形状，必须分开处理：
+    #   - 构建路径传进来的是 Hashtable / [ordered]@{}；
+    #   - 清单回读路径传进来的是 ConvertFrom-Json 出来的 PSCustomObject。
+    # **不能**对字典也走 .PSObject.Properties：字典的适配属性是 Count/Keys/Values/…，
+    # 遍历它会得到一堆伪包名（而且 "Keys" 这个键又会反过来遮蔽 .Keys 成员），
+    # 结果写出的 licenses 是一个键名被拼成一长串、值为空的假条目 —— 自检必然失败。
     param($LicenseIds)
     $Pairs = [ordered]@{}
+    if ($LicenseIds -is [System.Collections.IDictionary]) {
+        foreach ($Key in @($LicenseIds.Keys)) {
+            $Value = $LicenseIds[$Key]
+            $Pairs[[string]$Key] = [string]$Value
+        }
+        return $Pairs
+    }
     foreach ($Property in $LicenseIds.PSObject.Properties) {
         $Pairs[$Property.Name] = [string]$Property.Value
     }

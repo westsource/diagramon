@@ -1,4 +1,5 @@
 using System;
+using Diagramon.Services.Documents;
 using System.Collections.Generic;
 using System.Net.Http;
 using System.Text;
@@ -24,7 +25,7 @@ public class CustomAIService : IAIService
         _httpClient = new HttpClient { Timeout = TimeSpan.FromMinutes(5) };
     }
 
-    public async Task<AIMessage> GenerateAsync(string prompt, string? currentCode, List<AIMessage> history, string formatId)
+    public async Task<AIMessage> GenerateAsync(string prompt, string? currentCode, List<AIMessage> history, IDocumentFormat format, string? retryOf = null)
     {
         if (!IsConfigured)
         {
@@ -38,7 +39,7 @@ public class CustomAIService : IAIService
         }
 
         var baseUrl = _config.BaseUrl!.TrimEnd('/');
-        var messages = BuildMessages(prompt, currentCode, history, formatId);
+        var messages = AiMessages.Build(prompt, currentCode, history, format);
 
         var requestBody = new
         {
@@ -80,7 +81,7 @@ public class CustomAIService : IAIService
             });
 
             var generatedContent = result?.Choices?[0]?.Message?.Content?.Trim() ?? string.Empty;
-            var diagramCode = AiPromptCatalog.ExtractCode(generatedContent, formatId);
+            var diagramCode = AiPromptCatalog.ExtractCode(generatedContent, format.Ai);
 
             return new AIMessage
             {
@@ -88,6 +89,7 @@ public class CustomAIService : IAIService
                 Content = generatedContent,
                 GeneratedCode = diagramCode,
                 CodeBeforeGeneration = currentCode,
+                FinishReason = result?.Choices?[0]?.FinishReason,
                 IsLoading = false
             };
         }
@@ -123,30 +125,6 @@ public class CustomAIService : IAIService
         }
     }
 
-    private List<object> BuildMessages(string prompt, string? currentCode, List<AIMessage> history, string formatId)
-    {
-        var messages = new List<object>();
-
-        var systemPrompt = AiPromptCatalog.SystemPromptFor(formatId, currentCode);
-        messages.Add(new { role = "system", content = systemPrompt });
-
-        foreach (var msg in history)
-        {
-            if (msg.Role == MessageRole.User)
-            {
-                messages.Add(new { role = "user", content = msg.Content });
-            }
-            else if (msg.Role == MessageRole.Assistant && !string.IsNullOrWhiteSpace(msg.GeneratedCode))
-            {
-                messages.Add(new { role = "assistant", content = $"这是生成的 Mermaid 代码：\n```\n{msg.GeneratedCode}\n```" });
-            }
-        }
-
-        messages.Add(new { role = "user", content = prompt });
-
-        return messages;
-    }
-
     private string? ExtractErrorMessage(string responseContent)
     {
         try
@@ -173,6 +151,10 @@ public class CustomAIService : IAIService
     {
         [JsonPropertyName("message")]
         public OpenAIMessage? Message { get; set; }
+
+        /// <summary>`stop` / `length` / … —— `length` 表示被截断（必须让用户看见，见 AIMessage.IsTruncated）。</summary>
+        [JsonPropertyName("finish_reason")]
+        public string? FinishReason { get; set; }
     }
 
     private class OpenAIMessage

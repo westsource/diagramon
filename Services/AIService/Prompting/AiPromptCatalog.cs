@@ -1,81 +1,61 @@
 using System.Text.RegularExpressions;
 
+using Diagramon.Services.Documents;
+
 namespace Diagramon.Services.AIService.Prompting;
 
 /// <summary>
-/// 各图表格式的 AI 提示词与代码提取逻辑的统一入口，未知格式一律按 Mermaid 处理。
+/// 把「格式提供的提示词素材」拼成实际发给模型的文本，并从回复里抽出代码。
 /// </summary>
+/// <remarks>
+/// <para>
+/// 这里**只放跨格式共享的拼接规则**（"当前代码"怎么附加、"与图片冲突时以图片为准"这句放哪、
+/// 无代码块时怎么兜底）。各格式的提示词原文在 <see cref="IDocumentFormat.Ai"/> 里 ——
+/// 提示词属于格式，拼接属于共享逻辑。改造前这两件事混在一个按 id 分支的中心目录里
+/// （§9 陷阱 6：每加一个格式都要回去改它，漏一次就静默按 Mermaid 处理）。
+/// </para>
+/// </remarks>
 public static class AiPromptCatalog
 {
-    /// <summary>Graphviz DOT 格式标识。</summary>
-    private const string DotFormatId = "dot";
-
-    /// <summary>Mermaid 格式的系统提示词。</summary>
-    /// <remarks>该文案与旧版各 Provider 内的实现逐字符一致（含源码换行符），请勿调整换行。</remarks>
-    private const string MermaidSystemPrompt = @"你是一个专业的 Mermaid 图表代码生成助手。你的任务是根据用户的自然语言描述生成或修改 Mermaid 代码。
-
-规则：
-1. 只返回 Mermaid 代码，不要包含其他解释文字
-2. 代码必须符合 Mermaid 语法规范
-3. 如果用户要求修改现有代码，请基于现有代码进行修改
-4. 如果用户描述不清晰，生成一个合理的默认图表
-5. 支持的图表类型：流程图、时序图、类图、状态图、甘特图、饼图、ER图等
-
-返回格式：直接返回 Mermaid 代码，不要使用代码块标记。";
-
-    /// <summary>Graphviz DOT 格式的系统提示词。</summary>
-    private const string DotSystemPrompt =
-        "你是一个专业的 Graphviz DOT 图表代码生成助手。你的任务是根据用户的自然语言描述生成或修改 Graphviz DOT 代码。\n\n" +
-        "规则：\n" +
-        "1. 只返回 DOT 代码，不要包含其他解释文字\n" +
-        "2. 代码必须符合 Graphviz DOT 语法规范，顶层必须是 digraph 或 graph\n" +
-        "3. 如果用户要求修改现有代码，请基于现有代码进行修改\n" +
-        "4. 如果用户描述不清晰，生成一个合理的默认图\n" +
-        "5. 布局引擎通过代码里的 rankdir/splines 等属性表达即可，不要输出布局引擎名字\n\n" +
-        "返回格式：直接返回 DOT 代码，不要使用代码块标记。";
+    /// <summary>文字生成的 system prompt；当前文档非空时追加，被截断时**声明**。</summary>
+    public static string BuildSystemPrompt(AiPromptSet ai, AiInputBudget.Document document) =>
+        string.IsNullOrEmpty(document.Text)
+            ? ai.SystemPrompt
+            : $"{ai.SystemPrompt}\n\n{ai.CurrentCodeHeader}{TruncationNote(document)}\n{document.Text}";
 
     /// <summary>
-    /// 获取指定格式的系统提示词；<paramref name="currentCode"/> 非空时追加当前代码。
+    /// 识图的 system prompt；当前文档非空时追加。
     /// </summary>
-    public static string SystemPromptFor(string formatId, string? currentCode)
-    {
-        if (formatId == DotFormatId)
-        {
-            var dotPrompt = DotSystemPrompt;
-
-            if (!string.IsNullOrWhiteSpace(currentCode))
-            {
-                dotPrompt += $"\n\n当前 DOT 代码：\n{currentCode}";
-            }
-
-            return dotPrompt;
-        }
-
-        var prompt = MermaidSystemPrompt;
-
-        if (!string.IsNullOrWhiteSpace(currentCode))
-        {
-            prompt += $"\n\n当前 Mermaid 代码：\n{currentCode}";
-        }
-
-        return prompt;
-    }
+    /// <remarks>
+    /// 追加的那句必须写明<b>以图片为准</b>：否则模型会在旧代码上叠加，产出"两版内容的混合体"。
+    /// </remarks>
+    public static string BuildVisionPrompt(AiPromptSet ai, AiInputBudget.Document document) =>
+        string.IsNullOrEmpty(document.Text)
+            ? ai.VisionPrompt
+            : $"{ai.VisionPrompt}\n\n当前已有代码（供参考结构；**与图片冲突时以图片为准**）{TruncationNote(document)}：\n{document.Text}";
 
     /// <summary>
-    /// 从模型回复中提取指定格式的代码；内容为空时返回 null，没有代码块时返回去除首尾空白的原文。
+    /// 截断必须**声明**：不声明的话模型以为看到的是全文，会"接着往下写"或断言文档里没有的东西。
     /// </summary>
-    public static string? ExtractCode(string response, string formatId)
+    private static string TruncationNote(AiInputBudget.Document document) =>
+        document.Truncated
+            ? $"（**文档过长已截断：以下只是前 {document.Text.Split('\n').Length} 行，共 {document.TotalLines} 行**）"
+            : string.Empty;
+
+    /// <summary>
+    /// 从模型回复中提取本格式的代码；内容为空时返回 null，没有代码块时返回去除首尾空白的原文。
+    /// </summary>
+    public static string? ExtractCode(string response, AiPromptSet ai)
     {
         if (string.IsNullOrWhiteSpace(response))
-            return null;
-
-        var codeBlockMatch = Regex.Match(response, formatId == DotFormatId
-            ? @"```\s*(?:dot|graphviz)?\s*([\s\S]*?)```"
-            : @"```\s*(?:mermaid)?\s*([\s\S]*?)```");
-
-        if (codeBlockMatch.Success)
         {
-            return codeBlockMatch.Groups[1].Value.Trim();
+            return null;
+        }
+
+        if (!string.IsNullOrEmpty(ai.CodeFencePattern)
+            && Regex.Match(response, ai.CodeFencePattern) is { Success: true } match)
+        {
+            return match.Groups[1].Value.Trim();
         }
 
         // 无代码块：整段当代码（改造前就是这个行为，只是当时分成"命中起始关键字"与"未命中"两条

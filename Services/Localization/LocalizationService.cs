@@ -219,8 +219,8 @@ public sealed class LocalizationService
         _fallbackStrings["FormatDrawio"] = "drawio";
         _fallbackStrings["UntitledDrawioFileName"] = "Untitled.drawio";
         _fallbackStrings["DrawioRendererMissing"] = "drawio renderer assets are missing (tools\\drawio). Run tools\\fetch-drawio.ps1 first, or reinstall the app.";
-        _fallbackStrings["MenuConvertToDrawio"] = "_Convert to drawio diagram (one-way)...";
-        _fallbackStrings["ConvertToDrawioDone"] = "Converted the current Mermaid diagram into a new drawio tab. The conversion is one-way: canvas edits never write back to the Mermaid source";
+        _fallbackStrings["MenuConvertToDrawio"] = "_Convert to drawio diagram...";
+        _fallbackStrings["ConvertToGraphDone"] = "Converted the current Mermaid diagram into a new {0} tab. The conversion is one-way: canvas edits never write back to the Mermaid source";
         _fallbackStrings["UntitledMermaidFileName"] = "Untitled.mmd";
         _fallbackStrings["UntitledDotFileName"] = "Untitled.dot";
         _fallbackStrings["FileTypeFormatLabel"] = "{0} files";
@@ -260,9 +260,7 @@ _fallbackStrings["MenuMermaidDocs"] = "_Mermaid Documentation...";
         _fallbackStrings["AuthEmail"] = "Email";
         _fallbackStrings["AuthPassword"] = "Password";
         _fallbackStrings["AuthSignIn"] = "Sign in";
-        _fallbackStrings["AuthRegister"] = "Register";
-        _fallbackStrings["AuthSwitchToRegister"] = "No account? Register";
-        _fallbackStrings["AuthSwitchToSignIn"] = "Have an account? Sign in";
+        _fallbackStrings["AuthRegisterOnWeb"] = "No account? Register on the web";
         _fallbackStrings["AuthClose"] = "Close";
         _fallbackStrings["AuthWorking"] = "Working...";
         _fallbackStrings["AuthSignedInFormat"] = "Signed in as {0}";
@@ -275,10 +273,6 @@ _fallbackStrings["MenuMermaidDocs"] = "_Mermaid Documentation...";
         _fallbackStrings["AuthErrorNetwork"] = "Cannot reach the cloud service";
         _fallbackStrings["AuthErrorGeneric"] = "Operation failed, please try again";
         _fallbackStrings["AuthErrorEmailNotVerified"] = "Account not activated yet - please check your inbox";
-        _fallbackStrings["AuthPendingTitle"] = "Verify your email";
-        _fallbackStrings["AuthPendingBodyFormat"] =
-            "We sent an activation link to {0}. Unverified accounts cannot sign in; the desktop app is unaffected and works fully without signing in.";
-        _fallbackStrings["AuthPendingTtlFormat"] = "The link is valid for {0} minutes.";
         _fallbackStrings["AuthResend"] = "Resend activation email";
         _fallbackStrings["AuthResent"] = "Sent. Any earlier link is now invalid - use the newest email.";
 

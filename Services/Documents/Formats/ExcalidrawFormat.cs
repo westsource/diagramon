@@ -40,6 +40,9 @@ public sealed class ExcalidrawFormat : IDocumentFormat
     /// <summary>与 drawio 同理：图形画布不是文本 DSL，AI 直接产场景 JSON 既不可靠也不可读。</summary>
     public bool SupportsAiAssistant => false;
 
+    /// <summary>无 AI 能力：图形编辑器不产源码，AI 生成的文本无处可落（<c>AiPromptSet.None</c>）。</summary>
+    public AiPromptSet Ai => AiPromptSet.None;
+
     public IDocumentRenderer Renderer => NoPreviewRenderer.Instance;
 
     /// <summary>Excalidraw 没有布局引擎概念。</summary>

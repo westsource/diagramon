@@ -1,4 +1,5 @@
 using System;
+using Diagramon.Services.Documents;
 using System.Collections.Generic;
 using System.Net.Http;
 using System.Text;
@@ -26,7 +27,7 @@ public class AzureOpenAIService : IAIService
         _httpClient = new HttpClient();
     }
 
-    public async Task<AIMessage> GenerateAsync(string prompt, string? currentCode, List<AIMessage> history, string formatId)
+    public async Task<AIMessage> GenerateAsync(string prompt, string? currentCode, List<AIMessage> history, IDocumentFormat format, string? retryOf = null)
     {
         if (!IsConfigured)
         {
@@ -41,7 +42,7 @@ public class AzureOpenAIService : IAIService
 
         var endpoint = _config.Endpoint!.TrimEnd('/');
         var url = $"{endpoint}/openai/deployments/{_config.DeploymentName}/chat/completions?api-version=2024-02-15-preview";
-        var messages = BuildMessages(prompt, currentCode, history, formatId);
+        var messages = AiMessages.Build(prompt, currentCode, history, format);
 
         var requestBody = new
         {
@@ -77,7 +78,7 @@ public class AzureOpenAIService : IAIService
             });
 
             var generatedContent = result?.Choices?[0]?.Message?.Content?.Trim() ?? string.Empty;
-            var diagramCode = AiPromptCatalog.ExtractCode(generatedContent, formatId);
+            var diagramCode = AiPromptCatalog.ExtractCode(generatedContent, format.Ai);
 
             return new AIMessage
             {
@@ -85,6 +86,7 @@ public class AzureOpenAIService : IAIService
                 Content = generatedContent,
                 GeneratedCode = diagramCode,
                 CodeBeforeGeneration = currentCode,
+                FinishReason = result?.Choices?[0]?.FinishReason,
                 IsLoading = false
             };
         }
@@ -98,30 +100,6 @@ public class AzureOpenAIService : IAIService
                 IsLoading = false
             };
         }
-    }
-
-    private List<object> BuildMessages(string prompt, string? currentCode, List<AIMessage> history, string formatId)
-    {
-        var messages = new List<object>();
-
-        var systemPrompt = AiPromptCatalog.SystemPromptFor(formatId, currentCode);
-        messages.Add(new { role = "system", content = systemPrompt });
-
-        foreach (var msg in history)
-        {
-            if (msg.Role == MessageRole.User)
-            {
-                messages.Add(new { role = "user", content = msg.Content });
-            }
-            else if (msg.Role == MessageRole.Assistant && !string.IsNullOrWhiteSpace(msg.GeneratedCode))
-            {
-                messages.Add(new { role = "assistant", content = $"这是生成的 Mermaid 代码：\n```\n{msg.GeneratedCode}\n```" });
-            }
-        }
-
-        messages.Add(new { role = "user", content = prompt });
-
-        return messages;
     }
 
     private string? ExtractErrorMessage(string responseContent)
@@ -150,6 +128,10 @@ public class AzureOpenAIService : IAIService
     {
         [JsonPropertyName("message")]
         public AzureOpenAIMessage? Message { get; set; }
+
+        /// <summary>`stop` / `length` / … —— `length` 表示被截断。</summary>
+        [JsonPropertyName("finish_reason")]
+        public string? FinishReason { get; set; }
     }
 
     private class AzureOpenAIMessage
