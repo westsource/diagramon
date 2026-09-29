@@ -8,9 +8,9 @@
     <ApplicationIcon>Assets\diagramon32.ico</ApplicationIcon>
     <AvaloniaUseCompiledBindingsByDefault>true</AvaloniaUseCompiledBindingsByDefault>
     <!-- <PublishTrimmed>true</PublishTrimmed> -->
-    <Version>2.0.260909.0</Version>
+    <Version>2.0.260929.0</Version>
     <AssemblyVersion>2.0.0.0</AssemblyVersion>
-    <FileVersion>2.0.260.909</FileVersion>
+    <FileVersion>2.0.260.929</FileVersion>
   </PropertyGroup>
 
   <ItemGroup>
