@@ -1,5 +1,7 @@
 # Diagramon - Multi-format Diagram Editor
 
+[中文文档](README.zh-CN.md)
+
 A **local-first** multi-format diagram editor built with C# Avalonia. Supports **Mermaid** (`.mmd` / `.mermaid`), **Graphviz DOT** (`.dot` / `.gv`), **drawio** (`.drawio`) and **Excalidraw** (`.excalidraw`) — all four can be edited and previewed live. Features code editing with syntax highlighting, real-time preview (pan/zoom/fit-to-viewport), syntax validation, high-resolution PNG export and clipboard copy, plus an AI assistant that works either with your own API key (BYOK) or through the membership cloud gateway (including **image recognition**: pick a screenshot → diagram code).
 
 **Rendering and syntax checking happen entirely on this machine** (Node and Chrome headless ship inside the package; no external requests). Only when you **actively use AI** are the relevant code/image sent to the model service: BYOK talks straight to your own upstream, membership goes through the Diagramon cloud gateway.

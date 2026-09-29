@@ -1,5 +1,7 @@
 # Diagramon - 多格式图表编辑器
 
+[English](README.md)
+
 一个基于 C# Avalonia 构建的**本地优先**多格式图表编辑器。支持 **Mermaid**（`.mmd` / `.mermaid`）、**Graphviz DOT**（`.dot` / `.gv`）、**drawio**（`.drawio`）与 **Excalidraw**（`.excalidraw`），四种格式都可编辑并实时预览。具备代码编辑与语法高亮、实时预览（拖拽平移/滚轮缩放/双击适应）、语法检测、高清 PNG 导出与剪贴板复制；集成 AI 助手，既可用自有 API Key 直连（BYOK），也可走会员云网关（含**图片识别**：选图/截图 → 图表代码）。
 
 **图表渲染与语法检查全部在本机完成**（随包内置 Node 与 Chrome headless，无外部请求）。只有你**主动使用 AI** 时，相关代码/图片才会发送到对应的模型服务：BYOK 直连你自己的上游，会员走 Diagramon 云网关。
