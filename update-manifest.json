@@ -1,8 +1,8 @@
 ﻿{
-    "version":  "2.0.261008.2",
-    "releaseNotes":  "feat(view): 统一四处视图的画布手势与缩放命令，修复 drawio 回写被整条丢弃",
-    "zipFileName":  "Diagramon-2.0.261008.2-win-x64.zip",
-    "downloadUrl":  "https://github.com/westsource/diagramon/releases/download/v2.0.261008.2/Diagramon-2.0.261008.2-win-x64.zip",
-    "publishedAt":  "2026-10-08T21:54:18.9774272+08:00",
-    "zipFileSize":  299670593
+    "version":  "2.0.261008.3",
+    "releaseNotes":  "fix(save): 保存/另存为的文件类型跟随当前标签页格式，不再恒为 .mmd\nfeat(help): 帮助菜单增加「操作说明」窗口，正文随包分发（中英双语）",
+    "zipFileName":  "Diagramon-2.0.261008.3-win-x64.zip",
+    "downloadUrl":  "https://github.com/westsource/diagramon/releases/download/v2.0.261008.3/Diagramon-2.0.261008.3-win-x64.zip",
+    "publishedAt":  "2026-10-08T23:09:03.8486270+08:00",
+    "zipFileSize":  299673739
 }
