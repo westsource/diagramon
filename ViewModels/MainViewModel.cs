@@ -1385,7 +1385,7 @@ public partial class MainViewModel : ViewModelBase
 
         if (isNewFile)
         {
-            filePath = await _fileService.SaveFileAsync(tab.Content, tab.Header);
+            filePath = await _fileService.SaveFileAsync(tab.Content, _formats.Get(tab.FormatId), tab.Header);
             if (filePath == null)
             {
                 return false;
@@ -1669,7 +1669,7 @@ public partial class MainViewModel : ViewModelBase
     {
         if (CurrentTab == null) return;
         await FlushCanvasBeforePersistAsync(CurrentTab);
-        var filePath = await _fileService.SaveFileAsync(CurrentTab.Content, CurrentTab.Header);
+        var filePath = await _fileService.SaveFileAsync(CurrentTab.Content, _formats.Get(CurrentTab.FormatId), CurrentTab.Header);
         if (filePath == null) return;
 
         CurrentTab.Location = new LocalDocumentLocation(filePath);

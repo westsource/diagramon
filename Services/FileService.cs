@@ -53,15 +53,29 @@ public class FileService
         return await File.ReadAllTextAsync(filePath);
     }
 
-    public async Task<string?> SaveFileAsync(string content, string? defaultName = null)
+    /// <summary>
+    /// 弹"另存为"对话框并把内容写过去；取消返回 <c>null</c>。
+    /// </summary>
+    /// <remarks>
+    /// 过滤器与缺省扩展名都**跟着当前文档格式走**（<see cref="DocumentFormatRegistry.SuggestSaveFileName"/>）：
+    /// 建议文件名带该格式的规范扩展名，对话框的过滤器也以它为首项，因此用户不写扩展名时得到的是
+    /// 与内容相符的后缀（drawio 标签页不会再被存成 <c>.mmd</c>）。
+    /// </remarks>
+    public async Task<string?> SaveFileAsync(string content, IDocumentFormat format, string? suggestedName = null)
     {
         if (_storageProvider == null) return null;
+
+        var fileName = _formats.SuggestSaveFileName(format, suggestedName);
+        var defaultExtension = _formats.CanonicalExtension(format).TrimStart('.');
 
         var file = await _storageProvider.SaveFilePickerAsync(new FilePickerSaveOptions
         {
             Title = S.SaveFileDialogTitle,
-            SuggestedFileName = defaultName ?? S.UntitledMermaidFileName,
-            FileTypeChoices = _formats.BuildSavePickerTypes()
+            SuggestedFileName = fileName,
+            // Win32 的 lpstrDefExt 要的是不带点的扩展名；即便某个后端忽略它，
+            // 建议文件名本身已经带了正确后缀，结果依然一致。
+            DefaultExtension = defaultExtension,
+            FileTypeChoices = _formats.BuildSavePickerTypes(format)
         });
 
         if (file == null) return null;

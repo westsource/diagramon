@@ -126,13 +126,75 @@ public sealed class DocumentFormatRegistry
         return types;
     }
 
-    /// <summary>保存对话框的文件类型：每个格式一项，默认扩展名是该格式的第一扩展名。</summary>
-    public IReadOnlyList<FilePickerFileType> BuildSavePickerTypes()
+    /// <summary>
+    /// 该格式的**规范扩展名**（默认文件名带的那个，如 <c>.mmd</c> / <c>.drawio</c>）。
+    /// </summary>
+    /// <remarks>保存对话框的建议文件名、缺省扩展名与过滤器顺序都以它为准 —— 只此一处定义。</remarks>
+    public string CanonicalExtension(IDocumentFormat format) => Path.GetExtension(S.Get(format.DefaultFileNameKey));
+
+    /// <summary>
+    /// 保存对话框的文件类型：**当前标签页的格式排在最前**，其后是"所有文件"。
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// 顺序就是缺省值：Win32 / Avalonia 的保存对话框用第一个过滤器推导"用户没写扩展名"时的缺省扩展名。
+    /// 早先这里按注册表顺序返回全部格式（Mermaid 恒在第一），于是 drawio / DOT / Excalidraw 标签页
+    /// 另存为时都会存成 <c>.mmd</c> —— 文件后缀与内容对不上，下次打开会被按错误格式解析。
+    /// </para>
+    /// <para>
+    /// 只列当前格式 + 所有文件，不列别的格式：本应用的保存**不做跨格式转换**，
+    /// 把其它格式摆进来等于诱导用户把 drawio 的 XML 存成 <c>.mmd</c>。
+    /// </para>
+    /// </remarks>
+    public IReadOnlyList<FilePickerFileType> BuildSavePickerTypes(IDocumentFormat? current)
     {
-        return _formats.Select(BuildFormatPickerType).ToList();
+        if (current == null)
+        {
+            return _formats.Select(BuildFormatPickerType).ToList();
+        }
+
+        return
+        [
+            BuildFormatPickerType(current),
+            new FilePickerFileType(S.Get("FileTypeAllFiles"))
+            {
+                Patterns = ["*.*"]
+            }
+        ];
     }
 
-    private static FilePickerFileType BuildFormatPickerType(IDocumentFormat format)
+    /// <summary>
+    /// 另存为对话框的"建议文件名"：对齐到该格式的**规范扩展名**。
+    /// </summary>
+    /// <remarks>
+    /// 三种情况：没有扩展名就补上规范扩展名；已经是本格式的扩展名（含 <c>.gv</c> 这类等价写法）原样保留；
+    /// 是**别的已支持格式**的扩展名则换成规范扩展名（例如历史上被误存成 <c>foo.mmd</c> 的 drawio 标签页，
+    /// 再另存为时会建议 <c>foo.drawio</c>）。用户自己敲的非注册扩展名（<c>.txt</c> 之类）尊重不动。
+    /// </remarks>
+    public string SuggestSaveFileName(IDocumentFormat format, string? currentName)
+    {
+        var canonicalExtension = CanonicalExtension(format);
+        var name = string.IsNullOrWhiteSpace(currentName) ? S.Get(format.DefaultFileNameKey) : currentName!;
+
+        var currentExtension = Path.GetExtension(name);
+        if (string.IsNullOrEmpty(currentExtension))
+        {
+            return name + canonicalExtension;
+        }
+
+        if (format.Extensions.Contains(currentExtension, StringComparer.OrdinalIgnoreCase))
+        {
+            return name;
+        }
+
+        var belongsToAnotherFormat = _formats.Any(other =>
+            !ReferenceEquals(other, format) &&
+            other.Extensions.Contains(currentExtension, StringComparer.OrdinalIgnoreCase));
+
+        return belongsToAnotherFormat ? Path.ChangeExtension(name, canonicalExtension) : name;
+    }
+
+    private FilePickerFileType BuildFormatPickerType(IDocumentFormat format)
     {
         var name = S.Get(format.DisplayNameKey);
         var displayName = string.IsNullOrWhiteSpace(name) ? format.Id : name;
@@ -140,7 +202,7 @@ public sealed class DocumentFormatRegistry
         // 默认文件名带的是该格式的**规范扩展名**（未命名.mmd / 未命名.dot）；保存对话框用第一个
         // pattern 推导"用户没写扩展名"时的缺省扩展名，所以把它排到最前 —— 否则会出现
         // "输入 foo 保存成 foo.mermaid" 这种与默认文件名不一致的结果。
-        var canonicalExtension = Path.GetExtension(S.Get(format.DefaultFileNameKey));
+        var canonicalExtension = CanonicalExtension(format);
 
         var patterns = format.Extensions
             .OrderByDescending(extension =>
