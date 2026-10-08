@@ -1,8 +1,8 @@
 ﻿{
-    "version":  "2.0.260929.0",
-    "releaseNotes":  "feat(ai): 客户端接入会员 AI（云 provider + 图 → 图）+ 服务端配套\nfeat(client): 多格式文档平台（DOT / drawio / Excalidraw）+ 离线加固\nmerge: 合并 origin/master（2.0.260909.0）—— 保留查找替换/最近历史/图片缩放 与 云端接入、diagramon 改名\nfeat(client): 云端多级路径（树形/表格对话框、改名、reason 码）+ 产品改名 diagramon\nwip: 云端接入（阶段A）+ diagramon 改名（基于 main c6fcfbe）",
-    "zipFileName":  "Diagramon-2.0.260929.0-win-x64.zip",
-    "downloadUrl":  "https://github.com/westsource/diagramon/releases/download/v2.0.260929.0/Diagramon-2.0.260929.0-win-x64.zip",
-    "publishedAt":  "2026-09-29T10:27:12.0599407+08:00",
-    "zipFileSize":  299347830
+    "version":  "2.0.261008.0",
+    "releaseNotes":  "fix(client): 登录页注册入口改链接，并与按钮同排同一中心\nfix(client): 关于窗口高度改为随内容，「确定」不再溢出\nfix(assets): diagramon16.ico 改回单帧 16×16，消除与 diagramon32.ico 的重复\nfeat(icon): 客户端图标改用服务端网站的品牌标记（应用图标 + 主窗口图标同一枚）\ndocs(readme): 顶部加语言互链（GitHub 侧：README.md 英文 ↔ README.zh-CN.md 中文）\nfix(release): 推送段改用真实远端名 + 按平台推不同分支 + 失败不再静默\ndocs: GitHub 侧默认展示英文 README（中文版改为 README.zh-CN.md）\ndocs: 修订 README / 关于对话框 / 发布说明（四处文案与当前功能对齐）",
+    "zipFileName":  "Diagramon-2.0.261008.0-win-x64.zip",
+    "downloadUrl":  "https://github.com/westsource/diagramon/releases/download/v2.0.261008.0/Diagramon-2.0.261008.0-win-x64.zip",
+    "publishedAt":  "2026-10-08T14:31:17.4310741+08:00",
+    "zipFileSize":  299652139
 }
