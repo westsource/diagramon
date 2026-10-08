@@ -16,7 +16,10 @@ public sealed class AboutDialog : Window
     {
         Title = S.AboutTitle;
         Width = 460;
-        Height = 300;
+        // 高度由内容决定，不写死：功能描述是一段会换行的长文（中文 6 行、英文更长），
+        // 且整串文案与功能同步改动——写死高度就会在文字变长时把「确定」挤出窗口底边。
+        // 宽度仍固定（460 与 340 的文字列宽配套），只有高度跟着内容走。
+        SizeToContent = SizeToContent.Height;
         CanResize = false;
         ShowInTaskbar = false;
         WindowStartupLocation = WindowStartupLocation.CenterOwner;
