@@ -22,7 +22,7 @@ namespace Diagramon.Views;
 /// 关闭时无论成功与否都不影响本地功能：调用方用 <see cref="Succeeded"/> 决定是否更新提示。
 /// </para>
 /// <para>
-/// <b>注册不在客户端做</b>：「去注册」按钮直接把用户送去官网注册页（见
+/// <b>注册不在客户端做</b>：「没有账号？去官网注册」**链接**直接把用户送去官网注册页（见
 /// <see cref="OnRegisterOnWebClick"/>）。此前这里有一套"切到注册模式"的内嵌表单，
 /// 与网页端是同一件事的第二份实现 —— 邮箱激活、重发、条款文案都要两处同步，已删除。
 /// </para>
@@ -45,7 +45,7 @@ public sealed class LoginDialog : Window
 
     private readonly TextBlock _errorText;
     private readonly Button _primaryButton;
-    private readonly Button _switchButton;
+    private readonly HyperlinkButton _registerLink;
     private readonly Button _resendButton;
 
     private readonly StackPanel _formPanel;
@@ -68,27 +68,35 @@ public sealed class LoginDialog : Window
         _passwordBox = new TextBox { PasswordChar = '•', Watermark = S.AuthPassword, Margin = new Thickness(0, 0, 0, 12) };
         _errorText = new TextBlock { Foreground = ErrorBrush, TextWrapping = TextWrapping.Wrap, IsVisible = false, Margin = new Thickness(0, 0, 0, 8) };
 
+        // 页脚这一行要能装下四个控件（链接 + 重发 + 登录 + 取消）而对话框只有 440 宽：谁都不设 MinWidth，
+        // 一切按内容自适应 —— 定了最小值就会在"邮箱未激活"那个状态下把某个控件挤出窗口（见行尾注释）。
         _primaryButton = new Button
         {
             Content = S.AuthSignIn,
-            MinWidth = 110,
             IsDefault = true,
             HorizontalContentAlignment = HorizontalAlignment.Center,
         };
         _primaryButton.Click += OnPrimaryClick;
 
-        _switchButton = new Button
+        // 注册是**跳去另一个地方**的导航动作，不是这个对话框自己的动作者：所以是链接而不是
+        // 第三个按钮 —— 否则「去注册」看起来与「登录 / 取消」平级，用户会以为点它会在这里完成注册。
+        // 用 HyperlinkButton 而不是 TextBlock：它仍是 Button（键盘可达、有 IsEnabled、主题自带链接外观）。
+        // 纵向**与按钮同框同一中心**：Stretch 让它撑到按钮行的高度，再去掉主题给链接模板的 1px 边框 ——
+        // 那圈边框会把链接文字整体下压 1px，于是三个控件同框而文字不共线（实测 textCenter 294 vs 295）。
+        _registerLink = new HyperlinkButton
         {
             Content = S.AuthRegisterOnWeb,
-            MinWidth = 150,
-            HorizontalContentAlignment = HorizontalAlignment.Center,
+            Padding = new Thickness(0),
+            BorderThickness = new Thickness(0),
+            VerticalAlignment = VerticalAlignment.Stretch,
+            VerticalContentAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(0, 0, 8, 0),
         };
-        _switchButton.Click += OnRegisterOnWebClick;
+        _registerLink.Click += OnRegisterOnWebClick;
 
         _resendButton = new Button
         {
             Content = S.AuthResend,
-            MinWidth = 150,
             IsVisible = false,
             HorizontalContentAlignment = HorizontalAlignment.Center,
         };
@@ -97,7 +105,6 @@ public sealed class LoginDialog : Window
         var closeButton = new Button
         {
             Content = S.AuthClose,
-            MinWidth = 88,
             IsCancel = true,
             HorizontalContentAlignment = HorizontalAlignment.Center,
         };
@@ -125,6 +132,10 @@ public sealed class LoginDialog : Window
             Children =
             {
                 _formPanel,
+                // 页脚一行的宽度预算：内容宽 400px（440 去掉左右各 20 的 Margin），要同时装下
+                // 「去注册链接 + 重发 + 登录 + 取消」——重发只在邮箱未激活时出现。四个控件都按内容自适应
+                // （谁都没有 MinWidth），实测最挤的那一态占 394px；一旦有人加上最小值，就会把行尾的
+                // 取消挤出窗口（链接 140 / 重发 130 / 登录 46 / 取消 46 + 三个 8px 间距 + 链接 8px 右边距）。
                 new StackPanel
                 {
                     [Grid.RowProperty] = 1,
@@ -132,7 +143,7 @@ public sealed class LoginDialog : Window
                     HorizontalAlignment = HorizontalAlignment.Right,
                     Spacing = 8,
                     Margin = new Thickness(0, 16, 0, 0),
-                    Children = { closeButton, _switchButton, _resendButton, _primaryButton },
+                    Children = { _registerLink, _resendButton, _primaryButton, closeButton },
                 },
             },
         };
@@ -149,7 +160,7 @@ public sealed class LoginDialog : Window
     };
 
     /// <summary>
-    /// 「去注册」→ <b>打开系统浏览器跳到官网注册页</b>。
+    /// 「没有账号？去官网注册」→ <b>打开系统浏览器跳到官网注册页</b>。
     /// </summary>
     /// <remarks>
     /// <para>
@@ -158,7 +169,7 @@ public sealed class LoginDialog : Window
     /// </para>
     /// <para>
     /// 地址**由配置的服务端地址推导**（<see cref="AuthService.ServiceSiteUrl"/> + <c>/register</c>），
-    /// 不硬编码域名 —— 联调、私有部署、自建换服务器时这个按钮自动跟着走。
+    /// 不硬编码域名 —— 联调、私有部署、自建换服务器时这个链接自动跟着走。
     /// </para>
     /// <para>
     /// 打不开浏览器时**把地址显示出来**让用户自己复制：静默失败等于按了没反应。
@@ -259,7 +270,7 @@ public sealed class LoginDialog : Window
     {
         _emailBox.IsEnabled = !busy;
         _passwordBox.IsEnabled = !busy;
-        _switchButton.IsEnabled = !busy;
+        _registerLink.IsEnabled = !busy;
         _resendButton.IsEnabled = !busy;
 
         _primaryButton.Content = busy ? S.AuthWorking : S.AuthSignIn;
