@@ -11,7 +11,6 @@ namespace Diagramon.Services;
 public class AppSettings
 {
     public double EditorPreviewRatio { get; set; } = 0.5;
-    public double PreviewZoom { get; set; } = 1.0;
 
     public const double MinExportScale = 1.5;
     public const double MaxExportScale = 10.0;

@@ -27,7 +27,6 @@ public class Strings
     public string ImageCopied => Get("ImageCopied");
     public string ImageSaved => Get("ImageSaved");
     public string ClipboardNotSupported => Get("ClipboardNotSupported");
-    public string ZoomReset => Get("ZoomReset");
     public string ZoomFormat => Get("ZoomFormat");
     public string ErrorFormat => Get("ErrorFormat");
     public string SyntaxErrorFormat => Get("SyntaxErrorFormat");
@@ -124,8 +123,13 @@ public class Strings
     public string MenuCopy => Get("MenuCopy");
     public string MenuPaste => Get("MenuPaste");
     public string MenuSelectAll => Get("MenuSelectAll");
+    public string MenuView => Get("MenuView");
+    public string MenuViewFit => Get("MenuViewFit");
+    public string MenuViewZoomIn => Get("MenuViewZoomIn");
+    public string MenuViewZoomOut => Get("MenuViewZoomOut");
     public string MenuHelp => Get("MenuHelp");
     public string MenuMermaidDocs => Get("MenuMermaidDocs");
+    public string MenuDotDocs => Get("MenuDotDocs");
     public string MenuAbout => Get("MenuAbout");
     public string MenuSettings => Get("MenuSettings");
 
@@ -304,6 +308,7 @@ public class Strings
     // ---- 承载面 / 预览 / 宿主通道 ----
     public string EmbeddedCanvasNotReadyFormat => Get("EmbeddedCanvasNotReadyFormat");
     public string EmbeddedExportTimeoutFormat => Get("EmbeddedExportTimeoutFormat");
+    public string EmbeddedFlushTimeoutFormat => Get("EmbeddedFlushTimeoutFormat");
     public string EmbeddedHostEntryMissingFormat => Get("EmbeddedHostEntryMissingFormat");
     public string OfflineRequestBlockedFormat => Get("OfflineRequestBlockedFormat");
     public string DrawioHostErrorFallback => Get("DrawioHostErrorFallback");

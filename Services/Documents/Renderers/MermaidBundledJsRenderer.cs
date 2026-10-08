@@ -19,6 +19,7 @@ public sealed class MermaidBundledJsRenderer : IDocumentRenderer
     public IReadOnlyList<RendererAsset> Assets =>
     [
         new RendererAsset("mermaid.min.js", "avares://Diagramon/Assets/mermaid.min.js"),
+        new RendererAsset("preview-viewer.js", "avares://Diagramon/Assets/preview-viewer.js"),
     ];
 
     public string? OriginAssetsDirectory => null;
@@ -71,43 +72,15 @@ public sealed class MermaidBundledJsRenderer : IDocumentRenderer
 </head>
 <body>
   <div id="root"><div id="diagram"></div></div>
+  <script src="./preview-viewer.js"></script>
   <script src="./mermaid.min.js"></script>
   <script>
     const root = document.getElementById('root');
     const target = document.getElementById('diagram');
-    let scale = 1;
-    let offsetX = 0;
-    let offsetY = 0;
-    let dragging = false;
-    let lastX = 0;
-    let lastY = 0;
-    const minScale = 0.2;
-    const maxScale = 30;
-
-    function applyTransform() {
-      target.style.transform = `translate(${offsetX}px, ${offsetY}px) scale(${scale})`;
-      target.style.transformOrigin = 'center center';
-    }
-
-    function fitToViewport() {
-      scale = 1;
-      offsetX = 0;
-      offsetY = 0;
-      applyTransform();
-
-      const rootRect = root.getBoundingClientRect();
-      const diagramRect = target.getBoundingClientRect();
-      if (rootRect.width <= 0 || rootRect.height <= 0 || diagramRect.width <= 0 || diagramRect.height <= 0) {
-        return;
-      }
-
-      const padding = 24;
-      const fitScaleX = Math.max(0.01, (rootRect.width - padding) / diagramRect.width);
-      const fitScaleY = Math.max(0.01, (rootRect.height - padding) / diagramRect.height);
-      const fitScale = Math.min(fitScaleX, fitScaleY);
-      scale = Math.max(minScale, Math.min(maxScale, fitScale));
-      applyTransform();
-    }
+    // 视口手势（滚轮=平移、Ctrl+滚轮=缩放、拖拽=平移、双击=适应）由共享脚本提供，
+    // 与 DOT 页、两个内嵌画布保持同一套手感。
+    const viewport = window.PreviewViewport.attach(root, target);
+    const fitToViewport = () => viewport.fit();
 
     // 渲染报错的**页面级约定**（V2-8，方案 §6.10）：与 window.__export 同一套路 ——
     // 承载层轮询这个变量取值。三态：undefined = 渲染中，null = 成功，字符串 = 报错原文。
@@ -150,54 +123,6 @@ public sealed class MermaidBundledJsRenderer : IDocumentRenderer
         showError(err && err.message ? err.message : err);
       }
     }
-
-    root.addEventListener('pointerdown', (e) => {
-      if (e.button !== 0) return;
-      dragging = true;
-      lastX = e.clientX;
-      lastY = e.clientY;
-      root.style.cursor = 'grabbing';
-      root.setPointerCapture(e.pointerId);
-    });
-
-    root.addEventListener('pointermove', (e) => {
-      if (!dragging) return;
-      const dx = e.clientX - lastX;
-      const dy = e.clientY - lastY;
-      lastX = e.clientX;
-      lastY = e.clientY;
-      offsetX += dx;
-      offsetY += dy;
-      applyTransform();
-    });
-
-    root.addEventListener('pointerup', (e) => {
-      dragging = false;
-      root.style.cursor = 'grab';
-      if (root.hasPointerCapture(e.pointerId)) {
-        root.releasePointerCapture(e.pointerId);
-      }
-    });
-
-    root.addEventListener('wheel', (e) => {
-      e.preventDefault();
-      const oldScale = scale;
-      const zoomStep = e.deltaY < 0 ? 1.1 : 0.9;
-      scale = Math.max(minScale, Math.min(maxScale, scale * zoomStep));
-      if (Math.abs(scale - oldScale) < 1e-6) return;
-
-      const rect = root.getBoundingClientRect();
-      const cx = e.clientX - rect.left - rect.width / 2;
-      const cy = e.clientY - rect.top - rect.height / 2;
-      const ratio = scale / oldScale;
-      offsetX -= cx * (ratio - 1);
-      offsetY -= cy * (ratio - 1);
-      applyTransform();
-    }, { passive: false });
-
-    root.addEventListener('dblclick', () => {
-      fitToViewport();
-    });
 
     renderDiagram({{mermaidCodeJson}});
   </script>

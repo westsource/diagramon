@@ -83,9 +83,6 @@ public partial class MainViewModel : ViewModelBase
     private double _previewZoom = 1.0;
 
     [ObservableProperty]
-    private double _previewFitScale = 1.0;
-
-    [ObservableProperty]
     private double _editorPreviewRatio = 0.5;
 
     [ObservableProperty]
@@ -170,8 +167,13 @@ public partial class MainViewModel : ViewModelBase
     public string MenuCopy => S.MenuCopy;
     public string MenuPaste => S.MenuPaste;
     public string MenuSelectAll => S.MenuSelectAll;
+    public string MenuView => S.MenuView;
+    public string MenuViewFit => S.MenuViewFit;
+    public string MenuViewZoomIn => S.MenuViewZoomIn;
+    public string MenuViewZoomOut => S.MenuViewZoomOut;
     public string MenuHelp => S.MenuHelp;
     public string MenuMermaidDocs => S.MenuMermaidDocs;
+    public string MenuDotDocs => S.MenuDotDocs;
     public string MenuCheckUpdate => S.MenuCheckUpdate;
     public string MenuAbout => S.MenuAbout;
     public string MenuSettings => S.MenuSettings;
@@ -221,9 +223,13 @@ public partial class MainViewModel : ViewModelBase
         CurrentLanguageCode = languageCode;
     }
 
-    private const double MinZoom = 1.0;
-    private const double MaxZoom = 5.0;
-    private const double ZoomStep = 0.1;
+    /// <summary>
+    /// 应用级"放大 / 缩小一档"的倍率。缩放的**范围**不在宿主这里管：
+    /// 四个面各有自己的边界（预览页 20%–3000%、drawio 5%–1600%、Excalidraw 10%–3000%），
+    /// 由各自的实现去夹取 —— 宿主只发"放大一档"这一个相对量。
+    /// </summary>
+    public const double ZoomStepFactor = 1.25;
+
     private const int DebounceMilliseconds = 350;
 
     private Timer? _bgRenderTimer;
@@ -276,9 +282,38 @@ public partial class MainViewModel : ViewModelBase
 
     public bool HasRecentFiles => RecentFiles.Any(r => !r.IsMoreItem);
 
-    public string ZoomText => string.Format(S.ZoomFormat, (int)(PreviewDisplayScale * 100));
+    public string ZoomText => string.Format(S.ZoomFormat, (int)(CurrentZoomFactor * 100));
 
-    public double PreviewDisplayScale => PreviewZoom * PreviewFitScale;
+    /// <summary>
+    /// 状态栏要显示的缩放比例：预览面读页面报回的 <see cref="PreviewZoom"/>，内嵌画布读承载面报回的
+    /// <see cref="EmbeddedZoomFactor"/>。
+    /// </summary>
+    /// <remarks>
+    /// 四处视图（Mermaid / DOT 预览面 + drawio / Excalidraw 画布）都用一个读数：两个画布自带的
+    /// 缩放显示已被隐藏，比例由承载页回报（<c>window.__hostZoom</c> → 宿主 150ms 轮询）。
+    /// </remarks>
+    public double CurrentZoomFactor => IsEmbeddedAppVisible ? EmbeddedZoomFactor : PreviewZoom;
+
+    private double _embeddedZoomFactor = 1.0;
+
+    /// <summary>内嵌画布报出的缩放比例（<c>1</c> = 100%）。</summary>
+    public double EmbeddedZoomFactor
+    {
+        get => _embeddedZoomFactor;
+        set
+        {
+            if (!SetProperty(ref _embeddedZoomFactor, value))
+            {
+                return;
+            }
+
+            OnPropertyChanged(nameof(CurrentZoomFactor));
+            OnPropertyChanged(nameof(ZoomText));
+        }
+    }
+
+    /// <summary>预览浮层是否可用：有文档，且当前承载面能出图（文本预览面或内嵌画布）。</summary>
+    public bool IsPreviewOverlayVisible => CurrentTab != null && (IsPreviewSurfaceVisible || IsEmbeddedAppVisible);
 
     /// <summary>当前标签页的格式（<c>null</c> / 未知 id 时取注册表回退格式）。</summary>
     public IDocumentFormat CurrentFormat => _formats.Get(CurrentTab?.FormatId);
@@ -438,13 +473,7 @@ public partial class MainViewModel : ViewModelBase
 
     partial void OnPreviewZoomChanged(double value)
     {
-        OnPropertyChanged(nameof(PreviewDisplayScale));
-        OnPropertyChanged(nameof(ZoomText));
-    }
-
-    partial void OnPreviewFitScaleChanged(double value)
-    {
-        OnPropertyChanged(nameof(PreviewDisplayScale));
+        OnPropertyChanged(nameof(CurrentZoomFactor));
         OnPropertyChanged(nameof(ZoomText));
     }
 
@@ -455,9 +484,7 @@ public partial class MainViewModel : ViewModelBase
             Tabs[i].IsSelected = (i == value);
         }
 
-        PreviewFitScale = 1.0;
         ResetEditorState();
-        OnPropertyChanged(nameof(PreviewDisplayScale));
         OnPropertyChanged(nameof(ZoomText));
         NotifyCurrentFormatChanged();
 
@@ -481,6 +508,9 @@ public partial class MainViewModel : ViewModelBase
         OnPropertyChanged(nameof(IsEditorSurfaceVisible));
         OnPropertyChanged(nameof(IsPreviewSurfaceVisible));
         OnPropertyChanged(nameof(IsEmbeddedAppVisible));
+        OnPropertyChanged(nameof(CurrentZoomFactor));
+        OnPropertyChanged(nameof(ZoomText));
+        OnPropertyChanged(nameof(IsPreviewOverlayVisible));
         OnPropertyChanged(nameof(IsAiPanelAvailable));
         OnPropertyChanged(nameof(IsAiPanelVisible));
         OnPropertyChanged(nameof(IsAiToggleBarVisible));
@@ -514,7 +544,6 @@ public partial class MainViewModel : ViewModelBase
         _conversationService = new AIConversationService(settingsService.Settings.ConversationStoragePath);
 
         EditorPreviewRatio = settingsService.Settings.EditorPreviewRatio;
-        PreviewZoom = settingsService.Settings.PreviewZoom;
         RecentFiles.CollectionChanged += (_, _) => OnPropertyChanged(nameof(HasRecentFiles));
 
         _settingsService.CleanInvalidRecentFiles();
@@ -812,7 +841,6 @@ public partial class MainViewModel : ViewModelBase
     public void SaveSettings()
     {
         _settingsService.Settings.EditorPreviewRatio = EditorPreviewRatio;
-        _settingsService.Settings.PreviewZoom = PreviewZoom;
         AiAssistant?.SaveSettings();
         _settingsService.Save();
     }
@@ -1326,9 +1354,31 @@ public partial class MainViewModel : ViewModelBase
         }
     }
 
+    /// <summary>
+    /// 落盘前把画布里的最新内容取回正文。
+    /// </summary>
+    /// <remarks>
+    /// 内嵌画布的正文回写是事件驱动的，而 drawio 的 autosave 有 1.5s 去抖：刚画完就按"保存"
+    /// 会漏掉去抖窗口里的编辑。只有**当前**标签页在画布里有视图，别的标签页取不到更新，直接跳过。
+    /// </remarks>
+    private async Task FlushCanvasBeforePersistAsync(TabItem tab)
+    {
+        if (!ReferenceEquals(tab, CurrentTab))
+        {
+            return;
+        }
+
+        if (_ownerWindow is MainWindow window)
+        {
+            await window.FlushEmbeddedCanvasAsync();
+        }
+    }
+
     /// <summary>保存标签页（内嵌图形编辑器触发保存时也走这里）。</summary>
     public async Task<bool> SaveTabAsync(TabItem tab)
     {
+        await FlushCanvasBeforePersistAsync(tab);
+
         var filePath = tab.LocalFilePath;
         bool isNewFile = string.IsNullOrEmpty(filePath);
 
@@ -1617,6 +1667,7 @@ public partial class MainViewModel : ViewModelBase
     private async Task SaveFileAs()
     {
         if (CurrentTab == null) return;
+        await FlushCanvasBeforePersistAsync(CurrentTab);
         var filePath = await _fileService.SaveFileAsync(CurrentTab.Content, CurrentTab.Header);
         if (filePath == null) return;
 
@@ -1700,24 +1751,32 @@ public partial class MainViewModel : ViewModelBase
     }
 
     [RelayCommand]
-    private void ZoomIn()
-    {
-        PreviewZoom = Math.Min(PreviewZoom + ZoomStep, MaxZoom);
-        StatusMessage = string.Format(S.ZoomFormat, (int)(PreviewZoom * 100));
-    }
+    private async Task ZoomIn() => await ZoomActiveViewAsync(ZoomStepFactor);
 
     [RelayCommand]
-    private void ZoomOut()
+    private async Task ZoomOut() => await ZoomActiveViewAsync(1 / ZoomStepFactor);
+
+    /// <summary>适应视图（Ctrl+0）：交给当前承载面自己算（各家的缩放范围与锚点不同）。</summary>
+    [RelayCommand]
+    private async Task FitView()
     {
-        PreviewZoom = Math.Max(PreviewZoom - ZoomStep, MinZoom);
-        StatusMessage = string.Format(S.ZoomFormat, (int)(PreviewZoom * 100));
+        if (_ownerWindow is not MainWindow window)
+        {
+            return;
+        }
+
+        await window.FitActiveViewAsync();
     }
 
-    [RelayCommand]
-    private void ResetZoom()
+    /// <summary>应用级"放大 / 缩小"的转发：预览面与内嵌画布都由承载层落到各自的实现上。</summary>
+    private async Task ZoomActiveViewAsync(double factor)
     {
-        PreviewZoom = 1.0;
-        StatusMessage = S.ZoomReset;
+        if (_ownerWindow is not MainWindow window)
+        {
+            return;
+        }
+
+        await window.ZoomActiveViewAsync(factor);
     }
 
     [RelayCommand]
@@ -1797,6 +1856,8 @@ public partial class MainViewModel : ViewModelBase
     {
         var tab = CurrentTab;
         if (tab == null) return;
+
+        await FlushCanvasBeforePersistAsync(tab);
 
         var content = tab.Content;
 
@@ -2019,26 +2080,26 @@ public partial class MainViewModel : ViewModelBase
     }
 
     [RelayCommand]
-    private void OpenMermaidDocs()
+    private void OpenMermaidDocs() => OpenExternalLink("https://mermaid.js.org/intro/");
+
+    [RelayCommand]
+    private void OpenDotDocs() => OpenExternalLink("https://graphviz.org/doc/info/lang.html");
+
+    /// <summary>用系统默认浏览器打开外部链接（两个"规范"菜单项共用）。</summary>
+    private void OpenExternalLink(string url)
     {
         try
         {
-            var url = "https://mermaid.js.org/intro/";
             System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
             {
                 FileName = url,
-                UseShellExecute = true
+                UseShellExecute = true,
             });
         }
         catch
         {
             StatusMessage = S.CannotOpenLink;
         }
-    }
-
-    public void UpdatePreviewFitScale(Size viewportSize)
-    {
-        PreviewFitScale = 1.0;
     }
 
     public void UpdateEditorState(bool canUndo, bool canRedo, bool hasSelection, bool hasText)

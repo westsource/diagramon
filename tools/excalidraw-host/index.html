@@ -9,6 +9,12 @@
   #root { position: absolute; inset: 0; }
   #boot { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
           font-family: "Segoe UI", "Microsoft YaHei", sans-serif; color: #888; font-size: 13px; }
+  /* Excalidraw 自带的左下缩放控件（- / 重置 / +，容器类名 zoom-actions）与本应用的缩放
+     语义重复，这里藏掉。**只能靠类名**：0.18.1 的 UIOptions 里没有 zoom 开关
+     （canvasActions 只有 changeViewBackgroundColor / clearCanvas / export / loadScene /
+     saveToActiveFile / toggleTheme / saveAsImage）。升级 Excalidraw 后要复核这个类名
+     （版本 pin 在 tools/excalidraw.version）。隐藏 ≠ 删除：Ctrl+滚轮缩放照旧可用。 */
+  .zoom-actions { display: none !important; }
 </style>
 </head>
 <body>
@@ -67,6 +73,96 @@
   window.__hostQueue = out.queue;
   window.__hostError = null;
 
+  // 缩放比例回报（宿主每 150ms 轮询，见 EmbeddedProtocol.ZoomProbeScript）：
+  // Excalidraw 的缩放是页面状态，直接问 API 即可；拿不到时返回 0，宿主按"没有新值"处理。
+  window.__hostZoom = () => {
+    try {
+      const zoom = out.api ? out.api.getAppState().zoom : null;
+      const value = zoom ? Number(zoom.value) : 0;
+      return Number.isFinite(value) && value > 0 ? value : 0;
+    } catch (e) {
+      return 0;
+    }
+  };
+
+  // --------------------------------------------------------------------------
+  // 视口命令：应用级"放大 / 缩小 / 适应"落到 Excalidraw 时的实现。
+  //
+  // 缩放范围用 Excalidraw 自己的边界（0.1–30）；锚点取视口中心 —— 缩放前后视口中心对应的
+  // 场景坐标不变，这也是它自己的 Ctrl+滚轮在做的事（只不过锚点是光标）。
+  // --------------------------------------------------------------------------
+  const MIN_ZOOM = 0.1;
+  const MAX_ZOOM = 30;
+
+  function applyZoom(factor) {
+    const api = out.api;
+    if (!api) {
+      return false;
+    }
+
+    const value = Number(factor);
+    if (!Number.isFinite(value) || value <= 0 || Math.abs(value - 1) < 1e-6) {
+      return false;
+    }
+
+    const state = api.getAppState();
+    const current = state.zoom && Number(state.zoom.value) > 0 ? Number(state.zoom.value) : 1;
+    const target = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, current * value));
+    if (Math.abs(target - current) < 1e-6) {
+      return false;
+    }
+
+    const width = Number(state.width) || 0;
+    const height = Number(state.height) || 0;
+    const sceneCenterX = -Number(state.scrollX) + width / 2 / current;
+    const sceneCenterY = -Number(state.scrollY) + height / 2 / current;
+
+    api.updateScene({
+      appState: {
+        zoom: { value: target },
+        scrollX: -(sceneCenterX - width / 2 / target),
+        scrollY: -(sceneCenterY - height / 2 / target),
+      },
+    });
+    return true;
+  }
+
+  window.__hostZoomBy = applyZoom;
+
+  // --------------------------------------------------------------------------
+  // 画布内的应用级快捷键转发（与 drawio 承载页同一张词汇表）。
+  // 画布持有焦点时 Avalonia 窗口的 KeyBindings 收不到键；这里在捕获阶段截住命中的组合键，
+  // 顺带拦住 Excalidraw 自己的同名绑定（它的 Ctrl+S 会把场景当文件下载）。
+  // --------------------------------------------------------------------------
+  function normalizeHotkey(event) {
+    if (!event.ctrlKey || event.altKey || event.metaKey) {
+      return null;
+    }
+
+    switch (event.key) {
+      case 's': case 'S': return event.shiftKey ? 'ctrl+shift+s' : 'ctrl+s';
+      case 'o': case 'O': return 'ctrl+o';
+      case 'n': case 'N': return 'ctrl+n';
+      case 'w': case 'W': return 'ctrl+w';
+      case 'q': case 'Q': return 'ctrl+q';
+      case '0': return 'ctrl+0';
+      case '=': case '+': return 'ctrl+zoom-in';
+      case '-': case '_': return 'ctrl+zoom-out';
+      default: return null;
+    }
+  }
+
+  window.addEventListener('keydown', (event) => {
+    const combo = normalizeHotkey(event);
+    if (!combo) {
+      return;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+    report('hotkey', { combo: combo });
+  }, true);
+
   function report(name, payload) {
     // 按属性重读并自愈：宿主取走消息时可能替换/清空这个数组，
     // 页面若持有旧引用，后续事件会静默丢失。
@@ -100,6 +196,18 @@
     if (msg.action === 'ensureVisible') {
       // 标签页重新激活时由宿主下发：视口若在内容之外（或空文档停在奇怪视口）就拉回来
       return ensureViewportVisible();
+    }
+
+    if (msg.action === 'fit') {
+      // 应用级"适应视图"：把内容整体缩放到可见范围内（空文档则回到 100% + 原点，与 fitToViewport 同语义）
+      const elements = visibleElements();
+      if (elements.length === 0) {
+        out.api.updateScene({ appState: { zoom: { value: 1 }, scrollX: 0, scrollY: 0 } });
+        return true;
+      }
+
+      out.api.scrollToContent(elements, { fitToContent: true, animate: false });
+      return true;
     }
 
     if (msg.action === 'loadMermaid') {

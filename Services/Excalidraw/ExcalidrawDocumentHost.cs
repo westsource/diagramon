@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Text.Json;
 using System.Threading.Tasks;
@@ -49,6 +50,7 @@ public sealed class ExcalidrawDocumentHost : IEmbeddedDocumentHost
     private bool _navigated;
     private bool _ready;
     private bool _polling;
+    private double _zoomFactor = 1;
     private TaskCompletionSource<RendererResult>? _exportWaiter;
 
     public ExcalidrawDocumentHost()
@@ -57,11 +59,42 @@ public sealed class ExcalidrawDocumentHost : IEmbeddedDocumentHost
         _pollTimer.Tick += async (_, _) => await DrainAsync();
     }
 
-    /// <summary>Excalidraw 要求保存（当前版本没有画布内保存按钮，保留事件以对齐接口）。</summary>
-    public event EventHandler<TabItem>? SaveRequested;
-
     /// <summary>承载面报错 / 资源不可用。</summary>
     public event EventHandler<string>? ErrorReported;
+
+    /// <inheritdoc />
+    public double ZoomFactor => _zoomFactor;
+
+    /// <inheritdoc />
+    public event EventHandler? ZoomFactorChanged;
+
+    /// <inheritdoc />
+    public event EventHandler<string>? HotkeyPressed;
+
+    /// <inheritdoc />
+    public Task ZoomAsync(double factor)
+    {
+        if (_ready && _bridge != null)
+        {
+            _ = _bridge.ExecuteScriptAsync(EmbeddedProtocol.ZoomByScript(factor));
+        }
+
+        return Task.CompletedTask;
+    }
+
+    /// <inheritdoc />
+    public Task FitAsync()
+    {
+        // 走承载页的 fit 命令：内容整体缩放到可见范围（空文档回 100% + 原点）
+        SendCommand(new { action = "fit" });
+        return Task.CompletedTask;
+    }
+
+    /// <summary>
+    /// 落盘前的 flush：画布变更本来就是**即时报**的（onChange → 队列 → 宿主 150ms 轮询），
+    /// 这里补一次取队列即可 —— 它挡掉的是"变更已入队、但宿主还没轮到取走"的那 150ms 窗口。
+    /// </summary>
+    public Task FlushAsync() => DrainAsync();
 
     /// <summary><c>tools/excalidraw</c> 目录（含 <c>index.html</c> 与 <c>app.js</c>）；缺失返回 <c>null</c>。</summary>
     public static string? RuntimeDirectory
@@ -279,6 +312,8 @@ public sealed class ExcalidrawDocumentHost : IEmbeddedDocumentHost
             return;
         }
 
+        await UpdateZoomFactorAsync();
+
         var raw = await _bridge.ExecuteStringScriptAsync(EmbeddedProtocol.DrainQueueScript);
         if (string.IsNullOrWhiteSpace(raw))
         {
@@ -332,6 +367,15 @@ public sealed class ExcalidrawDocumentHost : IEmbeddedDocumentHost
                         ErrorReported?.Invoke(this, string.Format(S.OfflineRequestBlockedFormat, blockedUrl));
                         break;
 
+                    case "hotkey":
+                        // 画布内截下的应用级快捷键（画布持焦点时窗口的 KeyBindings 收不到键）
+                        var combo = root.TryGetProperty("combo", out var c) ? c.GetString() : null;
+                        if (!string.IsNullOrWhiteSpace(combo))
+                        {
+                            HotkeyPressed?.Invoke(this, combo!);
+                        }
+                        break;
+
                     case "error":
                         ErrorReported?.Invoke(this, root.TryGetProperty("message", out var m) ? m.GetString() ?? S.ExcalidrawHostErrorFallback : S.ExcalidrawHostErrorFallback);
                         break;
@@ -346,6 +390,29 @@ public sealed class ExcalidrawDocumentHost : IEmbeddedDocumentHost
         {
             ApplyScene(_currentTab, lastScene);
         }
+    }
+
+    /// <summary>
+    /// 读承载页报告的缩放比例（状态栏读数），变了才通知界面。
+    /// </summary>
+    /// <remarks>
+    /// 搭在已有的 150ms 轮询上；拿不到值（返回 0）时保留上一次读数，避免状态栏百分比抖动。
+    /// </remarks>
+    private async Task UpdateZoomFactorAsync()
+    {
+        var raw = (await _bridge!.ExecuteStringScriptAsync(EmbeddedProtocol.ZoomProbeScript))?.Trim();
+        if (!double.TryParse(raw, NumberStyles.Any, CultureInfo.InvariantCulture, out var factor) || factor <= 0)
+        {
+            return;
+        }
+
+        if (Math.Abs(factor - _zoomFactor) < 0.001)
+        {
+            return;
+        }
+
+        _zoomFactor = factor;
+        ZoomFactorChanged?.Invoke(this, EventArgs.Empty);
     }
 
     private void ApplyScene(TabItem tab, string payload)

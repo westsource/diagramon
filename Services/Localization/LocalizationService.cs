@@ -203,7 +203,6 @@ public sealed class LocalizationService
         _fallbackStrings["ImageCopied"] = "Image copied to clipboard";
         _fallbackStrings["ImageSaved"] = "Image saved";
         _fallbackStrings["ClipboardNotSupported"] = "Clipboard not supported in current environment";
-        _fallbackStrings["ZoomReset"] = "Zoom reset";
         _fallbackStrings["ZoomFormat"] = "Zoom: {0}%";
         _fallbackStrings["ErrorFormat"] = "Error: {0}";
         _fallbackStrings["SyntaxErrorFormat"] = "Syntax error: {0}";
@@ -248,7 +247,8 @@ public sealed class LocalizationService
         _fallbackStrings["MenuPaste"] = "_Paste";
         _fallbackStrings["MenuSelectAll"] = "Select _All";
         _fallbackStrings["MenuHelp"] = "_Help";
-_fallbackStrings["MenuMermaidDocs"] = "_Mermaid Documentation...";
+        _fallbackStrings["MenuMermaidDocs"] = "_Mermaid Documentation...";
+        _fallbackStrings["MenuDotDocs"] = "_Graphviz DOT Documentation...";
         _fallbackStrings["MenuAbout"] = "_About...";
         _fallbackStrings["MenuSettings"] = "_Settings...";
         _fallbackStrings["LanguageMenu"] = "Language";

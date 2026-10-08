@@ -25,7 +25,7 @@
   队列同时被消费与转发是刻意的：宿主只要能执行脚本（已验证可用）就能工作，
   不依赖 WebView 包装层是否暴露消息事件。
 -->
-<iframe id="dl" src="./index.html?embed=1&proto=json&spin=1&noExitBtn=1&libraries=1&ui=min&noSaveBtn=0"></iframe>
+<iframe id="dl" src="./index.html?embed=1&proto=json&spin=1&noExitBtn=1&libraries=1&ui=min&noSaveBtn=1&saveAndExit=0"></iframe>
 <script>
   // 离线守卫不在这里：drawio 跑在 iframe 里，宿主页的补丁管不到它的 realm。
   // 守卫由 tools/fetch-drawio.ps1 注入到 drawio 自己的 index.html（tools/offline-guard/offline-guard.js）。
@@ -36,7 +36,15 @@
   //
   // 同样**不带 `saveAndExit=1`**：带上它时画布里的保存会回 `{"event":"save", "exit":true}`，
   // 语义是"保存完请宿主关掉承载面"。本应用里 drawio 就是标签页的编辑器，没有"退出嵌入"这回事，
-  // 因此保持普通保存语义（`save` 只写回 + 落盘），`noExitBtn=1` 继续把退出按钮藏掉。
+  // 因此保持普通保存语义，`noExitBtn=1` 继续把退出按钮藏掉。
+  //
+  // `noSaveBtn=1` 去掉画布自带的 Save 按钮（它与本应用的"保存"是同一个语义，两个入口并列
+  // 只会让人怀疑哪个才算数）；**必须同时给 `saveAndExit=0`**：drawio 只在
+  // `"1"==urlParams.noSaveBtn ? ("0"!=urlParams.saveAndExit && 挂一个"Save and Exit")` 这个分支里
+  // 决定不放任何按钮（见 js/app.min.js 的 createEmbedButton 调用），少了 saveAndExit=0 会换出
+  // 一个语义更糟的"保存并退出"。去掉按钮后"画布 → 正文"的同步由两条路保证：
+  // drawio 自己的 autosave（每次改动 1.5s 后回写），以及宿主落盘前的 flush
+  // （`{"action":"export","format":"xml"}`，见 DrawioDocumentHost.FlushAsync）。
   const frameElement = document.getElementById('dl');
   const frame = () => frameElement.contentWindow;
 
@@ -80,6 +88,185 @@
     } catch (e) {
     }
   });
+
+  // ==========================================================================
+  // 藏掉 drawio 自己的缩放输入框（底部状态条右侧的「100%」输入，类名 geZoomInput）。
+  //
+  // 本应用的缩放语义只有一处（状态栏的百分数），画布内再摆一个读数就是两个数字互相打架；
+  // 而 drawio 的 embed 参数里**没有**关掉它的开关（只有 urlParams.zoom 设初值），只能注入样式。
+  // 选择在承载页注入而不是改 drawio 自己的 index.html：后者要走 tools/fetch-drawio.ps1 的补丁
+  // + 清单指纹（重下源码包），换来的是同一件事。
+  //
+  // **隐藏 ≠ 删除**：Alt+滚轮缩放照旧可用，元素仍在 DOM 里，drawio 也照常更新它的值。
+  //
+  // 挂在 iframe 的 load 上而不是注入一次就完事：drawio 内部会 window.location.reload()
+  // （语言/主题切换等路径），重载后注入的样式会一起消失，而 load 每次导航都会再来一次。
+  // ==========================================================================
+  const ZOOM_HIDE_CSS = '.geZoomInput{display:none !important;}';
+
+  // ==========================================================================
+  // 画布内的应用级快捷键转发。
+  //
+  // 画布标签页的焦点在原生 WebView 子窗口里，Avalonia 窗口级的 KeyBindings（Ctrl+S 等）收不到键 ——
+  // 键先落在 WebView 的窗口过程上。因此由承载页在**捕获阶段**先看一眼，命中的组合键
+  // preventDefault + stopPropagation（顺带拦住 drawio/Excalidraw 自己的同名绑定，例如
+  // Excalidraw 的 Ctrl+S 会去下载场景文件），再入队回宿主由 C# 执行对应命令。
+  //
+  // 组合键的取值是宿主侧的词汇表（见 MainWindow.HandleCanvasHotkey）：
+  //   ctrl+s / ctrl+shift+s / ctrl+o / ctrl+n / ctrl+w / ctrl+q / ctrl+0 / ctrl+zoom-in / ctrl+zoom-out
+  //
+  // 只转发"应用级"命令；撤销/剪切等编辑类快捷键留给画布自己（它有它自己的历史）。
+  // ==========================================================================
+  function normalizeHotkey(event) {
+    if (!event.ctrlKey || event.altKey || event.metaKey) {
+      return null;
+    }
+
+    switch (event.key) {
+      case 's': case 'S': return event.shiftKey ? 'ctrl+shift+s' : 'ctrl+s';
+      case 'o': case 'O': return 'ctrl+o';
+      case 'n': case 'N': return 'ctrl+n';
+      case 'w': case 'W': return 'ctrl+w';
+      case 'q': case 'Q': return 'ctrl+q';
+      case '0': return 'ctrl+0';
+      case '=': case '+': return 'ctrl+zoom-in';
+      case '-': case '_': return 'ctrl+zoom-out';
+      default: return null;
+    }
+  }
+
+  function forwardHotkeys(win) {
+    if (win.__diagramonHotkeys) {
+      return;
+    }
+
+    win.__diagramonHotkeys = true;
+    win.addEventListener('keydown', (event) => {
+      const combo = normalizeHotkey(event);
+      if (!combo) {
+        return;
+      }
+
+      event.preventDefault();
+      event.stopPropagation();
+      window.__hostQueue.push(JSON.stringify({ event: 'hotkey', combo: combo }));
+    }, true);
+  }
+
+  function installDrawioChrome() {
+    try {
+      const win = frame();
+      const doc = win.document;
+      if (!doc || !doc.head) {
+        return;
+      }
+
+      if (!doc.getElementById('diagramon-chrome')) {
+        const style = doc.createElement('style');
+        style.id = 'diagramon-chrome';
+        style.textContent = ZOOM_HIDE_CSS;
+        doc.head.appendChild(style);
+      }
+
+      forwardHotkeys(win);
+    } catch (e) {
+      // iframe 还没建文档 / 已跨源：下一次 load 再试
+    }
+  }
+
+  frameElement.addEventListener('load', installDrawioChrome);
+  installDrawioChrome();
+
+  // ==========================================================================
+  // 缩放比例回报（宿主每 150ms 轮询，见 EmbeddedProtocol.ZoomProbeScript）。
+  //
+  // 读的是底部状态条那个**已被上面藏起来**的缩放输入框：元素仍在 DOM 里、drawio 也照常更新它的值，
+  // 这是拿到"画布当前缩放"最省事的一条路 —— embed 协议没有查询缩放的动作，而缩放输入之外唯一的
+  // 读数 UI（工具条/菜单）在 min UI 里根本不渲染。拿不到时返回 0，宿主按"没有新值"处理。
+  // ==========================================================================
+  window.__hostZoom = () => {
+    try {
+      const input = frame().document.querySelector('.geZoomInput');
+      const percent = input ? parseFloat(input.value) : NaN;
+      return Number.isFinite(percent) && percent > 0 ? percent / 100 : 0;
+    } catch (e) {
+      return 0;
+    }
+  };
+
+  // ==========================================================================
+  // 应用级"适应视图"的落点（宿主执行 EmbeddedProtocol.FitScript）。
+  //
+  // 用的是 drawio 自带的 **Fit Page**（Ctrl+Shift+J），**不是** embed 协议的 `{"action":"fit"}`：
+  // 后者 fit 的是 `graph.getGraphBounds()`（内容框），页面里只有一个小图形时会把内容放大到几十倍
+  // （实测 160×60 的图形 → 606%），看起来就是"第一个元素充满整个屏幕"；
+  // 而 Fit Page 把整页铺进视口（实测 850×1100 页在 1010×620 视口 → 55%），
+  // 与另外三个模式"Caps 看清整幅图"的语义一致 —— drawio 的"整幅图"就是它的页面。
+  //
+  // 合成按键而不是调动作：embed 协议里没有 fitPage/viewbox 这类动作（`viewbox` 实测是空操作），
+  // drawio 的 Fit Page 只挂在快捷键上。合成 keydown 走它自己的 action（含它的页边距与缩放级别对齐）。
+  // 组合键 Ctrl+Shift+J 不在上面的应用级快捷键转发表里，因此不会被我们自己截走。
+  // ==========================================================================
+  window.__hostFit = () => {
+    try {
+      const win = frame();
+      const doc = win.document;
+      const target = doc.querySelector('.geDiagramContainer') || doc.body;
+      if (!target) {
+        return false;
+      }
+
+      target.dispatchEvent(new KeyboardEvent('keydown', {
+        key: 'J',
+        code: 'KeyJ',
+        keyCode: 74,
+        ctrlKey: true,
+        shiftKey: true,
+        bubbles: true,
+        cancelable: true,
+      }));
+      return true;
+    } catch (e) {
+      return false;
+    }
+  };
+
+  // ==========================================================================
+  // 应用级"放大 / 缩小一档"的落点（宿主执行 EmbeddedProtocol.ZoomByScript）。
+  //
+  // drawio 的 embed 协议没有"设缩放"的动作，所以借它自己的 Ctrl+滚轮通道：合成一个 WheelEvent
+  // 投给画布容器，倍率换算成等效 deltaY（实测它一格 deltaY=±120 约合 1.1 倍）。
+  // 走它的原生逻辑 = 沿用它的缩放范围（5%–1600%）、锚点与重绘时序。
+  // ==========================================================================
+  window.__hostZoomBy = (factor) => {
+    try {
+      const value = Number(factor);
+      if (!Number.isFinite(value) || value <= 0 || Math.abs(value - 1) < 1e-6) {
+        return false;
+      }
+
+      const canvas = frame().document.querySelector('.geDiagramContainer');
+      if (!canvas) {
+        return false;
+      }
+
+      const rect = canvas.getBoundingClientRect();
+      canvas.dispatchEvent(new WheelEvent('wheel', {
+        deltaX: 0,
+        deltaY: -120 * Math.log(value) / Math.log(1.1),
+        deltaMode: 0,
+        ctrlKey: true,
+        shiftKey: false,
+        bubbles: true,
+        cancelable: true,
+        clientX: rect.left + rect.width / 2,
+        clientY: rect.top + rect.height / 2,
+      }));
+      return true;
+    } catch (e) {
+      return false;
+    }
+  };
 </script>
 </body>
 </html>

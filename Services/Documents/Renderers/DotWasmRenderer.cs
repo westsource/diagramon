@@ -31,7 +31,10 @@ public sealed class DotWasmRenderer : IDocumentRenderer
 
     public RendererProvision Provision => RendererProvision.NpmWasm;
 
-    public IReadOnlyList<RendererAsset> Assets => [];
+    public IReadOnlyList<RendererAsset> Assets =>
+    [
+        new RendererAsset("preview-viewer.js", "avares://Diagramon/Assets/preview-viewer.js"),
+    ];
 
     /// <summary><c>tools/graphviz</c>（由 <c>tools/fetch-graphviz.ps1</c> 拉取）；缺失时返回 <c>null</c>。</summary>
     public string? OriginAssetsDirectory => AppPaths.FindToolsDirectory("graphviz");
@@ -92,19 +95,16 @@ public sealed class DotWasmRenderer : IDocumentRenderer
 </head>
 <body>
   <div id="root"><div id="diagram"></div></div>
+  <!-- 视口手势的共享实现（与 Mermaid 页、两个内嵌画布同一套手感）：必须是经典脚本，
+       在 module 之前加载，模块里再取 window.PreviewViewport。 -->
+  <script src="./preview-viewer.js"></script>
   <script type="module">
     import { Graphviz } from '/renderer/graphviz.js';
 
     const root = document.getElementById('root');
     const target = document.getElementById('diagram');
-    let scale = 1;
-    let offsetX = 0;
-    let offsetY = 0;
-    let dragging = false;
-    let lastX = 0;
-    let lastY = 0;
-    const minScale = 0.2;
-    const maxScale = 30;
+    const viewport = window.PreviewViewport.attach(root, target);
+    const fitToViewport = () => viewport.fit();
 
     let graphvizPromise = null;
 
@@ -113,33 +113,6 @@ public sealed class DotWasmRenderer : IDocumentRenderer
         graphvizPromise = Graphviz.load();
       }
       return graphvizPromise;
-    }
-
-    function applyTransform() {
-      target.style.transform = `translate(${offsetX}px, ${offsetY}px) scale(${scale})`;
-      target.style.transformOrigin = 'center center';
-      // 承载层靠轮询全局 scale 显示缩放百分比；module 作用域里的 let 不是全局，必须显式镜像
-      window.scale = scale;
-    }
-
-    function fitToViewport() {
-      scale = 1;
-      offsetX = 0;
-      offsetY = 0;
-      applyTransform();
-
-      const rootRect = root.getBoundingClientRect();
-      const diagramRect = target.getBoundingClientRect();
-      if (rootRect.width <= 0 || rootRect.height <= 0 || diagramRect.width <= 0 || diagramRect.height <= 0) {
-        return;
-      }
-
-      const padding = 24;
-      const fitScaleX = Math.max(0.01, (rootRect.width - padding) / diagramRect.width);
-      const fitScaleY = Math.max(0.01, (rootRect.height - padding) / diagramRect.height);
-      const fitScale = Math.min(fitScaleX, fitScaleY);
-      scale = Math.max(minScale, Math.min(maxScale, fitScale));
-      applyTransform();
     }
 
     function showError(message) {
@@ -192,54 +165,6 @@ public sealed class DotWasmRenderer : IDocumentRenderer
 
     window.renderDiagram = renderDiagram;
     window.renderPng = renderPng;
-
-    root.addEventListener('pointerdown', (e) => {
-      if (e.button !== 0) return;
-      dragging = true;
-      lastX = e.clientX;
-      lastY = e.clientY;
-      root.style.cursor = 'grabbing';
-      root.setPointerCapture(e.pointerId);
-    });
-
-    root.addEventListener('pointermove', (e) => {
-      if (!dragging) return;
-      const dx = e.clientX - lastX;
-      const dy = e.clientY - lastY;
-      lastX = e.clientX;
-      lastY = e.clientY;
-      offsetX += dx;
-      offsetY += dy;
-      applyTransform();
-    });
-
-    root.addEventListener('pointerup', (e) => {
-      dragging = false;
-      root.style.cursor = 'grab';
-      if (root.hasPointerCapture(e.pointerId)) {
-        root.releasePointerCapture(e.pointerId);
-      }
-    });
-
-    root.addEventListener('wheel', (e) => {
-      e.preventDefault();
-      const oldScale = scale;
-      const zoomStep = e.deltaY < 0 ? 1.1 : 0.9;
-      scale = Math.max(minScale, Math.min(maxScale, scale * zoomStep));
-      if (Math.abs(scale - oldScale) < 1e-6) return;
-
-      const rect = root.getBoundingClientRect();
-      const cx = e.clientX - rect.left - rect.width / 2;
-      const cy = e.clientY - rect.top - rect.height / 2;
-      const ratio = scale / oldScale;
-      offsetX -= cx * (ratio - 1);
-      offsetY -= cy * (ratio - 1);
-      applyTransform();
-    }, { passive: false });
-
-    root.addEventListener('dblclick', () => {
-      fitToViewport();
-    });
 
     renderDiagram({{sourceJson}}, {{engineJson}});
   </script>

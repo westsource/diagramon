@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Linq.Expressions;
 using System.Reflection;
@@ -65,7 +66,7 @@ public partial class MainWindow : Window
     private TaskCompletionSource<bool>? _surfaceReadySignal;
     private bool _webViewAttached;
     private bool _webViewInitTried;
-    private DispatcherTimer? _zoomPollTimer;
+    private DispatcherTimer? _previewPollTimer;
     private bool _isClosing;
 
     private Delegate? _webViewAccelKeyHandler;
@@ -205,7 +206,17 @@ public partial class MainWindow : Window
         bindings.Add(CreateConditionalKeyBinding("Ctrl+C", nameof(CopyEditor)));
         bindings.Add(CreateConditionalKeyBinding("Ctrl+V", nameof(PasteEditor)));
         bindings.Add(CreateConditionalKeyBinding("Ctrl+A", nameof(SelectAllEditor)));
-        
+
+        // 视图：与两个画布的原生键位对齐（Ctrl+0 适应、Ctrl+± 缩放）。
+        // 数字键盘的 +/- 与主键盘的 =/+、-/_ 都收，Shift 组合一并认（多数键盘上 "+" 要按 Shift）。
+        bindings.Add(CreateViewModelKeyBinding("Ctrl+D0", nameof(MainViewModel.FitViewCommand)));
+        bindings.Add(CreateViewModelKeyBinding("Ctrl+NumPad0", nameof(MainViewModel.FitViewCommand)));
+        bindings.Add(CreateViewModelKeyBinding("Ctrl+OemPlus", nameof(MainViewModel.ZoomInCommand)));
+        bindings.Add(CreateViewModelKeyBinding("Ctrl+Shift+OemPlus", nameof(MainViewModel.ZoomInCommand)));
+        bindings.Add(CreateViewModelKeyBinding("Ctrl+Add", nameof(MainViewModel.ZoomInCommand)));
+        bindings.Add(CreateViewModelKeyBinding("Ctrl+OemMinus", nameof(MainViewModel.ZoomOutCommand)));
+        bindings.Add(CreateViewModelKeyBinding("Ctrl+Subtract", nameof(MainViewModel.ZoomOutCommand)));
+
         return bindings;
     }
 
@@ -359,11 +370,6 @@ public partial class MainWindow : Window
 
     }
 
-    private void ResetPreviewOffset()
-    {
-        // WebView 预览不再支持拖拽偏移
-    }
-
     private void OnDataContextChanged(object? sender, EventArgs e)
     {
         if (_viewModel != null)
@@ -393,8 +399,6 @@ public partial class MainWindow : Window
             Dispatcher.UIThread.Post(RefreshEditorState, DispatcherPriority.Background);
             Dispatcher.UIThread.Post(() =>
             {
-                ResetPreviewOffset();
-                UpdatePreviewFitScale();
                 UpdateWebPreview();
                 SyncEmbeddedAppSurface();
             }, DispatcherPriority.Background);
@@ -568,35 +572,10 @@ public partial class MainWindow : Window
         }
     }
 
-    private void OnResetPreviewClicked(object? sender, RoutedEventArgs e)
-    {
-        if (DataContext is MainViewModel viewModel)
-        {
-            viewModel.ResetZoomCommand.Execute(null);
-        }
-
-        ResetPreviewOffset();
-        UpdatePreviewFitScale();
-    }
-
     private void OnWorkspaceSizeChanged(object? sender, SizeChangedEventArgs e)
     {
         UpdateWorkspaceLayout();
         UpdateWebPreview();
-    }
-
-    private void UpdatePreviewFitScale()
-    {
-        if (DataContext is not MainViewModel viewModel || _previewGrid == null)
-        {
-            return;
-        }
-
-        var viewportSize = _previewGrid.Bounds.Size;
-        if (viewportSize.Width > 0 && viewportSize.Height > 0)
-        {
-            viewModel.UpdatePreviewFitScale(viewportSize);
-        }
     }
 
     private void UpdateWorkspaceLayout()
@@ -623,8 +602,6 @@ public partial class MainWindow : Window
                 viewModel.SelectedTabIndex = index;
                 Dispatcher.UIThread.Post(() =>
                 {
-                    ResetPreviewOffset();
-                    UpdatePreviewFitScale();
                 }, DispatcherPriority.Background);
             }
         }
@@ -873,11 +850,14 @@ public partial class MainWindow : Window
         if (_viewModel.TryTakeMermaidImport(tab, out var mermaidSource))
         {
             host.LoadMermaidSource(tab, mermaidSource);
+            _viewModel.EmbeddedZoomFactor = host.ZoomFactor;
             _viewModel.StatusMessage = Strings.Instance.Ready;
             return;
         }
 
         host.Show(tab);
+        // 状态栏读数：刚切到画布时先摆上这个宿主已知的比例，后续变化由 ZoomFactorChanged 推
+        _viewModel.EmbeddedZoomFactor = host.ZoomFactor;
         _viewModel.StatusMessage = Strings.Instance.Ready;
     }
 
@@ -904,11 +884,12 @@ public partial class MainWindow : Window
             return null;
         }
 
-        host.SaveRequested += async (_, tab) =>
+        host.HotkeyPressed += async (_, combo) => await HandleCanvasHotkeyAsync(combo);
+        host.ZoomFactorChanged += (_, _) =>
         {
-            if (_viewModel != null)
+            if (_viewModel != null && string.Equals(host.FormatId, _viewModel.CurrentFormat.Id, StringComparison.OrdinalIgnoreCase))
             {
-                await _viewModel.SaveTabAsync(tab);
+                _viewModel.EmbeddedZoomFactor = host.ZoomFactor;
             }
         };
         host.ErrorReported += (_, message) =>
@@ -961,6 +942,121 @@ public partial class MainWindow : Window
         }
 
         return await host.ExportImageAsync(format, scale, transparent);
+    }
+
+    /// <summary>
+    /// 落盘前把画布里的最新内容取回正文（供 <c>MainViewModel</c> 的保存动作使用）。
+    /// </summary>
+    public async Task FlushEmbeddedCanvasAsync()
+    {
+        var activeFormatId = _viewModel?.CurrentFormat.Id;
+        if (activeFormatId == null || !_embeddedHosts.TryGetValue(activeFormatId, out var host))
+        {
+            return;
+        }
+
+        await host.FlushAsync();
+    }
+
+    /// <summary>
+    /// 把"放大 / 缩小一档"发给**当前**承载面（应用级命令 <c>MainViewModel.ZoomIn/ZoomOut</c> 的落点）。
+    /// </summary>
+    /// <remarks>
+    /// 两条路：内嵌画布走承载面自己的缩放实现（各家范围/锚点不同），预览面走共享视口脚本
+    /// （<c>Assets/preview-viewer.js</c> 暴露的 <c>window.__previewViewport</c>）。
+    /// </remarks>
+    public async Task ZoomActiveViewAsync(double factor)
+    {
+        if (_viewModel == null)
+        {
+            return;
+        }
+
+        if (_viewModel.IsEmbeddedAppVisible)
+        {
+            var activeFormatId = _viewModel.CurrentFormat.Id;
+            if (_embeddedHosts.TryGetValue(activeFormatId, out var host))
+            {
+                await host.ZoomAsync(factor);
+            }
+
+            return;
+        }
+
+        await ExecutePreviewScriptAsync($"window.__previewViewport.zoomBy({factor.ToString("0.####", CultureInfo.InvariantCulture)})");
+    }
+
+    /// <summary>把"适应视图"发给当前承载面（预览面 = 页面自己的 fit，画布 = 各家的 fit）。</summary>
+    public async Task FitActiveViewAsync()
+    {
+        if (_viewModel == null)
+        {
+            return;
+        }
+
+        if (_viewModel.IsEmbeddedAppVisible)
+        {
+            var activeFormatId = _viewModel.CurrentFormat.Id;
+            if (_embeddedHosts.TryGetValue(activeFormatId, out var host))
+            {
+                await host.FitAsync();
+            }
+
+            return;
+        }
+
+        await ExecutePreviewScriptAsync("window.__previewViewport.fit()");
+    }
+
+    /// <summary>把一条脚本投给预览 WebView（渲染器页面与共享视口脚本都在它里面）。</summary>
+    private Task ExecutePreviewScriptAsync(string script)
+    {
+        return InvokeScriptAsync(script);
+    }
+
+    /// <summary>
+    /// 画布内按下的应用级快捷键（画布持焦点时窗口的 KeyBindings 收不到键，由承载页转发回来）。
+    /// </summary>
+    private async Task HandleCanvasHotkeyAsync(string combo)
+    {
+        if (_viewModel == null)
+        {
+            return;
+        }
+
+        switch (combo)
+        {
+            case "ctrl+s":
+                if (_viewModel.CurrentTab is { } tab)
+                {
+                    await _viewModel.SaveTabAsync(tab);
+                }
+                break;
+            case "ctrl+shift+s":
+                _viewModel.SaveFileAsCommand.Execute(null);
+                break;
+            case "ctrl+o":
+                _viewModel.OpenFileCommand.Execute(null);
+                break;
+            case "ctrl+n":
+                _viewModel.NewFileCommand.Execute(null);
+                break;
+            case "ctrl+w":
+                _viewModel.CloseCurrentTabCommand.Execute(null);
+                break;
+            case "ctrl+q":
+                _viewModel.ExitCommand.Execute(null);
+                break;
+            case "ctrl+0":
+                await FitActiveViewAsync();
+                break;
+            case "ctrl+zoom-in":
+                await ZoomActiveViewAsync(MainViewModel.ZoomStepFactor);
+                break;
+            case "ctrl+zoom-out":
+                await ZoomActiveViewAsync(1 / MainViewModel.ZoomStepFactor);
+                break;
+        }
     }
 
     /// <summary>
@@ -1245,44 +1341,56 @@ public partial class MainWindow : Window
             return new RendererResult(false, null, ex.Message);
         }
     }
-    private void StartZoomPolling()
+    /// <summary>
+    /// 轮询预览页的视口状态：缩放比例（状态栏读数）与截下的应用级快捷键。
+    /// </summary>
+    /// <remarks>
+    /// 快捷键走单槽 <c>window.__previewHotkey</c>：预览 WebView 持有焦点时窗口的 KeyBindings 收不到键，
+    /// 由页面在捕获阶段记下命中的组合键，这里取走并清空（见 Assets/preview-viewer.js）。
+    /// </remarks>
+    private void StartPreviewPolling()
     {
-        if (_zoomPollTimer != null)
+        if (_previewPollTimer != null)
             return;
 
-        _zoomPollTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(250) };
-        _zoomPollTimer.Tick += async (_, _) =>
+        _previewPollTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(250) };
+        _previewPollTimer.Tick += async (_, _) =>
         {
             if (_previewWebViewControl == null || _webViewExecuteScriptMethod == null)
                 return;
 
             try
             {
-                var taskResult = _webViewExecuteScriptMethod.Invoke(_previewWebViewControl, new object[] { "scale" });
-                string? value = null;
-                if (taskResult is Task<string> typedTask)
+                var json = await EvaluateStringAsync(
+                    "JSON.stringify({ scale: window.__previewScale ?? null, hotkey: window.__previewHotkey ?? '' })");
+                if (string.IsNullOrEmpty(json))
                 {
-                    value = await typedTask;
-                }
-                else if (taskResult is Task task)
-                {
-                    await task;
-                    value = task.GetType().GetProperty("Result")?.GetValue(task)?.ToString();
+                    return;
                 }
 
-                if (!string.IsNullOrEmpty(value) &&
-                    double.TryParse(value, System.Globalization.NumberStyles.Any,
-                    System.Globalization.CultureInfo.InvariantCulture, out var scale) &&
-                    DataContext is MainViewModel vm)
+                using var document = System.Text.Json.JsonDocument.Parse(json);
+                var root = document.RootElement;
+
+                if (DataContext is MainViewModel vm &&
+                    root.TryGetProperty("scale", out var scaleElement) &&
+                    scaleElement.ValueKind == System.Text.Json.JsonValueKind.Number)
                 {
-                    vm.PreviewZoom = scale;
+                    vm.PreviewZoom = scaleElement.GetDouble();
+                }
+
+                if (root.TryGetProperty("hotkey", out var hotkeyElement) &&
+                    hotkeyElement.ValueKind == System.Text.Json.JsonValueKind.String &&
+                    hotkeyElement.GetString() is { Length: > 0 } combo)
+                {
+                    await ExecutePreviewScriptAsync("window.__previewHotkey = ''");
+                    await HandleCanvasHotkeyAsync(combo);
                 }
             }
             catch
             {
             }
         };
-        _zoomPollTimer.Start();
+        _previewPollTimer.Start();
     }
 
     private bool EnsureWebViewReady()
@@ -1291,7 +1399,7 @@ public partial class MainWindow : Window
         {
             _previewWebViewControl = existingWebView;
             _webViewAttached = true;
-            StartZoomPolling();
+            StartPreviewPolling();
             return true;
         }
 
@@ -1376,7 +1484,7 @@ public partial class MainWindow : Window
             webViewControl.VerticalAlignment = Avalonia.Layout.VerticalAlignment.Stretch;
             _previewWebHost.Child = webViewControl;
             _previewWebViewControl = webViewControl;
-            StartZoomPolling();
+            StartPreviewPolling();
             return true;
         }
         catch

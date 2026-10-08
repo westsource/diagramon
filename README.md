@@ -2,7 +2,7 @@
 
 [中文文档](README.zh-CN.md)
 
-A **local-first** multi-format diagram editor built with C# Avalonia. Supports **Mermaid** (`.mmd` / `.mermaid`), **Graphviz DOT** (`.dot` / `.gv`), **drawio** (`.drawio`) and **Excalidraw** (`.excalidraw`) — all four can be edited and previewed live. Features code editing with syntax highlighting, real-time preview (pan/zoom/fit-to-viewport), syntax validation, high-resolution PNG export and clipboard copy, plus an AI assistant that works either with your own API key (BYOK) or through the membership cloud gateway (including **image recognition**: pick a screenshot → diagram code).
+A **local-first** multi-format diagram editor built with C# Avalonia. Supports **Mermaid** (`.mmd` / `.mermaid`), **Graphviz DOT** (`.dot` / `.gv`), **drawio** (`.drawio`) and **Excalidraw** (`.excalidraw`) — all four can be edited and previewed live. Features code editing with syntax highlighting, real-time preview with identical pan/zoom/fit gestures across all four views, syntax validation, high-resolution PNG export and clipboard copy, plus an AI assistant that works either with your own API key (BYOK) or through the membership cloud gateway (including **image recognition**: pick a screenshot → diagram code).
 
 **Rendering and syntax checking happen entirely on this machine** (Node and Chrome headless ship inside the package; no external requests). Only when you **actively use AI** are the relevant code/image sent to the model service: BYOK talks straight to your own upstream, membership goes through the Diagramon cloud gateway.
 
@@ -28,16 +28,15 @@ Version **v2.0.260929.0**
 ### Real-time Preview
 - **JavaScript Injection** - Initial load via WebView file navigation; subsequent updates use CoreWebView2.ExecuteScriptAsync for zero-latency script injection
 - **Off-screen Rendering** - SVG rendered in an absolutely-positioned off-screen container to avoid layout interference
-- **Drag to Pan** - Hold left mouse button and drag to move the diagram
-- **Scroll to Zoom** - Zoom from 20% to 3000% via mouse wheel (centered on cursor); zoom level shown in status bar
-- **Double-click to Fit** - Auto-fit diagram to viewport on double-click
+- **Canvas gestures (identical in all four views)** - the Mermaid / DOT preview panes and both embedded canvases (drawio / Excalidraw) share one set of "look" gestures: **wheel = pan**, **Shift+wheel = horizontal pan**, **Ctrl+wheel = zoom (anchored at the cursor)**, **drag = pan** (a canvas keeps left-drag for selection and pans with the middle button or space+drag), **double-click = fit to view**; `Ctrl+0` (fit), `Ctrl+=` (zoom in one step) and `Ctrl+-` (zoom out one step) are forwarded by the app to whichever surface is active (preview pane 20%–3000%, drawio 5%–1600%, Excalidraw 10%–3000% - each keeps its native limits). What "fit" means follows each format's own whole picture: the preview pane and Excalidraw fill the view with the **content**, drawio fills it with the **page** (its own Fit Page - a single small shape is never blown up)
+- **Status bar zoom** - the percentage at the right of the status bar shows the zoom of the *active* view (the preview page reports it, a canvas reports it through `window.__hostZoom`); both canvases' own zoom readouts are hidden so two numbers can't disagree on screen
 - **Error Display** - User-friendly error messages shown directly in the preview area
 - **Toggle Editor** - Click the triangle button (▶/◀) in the splitter bar to hide/show the editor for full-screen preview
 - **Rendering Cache** - LRU cache (32 entries max) + background PNG generation after preview
-- **WebView Shortcuts** - Ctrl+S triggers save even when the preview area has focus
+- **WebView shortcuts** - when the preview pane or a canvas has focus (keys land on the WebView first, so window-level accelerators never see them), the carrier page intercepts `Ctrl+S` / `Ctrl+Shift+S` / `Ctrl+O` / `Ctrl+N` / `Ctrl+W` / `Ctrl+Q` / `Ctrl+0` / `Ctrl+=` / `Ctrl+-` and hands them back to the host: save, save-as, open, new, close tab, quit, fit to view, zoom in, zoom out
 
 ### Image Operations
-- **Save Image** - Click the floating Save button (top-right of preview area) to export a high-resolution PNG/JPEG image
+- **Save Image** - Click the floating Save button (bottom-right of the preview area) to export a high-resolution PNG/JPEG image
 - **Copy Image** - Click the floating Copy button to copy the diagram to the system clipboard as PNG
 - **Adaptive Scaling** - Export automatically calculates optimal scale (1.5x–5.0x) based on diagram complexity (node/edge/subgraph count)
 - **Per-format export** - Mermaid exports through Mermaid CLI (`mmdc`); DOT rasterizes inside the preview page (`render → SVG → canvas → PNG`, **zero subprocess**) and produces transparent PNGs
@@ -55,15 +54,17 @@ Version **v2.0.260929.0**
 - **Canvas is the editor** - drawio tabs are hosted in a dedicated WebView (created lazily, never destroyed on tab switch, so the undo history survives); the editor/preview panes step aside for the canvas
 - **The file stays XML text** - a `.drawio` file *is* mxfile XML; the canvas is just a view of it, so what lands on disk stays diffable and version-controllable and reuses the same save / save-as / recent-files path
 - **Automatic write-back** - canvas edits (drawio's autosave) are written back into the tab body and the title gets a `*`; the write-back suspends change notifications and never enters the text render pipeline
+- **Single save entry** - drawio's own Save button is switched off (`noSaveBtn=1&saveAndExit=0`; without `saveAndExit=0` drawio swaps in a "Save and Exit" button instead), and its canvas zoom readout is hidden (Alt+wheel zooming is unaffected). Save / Ctrl+S first asks the canvas for its current XML (`export` with `format=xml` - the very same `getFileData` its autosave sends), so edits made inside the 1.5 s autosave debounce still reach the file
 - **Self-hosted offline runtime** - drawio ships with the app (`tools/drawio`, pruned by `tools/fetch-drawio.ps1`) and is served over an in-process loopback origin; additional shape libraries and externally hosted template images are downloaded into the package and rewritten to relative paths at fetch time, while Google fonts and external integrations (Drive, MathJax, server-side export) are disabled - zero external requests end to end
-- **Export** - side by side with the text formats: the save/copy image buttons make the canvas rasterize in-page, **zero subprocess**
+- **Export** - side by side with the text formats: the save/copy image buttons make the canvas rasterize in-page, **zero subprocess**; the floating pair hugs the bottom-right of the preview column, in the band below drawio's format panel and its bottom bar, so no canvas chrome is covered
 - **Mermaid → drawio conversion** - File → Convert to drawio diagram: the current Mermaid source is handed to drawio's own parser and the result opens in a **new** tab, leaving the original `.mmd` tab untouched (one-way: canvas edits never write back to the Mermaid source)
 - **Coexists with text formats** - `.drawio`, `.mmd` and `.dot` tabs can be open at once and switched freely; drawio tabs hide the AI assistant and the layout picker
 
 ### Excalidraw hand-drawn editing (`.excalidraw`)
 - **Library-style integration** - Excalidraw is instantiated inside our own carrier page (not an iframe protocol integration), so there is no message handshake; the page and its runtime are served over the same in-process loopback origin
 - **The file is JSON text** - a `.excalidraw` file *is* the Excalidraw scene JSON; the canvas is a view of it, and save / save-as / recent-files reuse the same path
-- **Automatic write-back** - canvas changes (fired per frame while dragging) are queued, coalesced on a 150 ms tick and written back into the tab body with change notifications suspended; only the small persistable slice of appState is stored (transient selection/hover state is not)
+- **Automatic write-back** - canvas changes (fired per frame while dragging) are queued, coalesced on a 150 ms tick and written back into the tab body with change notifications suspended; only the small persistable slice of appState is stored (transient selection/hover state is not); Save / Ctrl+S drains the queue once more before it writes
+- **No duplicated canvas chrome** - Excalidraw's own bottom-left zoom controls are hidden (Ctrl+wheel zooming is unaffected); they are suppressed by class name because 0.18.1's `UIOptions.canvasActions` has no zoom switch
 - **Offline first** - `EXCALIDRAW_ASSET_PATH` is pinned to the bundled directory at build time so fonts never come from a CDN; zero external requests at runtime
 - **Offline guard** - the carrier page patches networking before any app script runs: cross-origin `fetch`/`XHR`/`Image`/`sendBeacon` are refused and every block is surfaced in the status bar (catches upstream regressions where a feature starts phoning home)
 - **Mermaid → Excalidraw** - File → Convert to Excalidraw diagram: conversion runs in-page through `@excalidraw/mermaid-to-excalidraw` and the result opens in a new tab (one-way: canvas edits never write back to the Mermaid source)
@@ -107,6 +108,7 @@ Version **v2.0.260929.0**
 ### About
 - Help → About: App name, description, author (道荣 & 黄超), current version
 - Help → Mermaid Documentation: Opens Mermaid.js official docs in browser
+- Help → Graphviz DOT Documentation: Opens the official DOT language reference (graphviz.org) in browser
 
 ### UI Features
 - **Draggable Splitter** - Adjustable editor/preview ratio (editor: 320px ~ 860px; preview: min 480px)
@@ -259,6 +261,7 @@ Enter or modify Mermaid code in the left editor panel. The right preview area up
 
 - Help → About: App name, features, author (道荣 & 黄超), version
 - Help → Mermaid Documentation: Opens mermaid.js.org in browser
+- Help → Graphviz DOT Documentation: Opens graphviz.org/doc/info/lang.html in browser
 
 ## Keyboard Shortcuts
 

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Text.Json;
 using System.Threading.Tasks;
@@ -50,6 +51,12 @@ public sealed class DrawioDocumentHost : IEmbeddedDocumentHost
     private static readonly TimeSpan PollInterval = TimeSpan.FromMilliseconds(150);
     private static readonly TimeSpan ExportTimeout = TimeSpan.FromSeconds(60);
 
+    /// <summary>
+    /// flush 的超时：等不到画布回话时照常落盘（用上一次回写的内容），但要**说出来** ——
+    /// 静默按旧内容保存是这一步最容易埋进去的假成功。
+    /// </summary>
+    private static readonly TimeSpan FlushTimeout = TimeSpan.FromSeconds(5);
+
     private readonly DispatcherTimer _pollTimer;
     private readonly Queue<DrawioAction> _pendingActions = new();
 
@@ -62,7 +69,9 @@ public sealed class DrawioDocumentHost : IEmbeddedDocumentHost
     private bool _navigated;
     private bool _ready;
     private bool _polling;
+    private double _zoomFactor = 1;
     private TaskCompletionSource<RendererResult>? _exportWaiter;
+    private TaskCompletionSource<string?>? _flushWaiter;
 
     public DrawioDocumentHost()
     {
@@ -70,11 +79,45 @@ public sealed class DrawioDocumentHost : IEmbeddedDocumentHost
         _pollTimer.Tick += async (_, _) => await DrainAsync();
     }
 
-    /// <summary>drawio 要求保存（用户在画布上按了保存，或 saveAndExit）。承载方负责落盘。</summary>
-    public event EventHandler<TabItem>? SaveRequested;
-
-    /// <summary>drawio 报错 / 承载面不可用时的提示文本。</summary>
+    /// <summary>
+    /// drawio 报错 / 承载面不可用时的提示文本。
+    /// </summary>
     public event EventHandler<string>? ErrorReported;
+
+    /// <inheritdoc />
+    public double ZoomFactor => _zoomFactor;
+
+    /// <inheritdoc />
+    public event EventHandler? ZoomFactorChanged;
+
+    /// <inheritdoc />
+    public event EventHandler<string>? HotkeyPressed;
+
+    /// <inheritdoc />
+    public Task ZoomAsync(double factor)
+    {
+        // 页面未就绪时直接丢弃：应用级缩放命令只可能在画布已经显示时被触发
+        if (_ready && _bridge != null)
+        {
+            _ = _bridge.ExecuteScriptAsync(EmbeddedProtocol.ZoomByScript(factor));
+        }
+
+        return Task.CompletedTask;
+    }
+
+    /// <inheritdoc />
+    public Task FitAsync()
+    {
+        // 走承载页的 __hostFit：drawio 自己的 Fit Page（整页铺进视口）。
+        // 不用 embed 的 `{"action":"fit"}` —— 那个 fit 的是内容框，小图会被放大到几十倍
+        // （实测 160×60 → 606%），与预览面/Excalidraw 的"看清整幅图"语义不一致。
+        if (_ready && _bridge != null)
+        {
+            _ = _bridge.ExecuteScriptAsync(EmbeddedProtocol.FitScript);
+        }
+
+        return Task.CompletedTask;
+    }
 
     /// <summary><c>tools/drawio</c> 目录（含 <c>index.html</c> 与 <c>host.html</c>）；缺失返回 <c>null</c>。</summary>
     public static string? DrawioDirectory
@@ -166,9 +209,6 @@ public sealed class DrawioDocumentHost : IEmbeddedDocumentHost
         StartPolling();
     }
 
-    /// <summary>让 drawio 适配窗口。</summary>
-    public void Fit() => SendAction(DrawioAction.Fit());
-
     /// <summary>
     /// 让 drawio 在画布内导出位图并取回字节（方案 §8.3.4 的 drawio 侧对应实现：
     /// 导出在页面内完成，**零子进程**）。
@@ -193,6 +233,49 @@ public sealed class DrawioDocumentHost : IEmbeddedDocumentHost
         }
 
         return await waiter.Task;
+    }
+
+    /// <summary>
+    /// 落盘前把画布的当前内容要回正文。
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// 走 drawio 的 <c>export</c>（<c>format: "xml"</c>）：它与 drawio 自己的 autosave 走的是同一个
+    /// <c>getFileData</c>，实测两者的 XML **逐字节相同**（tools/drawio v31.4.6，同一画布状态）。
+    /// 也就是说这条通道拿到的是"autosave 本来会写回的东西"，只是不必等那 1.5s 去抖。
+    /// </para>
+    /// <para>
+    /// 回写后内容**没变就什么都不做**（见 <see cref="ApplyContent"/>）：flush 会在每次保存前跑一遍，
+    /// 若每次都标脏，用户会看到"刚保存完还是已修改"。
+    /// </para>
+    /// </remarks>
+    public async Task FlushAsync()
+    {
+        var tab = _currentTab;
+        if (!_ready || tab == null || _bridge == null)
+        {
+            // 画布还没就绪：正文本来就是唯一真相（此时画布还没有任何编辑可言），直接放行落盘
+            return;
+        }
+
+        var waiter = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _flushWaiter = waiter;
+        SendAction(DrawioAction.ExportXml());
+
+        var completed = await Task.WhenAny(waiter.Task, Task.Delay(FlushTimeout));
+        _flushWaiter = null;
+
+        if (completed != waiter.Task)
+        {
+            ErrorReported?.Invoke(this, string.Format(S.EmbeddedFlushTimeoutFormat, S.FormatDrawio));
+            return;
+        }
+
+        var xml = await waiter.Task;
+        if (!string.IsNullOrEmpty(xml))
+        {
+            ApplyContent(tab, xml);
+        }
     }
 
     private void EnsureNavigated()
@@ -293,6 +376,8 @@ public sealed class DrawioDocumentHost : IEmbeddedDocumentHost
             return;
         }
 
+        await UpdateZoomFactorAsync();
+
         var raw = await _bridge.ExecuteStringScriptAsync(EmbeddedProtocol.DrainQueueScript);
         if (string.IsNullOrWhiteSpace(raw))
         {
@@ -372,19 +457,38 @@ public sealed class DrawioDocumentHost : IEmbeddedDocumentHost
                 break;
 
             case "save":
+                // 画布里已经没有保存入口（host.html 传 noSaveBtn=1），这条分支留着是为了容忍
+                // 上游仍发出 save（例如某个版本把快捷键接回来）：语义只剩"把画布内容写回正文"，
+                // 落盘由本应用的保存动作负责（它会先 flush，见 FlushAsync）。
                 if (!string.IsNullOrEmpty(message.Xml))
                 {
                     ApplyContent(tab, message.Xml);
                 }
-                SaveRequested?.Invoke(this, tab);
                 break;
 
             case "export":
-                CompleteExport(message);
+                // drawio 的 export 事件被两个用途共用：落盘前的 flush（format=xml）与导出位图。
+                // 必须靠 format 区分 —— 否则 flush 要回来的 XML 会被当成图片去解 base64。
+                if (string.Equals(message.Format, "xml", StringComparison.OrdinalIgnoreCase))
+                {
+                    CompleteFlush(message.Xml);
+                }
+                else
+                {
+                    CompleteExport(message);
+                }
                 break;
 
             case "error":
-                ErrorReported?.Invoke(this, message.Message ?? S.DrawioHostErrorFallback);
+                ErrorReported?.Invoke(this, message.MessageText ?? S.DrawioHostErrorFallback);
+                break;
+
+            case "hotkey":
+                // 画布内截下的应用级快捷键（画布持焦点时窗口的 KeyBindings 收不到键）
+                if (!string.IsNullOrWhiteSpace(message.Combo))
+                {
+                    HotkeyPressed?.Invoke(this, message.Combo);
+                }
                 break;
 
             case "load":
@@ -394,16 +498,23 @@ public sealed class DrawioDocumentHost : IEmbeddedDocumentHost
     }
 
     /// <summary>
-    /// autosave / save 回写：**挂起变更通知**，直接写正文。
+    /// autosave / save / flush 回写：**挂起变更通知**，直接写正文。
     /// </summary>
+    /// <remarks>
+    /// 内容与正文一致时**不标脏**：drawio 的 autosave 会把整份文档规范化后发回来，保存前的 flush
+    /// 更会在每次保存时原样取回画布状态 —— 无条件 <c>IsModified = true</c> 会让"刚保存完"的文档
+    /// 立刻又显示已修改，并在下次保存时白写一遍。
+    /// </remarks>
     private void ApplyContent(TabItem tab, string xml)
     {
         _loadedXml = xml;
 
+        var changed = !string.Equals(tab.Content, xml, StringComparison.Ordinal);
+
         tab.SuspendContentNotifications = true;
         try
         {
-            if (!string.Equals(tab.Content, xml, StringComparison.Ordinal))
+            if (changed)
             {
                 tab.Content = xml;
             }
@@ -413,8 +524,41 @@ public sealed class DrawioDocumentHost : IEmbeddedDocumentHost
             tab.SuspendContentNotifications = false;
         }
 
-        tab.IsModified = true;
-        tab.UpdateHeader();
+        if (changed)
+        {
+            tab.IsModified = true;
+            tab.UpdateHeader();
+        }
+    }
+
+    /// <summary>
+    /// 读承载页报告的缩放比例（状态栏读数），变了才通知界面。
+    /// </summary>
+    /// <remarks>
+    /// 搭在已有的 150ms 轮询上，不另开定时器；拿不到值（返回 0）时保留上一次读数 ——
+    /// 状态栏的百分比不能因为一次读失败就跳到 0。
+    /// </remarks>
+    private async Task UpdateZoomFactorAsync()
+    {
+        var raw = (await _bridge!.ExecuteStringScriptAsync(EmbeddedProtocol.ZoomProbeScript))?.Trim();
+        if (!double.TryParse(raw, NumberStyles.Any, CultureInfo.InvariantCulture, out var factor) || factor <= 0)
+        {
+            return;
+        }
+
+        if (Math.Abs(factor - _zoomFactor) < 0.001)
+        {
+            return;
+        }
+
+        _zoomFactor = factor;
+        ZoomFactorChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    /// <summary>flush 回话：把 XML 交给等待方（保存动作）去决定怎么落。</summary>
+    private void CompleteFlush(string? xml)
+    {
+        _flushWaiter?.TrySetResult(xml);
     }
 
     private void CompleteExport(DrawioEvent message)
@@ -431,7 +575,7 @@ public sealed class DrawioDocumentHost : IEmbeddedDocumentHost
 
         if (string.IsNullOrEmpty(data) || separator < 0)
         {
-            waiter.TrySetResult(new RendererResult(false, null, message.Message ?? S.DrawioExportMissingData));
+            waiter.TrySetResult(new RendererResult(false, null, message.MessageText ?? S.DrawioExportMissingData));
             return;
         }
 
