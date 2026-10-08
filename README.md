@@ -109,6 +109,7 @@ Version **v2.0.260929.0**
 - Help → About: App name, description, author (道荣 & 黄超), current version
 - Help → Mermaid Documentation: Opens Mermaid.js official docs in browser
 - Help → Graphviz DOT Documentation: Opens the official DOT language reference (graphviz.org) in browser
+- Help → Operations Guide: Built-in guide window (gestures, per-format notes, cloud/AI, shortcuts, troubleshooting)
 
 ### UI Features
 - **Draggable Splitter** - Adjustable editor/preview ratio (editor: 320px ~ 860px; preview: min 480px)
@@ -262,6 +263,7 @@ Enter or modify Mermaid code in the left editor panel. The right preview area up
 - Help → About: App name, features, author (道荣 & 黄超), version
 - Help → Mermaid Documentation: Opens mermaid.js.org in browser
 - Help → Graphviz DOT Documentation: Opens graphviz.org/doc/info/lang.html in browser
+- Help → Operations Guide: Built-in guide window (gestures, per-format notes, cloud/AI, shortcuts, troubleshooting)
 
 ## Keyboard Shortcuts
 

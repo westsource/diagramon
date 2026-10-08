@@ -174,6 +174,7 @@ public partial class MainViewModel : ViewModelBase
     public string MenuHelp => S.MenuHelp;
     public string MenuMermaidDocs => S.MenuMermaidDocs;
     public string MenuDotDocs => S.MenuDotDocs;
+    public string MenuHelpDocs => S.MenuHelpDocs;
     public string MenuCheckUpdate => S.MenuCheckUpdate;
     public string MenuAbout => S.MenuAbout;
     public string MenuSettings => S.MenuSettings;
@@ -2084,6 +2085,17 @@ public partial class MainViewModel : ViewModelBase
 
     [RelayCommand]
     private void OpenDotDocs() => OpenExternalLink("https://graphviz.org/doc/info/lang.html");
+
+    /// <summary>
+    /// 打开随包的「操作说明」窗口（内容来自 <c>Assets/Help/help.&lt;lang&gt;.md</c>，
+    /// 与界面语言一起切换：见 <see cref="LocalizationService.GetHelpDocument"/>）。
+    /// </summary>
+    [RelayCommand]
+    private void ShowHelp()
+    {
+        var dialog = new HelpDialog(LocalizationService.Instance.GetHelpDocument());
+        _ = dialog.ShowDialog(_ownerWindow);
+    }
 
     /// <summary>用系统默认浏览器打开外部链接（两个"规范"菜单项共用）。</summary>
     private void OpenExternalLink(string url)

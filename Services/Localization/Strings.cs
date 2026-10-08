@@ -130,6 +130,10 @@ public class Strings
     public string MenuHelp => Get("MenuHelp");
     public string MenuMermaidDocs => Get("MenuMermaidDocs");
     public string MenuDotDocs => Get("MenuDotDocs");
+    public string MenuHelpDocs => Get("MenuHelpDocs");
+    public string HelpTitle => Get("HelpTitle");
+    public string HelpClose => Get("HelpClose");
+    public string HelpUnavailable => Get("HelpUnavailable");
     public string MenuAbout => Get("MenuAbout");
     public string MenuSettings => Get("MenuSettings");
 

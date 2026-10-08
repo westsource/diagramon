@@ -111,6 +111,7 @@
 - **帮助 → 关于** - 显示应用名称、功能描述、作者（道荣 & 黄超）、当前版本号
 - **帮助 → Mermaid 文档** - 在浏览器中打开 https://mermaid.js.org/intro/
 - **帮助 → Graphviz DOT 规范** - 在浏览器中打开 https://graphviz.org/doc/info/lang.html
+- **帮助 → 操作说明** - 应用内帮助窗口：画布手势、各格式要点、AI 与云端、快捷键总表、故障排查
 
 ### 界面特性
 - **拖拽分隔条** - 编辑器与预览区比例可拖拽调节（编辑器 320px ~ 860px；预览区最小 480px）
@@ -261,6 +262,7 @@ dotnet publish -c Release -r win-x64 --self-contained true -p:PublishSingleFile=
 - 帮助 → 关于：查看应用名称、功能描述、作者（道荣 & 黄超）、当前版本号
 - 帮助 → Mermaid 文档：在浏览器中打开 Mermaid 官方文档
 - 帮助 → Graphviz DOT 规范：在浏览器中打开 Graphviz 官方 DOT 语言参考
+- 帮助 → 操作说明：在内置帮助窗口查看完整操作说明
 
 ## 快捷键
 

@@ -41,6 +41,38 @@ public sealed class LocalizationService
 
     public LanguageInfo CurrentLanguage => _availableLanguages.GetValueOrDefault(_currentLanguageCode) ?? new LanguageInfo { Code = "en-US", NativeName = "English", EnglishName = "English" };
 
+    /// <summary>
+    /// 读取当前语言的「操作说明」全文（随包资源 <c>Assets/Help/help.&lt;code&gt;.md</c>，缺当前语言时回退英文）。
+    /// </summary>
+    /// <remarks>
+    /// 帮助正文刻意**不进语言表**：它是一篇有结构的文档（章节 / 条目 / 快捷键表），塞进 JSON 会变成
+    /// 一坨带 <c>\n</c> 的长字符串，改起来和审起来都不像文档。这里沿用语言文件同一套 avares 加载方式，
+    /// 读不到时返回空串，由调用方决定怎么提示（不让对话框变成一片空白）。
+    /// </remarks>
+    public string GetHelpDocument()
+    {
+        foreach (var code in new[] { _currentLanguageCode, "en-US" })
+        {
+            try
+            {
+                var uri = new Uri($"avares://Diagramon/Assets/Help/help.{code}.md");
+                using var stream = AssetLoader.Open(uri);
+                using var reader = new StreamReader(stream);
+                var text = reader.ReadToEnd();
+                if (!string.IsNullOrWhiteSpace(text))
+                {
+                    return text;
+                }
+            }
+            catch
+            {
+                // 该语言没有帮助文档（或资源缺失）：换下一个候选
+            }
+        }
+
+        return string.Empty;
+    }
+
     public IReadOnlyDictionary<string, LanguageInfo> AvailableLanguages => _availableLanguages;
 
     private LocalizationService()
@@ -249,6 +281,10 @@ public sealed class LocalizationService
         _fallbackStrings["MenuHelp"] = "_Help";
         _fallbackStrings["MenuMermaidDocs"] = "_Mermaid Documentation...";
         _fallbackStrings["MenuDotDocs"] = "_Graphviz DOT Documentation...";
+        _fallbackStrings["MenuHelpDocs"] = "_Operations Guide...";
+        _fallbackStrings["HelpTitle"] = "Operations Guide";
+        _fallbackStrings["HelpClose"] = "Close";
+        _fallbackStrings["HelpUnavailable"] = "Help content is missing: this language guide was not packaged.";
         _fallbackStrings["MenuAbout"] = "_About...";
         _fallbackStrings["MenuSettings"] = "_Settings...";
         _fallbackStrings["LanguageMenu"] = "Language";
