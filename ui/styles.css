@@ -313,3 +313,90 @@ html, body {
 
 /* `hidden` 必须压过组件自身的 display（否则 .preview-tools/.status-layout 的 flex 会赢） */
 [hidden] { display: none !important; }
+
+/* ---- menu bar ---- */
+.menubar {
+  display: flex;
+  align-items: stretch;
+  gap: 2px;
+  padding: 2px 6px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+}
+.menubar-wrap { position: relative; }
+.menubar-item {
+  padding: 4px 10px;
+  font: inherit;
+  color: var(--fg);
+  background: none;
+  border: 0;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.menubar-item:hover, .menubar-item.open { background: var(--surface-2); }
+.menu-dropdown {
+  position: absolute;
+  top: calc(100% + 2px);
+  left: 0;
+  min-width: 200px;
+  max-height: 70vh;
+  overflow: auto;
+  padding: 4px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, .2);
+  z-index: 30;
+}
+.menu-dropdown.submenu { top: 0; }
+.menu-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 5px 10px;
+  font: inherit;
+  color: var(--fg);
+  text-align: left;
+  background: none;
+  border: 0;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.menu-row:hover { background: var(--surface-2); }
+.menu-row.disabled { color: var(--muted); cursor: default; }
+.menu-row.disabled:hover { background: none; }
+.menu-row-label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.menu-row-accel { color: var(--muted); font-size: 12px; }
+.menu-row-arrow { color: var(--muted); }
+.menu-sep { height: 1px; margin: 4px 6px; background: var(--border); }
+.modal-body.guide { max-height: 50vh; overflow: auto; text-align: left; color: var(--fg); }
+.history-search {
+  width: 100%;
+  margin-bottom: 8px;
+  padding: 6px 8px;
+  font: inherit;
+  color: var(--fg);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+.history-list { max-height: 44vh; overflow: auto; }
+.history-row {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  padding: 6px 8px;
+  font: inherit;
+  text-align: left;
+  color: var(--fg);
+  background: none;
+  border: 0;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.history-row:hover { background: var(--surface-2); }
+.history-row .p { color: var(--muted); font-size: 12px; }

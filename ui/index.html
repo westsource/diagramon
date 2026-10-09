@@ -8,16 +8,18 @@
 </head>
 <body>
   <div id="app">
+    <nav class="menubar" id="menubar"></nav>
+
     <header class="toolbar">
       <div class="toolbar-group" id="file-actions">
         <div class="menu">
-          <button class="tb-btn" id="btn-new" title="新建 (Ctrl+N)">新建 ▾</button>
+          <button class="tb-btn" id="btn-new" data-i18n-title="new" title="新建">新建 ▾</button>
           <div class="menu-popup" id="new-menu"></div>
         </div>
-        <button class="tb-btn" id="btn-open" title="打开 (Ctrl+O)">打开</button>
-        <button class="tb-btn" id="btn-save" title="保存 (Ctrl+S)">保存</button>
-        <button class="tb-btn" id="btn-save-as" title="另存为 (Ctrl+Shift+S)">另存为</button>
-        <button class="tb-btn" id="btn-close" title="关闭标签页 (Ctrl+W)">关闭</button>
+        <button class="tb-btn" id="btn-open" data-i18n="open">打开</button>
+        <button class="tb-btn" id="btn-save" data-i18n="save">保存</button>
+        <button class="tb-btn" id="btn-save-as" data-i18n="saveAs">另存为</button>
+        <button class="tb-btn" id="btn-close" data-i18n="close">关闭</button>
       </div>
       <div class="toolbar-spacer"></div>
       <div class="toolbar-group" id="format-badge"></div>
@@ -36,20 +38,20 @@
         <div class="preview-scroll" id="preview-scroll">
           <div class="preview-content" id="preview-content"></div>
         </div>
-        <div class="preview-empty" id="preview-empty">没有打开的文档</div>
+        <div class="preview-empty" id="preview-empty" data-i18n="noDoc">没有打开的文档</div>
         <div class="preview-canvas" id="preview-canvas" hidden></div>
         <div class="preview-tools" id="preview-tools" hidden>
-          <button class="pt-btn" id="btn-export-png" title="保存为图片">保存图片</button>
-          <button class="pt-btn" id="btn-copy-png" title="复制图片到剪贴板">复制图片</button>
+          <button class="pt-btn" id="btn-export-png" data-i18n="exportPng" data-i18n-title="exportPngTip">保存图片</button>
+          <button class="pt-btn" id="btn-copy-png" data-i18n="copyPng" data-i18n-title="copyPngTip">复制图片</button>
         </div>
       </section>
     </main>
 
     <footer class="statusbar">
-      <span class="status-msg" id="status-msg">就绪</span>
+      <span class="status-msg" id="status-msg" data-i18n="ready">就绪</span>
       <span class="status-spacer"></span>
       <label class="status-layout" id="layout-wrap" hidden>
-        <span class="status-layout-label">布局</span>
+        <span class="status-layout-label" data-i18n="layout">布局</span>
         <select id="layout-select"></select>
       </label>
       <span class="status-zoom" id="status-zoom">100%</span>
@@ -59,7 +61,10 @@
   <!-- 渲染器与业务脚本：先渲染器，再外壳（顺序即依赖） -->
   <script src="/mermaid/mermaid.min.js"></script>
   <script src="./ipc.js"></script>
+  <script src="./i18n.js"></script>
+  <script src="./settings.js"></script>
   <script src="./dialogs.js"></script>
+  <script src="./menu.js"></script>
   <script src="./preview.js"></script>
   <script src="./canvas.js"></script>
   <script src="./vendor/editor.bundle.js"></script>

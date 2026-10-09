@@ -74,7 +74,7 @@ impl Session {
         format: DocFormat,
         body: String,
     ) -> (String, bool) {
-        let canonical = path.canonicalize().unwrap_or(path);
+        let canonical = normalize_canonical(path);
         if let Some(existing) = self
             .docs
             .iter()
@@ -119,6 +119,23 @@ impl Session {
     /// 全部标签页的状态快照。
     pub fn tab_states(&self) -> Vec<TabState> {
         self.docs.iter().map(Document::tab_state).collect()
+    }
+}
+
+/// 规范化磁盘路径：先 `canonicalize`（解析符号链接/`..`/大小写），再去掉 Windows 的
+/// verbatim 前缀（`\\?\` / `\\?\UNC\`）。
+///
+/// 去掉前缀是**面向用户**的决定：带前缀的路径会出现在标签页标题、最近文件与设置里
+/// （`\\?\C:\…`），既不好看也会被用户复制去别处用。去前缀后仍是绝对路径，系统调用照常可用。
+fn normalize_canonical(path: PathBuf) -> PathBuf {
+    let canonical = path.canonicalize().unwrap_or(path);
+    let text = canonical.to_string_lossy();
+    if let Some(rest) = text.strip_prefix(r"\\?\UNC\") {
+        PathBuf::from(format!(r"\\{rest}"))
+    } else if let Some(rest) = text.strip_prefix(r"\\?\") {
+        PathBuf::from(rest)
+    } else {
+        canonical
     }
 }
 
@@ -201,5 +218,18 @@ mod tests {
         let mut s = Session::new();
         let err = s.close("nope").unwrap_err();
         assert_eq!(err.code, app_ipc::codes::INVALID_TAB);
+    }
+
+    #[test]
+    fn canonical_paths_drop_verbatim_prefix() {
+        // 不存在的路径会原样返回（canonicalize 失败），正好用来测前缀剥离这条纯逻辑
+        let win = normalize_canonical(PathBuf::from(r"\\?\C:\some\dir\file.mmd"));
+        assert_eq!(win, PathBuf::from(r"C:\some\dir\file.mmd"));
+
+        let unc = normalize_canonical(PathBuf::from(r"\\?\UNC\server\share\a.mmd"));
+        assert_eq!(unc, PathBuf::from(r"\\server\share\a.mmd"));
+
+        let plain = normalize_canonical(PathBuf::from("relative/path.mmd"));
+        assert_eq!(plain, PathBuf::from("relative/path.mmd"));
     }
 }

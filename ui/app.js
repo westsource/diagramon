@@ -1,8 +1,10 @@
-// 应用外壳：标签页、文件操作、工具栏/状态栏、快捷键，并把各模块接起来。
+// 应用外壳：标签页、文件操作、菜单栏/工具栏/状态栏、快捷键，并把各模块接起来。
 
 (function () {
   const RENDER_DEBOUNCE_MS = 350;
   const BODY_DEBOUNCE_MS = 200;
+
+  const t = (key, vars) => DGM.i18n.t(key, vars);
 
   const state = {
     /** @type {Array<{id:string,path:(string|null),format:string,title:string,dirty:boolean}>} */
@@ -11,17 +13,18 @@
     /** @type {Map<string,{id:string,defaultExtension:string,layoutOptions:Array}>} */
     formats: new Map(),
     /** @type {Map<string,string>} */ bodies: new Map(),
-    /** DOT 布局引擎（按标签页记忆，默认引擎来自注册表）。 */
+    /** DOT 布局引擎（按标签页记忆）。 */
     engines: new Map(),
     renderTimer: 0,
     bodyTimer: 0,
     info: null,
+    recent: [],
   };
 
   const el = {
+    menubar: document.getElementById("menubar"),
     tabs: document.getElementById("tabs"),
     editorHost: document.getElementById("editor-host"),
-    previewEmpty: document.getElementById("preview-empty"),
     statusMsg: document.getElementById("status-msg"),
     statusZoom: document.getElementById("status-zoom"),
     formatBadge: document.getElementById("format-badge"),
@@ -38,7 +41,7 @@
     layoutSelect: document.getElementById("layout-select"),
     previewTools: document.getElementById("preview-tools"),
     previewCanvas: document.getElementById("preview-canvas"),
-    previewScroll: document.getElementById("preview-scroll"),
+    previewEmpty: document.getElementById("preview-empty"),
   };
 
   function status(msg, warn = false) {
@@ -49,16 +52,16 @@
   const activeTab = () => state.tabs.find((t) => t.id === state.activeId) || null;
   const formatOf = (tab) =>
     state.formats.get(tab.format) || { id: tab.format, defaultExtension: tab.format, layoutOptions: [] };
+  const isCanvasFormat = (format) => format === "drawio" || format === "excalidraw";
 
   function displayTitle(tab) {
-    return tab.title || `未命名.${formatOf(tab).defaultExtension}`;
+    return tab.title || `${DGM.i18n.t("untitled")}.${formatOf(tab).defaultExtension}`;
   }
 
-  /** 导出图片的建议文件名（去扩展名）。 */
   function currentExportStem() {
     const tab = activeTab();
     if (!tab) return "diagram";
-    const title = tab.title || `未命名.${formatOf(tab).defaultExtension}`;
+    const title = tab.title || `Untitled.${formatOf(tab).defaultExtension}`;
     return title.replace(/\.[^.]+$/, "") || "diagram";
   }
 
@@ -111,8 +114,6 @@
     await DGM.preview.render(tab, DGM.editor.getValue(), { engine: currentEngine(tab.format) });
     el.previewTools.hidden = !DGM.preview.hasContent();
   }
-
-  const isCanvasFormat = (format) => format === "drawio" || format === "excalidraw";
 
   function updateStatusBar() {
     const tab = activeTab();
@@ -170,7 +171,7 @@
       const close = document.createElement("button");
       close.className = "tab-close";
       close.textContent = "×";
-      close.title = "关闭 (Ctrl+W)";
+      close.title = `${t("close")} (Ctrl+W)`;
       close.addEventListener("click", (e) => {
         e.stopPropagation();
         closeTab(tab.id);
@@ -193,7 +194,7 @@
   }
 
   function upsertTab(tab) {
-    const i = state.tabs.findIndex((t) => t.id === tab.id);
+    const i = state.tabs.findIndex((x) => x.id === tab.id);
     if (i >= 0) state.tabs[i] = tab;
     else state.tabs.push(tab);
   }
@@ -223,8 +224,17 @@
   }
 
   async function openFiles() {
-    const opened = await DGM.invoke("open_dialog");
-    if (!opened.length) return;
+    try {
+      const opened = await DGM.invoke("open_dialog");
+      if (!opened.length) return;
+      await adoptOpened(opened);
+    } catch (e) {
+      status(`${t("openFailed")}: ${e && e.message ? e.message : e}`, true);
+    }
+  }
+
+  /** 载入一组已打开的文档（对话框、命令行、最近文件共用）。 */
+  async function adoptOpened(opened) {
     for (const item of opened) {
       upsertTab(item.tab);
       state.bodies.set(item.tab.id, item.body);
@@ -232,7 +242,18 @@
     const last = opened[opened.length - 1].tab;
     await refreshTabs();
     await activateTab(last.id);
-    status(`已打开 ${opened.length} 个文件`);
+    await refreshRecent();
+    renderMenu();
+    status(t("opened", { n: opened.length }));
+  }
+
+  async function openPath(path) {
+    try {
+      const opened = await DGM.invoke("open_paths_cmd", { paths: [path] });
+      await adoptOpened(opened);
+    } catch (e) {
+      status(`${t("openFailed")}: ${e && e.message ? e.message : e}`, true);
+    }
   }
 
   /** 画布格式落盘前先 flush：把画布当前内容取回正文。 */
@@ -256,14 +277,16 @@
       if (!updated) return; // 用户取消
       upsertTab(updated);
       renderTabs();
-      status(`已保存 ${displayTitle(updated)}`);
+      await refreshRecent();
+      renderMenu();
+      status(t("saved", { name: displayTitle(updated) }));
     } catch (e) {
-      status(`保存失败: ${e && e.message ? e.message : e}`, true);
+      status(`${t("saveFailed")}: ${e && e.message ? e.message : e}`, true);
     }
   }
 
   async function closeTab(id) {
-    const tab = state.tabs.find((t) => t.id === id);
+    const tab = state.tabs.find((x) => x.id === id);
     if (tab && tab.dirty) {
       const choice = await DGM.dialogs.saveChanges(displayTitle(tab));
       if (choice === "cancel") return;
@@ -303,8 +326,7 @@
   // ---------------------------------------------------------------- 快捷键
 
   function hotkeyAction(e) {
-    const k = e.key;
-    const lower = k.toLowerCase();
+    const lower = e.key.toLowerCase();
     if (e.shiftKey && lower === "s") return "save-as";
     switch (lower) {
       case "n": return "new";
@@ -318,11 +340,26 @@
       case "-": case "_": return "zoom-out";
       default: break;
     }
-    // 小键盘
     if (e.code === "Numpad0") return "fit";
     if (e.code === "NumpadAdd") return "zoom-in";
     if (e.code === "NumpadSubtract") return "zoom-out";
     return null;
+  }
+
+  function runAction(action) {
+    switch (action) {
+      case "new": newTab("mermaid"); break;
+      case "open": openFiles(); break;
+      case "save": save(false); break;
+      case "save-as": save(true); break;
+      case "close": if (state.activeId) closeTab(state.activeId); break;
+      case "quit": quit(); break;
+      case "find": if (DGM.editor.openSearch) DGM.editor.openSearch(); break;
+      case "fit": DGM.preview.fit(); break;
+      case "zoom-in": DGM.preview.zoomIn(); break;
+      case "zoom-out": DGM.preview.zoomOut(); break;
+      default: break;
+    }
   }
 
   function setupShortcuts() {
@@ -331,45 +368,35 @@
       const action = hotkeyAction(e);
       if (!action) return;
       e.preventDefault();
-      switch (action) {
-        case "new": newTab("mermaid"); break;
-        case "open": openFiles(); break;
-        case "save": save(false); break;
-        case "save-as": save(true); break;
-        case "close": if (state.activeId) closeTab(state.activeId); break;
-        case "quit": quit(); break;
-        case "find": if (DGM.editor.openSearch) DGM.editor.openSearch(); break;
-        case "fit": DGM.preview.fit(); break;
-        case "zoom-in": DGM.preview.zoomIn(); break;
-        case "zoom-out": DGM.preview.zoomOut(); break;
-        default: break;
-      }
+      runAction(action);
     });
   }
 
   /** 画布内截下的应用级快捷键（画布持焦点时窗口快捷键收不到键）。 */
   function handleCanvasHotkey(combo) {
-    switch (combo) {
-      case "ctrl+s": save(false); break;
-      case "ctrl+shift+s": save(true); break;
-      case "ctrl+o": openFiles(); break;
-      case "ctrl+n": newTab("mermaid"); break;
-      case "ctrl+w": if (state.activeId) closeTab(state.activeId); break;
-      case "ctrl+q": quit(); break;
-      default: break; // ctrl+0 / zoom-in / zoom-out 由画布自己处理
-    }
+    const map = {
+      "ctrl+s": "save",
+      "ctrl+shift+s": "save-as",
+      "ctrl+o": "open",
+      "ctrl+n": "new",
+      "ctrl+w": "close",
+      "ctrl+q": "quit",
+    };
+    const action = map[combo];
+    if (action) runAction(action);
   }
 
   async function quit() {
-    const dirty = state.tabs.filter((t) => t.dirty);
+    const dirty = state.tabs.filter((x) => x.dirty);
     if (dirty.length) {
       const choice = await DGM.dialogs.confirmQuit(dirty.length);
       if (!choice) return;
     }
+    if (DGM.settings) await DGM.settings.flush();
     await DGM.invoke("quit");
   }
 
-  // ---------------------------------------------------------------- 布局与导出
+  // ---------------------------------------------------------------- 布局 / 导出
 
   function setupLayoutSelector() {
     el.layoutSelect.addEventListener("change", () => {
@@ -385,14 +412,14 @@
       try {
         await exportCurrent(true);
       } catch (e) {
-        status(`导出失败: ${e && e.message ? e.message : e}`, true);
+        status(`${t("exportFailed")}: ${e && e.message ? e.message : e}`, true);
       }
     });
     document.getElementById("btn-copy-png").addEventListener("click", async () => {
       try {
         await exportCurrent(false);
       } catch (e) {
-        status(`复制失败: ${e && e.message ? e.message : e}`, true);
+        status(`${t("copyFailed")}: ${e && e.message ? e.message : e}`, true);
       }
     });
   }
@@ -400,17 +427,17 @@
   /** 导出当前标签页的位图；画布格式走画布内栅格化，文本格式走预览栅格化。 */
   async function exportCurrent(toFile) {
     const tab = activeTab();
-    if (!tab) throw new Error("没有打开的文档");
+    if (!tab) throw new Error(t("noDoc"));
     if (isCanvasFormat(tab.format)) {
       const dataUrl = await DGM.canvas.exportPng(tab.format, 3, true);
-      if (!dataUrl) throw new Error("画布尚未就绪或导出失败");
+      if (!dataUrl) throw new Error(t("canvasNotReady"));
       const url = dataUrl.startsWith("data:") ? dataUrl : `data:image/png;base64,${dataUrl}`;
       if (toFile) {
         const path = await DGM.invoke("save_image", { dataUrl: url, fileName: `${currentExportStem()}.png` });
-        if (path) status(`已保存图片 ${path}`);
+        if (path) status(t("savedImage", { path }));
       } else {
         await DGM.copyImageDataUrl(url);
-        status("图片已复制到剪贴板");
+        status(t("imageCopied"));
       }
       return;
     }
@@ -418,7 +445,7 @@
     else await DGM.preview.copyImage();
   }
 
-  // ---------------------------------------------------------------- 分隔条 / 新建菜单
+  // ---------------------------------------------------------------- 分隔条
 
   function setupSplitter() {
     let dragging = false;
@@ -440,11 +467,105 @@
     });
   }
 
+  function applyEditorRatio() {
+    const ratio = DGM.settings && DGM.settings.value.editorRatio;
+    if (ratio) el.paneEditor.style.flexBasis = `${Math.round(ratio * 100)}%`;
+  }
+
+  // ---------------------------------------------------------------- 菜单
+
+  async function refreshRecent() {
+    if (!DGM.settings) return [];
+    state.recent = await DGM.settings.recent();
+    return state.recent;
+  }
+
+  function formatLabel(format) {
+    return format;
+  }
+
+  function buildMenuModel() {
+    const recentItems = state.recent.length
+      ? state.recent.map((r) => ({
+          label: r.title || r.path,
+          onClick: () => openPath(r.path),
+        }))
+      : [{ label: t("recentEmpty"), disabled: true }];
+    recentItems.push({ kind: "separator" });
+    recentItems.push({ label: t("recentMore"), onClick: openHistory });
+    recentItems.push({
+      label: t("clearHistory"),
+      onClick: async () => {
+        await DGM.settings.recentClear();
+        await refreshRecent();
+        renderMenu();
+      },
+    });
+
+    return [
+      {
+        label: t("file"),
+        items: [
+          {
+            label: t("new"),
+            kind: "submenu",
+            items: [...state.formats.values()].map((f) => ({
+              label: formatLabel(f.id),
+              onClick: () => newTab(f.id),
+            })),
+          },
+          { label: t("open"), accel: "Ctrl+O", onClick: openFiles },
+          { label: t("save"), accel: "Ctrl+S", onClick: () => save(false) },
+          { label: t("saveAs"), accel: "Ctrl+Shift+S", onClick: () => save(true) },
+          { kind: "separator" },
+          { label: t("recentFiles"), kind: "submenu", items: recentItems },
+          { kind: "separator" },
+          { label: t("close"), accel: "Ctrl+W", onClick: () => state.activeId && closeTab(state.activeId) },
+          { label: t("quit"), accel: "Ctrl+Q", onClick: quit },
+        ],
+      },
+      {
+        label: t("settings"),
+        items: [
+          {
+            label: t("language"),
+            kind: "submenu",
+            items: DGM.i18n.languages.map((code) => ({
+              label: code === "zh-CN" ? "中文" : "English",
+              onClick: () => DGM.i18n.setLang(code),
+            })),
+          },
+        ],
+      },
+      {
+        label: t("help"),
+        items: [
+          { label: t("guide"), onClick: () => DGM.dialogs.guide() },
+          { label: t("about"), onClick: () => DGM.dialogs.about(state.info || { name: "Diagramon", version: "?", platform: "?" }) },
+        ],
+      },
+    ];
+  }
+
+  function renderMenu() {
+    DGM.menu.setModel(buildMenuModel());
+  }
+
+  async function openHistory() {
+    await refreshRecent();
+    if (!state.recent.length) {
+      status(t("recentEmpty"));
+      return;
+    }
+    const path = await DGM.dialogs.history(state.recent);
+    if (path) await openPath(path);
+  }
+
   function setupNewMenu() {
     el.newMenu.innerHTML = "";
     for (const spec of state.formats.values()) {
       const b = document.createElement("button");
-      b.textContent = `新建 ${spec.id}`;
+      b.textContent = `${t("new")} ${formatLabel(spec.id)}`;
       b.addEventListener("click", () => {
         el.newMenu.classList.remove("open");
         newTab(spec.id);
@@ -458,6 +579,27 @@
     window.addEventListener("click", () => el.newMenu.classList.remove("open"));
   }
 
+  // ---------------------------------------------------------------- 转换
+
+  /** Mermaid → 图形编辑器（单向：画布上的改动不回写 Mermaid 源码）。 */
+  async function convertActiveTo(targetFormat) {
+    const src = activeTab();
+    if (!src) throw new Error(t("noDoc"));
+    if (src.format !== "mermaid") throw new Error(t("onlyMermaidConvertible"));
+    const source = DGM.editor.getValue();
+
+    DGM.canvas.setPendingConversion(targetFormat, source);
+    const opened = await DGM.invoke("new_tab", { format: targetFormat });
+    upsertTab(opened.tab);
+    state.activeId = opened.tab.id;
+    DGM.editor.setLanguage(targetFormat);
+    DGM.editor.setValue(opened.body);
+    renderTabs();
+    await rerender();
+    status(t("converted", { format: targetFormat }));
+    return opened.tab.id;
+  }
+
   // ---------------------------------------------------------------- 启动
 
   async function boot() {
@@ -468,10 +610,10 @@
     });
     DGM.canvas.init({
       container: el.previewCanvas,
-      onContent: async (tabId, xml) => {
+      onContent: async (tabId, body) => {
         if (tabId !== state.activeId) return;
-        DGM.editor.setValue(xml);
-        const updated = await DGM.invoke("set_body", { id: tabId, body: xml });
+        DGM.editor.setValue(body);
+        const updated = await DGM.invoke("set_body", { id: tabId, body });
         upsertTab(updated);
         renderTabs();
       },
@@ -483,10 +625,26 @@
     setupShortcuts();
     setupLayoutSelector();
     setupExportButtons();
+    DGM.dialogs.init();
 
     state.info = await DGM.invoke("app_info");
     const formats = await DGM.invoke("formats");
     for (const f of formats) state.formats.set(f.id, f);
+
+    // 设置与语言：显式设置优先，否则按系统语言探测
+    await DGM.settings.load();
+    const lang = DGM.settings.value.language || DGM.i18n.detect();
+    DGM.i18n.setLang(lang, { persist: false });
+    DGM.i18n.apply();
+    DGM.i18n.onChange(() => {
+      renderMenu();
+      setupNewMenu();
+      renderTabs();
+    });
+    applyEditorRatio();
+
+    await refreshRecent();
+    DGM.menu.mount(el.menubar, buildMenuModel());
     setupNewMenu();
 
     el.btnOpen.addEventListener("click", openFiles);
@@ -497,31 +655,15 @@
     document.title = `${state.info.name} ${state.info.version}`;
     status(`${state.info.name} ${state.info.version} · ${state.info.platform}`);
 
-    if (DGM.settings) await DGM.settings.load();
-    if (DGM.dialogs) DGM.dialogs.init();
-
-    await refreshTabs();
-    if (state.activeId) await activateTab(state.activeId);
-    else await newTab("mermaid");
-  }
-
-  /** Mermaid → 图形编辑器（单向：画布上的改动不回写 Mermaid 源码）。 */
-  async function convertActiveTo(targetFormat) {
-    const src = activeTab();
-    if (!src) throw new Error("没有打开的文档");
-    if (src.format !== "mermaid") throw new Error("只有 Mermaid 文档可以转换");
-    const source = DGM.editor.getValue();
-
-    DGM.canvas.setPendingConversion(targetFormat, source);
-    const opened = await DGM.invoke("new_tab", { format: targetFormat });
-    upsertTab(opened.tab);
-    state.activeId = opened.tab.id;
-    DGM.editor.setLanguage(targetFormat);
-    DGM.editor.setValue(opened.body);
-    renderTabs();
-    await rerender();
-    status(`已转换为 ${targetFormat}（原 Mermaid 标签页保持不变）`);
-    return opened.tab.id;
+    // 命令行参数里的文件
+    const cli = await DGM.invoke("cli_paths");
+    if (cli.length) {
+      await openPath(cli[cli.length - 1]);
+    } else {
+      await refreshTabs();
+      if (state.activeId) await activateTab(state.activeId);
+      else await newTab("mermaid");
+    }
   }
 
   DGM.app = {
@@ -533,14 +675,17 @@
     upsertTab,
     newTab,
     openFiles,
+    openPath,
     save,
     closeTab,
     convertActiveTo,
     exportCurrent,
     isCanvasFormat,
+    refreshRecent,
+    renderMenu,
     state,
     el,
   };
 
-  boot().catch((e) => status(`启动失败: ${e && e.message ? e.message : e}`, true));
+  boot().catch((e) => status(t("startFailed") + `: ${e && e.message ? e.message : e}`, true));
 })();

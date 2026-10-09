@@ -104,10 +104,15 @@ function skip(name, reason) {
 }
 
 async function main() {
+  // 先加载场景模块：它可以在模块作用域里声明 `appArgs`（例如命令行打开的场景需要）
+  // 与准备测试素材（临时文件），这些必须在启动应用之前完成。
+  const scenario = await import(pathToFileURL(path.resolve(SCENARIO)).href);
+  const appArgs = (scenario.appArgs || []).map(String);
+
   const env = { ...process.env, WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${PORT}` };
   // 让应用从仓库工作树取 ui/ 与旧资产树（与开发运行一致）。
   delete env.DIAGRAMON_UI_DIR;
-  const child = spawn(APP, [], { env, stdio: ["ignore", "pipe", "pipe"] });
+  const child = spawn(APP, appArgs, { env, stdio: ["ignore", "pipe", "pipe"] });
   const logs = [];
   child.stdout.on("data", (b) => logs.push(b.toString()));
   child.stderr.on("data", (b) => logs.push(b.toString()));
@@ -132,7 +137,6 @@ async function main() {
       await sleep(250);
     }
 
-    const scenario = await import(pathToFileURL(path.resolve(SCENARIO)).href);
     const ctx = {
       cdp,
       check,

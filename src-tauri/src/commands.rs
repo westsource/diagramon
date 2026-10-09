@@ -219,6 +219,83 @@ pub async fn save_image(
     Ok(Some(path.to_string_lossy().into_owned()))
 }
 
+/// 读设置。
+#[tauri::command]
+pub fn settings_get(state: State<'_, AppState>) -> app_core::Settings {
+    state.with_settings(|s| s.clone())
+}
+
+/// 覆盖写设置（前端持有的就是全量对象），随即落盘。
+#[tauri::command]
+pub fn settings_save(state: State<'_, AppState>, settings: app_core::Settings) -> app_core::Settings {
+    state.with_settings(|s| *s = settings);
+    state.persist_settings();
+    state.with_settings(|s| s.clone())
+}
+
+/// 最近文件列表（最新在前）。
+#[tauri::command]
+pub fn recent_list(state: State<'_, AppState>) -> Vec<app_core::RecentFile> {
+    state.with_settings(|s| s.recent_files.clone())
+}
+
+/// 记一条最近文件并落盘，返回更新后的列表。
+#[tauri::command]
+pub fn recent_add(state: State<'_, AppState>, path: String, title: String) -> Vec<app_core::RecentFile> {
+    let now = now_ms();
+    state.with_settings(|s| s.touch_recent(&path, &title, now));
+    state.persist_settings();
+    state.with_settings(|s| s.recent_files.clone())
+}
+
+/// 清空最近文件。
+#[tauri::command]
+pub fn recent_clear(state: State<'_, AppState>) -> Vec<app_core::RecentFile> {
+    state.with_settings(|s| s.recent_files.clear());
+    state.persist_settings();
+    Vec::new()
+}
+
+/// 剔除已失效的最近文件，返回更新后的列表。
+#[tauri::command]
+pub fn recent_prune(state: State<'_, AppState>) -> Vec<app_core::RecentFile> {
+    state.with_settings(|s| s.prune_recent());
+    state.persist_settings();
+    state.with_settings(|s| s.recent_files.clone())
+}
+
+/// 命令行里给出的、确实存在的文件路径（启动时由前端取走并打开）。
+#[tauri::command]
+pub fn cli_paths() -> Vec<String> {
+    std::env::args()
+        .skip(1)
+        .filter(|a| !a.starts_with('-'))
+        .filter(|a| std::path::Path::new(a).is_file())
+        .collect()
+}
+
+/// 应用目录（关于/诊断用）。
+#[tauri::command]
+pub fn app_dirs(state: State<'_, AppState>) -> std::collections::BTreeMap<String, String> {
+    let paths = state.platform().paths();
+    let mut out = std::collections::BTreeMap::new();
+    out.insert("config".into(), paths.config_dir().to_string_lossy().into_owned());
+    out.insert("data".into(), paths.data_dir().to_string_lossy().into_owned());
+    out.insert("cache".into(), paths.cache_dir().to_string_lossy().into_owned());
+    out.insert(
+        "settings".into(),
+        state.settings_path().to_string_lossy().into_owned(),
+    );
+    out
+}
+
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
 /// 关闭标签页，返回剩余标签与新的活动页。
 #[tauri::command]
 pub fn close_tab(state: State<'_, AppState>, id: String) -> Res<CloseResult> {
@@ -297,6 +374,7 @@ fn open_paths(state: &State<'_, AppState>, paths: Vec<PathBuf>) -> Res<Vec<Opene
                 body: doc.body().to_string(),
             }
         });
+        record_recent(state, opened.tab.path.as_deref(), &opened.tab.title);
         out.push(opened);
     }
     Ok(out)
@@ -304,7 +382,7 @@ fn open_paths(state: &State<'_, AppState>, paths: Vec<PathBuf>) -> Res<Vec<Opene
 
 /// 把标签正文写到磁盘并把该页标记为已保存。
 fn write_document(state: &State<'_, AppState>, id: &str, path: PathBuf) -> Res<TabState> {
-    state.with_session(|s| {
+    let updated = state.with_session(|s| {
         let doc = s
             .get(id)
             .ok_or_else(|| ApiError::new(codes::INVALID_TAB, format!("未知标签页: {id}")))?;
@@ -313,7 +391,17 @@ fn write_document(state: &State<'_, AppState>, id: &str, path: PathBuf) -> Res<T
         let doc = s.get_mut(id).expect("上一步已确认存在");
         doc.mark_saved(path);
         Ok(doc.tab_state())
-    })
+    })?;
+    record_recent(state, updated.path.as_deref(), &updated.title);
+    Ok(updated)
+}
+
+/// 记一条最近文件（打开/首次保存成功后调用）。
+fn record_recent(state: &State<'_, AppState>, path: Option<&str>, title: &str) {
+    let Some(path) = path else { return };
+    let now = now_ms();
+    state.with_settings(|s| s.touch_recent(path, title, now));
+    state.persist_settings();
 }
 
 /// 某格式的对话框过滤器（名称, 扩展名）。

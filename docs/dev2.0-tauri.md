@@ -99,6 +99,9 @@ node tools/e2e/run.mjs tools/e2e/scenarios/stage1a.mjs   # 单个场景
 * 内嵌画布：drawio 与 Excalidraw（同源 iframe 桥、autosave 回写、保存前 flush、
   页内导出、画布内应用级快捷键回传）；
 * Mermaid → drawio / Excalidraw 单向转换；
+* 配置地基：菜单栏（文件/设置/帮助）、设置持久化（`settings.json`：语言/编辑器比例/最近文件/
+  跳过版本等）、最近文件（记录/去重/失效剔除/菜单+历史对话框含搜索）、本地化（en-US/zh-CN +
+  首次按系统语言探测 + 即时切换）、关于/操作说明对话框、崩溃日志（`crash.log`）、命令行参数打开；
 * 自动化验收跑分器 `tools/e2e/`（CDP 驱动真实页面，`node tools/e2e/all.mjs` 一键跑完）。
 
 未完成（后续阶段）：

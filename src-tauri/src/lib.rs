@@ -80,6 +80,20 @@ compile_error!(
     "macOS/Linux 平台适配层尚未实现：请先补 platform-macos / platform-linux（阶段 1 待办）"
 );
 
+/// 安装崩溃日志：任何 panic 追加到 `<cache>/crash.log`。
+///
+/// 既有客户端同样把未处理异常写进 `crash.log`（`%LOCALAPPDATA%/Diagramon`），
+/// 这里沿用同一路径语义（cache_dir 即 `%LOCALAPPDATA%` 下的应用目录）。
+fn install_crash_log(cache_dir: std::path::PathBuf) {
+    std::panic::set_hook(Box::new(move |info| {
+        let entry = app_core::crash::format_entry(&info.to_string());
+        if let Err(e) = app_core::crash::append(&cache_dir, &entry) {
+            eprintln!("dgm|crash|write_failed|{e}");
+        }
+        eprintln!("dgm|crash|{info}");
+    }));
+}
+
 /// 启动应用。
 pub fn run() {
     let roots = Arc::new(AssetRoots::detect(ui_dir()));
@@ -91,6 +105,7 @@ pub fn run() {
     );
 
     let platform = create_platform().expect("平台适配层初始化失败");
+    install_crash_log(platform.paths().cache_dir());
 
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -160,6 +175,14 @@ pub fn run() {
             commands::credential_get,
             commands::credential_set,
             commands::credential_delete,
+            commands::settings_get,
+            commands::settings_save,
+            commands::recent_list,
+            commands::recent_add,
+            commands::recent_clear,
+            commands::recent_prune,
+            commands::cli_paths,
+            commands::app_dirs,
             commands::quit,
         ])
         .run(tauri::generate_context!())
