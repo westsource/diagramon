@@ -2,8 +2,10 @@
 
 pub mod document;
 pub mod format;
+pub mod image;
 pub mod session;
 
 pub use document::Document;
 pub use format::{spec, spec_by_id, specs, FormatSpec, LayoutOption, Surface};
+pub use image::{decode_data_url, extension_for_mime};
 pub use session::Session;

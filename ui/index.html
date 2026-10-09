@@ -17,6 +17,7 @@
         <button class="tb-btn" id="btn-open" title="打开 (Ctrl+O)">打开</button>
         <button class="tb-btn" id="btn-save" title="保存 (Ctrl+S)">保存</button>
         <button class="tb-btn" id="btn-save-as" title="另存为 (Ctrl+Shift+S)">另存为</button>
+        <button class="tb-btn" id="btn-close" title="关闭标签页 (Ctrl+W)">关闭</button>
       </div>
       <div class="toolbar-spacer"></div>
       <div class="toolbar-group" id="format-badge"></div>
@@ -28,7 +29,7 @@
 
     <main class="workspace" id="workspace">
       <section class="pane pane-editor" id="pane-editor">
-        <textarea id="editor" spellcheck="false" autocomplete="off" wrap="off"></textarea>
+        <div class="editor-host" id="editor-host"></div>
       </section>
       <div class="splitter" id="splitter" role="separator" aria-orientation="vertical"></div>
       <section class="pane pane-preview" id="pane-preview">
@@ -36,18 +37,31 @@
           <div class="preview-content" id="preview-content"></div>
         </div>
         <div class="preview-empty" id="preview-empty">没有打开的文档</div>
+        <div class="preview-canvas" id="preview-canvas" hidden></div>
+        <div class="preview-tools" id="preview-tools" hidden>
+          <button class="pt-btn" id="btn-export-png" title="保存为图片">保存图片</button>
+          <button class="pt-btn" id="btn-copy-png" title="复制图片到剪贴板">复制图片</button>
+        </div>
       </section>
     </main>
 
     <footer class="statusbar">
       <span class="status-msg" id="status-msg">就绪</span>
       <span class="status-spacer"></span>
+      <label class="status-layout" id="layout-wrap" hidden>
+        <span class="status-layout-label">布局</span>
+        <select id="layout-select"></select>
+      </label>
       <span class="status-zoom" id="status-zoom">100%</span>
     </footer>
   </div>
 
-  <!-- 渲染器与业务脚本：先加载渲染器，再加载外壳 -->
+  <!-- 渲染器与业务脚本：先渲染器，再外壳（顺序即依赖） -->
   <script src="/mermaid/mermaid.min.js"></script>
+  <script src="./ipc.js"></script>
+  <script src="./dialogs.js"></script>
+  <script src="./preview.js"></script>
+  <script src="./editor.js"></script>
   <script src="./app.js"></script>
 </body>
 </html>

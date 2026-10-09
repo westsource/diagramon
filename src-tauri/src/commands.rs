@@ -182,6 +182,43 @@ pub async fn save_as(
     write_document(&state, &id, path).map(Some)
 }
 
+/// 保存前端生成的位图（`data:` URL）到磁盘。
+///
+/// 前端把预览内容栅格化为 PNG data URL（`data:` 路，见 §7.3 的跨引擎结论），
+/// 这里只负责解码与写盘；返回写入的绝对路径，用户在对话框取消则返回 `None`。
+#[tauri::command]
+pub async fn save_image(
+    app: AppHandle,
+    data_url: String,
+    file_name: String,
+) -> Res<Option<String>> {
+    let (mime, bytes) = app_core::decode_data_url(&data_url)?;
+
+    let ext = app_core::extension_for_mime(&mime);
+    let filter_name = if ext == "jpg" { "JPEG 图片" } else { "PNG 图片" };
+    let mut suggested = file_name;
+    if !suggested.to_ascii_lowercase().ends_with(&format!(".{ext}")) {
+        suggested = format!("{}.{ext}", suggested.trim_end_matches('.'));
+    }
+
+    let builder = app
+        .dialog()
+        .file()
+        .set_title("保存图片")
+        .set_file_name(suggested)
+        .add_filter(filter_name, &[ext]);
+    let picked = tauri::async_runtime::spawn_blocking(move || builder.blocking_save_file())
+        .await
+        .map_err(|e| io_err("保存图片对话框失败", e))?;
+
+    let Some(file) = picked else {
+        return Ok(None);
+    };
+    let path = file.into_path().map_err(|e| io_err("无效的保存路径", e))?;
+    std::fs::write(&path, bytes).map_err(|e| io_err(&format!("写入 {}", path.display()), e))?;
+    Ok(Some(path.to_string_lossy().into_owned()))
+}
+
 /// 关闭标签页，返回剩余标签与新的活动页。
 #[tauri::command]
 pub fn close_tab(state: State<'_, AppState>, id: String) -> Res<CloseResult> {

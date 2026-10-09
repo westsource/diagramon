@@ -30,9 +30,10 @@ app-ipc = { workspace = true }
 app-core = { workspace = true }
 assets = { workspace = true }
 platform = { workspace = true }
-tauri = { version = "2", features = [] }
+tauri = { version = "2", features = ["image-png"] }
 tauri-plugin-dialog = "2"
 tauri-plugin-opener = "2"
+tauri-plugin-clipboard-manager = "2"
 serde = { workspace = true }
 serde_json = { workspace = true }
 

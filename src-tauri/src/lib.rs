@@ -95,6 +95,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_clipboard_manager::init())
         .register_asynchronous_uri_scheme_protocol("dgm", move |_ctx, request, responder| {
             let roots = roots.clone();
             let path = request.uri().path().to_string();
@@ -153,6 +154,7 @@ pub fn run() {
             commands::set_body,
             commands::save,
             commands::save_as,
+            commands::save_image,
             commands::close_tab,
             commands::activate_tab,
             commands::credential_get,
