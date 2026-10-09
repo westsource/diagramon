@@ -20,8 +20,22 @@ use tauri::{WebviewUrl, WebviewWindowBuilder};
 
 use state::AppState;
 
-/// 前端产物目录：开发期是源码树里的 `ui/`；发布形态由 `DIAGRAMON_ASSETS_DIR` 或资源目录覆盖。
+/// 前端产物目录。
+///
+/// 解析顺序：`DIAGRAMON_UI_DIR` → 可执行文件同级的 `ui/`（发布/便携形态）
+/// → 源码树里的 `ui/`（开发形态）。
 fn ui_dir() -> PathBuf {
+    if let Some(p) = std::env::var_os("DIAGRAMON_UI_DIR") {
+        return PathBuf::from(p);
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            let cand = dir.join("ui");
+            if cand.join("index.html").is_file() {
+                return cand;
+            }
+        }
+    }
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../ui")
 }
 

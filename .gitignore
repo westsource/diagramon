@@ -385,3 +385,5 @@ src-tauri/gen/
 # 前端依赖（后续引入打包器时）
 ui/node_modules/
 ui/dist/
+# 便携运行目录（本地装配：exe + ui/ + 随包资产），不入库
+/dist/

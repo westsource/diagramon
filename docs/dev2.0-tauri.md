@@ -78,6 +78,9 @@ cargo test -p platform-windows   # DPAPI 凭据存储往返测试
 
 未完成（后续阶段）：
 
+> 完整的功能差距清单（逐项与 main 分支对照，含 main 侧证据文件:行）见
+> [`dev2.0-gap-analysis.md`](./dev2.0-gap-analysis.md)。
+
 * macOS / Linux 平台适配层（当前在非 Windows 目标上会以 `compile_error!` 明确阻断，不静默降级）；
 * drawio / Excalidraw 内嵌画布宿主页（阶段 2）；DOT 六布局选择器；页内 PNG 导出（去 mmdc）；
 * AI 助手、设置、云端、更新器（阶段 3–4）；三平台打包与签名（阶段 4）。
