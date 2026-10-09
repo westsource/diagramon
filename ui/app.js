@@ -461,7 +461,11 @@
   // ---------------------------------------------------------------- 启动
 
   async function boot() {
-    DGM.preview.init({ onZoom: (s) => (el.statusZoom.textContent = `${Math.round(s * 100)}%`), onStatus: status });
+    DGM.preview.init({
+      onZoom: (s) => (el.statusZoom.textContent = `${Math.round(s * 100)}%`),
+      onStatus: status,
+      onErrorLine: (line) => DGM.editor.revealLine(line),
+    });
     DGM.canvas.init({
       container: el.previewCanvas,
       onContent: async (tabId, xml) => {

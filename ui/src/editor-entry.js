@@ -187,6 +187,14 @@ function create(host, opts = {}) {
       view.dispatch({ effects: language.reconfigure(ctor()) });
     },
     focus: () => view.focus(),
+    /** 把某一行滚动到视野中央（渲染报错定位用；不改动选区，避免打断正在输入的用户）。 */
+    revealLine(line) {
+      const total = view.state.doc.lines;
+      const l = Math.max(1, Math.min(Number(line) || 1, total));
+      const info = view.state.doc.line(l);
+      view.dispatch({ effects: EditorView.scrollIntoView(info.from, { y: "center" }) });
+      return l;
+    },
     openSearch: () => {
       openSearchPanel(view);
       return true;

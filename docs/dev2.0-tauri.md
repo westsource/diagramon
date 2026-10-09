@@ -12,7 +12,7 @@
 |---|---|---|
 | 0 判定门 | 三平台最小可复现包跑通（`tauri-spike-kit/`） | ✅ Windows / Linux 已实测通过；macOS 待真机 |
 | **1 骨架与适配层** | 三平台能起一个空壳窗口；凭据读写、文件对话框 | **进行中**：工作区骨架 + Windows 适配层已落地 |
-| 2 承载与渲染 | 四类图渲染与导出（drawio / excalidraw 宿主页、graphviz / mermaid 页内渲染、去 mmdc） | 待做 |
+| 2 承载与渲染 | 四类图渲染与导出（drawio / excalidraw 宿主页、graphviz / mermaid 页内渲染、去 mmdc） | ✅ **Windows 已完成**（四类图均可渲染与页内导出；drawio / Excalidraw 内嵌画布、DOT 六布局、编辑器高亮/查找、Mermaid→图形转换、语法校验行号） |
 | 3 业务功能 | 文档模型、标签页、文件 IO、AI 面板、设置 | 部分（文档/标签页/文件 IO 已完成） |
 | 4 平台化 | 三套打包、签名、更新器、文件关联 | 待做 |
 | 5 验证与发布 | 三引擎回归、性能与体积、灰度 | 待做 |
@@ -65,6 +65,25 @@ cargo test -p platform-windows   # DPAPI 凭据存储往返测试
 
 运行时在 stdout 打印 `dgm|roots|…`、`dgm|url|…`、`dgm|404|…` 便于诊断。
 
+## 4.1 自动化验收（tools/e2e）
+
+`tools/e2e/` 是一个零依赖的 Node 跑分器：以
+`WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=<port>` 启动应用，
+用 CDP 连到窗口里的真实 WebView2 页面执行断言与交互（真实键入、真实点击），
+不依赖桌面输入注入，也不需要人工点击。
+
+```bash
+node tools/e2e/all.mjs                 # 跑完全部场景并汇总
+node tools/e2e/run.mjs tools/e2e/scenarios/stage1a.mjs   # 单个场景
+```
+
+判定三态：`PASS` / `FAIL` / `SKIP`（环境导致的无法判定项，如系统剪贴板被他人独占）。
+退出码在存在 `FAIL` 时为 1。
+
+当前场景与覆盖：`stage1a` DOT 布局选择器 + 页内 PNG 导出；`stage1b` CodeMirror 高亮/行号/查找 + 真实键入；
+`stage1c` drawio 内嵌画布 + flush + 导出 + Mermaid→drawio；`stage1d` Excalidraw 画布 + 回写 + 导出 + 转换；
+`stage1e` 语法校验与报错行号。
+
 ## 5. 已完成 / 未完成（截至本分支首次提交）
 
 已完成：
@@ -73,8 +92,14 @@ cargo test -p platform-windows   # DPAPI 凭据存储往返测试
 * 文档模型与会话（脏标记按内容比对、同路径去重激活、关闭后活动页落点）；
 * 自定义协议资产服务（`..` 防穿越、MIME 推断、按平台 origin）；
 * 平台适配层 trait + Windows DPAPI 凭据存储（含落盘密文断言测试）；
-* Tauri 命令层：开/存/另存/新建/关/激活标签页、读写正文、凭据读写、退出；
-* 前端外壳：标签页、编辑器、Mermaid/DOT 实时预览（350ms 防抖）、预览平移/缩放/适配、文件操作与快捷键。
+* Tauri 命令层：开/存/另存/新建/关/激活标签页、读写正文、保存图片、凭据读写、退出；
+* 编辑器：CodeMirror 6（行号、Mermaid/DOT 自带行式高亮、JSON/XML 官方语言、查找替换）；
+* 预览：Mermaid / Graphviz 页内渲染、DOT 六布局、平移缩放适配、语法校验与报错行号；
+* 导出：Mermaid/DOT 预览栅格化 + 画布内栅格化，保存到文件与复制到剪贴板（自适应倍率）；
+* 内嵌画布：drawio 与 Excalidraw（同源 iframe 桥、autosave 回写、保存前 flush、
+  页内导出、画布内应用级快捷键回传）；
+* Mermaid → drawio / Excalidraw 单向转换；
+* 自动化验收跑分器 `tools/e2e/`（CDP 驱动真实页面，`node tools/e2e/all.mjs` 一键跑完）。
 
 未完成（后续阶段）：
 
@@ -82,5 +107,4 @@ cargo test -p platform-windows   # DPAPI 凭据存储往返测试
 > [`dev2.0-gap-analysis.md`](./dev2.0-gap-analysis.md)。
 
 * macOS / Linux 平台适配层（当前在非 Windows 目标上会以 `compile_error!` 明确阻断，不静默降级）；
-* drawio / Excalidraw 内嵌画布宿主页（阶段 2）；DOT 六布局选择器；页内 PNG 导出（去 mmdc）；
-* AI 助手、设置、云端、更新器（阶段 3–4）；三平台打包与签名（阶段 4）。
+* 阶段 3 业务功能：AI 助手、设置持久化、最近文件、本地化、各对话框、云端、更新器（阶段 4）。

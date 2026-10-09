@@ -25,6 +25,7 @@
     y: 0,
     onZoom: null,
     onStatus: null,
+    onErrorLine: null,
   };
 
   let mermaidReady = false;
@@ -130,6 +131,18 @@
 
   // ---------------------------------------------------------------- 提示与错误
 
+  /**
+   * 从渲染器/校验器的原始报错里解析出行号并给出可读文案。
+   * 覆盖 Mermaid（`Parse error on line N`）与 Graphviz（`syntax error in line N near '…'`）。
+   */
+  function describeError(raw) {
+    const text = String(raw == null ? "" : raw);
+    const match = /(?:on\s+)?line[ :]+(\d+)/i.exec(text);
+    const line = match ? Number(match[1]) : 0;
+    const firstLine = text.split("\n").map((s) => s.trim()).find((s) => s.length > 0) || text;
+    return line ? { line, text: `第 ${line} 行：${firstLine}` } : { line: 0, text: firstLine };
+  }
+
   function showNote(text) {
     state.lastSvg = "";
     el.content.innerHTML = "";
@@ -188,6 +201,11 @@
         if (!ensureMermaid()) {
           throw new Error("Mermaid 渲染器未加载：请确认资产目录包含 mermaid.min.js");
         }
+        // 先校验（mermaid.parse）再渲染：校验失败不会在页面上留下半渲染的残迹，
+        // 且报错文案带行号，能直接定位。
+        if (typeof window.mermaid.parse === "function") {
+          await window.mermaid.parse(body);
+        }
         svg = (await window.mermaid.render(`dgm-${mine}`, body)).svg;
       } else {
         const engine = (opts && opts.engine) || "dot";
@@ -201,15 +219,12 @@
       view.fit();
     } catch (err) {
       if (mine !== token) return;
-      const msg = err && err.message ? err.message : String(err);
-      showError(msg);
+      const described = describeError(err && err.message ? err.message : err);
+      showError(described.text);
       el.tools.hidden = true;
-      if (state.onStatus) state.onStatus(firstLine(msg), true);
+      if (state.onStatus) state.onStatus(described.text, true);
+      if (described.line && state.onErrorLine) state.onErrorLine(described.line);
     }
-  }
-
-  function firstLine(text) {
-    return String(text).split("\n").filter((l) => l.trim().length > 0)[0] || String(text);
   }
 
   // ---------------------------------------------------------------- 位图导出
@@ -293,6 +308,7 @@
       setupGestures();
       state.onZoom = (opts && opts.onZoom) || null;
       state.onStatus = (opts && opts.onStatus) || null;
+      state.onErrorLine = (opts && opts.onErrorLine) || null;
     },
     render,
     fit: () => view.fit(),
@@ -303,6 +319,8 @@
     isCanvasFormat: () => state.lastFormat === "drawio" || state.lastFormat === "excalidraw",
     /** 当前预览栅格化为 PNG data URL（导出与自动化验收共用）。 */
     toPngDataUrl,
+    /** 从渲染器原始报错解析出行号与可读文案（导出与自动化验收共用）。 */
+    describeError,
     saveImage,
     copyImage,
     element: {

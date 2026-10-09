@@ -61,6 +61,11 @@
     focus() {
       if (state.handle) state.handle.focus();
     },
+    /** 定位到某一行（渲染报错用）；返回实际行号，0 表示后端不支持。 */
+    revealLine(line) {
+      if (state.handle && state.handle.revealLine) return state.handle.revealLine(line);
+      return 0;
+    },
     /** 打开查找/替换面板；返回是否可用（textarea 回退下不可用）。 */
     openSearch() {
       return state.handle && state.handle.openSearch ? state.handle.openSearch() : false;
