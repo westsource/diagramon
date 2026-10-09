@@ -376,3 +376,12 @@ FodyWeavers.xsd
 
 # VS Code
 .vscode/
+
+# ---- dev2.0：Rust + Tauri 跨平台实现 ----
+# Cargo 构建产物（工作区根 target/）
+/target/
+# Tauri 构建期生成的 schema 与 ACL 清单，不入库（可由 cargo build 重新生成）
+src-tauri/gen/
+# 前端依赖（后续引入打包器时）
+ui/node_modules/
+ui/dist/

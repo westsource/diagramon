@@ -1,0 +1,38 @@
+# Diagramon dev2.0 —— Rust + Tauri 2 跨平台重写（Windows / macOS / Linux）
+#
+# 本工作区与同目录下的 Avalonia 客户端（Diagramon.csproj 等）并存，
+# 迁移完成前旧实现保留为行为参照。工程结构对齐《迁移方案 v1.2》§7.5。
+[workspace]
+resolver = "2"
+members = [
+    "crates/app-ipc",
+    "crates/app-core",
+    "crates/assets",
+    "crates/platform",
+    "crates/platform-windows",
+    "src-tauri",
+]
+
+[workspace.package]
+version = "2.0.0"
+edition = "2021"
+license = "Apache-2.0"
+repository = "https://github.com/westsource/diagramon"
+
+[workspace.dependencies]
+app-ipc = { path = "crates/app-ipc" }
+app-core = { path = "crates/app-core" }
+assets = { path = "crates/assets" }
+platform = { path = "crates/platform" }
+platform-windows = { path = "crates/platform-windows" }
+
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

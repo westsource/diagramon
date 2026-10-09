@@ -1,0 +1,11 @@
+[package]
+name = "platform"
+description = "Diagramon 平台适配层：凭据、路径等接口定义（无平台依赖）"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+thiserror = { workspace = true }
+dirs = "7"

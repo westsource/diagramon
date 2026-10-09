@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Diagramon</title>
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <div id="app">
+    <header class="toolbar">
+      <div class="toolbar-group" id="file-actions">
+        <div class="menu">
+          <button class="tb-btn" id="btn-new" title="新建 (Ctrl+N)">新建 ▾</button>
+          <div class="menu-popup" id="new-menu"></div>
+        </div>
+        <button class="tb-btn" id="btn-open" title="打开 (Ctrl+O)">打开</button>
+        <button class="tb-btn" id="btn-save" title="保存 (Ctrl+S)">保存</button>
+        <button class="tb-btn" id="btn-save-as" title="另存为 (Ctrl+Shift+S)">另存为</button>
+      </div>
+      <div class="toolbar-spacer"></div>
+      <div class="toolbar-group" id="format-badge"></div>
+    </header>
+
+    <nav class="tabbar">
+      <div class="tabs" id="tabs"></div>
+    </nav>
+
+    <main class="workspace" id="workspace">
+      <section class="pane pane-editor" id="pane-editor">
+        <textarea id="editor" spellcheck="false" autocomplete="off" wrap="off"></textarea>
+      </section>
+      <div class="splitter" id="splitter" role="separator" aria-orientation="vertical"></div>
+      <section class="pane pane-preview" id="pane-preview">
+        <div class="preview-scroll" id="preview-scroll">
+          <div class="preview-content" id="preview-content"></div>
+        </div>
+        <div class="preview-empty" id="preview-empty">没有打开的文档</div>
+      </section>
+    </main>
+
+    <footer class="statusbar">
+      <span class="status-msg" id="status-msg">就绪</span>
+      <span class="status-spacer"></span>
+      <span class="status-zoom" id="status-zoom">100%</span>
+    </footer>
+  </div>
+
+  <!-- 渲染器与业务脚本：先加载渲染器，再加载外壳 -->
+  <script src="/mermaid/mermaid.min.js"></script>
+  <script src="./app.js"></script>
+</body>
+</html>
