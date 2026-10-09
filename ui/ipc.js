@@ -19,3 +19,24 @@ DGM.dataUrlToBytes = (dataUrl) => {
   for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
   return bytes;
 };
+
+/**
+ * 把 PNG data URL 写到系统剪贴板。
+ * Windows 上剪贴板可能被其它进程短暂占用（"clipboard is not accessible"），
+ * 属可恢复竞态，因此做有界重试；重试仍失败则抛出最后一个错误。
+ */
+DGM.copyImageDataUrl = async (dataUrl) => {
+  if (!DGM.clipboard) throw new Error("剪贴板插件不可用");
+  const bytes = DGM.dataUrlToBytes(dataUrl);
+  let lastErr = null;
+  for (let attempt = 0; attempt < 6; attempt += 1) {
+    try {
+      await DGM.clipboard.writeImage(bytes);
+      return;
+    } catch (e) {
+      lastErr = e;
+      await new Promise((r) => setTimeout(r, 150));
+    }
+  }
+  throw lastErr || new Error("复制图片失败");
+};

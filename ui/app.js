@@ -85,22 +85,34 @@
       el.layoutWrap.hidden = true;
       el.previewTools.hidden = true;
       el.previewCanvas.hidden = true;
+      DGM.canvas.hide();
       return;
     }
     updateStatusBar();
-    await DGM.preview.render(tab, DGM.editor.getValue(), { engine: currentEngine(tab.format) });
-    el.previewTools.hidden = el.previewTools.hidden || !DGM.preview.hasContent();
 
-    if (tab.format === "drawio" || tab.format === "excalidraw") {
+    if (isCanvasFormat(tab.format)) {
+      // 画布即编辑器：文本面与分割条让位（与既有客户端一致）
+      el.paneEditor.hidden = true;
+      el.splitter.hidden = true;
+      await DGM.preview.render(null, "");
+      DGM.preview.element.content.innerHTML = "";
       el.previewCanvas.hidden = false;
-      el.previewTools.hidden = true;
-      if (DGM.canvas && DGM.canvas.show) DGM.canvas.show(tab, DGM.editor.getValue());
-    } else {
-      el.previewCanvas.hidden = true;
-      el.previewScroll.hidden = false;
-      if (DGM.canvas && DGM.canvas.hide) DGM.canvas.hide();
+      DGM.canvas.show(tab, DGM.editor.getValue());
+      el.previewTools.hidden = false;
+      updateLayoutSelector();
+      return;
     }
+
+    el.paneEditor.hidden = false;
+    el.splitter.hidden = false;
+    DGM.canvas.hide();
+    el.previewCanvas.hidden = true;
+    updateLayoutSelector();
+    await DGM.preview.render(tab, DGM.editor.getValue(), { engine: currentEngine(tab.format) });
+    el.previewTools.hidden = !DGM.preview.hasContent();
   }
+
+  const isCanvasFormat = (format) => format === "drawio" || format === "excalidraw";
 
   function updateStatusBar() {
     const tab = activeTab();
@@ -223,10 +235,23 @@
     status(`已打开 ${opened.length} 个文件`);
   }
 
+  /** 画布格式落盘前先 flush：把画布当前内容取回正文。 */
+  async function syncCanvasBody(tab) {
+    if (!isCanvasFormat(tab.format)) return;
+    const xml = await DGM.canvas.flush(tab.format);
+    if (typeof xml === "string" && xml.length) {
+      DGM.editor.setValue(xml);
+      const updated = await DGM.invoke("set_body", { id: tab.id, body: xml });
+      upsertTab(updated);
+      renderTabs();
+    }
+  }
+
   async function save(as) {
     const tab = activeTab();
     if (!tab) return;
     try {
+      await syncCanvasBody(tab);
       const updated = await DGM.invoke(as ? "save_as" : "save", { id: tab.id });
       if (!updated) return; // 用户取消
       upsertTab(updated);
@@ -322,6 +347,19 @@
     });
   }
 
+  /** 画布内截下的应用级快捷键（画布持焦点时窗口快捷键收不到键）。 */
+  function handleCanvasHotkey(combo) {
+    switch (combo) {
+      case "ctrl+s": save(false); break;
+      case "ctrl+shift+s": save(true); break;
+      case "ctrl+o": openFiles(); break;
+      case "ctrl+n": newTab("mermaid"); break;
+      case "ctrl+w": if (state.activeId) closeTab(state.activeId); break;
+      case "ctrl+q": quit(); break;
+      default: break; // ctrl+0 / zoom-in / zoom-out 由画布自己处理
+    }
+  }
+
   async function quit() {
     const dirty = state.tabs.filter((t) => t.dirty);
     if (dirty.length) {
@@ -345,18 +383,39 @@
   function setupExportButtons() {
     document.getElementById("btn-export-png").addEventListener("click", async () => {
       try {
-        await DGM.preview.saveImage();
+        await exportCurrent(true);
       } catch (e) {
         status(`导出失败: ${e && e.message ? e.message : e}`, true);
       }
     });
     document.getElementById("btn-copy-png").addEventListener("click", async () => {
       try {
-        await DGM.preview.copyImage();
+        await exportCurrent(false);
       } catch (e) {
         status(`复制失败: ${e && e.message ? e.message : e}`, true);
       }
     });
+  }
+
+  /** 导出当前标签页的位图；画布格式走画布内栅格化，文本格式走预览栅格化。 */
+  async function exportCurrent(toFile) {
+    const tab = activeTab();
+    if (!tab) throw new Error("没有打开的文档");
+    if (isCanvasFormat(tab.format)) {
+      const dataUrl = await DGM.canvas.exportPng(tab.format, 3, true);
+      if (!dataUrl) throw new Error("画布尚未就绪或导出失败");
+      const url = dataUrl.startsWith("data:") ? dataUrl : `data:image/png;base64,${dataUrl}`;
+      if (toFile) {
+        const path = await DGM.invoke("save_image", { dataUrl: url, fileName: `${currentExportStem()}.png` });
+        if (path) status(`已保存图片 ${path}`);
+      } else {
+        await DGM.copyImageDataUrl(url);
+        status("图片已复制到剪贴板");
+      }
+      return;
+    }
+    if (toFile) await DGM.preview.saveImage();
+    else await DGM.preview.copyImage();
   }
 
   // ---------------------------------------------------------------- 分隔条 / 新建菜单
@@ -403,6 +462,19 @@
 
   async function boot() {
     DGM.preview.init({ onZoom: (s) => (el.statusZoom.textContent = `${Math.round(s * 100)}%`), onStatus: status });
+    DGM.canvas.init({
+      container: el.previewCanvas,
+      onContent: async (tabId, xml) => {
+        if (tabId !== state.activeId) return;
+        DGM.editor.setValue(xml);
+        const updated = await DGM.invoke("set_body", { id: tabId, body: xml });
+        upsertTab(updated);
+        renderTabs();
+      },
+      onError: (msg) => status(msg, true),
+      onHotkey: handleCanvasHotkey,
+      onZoom: (z) => (el.statusZoom.textContent = `${Math.round(z * 100)}%`),
+    });
     setupSplitter();
     setupShortcuts();
     setupLayoutSelector();
@@ -429,6 +501,25 @@
     else await newTab("mermaid");
   }
 
+  /** Mermaid → 图形编辑器（单向：画布上的改动不回写 Mermaid 源码）。 */
+  async function convertActiveTo(targetFormat) {
+    const src = activeTab();
+    if (!src) throw new Error("没有打开的文档");
+    if (src.format !== "mermaid") throw new Error("只有 Mermaid 文档可以转换");
+    const source = DGM.editor.getValue();
+
+    DGM.canvas.setPendingConversion(targetFormat, source);
+    const opened = await DGM.invoke("new_tab", { format: targetFormat });
+    upsertTab(opened.tab);
+    state.activeId = opened.tab.id;
+    DGM.editor.setLanguage(targetFormat);
+    DGM.editor.setValue(opened.body);
+    renderTabs();
+    await rerender();
+    status(`已转换为 ${targetFormat}（原 Mermaid 标签页保持不变）`);
+    return opened.tab.id;
+  }
+
   DGM.app = {
     status,
     currentExportStem,
@@ -436,6 +527,13 @@
     activateTab,
     refreshTabs,
     upsertTab,
+    newTab,
+    openFiles,
+    save,
+    closeTab,
+    convertActiveTo,
+    exportCurrent,
+    isCanvasFormat,
     state,
     el,
   };

@@ -284,22 +284,8 @@
 
   async function copyImage() {
     const dataUrl = await toPngDataUrl();
-    if (!window.DGM.clipboard) throw new Error("剪贴板插件不可用");
-    const bytes = window.DGM.dataUrlToBytes(dataUrl);
-    // Windows 上剪贴板可能被其它进程短暂占用（"clipboard is not accessible"），
-    // 这是可恢复的竞态，重试几次即可。
-    let lastErr = null;
-    for (let attempt = 0; attempt < 6; attempt += 1) {
-      try {
-        await window.DGM.clipboard.writeImage(bytes);
-        if (state.onStatus) state.onStatus("图片已复制到剪贴板");
-        return;
-      } catch (e) {
-        lastErr = e;
-        await new Promise((r) => setTimeout(r, 150));
-      }
-    }
-    throw lastErr || new Error("复制图片失败");
+    await window.DGM.copyImageDataUrl(dataUrl);
+    if (state.onStatus) state.onStatus("图片已复制到剪贴板");
   }
 
   DGM.preview = {
