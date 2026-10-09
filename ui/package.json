@@ -1,0 +1,20 @@
+{
+  "name": "diagramon-ui",
+  "private": true,
+  "version": "2.0.0",
+  "description": "Diagramon 前端外壳（无框架；仅编辑器用打包器产出 vendor 产物）",
+  "scripts": {
+    "build": "node build.mjs"
+  },
+  "devDependencies": {
+    "@codemirror/commands": "^6.7.1",
+    "@codemirror/lang-json": "^6.0.1",
+    "@codemirror/lang-xml": "^6.1.0",
+    "@codemirror/language": "^6.10.8",
+    "@codemirror/search": "^6.5.8",
+    "@codemirror/state": "^6.5.0",
+    "@codemirror/view": "^6.35.0",
+    "codemirror": "^6.0.1",
+    "esbuild": "^0.24.0"
+  }
+}

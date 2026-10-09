@@ -310,3 +310,6 @@ html, body {
   border-color: var(--accent);
 }
 .modal-btn.primary:hover { filter: brightness(1.08); }
+
+/* `hidden` 必须压过组件自身的 display（否则 .preview-tools/.status-layout 的 flex 会赢） */
+[hidden] { display: none !important; }

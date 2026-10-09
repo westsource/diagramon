@@ -1,50 +1,72 @@
-// 编辑器抽象层：外壳只依赖这套接口，具体实现（纯 textarea / CodeMirror）可替换。
+// 编辑器抽象层：优先用打包好的 CodeMirror（`window.DGMEditor`），拿不到时退回纯 textarea。
 //
-// 之所以先立接口：语法高亮与查找替换会换掉底层实现，外壳不应跟着改。
+// 之所以保留回退：vendor 产物缺失时应用仍应能编辑（只是没有高亮），而不是整页报错。
 
 (function () {
-  const state = { host: null, textarea: null, onChange: null, suppress: false };
+  const state = { host: null, handle: null, onChange: null, doc: "", language: "mermaid" };
 
-  function ensure() {
-    if (state.textarea || !state.host) return;
+  function cm() {
+    return window.DGMEditor && typeof window.DGMEditor.create === "function" ? window.DGMEditor : null;
+  }
+
+  function createCodeMirror(host) {
+    return window.DGMEditor.create(host, {
+      doc: state.doc,
+      language: state.language,
+      onChange: (v) => state.onChange && state.onChange(v),
+    });
+  }
+
+  function createTextarea(host) {
     const ta = document.createElement("textarea");
     ta.id = "editor";
     ta.spellcheck = false;
     ta.autocomplete = "off";
     ta.wrap = "off";
-    ta.addEventListener("input", () => {
-      if (!state.suppress && state.onChange) state.onChange(ta.value);
-    });
-    state.host.appendChild(ta);
-    state.textarea = ta;
+    ta.value = state.doc;
+    ta.addEventListener("input", () => state.onChange && state.onChange(ta.value));
+    host.appendChild(ta);
+    return {
+      getValue: () => ta.value,
+      setValue: (v) => {
+        ta.value = v;
+      },
+      setLanguage: () => {},
+      focus: () => ta.focus(),
+      openSearch: () => false,
+      destroy: () => ta.remove(),
+    };
   }
 
   DGM.editor = {
-    /** 挂载到宿主元素；可重复调用（幂等）。 */
     mount(host) {
       state.host = host;
-      ensure();
+      if (!state.handle) state.handle = cm() ? createCodeMirror(host) : createTextarea(host);
     },
     getValue() {
-      ensure();
-      return state.textarea ? state.textarea.value : "";
+      return state.handle ? state.handle.getValue() : state.doc;
     },
-    /** 程序化设置正文（不触发 onChange）。 */
     setValue(value) {
-      ensure();
-      if (!state.textarea) return;
-      state.suppress = true;
-      state.textarea.value = value;
-      state.suppress = false;
+      state.doc = value;
+      if (state.handle) state.handle.setValue(value);
+    },
+    /** 切换语法（按标签格式）。 */
+    setLanguage(format) {
+      state.language = format || "mermaid";
+      if (state.handle && state.handle.setLanguage) state.handle.setLanguage(state.language);
     },
     onChange(cb) {
       state.onChange = cb;
     },
     focus() {
-      ensure();
-      if (state.textarea) state.textarea.focus();
+      if (state.handle) state.handle.focus();
     },
-    /** 切换标签页时的失焦/脏标刷新钩子（实现可覆写）。 */
-    refresh() {},
+    /** 打开查找/替换面板；返回是否可用（textarea 回退下不可用）。 */
+    openSearch() {
+      return state.handle && state.handle.openSearch ? state.handle.openSearch() : false;
+    },
+    usingCodeMirror() {
+      return Boolean(cm());
+    },
   };
 })();

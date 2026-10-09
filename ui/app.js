@@ -191,6 +191,8 @@
     await DGM.invoke("activate_tab", { id });
     const body = await DGM.invoke("read_document", { id });
     state.bodies.set(id, body);
+    const tab = activeTab();
+    if (tab) DGM.editor.setLanguage(tab.format);
     DGM.editor.setValue(body);
     renderTabs();
     await rerender();
@@ -201,6 +203,7 @@
     upsertTab(opened.tab);
     state.activeId = opened.tab.id;
     state.bodies.set(opened.tab.id, opened.body);
+    DGM.editor.setLanguage(opened.tab.format);
     DGM.editor.setValue(opened.body);
     renderTabs();
     await rerender();

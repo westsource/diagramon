@@ -24,6 +24,12 @@ export default async function ({ cdp, check, sleep, log }) {
     await waitFor(cdp, "document.querySelector('#preview-content svg')"),
   );
 
+  // Mermaid 无布局概念：选择器必须隐藏（并且 `hidden` 要真正生效，不被 flex 覆盖）
+  const layoutHidden = await cdp.evaluate(
+    "(() => { const w = document.getElementById('layout-wrap'); return w.hidden && getComputedStyle(w).display === 'none'; })()",
+  );
+  check("Mermaid 标签页隐藏布局选择器", layoutHidden === true);
+
   // ---- Mermaid 导出 ----
   const mermaidPng = await cdp.evaluate("window.DGM.preview.toPngDataUrl()");
   check("Mermaid 栅格化为 PNG data URL", typeof mermaidPng === "string" && mermaidPng.startsWith("data:image/png;base64,"));
