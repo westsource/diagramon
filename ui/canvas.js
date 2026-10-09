@@ -22,7 +22,7 @@
 
   function host(format) {
     if (state.hosts[format]) return state.hosts[format];
-    const entry = { frame: null, ready: false, loadedTab: null, lastApplied: "", pending: [], waiters: [] };
+    const entry = { frame: null, ready: false, loadedTab: null, lastApplied: "", pending: [], waiters: [], files: {} };
     state.hosts[format] = entry;
     return entry;
   }
@@ -82,6 +82,7 @@
     const entry = host(format);
     switch (msg.event) {
       case "init":
+      case "ready":
         entry.ready = true;
         flushPending(format);
         break;
@@ -94,6 +95,17 @@
           entry.lastApplied = msg.xml;
           if (state.onContent && entry.loadedTab) state.onContent(entry.loadedTab, msg.xml);
         }
+        break;
+      case "scene": {
+        // Excalidraw：画布变更以 elements/appState 回传，这里还原成文件 JSON
+        const json = sceneToJson(msg, entry);
+        if (json && json !== entry.lastApplied) {
+          entry.lastApplied = json;
+          if (state.onContent && entry.loadedTab) state.onContent(entry.loadedTab, json);
+        }
+        break;
+      }
+      case "loaded":
         break;
       case "export":
         if (String(msg.format).toLowerCase() === "xml") {
@@ -114,6 +126,22 @@
         break;
       default:
         break;
+    }
+  }
+
+  /** 把 Excalidraw 的 scene 事件还原成 `.excalidraw` 文件正文（保留载入时的 files）。 */
+  function sceneToJson(msg, entry) {
+    try {
+      return JSON.stringify({
+        type: "excalidraw",
+        version: 2,
+        source: "Diagramon",
+        elements: msg.elements || [],
+        appState: msg.appState || {},
+        files: entry.files || {},
+      });
+    } catch (e) {
+      return null;
     }
   }
 
@@ -173,7 +201,14 @@
     } else if (format === "drawio") {
       send(format, { action: "load", xml: body, autosave: 1 });
     } else {
-      send(format, { action: "load", data: body });
+      // Excalidraw：正文就是场景 JSON，直接 setScene；顺带记住 files 段
+      try {
+        const scene = JSON.parse(body);
+        entry.files = scene.files || {};
+      } catch (e) {
+        entry.files = {};
+      }
+      send(format, { action: "setScene", scene: body });
     }
     startPolling();
   }
@@ -188,10 +223,13 @@
     if (state.container) state.container.hidden = true;
   }
 
-  /** 落盘前取画布当前 XML（与 autosave 同源，只是不等 1.5s 去抖）。 */
+  /** 落盘前取画布当前正文。
+   *  drawio：向画布取 XML（与 autosave 同源，只是不等 1.5s 去抖）。
+   *  Excalidraw：正文由 `scene` 事件持续回写，直接返回当前值（协议没有 XML 导出档）。 */
   function flush(format) {
     const entry = host(format);
     if (!entry.frame || entry.loadedTab === null) return Promise.resolve(null);
+    if (format !== "drawio") return Promise.resolve(entry.lastApplied || null);
     return new Promise((resolve) => {
       entry.waiters.push({ kind: "xml", resolve });
       send(format, { action: "export", format: "xml" });
@@ -223,7 +261,7 @@
     if (format === "drawio") {
       send(format, { action: "load", autosave: 1, descriptor: { format: "mermaid", data: source, wrap: true } });
     } else {
-      send(format, { action: "load", data: JSON.stringify({ type: "mermaid", data: source }) });
+      send(format, { action: "loadMermaid", source });
     }
   }
 

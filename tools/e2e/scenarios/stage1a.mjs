@@ -5,7 +5,7 @@
 async function waitFor(cdp, expr, { timeout = 15000, interval = 200 } = {}) {
   const deadline = Date.now() + timeout;
   while (Date.now() < deadline) {
-    if (await cdp.evaluate(`(() => { try { return !!(${expr}); } catch (e) { return false; } })()`)) return true;
+    if (await cdp.evaluate(`(async () => { try { return !!(${expr}); } catch (e) { return false; } })()`)) return true;
     await new Promise((r) => setTimeout(r, interval));
   }
   return false;

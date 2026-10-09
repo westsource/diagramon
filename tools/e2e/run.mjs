@@ -123,9 +123,11 @@ async function main() {
     const cdp = new Cdp(ws);
     await cdp.send("Page.enable");
 
-    // 等外壳启动完成（boot 结束会设置 document.title）
-    for (let i = 0; i < 60; i += 1) {
-      const ready = await cdp.evaluate("!!window.DGM && !!window.DGM.app && document.querySelectorAll('.tabs .tab').length >= 0");
+    // 等外壳启动完成：DGM 就绪 **且** 初始标签页已建立（boot 是异步的）
+    for (let i = 0; i < 80; i += 1) {
+      const ready = await cdp.evaluate(
+        "!!window.DGM && !!window.DGM.app && window.DGM.app.state.tabs.length >= 1 && !!document.querySelector('.tabs .tab')",
+      );
       if (ready) break;
       await sleep(250);
     }
