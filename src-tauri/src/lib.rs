@@ -8,15 +8,18 @@
 
 mod commands;
 mod state;
+mod watcher;
+mod workspace_cmds;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use app_ipc::events;
 use assets::AssetRoots;
 use platform::{AppPaths, CredentialStore};
 use state::AppState;
 use tauri::http::{header, Response};
-use tauri::{Manager, WebviewUrl, WebviewWindowBuilder}; // Manager 提供 App::state()
+use tauri::{Emitter, Manager, WebviewUrl, WebviewWindowBuilder}; // Manager 提供 App::state()
 
 /// 前端产物目录。
 ///
@@ -80,9 +83,6 @@ pub fn run() {
     let creds = credential_store(&paths);
     let app_state = Arc::new(AppState::new(paths, creds));
 
-    // 命令行/文件关联传进来的文件：先开着，前端一起来就能看到
-    open_cli_files(&app_state);
-
     let roots = Arc::new(AssetRoots::detect(ui_dir()));
     eprintln!(
         "diagramon|roots|ui={}|source={:?}|packaged={:?}",
@@ -91,7 +91,26 @@ pub fn run() {
         roots.packaged
     );
 
+    // 上次没保存完的（草稿仓里有）：先收进会话，再开命令行文件 —— 这样命令行那个
+    // 文件拿到活动标签页，符合"我点它就是要看它"的直觉。
+    restore_drafts(&app_state);
+    open_cli_files(&app_state);
+
     tauri::Builder::default()
+        // 单实例必须**第一个**注册：否则第二个进程会先把窗口建出来才被劝退
+        .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
+            let paths = diagram_files(&argv);
+            if paths.is_empty() {
+                return;
+            }
+            // 开文档交给前端：那边才知道编辑器/预览/最近列表各自要做什么。
+            // Rust 只负责"第二个进程想开这几个文件"这一件事。
+            let _ = app.emit(events::OPEN_PATHS, app_ipc::OpenPathsEvent { paths });
+            if let Some(w) = app.get_webview_window("main") {
+                let _ = w.unminimize();
+                let _ = w.set_focus();
+            }
+        }))
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_clipboard_manager::init())
@@ -136,6 +155,7 @@ pub fn run() {
             let paths = app.state::<Arc<AppState>>().paths.clone();
             build_main_window(app, &paths)?;
             eprintln!("diagramon|url|{}", window_url_label());
+            spawn_autosave(app.handle().clone());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -151,6 +171,7 @@ pub fn run() {
             commands::doc_set_caret,
             commands::doc_set_view_mode,
             commands::doc_set_layout,
+            commands::doc_reload,
             commands::doc_issues,
             commands::doc_outline,
             commands::doc_scope,
@@ -163,9 +184,111 @@ pub fn run() {
             commands::cred_delete,
             commands::ai_chat,
             commands::ai_cancel,
+            workspace_cmds::workspace_open,
+            workspace_cmds::workspace_get,
+            workspace_cmds::workspace_close,
+            workspace_cmds::workspace_new_file,
+            workspace_cmds::workspace_rename,
+            workspace_cmds::workspace_delete,
+            workspace_cmds::search_run,
+            workspace_cmds::search_cancel,
+            workspace_cmds::search_once,
         ])
         .run(tauri::generate_context!())
         .expect("Diagramon 启动失败");
+}
+
+/// 命令行参数里属于本应用的文件（第二个实例转交、以及"双击文件打开"都走这里）。
+///
+/// 只认注册表里的扩展名：把 `--flag`、可执行文件路径之类筛掉，
+/// 免得第二个进程一启就把工作目录里的乱七八糟东西全塞进来。
+fn diagram_files(argv: &[String]) -> Vec<String> {
+    argv.iter()
+        .skip(1) // argv[0] 是 exe 自己
+        .filter(|a| !a.starts_with('-'))
+        .filter(|a| {
+            Path::new(a)
+                .extension()
+                .map(|e| app_core::workspace::is_open_ext(&e.to_string_lossy()))
+                .unwrap_or(false)
+        })
+        .cloned()
+        .collect()
+}
+
+/// 把草稿仓里的未落盘文档收进会话（上次退出时没保存完的东西）。
+fn restore_drafts(state: &AppState) {
+    let drafts = app_core::recovery::load_all(&state.recovery_dir);
+    if drafts.is_empty() {
+        return;
+    }
+    let n = drafts.len();
+    let mut s = state.session();
+    for d in drafts {
+        s.adopt_draft(d.id, d.name, d.format, d.body);
+    }
+    eprintln!("diagramon|recovered|{n}");
+}
+
+/// autosave：每 1 秒醒一次，把到期的脏文档落盘。
+///
+/// **为什么归 Rust 而不是前端计时器**：WebView2 对后台窗口把 `setTimeout`
+/// 节流到约 1 次/秒，窗口不聚焦时界面侧的计时器根本不准。这件事必须由不睡觉的一侧做。
+fn spawn_autosave(app: tauri::AppHandle) {
+    std::thread::spawn(move || loop {
+        std::thread::sleep(std::time::Duration::from_millis(1000));
+        let st = app.state::<Arc<AppState>>().inner().clone();
+        if !st.settings().editor.autosave {
+            st.autosave().clear();
+            continue;
+        }
+        let now = std::time::Instant::now();
+        let due: Vec<String> = {
+            let map = st.autosave();
+            map.iter().filter(|(_, t)| **t <= now).map(|(k, _)| k.clone()).collect()
+        };
+        for id in due {
+            st.autosave().remove(&id);
+            if let Err(e) = autosave_one(&app, &st, &id) {
+                eprintln!("diagramon|autosave-failed|{id}|{e}");
+            }
+        }
+    });
+}
+
+/// 落一份 autosave：有路径的写回原文件，没有的进草稿仓。
+fn autosave_one(app: &tauri::AppHandle, st: &AppState, id: &str) -> Result<(), String> {
+    let (path, name, format, body, dirty) = {
+        let s = st.session();
+        let d = s.get(id).ok_or_else(|| "文档不存在".to_string())?;
+        (d.path.clone(), d.name.clone(), d.format, d.body.clone(), d.dirty)
+    };
+    if !dirty {
+        return Ok(()); // 期间用户自己存了/改回去了
+    }
+    match path {
+        Some(p) => {
+            let p = PathBuf::from(p);
+            // 受限模式下不许写出去 —— 直接不写，留给用户手动保存（别把草稿也弄丢）
+            st.check_writable(&p)?;
+            commands::atomic_write(&p, &body)?;
+            let doc = st
+                .session()
+                .commit_saved(id, None)
+                .ok_or_else(|| "文档不存在".to_string())?;
+            let _ = app.emit(events::DOC_AUTOSAVED, doc);
+        }
+        None => {
+            let draft = app_core::recovery::Draft {
+                id: id.to_string(),
+                name,
+                format,
+                body,
+            };
+            app_core::recovery::save(&st.recovery_dir, &draft).map_err(|e| e.to_string())?;
+        }
+    }
+    Ok(())
 }
 
 /// 主窗口。**运行时创建**而不是写在 tauri.conf.json 里，为的是能按环境变量决定

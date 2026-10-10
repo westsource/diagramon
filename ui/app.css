@@ -1694,6 +1694,63 @@ body.no-mock .mock-badge { display: none; }
 .cloud-me .avatar { display: inline-flex; align-items: center; justify-content: center; }
 
 /* ============================================================================
+ * §19.10 工作区（第 4 步）：真实目录树 / 冲突横幅
+ * ========================================================================== */
+
+/* 工作区头：目录名 + 三个小动作按钮 */
+.ws-head {
+  display: flex; align-items: center; gap: 6px;
+  padding: 6px 4px 8px; margin-bottom: 4px;
+  border-bottom: 1px solid var(--line, color-mix(in srgb, var(--ink) 8%, transparent));
+}
+.ws-head .ws-name {
+  display: inline-flex; align-items: center; gap: 6px; flex: 1; min-width: 0;
+  font-size: var(--fs-sm); font-weight: 600; color: var(--ink);
+}
+.ws-head .ws-name .nm { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ws-head .ws-acts { display: inline-flex; gap: 2px; flex: 0 0 auto; }
+
+/* 目录树里的目录行 / 文件行 */
+.ws-kids { display: block; }
+.tree-row.ws-dir { color: var(--ink-2); font-weight: 500; }
+.tree-row.ws-file .nm { color: var(--ink-2); }
+.tree-row.ws-file .x-row { opacity: 0; }
+.tree-row.ws-file:hover .x-row { opacity: 1; }
+
+/* 统计行：文件数 / 截断告警 */
+.ws-stats {
+  display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: center;
+  padding: 8px 6px 0; font-size: var(--fs-xs); color: var(--faint);
+}
+.ws-stats > * { display: inline-flex; align-items: center; gap: 4px; }
+.ws-stats .warn { color: var(--warn, #a97a26); }
+
+/* 搜索：作用域指示条 */
+.search-scope {
+  display: flex; align-items: center; gap: 6px;
+  margin: 0 0 8px; padding: 0 2px;
+  font-size: var(--fs-xs); color: var(--faint); font-weight: 500;
+}
+.search-scope .ico { color: var(--accent); }
+
+/* 外部改动冲突横幅：需要用户决策，不自动消失 */
+.fs-banner {
+  display: flex; align-items: center; gap: 10px;
+  margin: 0 14px 8px; padding: 8px 12px;
+  border: 1px solid color-mix(in srgb, var(--warn, #a97a26) 45%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--warn, #a97a26) 12%, transparent);
+  color: var(--ink);
+}
+.fs-banner[hidden] { display: none; }
+.fs-banner > .ico { flex: 0 0 auto; color: var(--warn, #a97a26); }
+.fs-banner .fb-txt { display: flex; flex-direction: column; min-width: 0; font-size: var(--fs-xs); }
+.fs-banner .fb-txt b { font-weight: 600; color: var(--ink); }
+.fs-banner .fb-txt span { color: var(--muted); }
+.fs-banner .sp { flex: 1; }
+.fs-banner .fb-more { font-size: var(--fs-xs); color: var(--muted); font-variant-numeric: tabular-nums; }
+
+/* ============================================================================
  * §19.9 对话框应用层补丁（设置里的模型表 / 转换矩阵清单 / 快捷键表 / 说明 / 关于）
  * ========================================================================== */
 

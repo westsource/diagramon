@@ -1,15 +1,29 @@
-//! 应用状态：会话、设置、凭据库、HTTP 客户端、AI 取消登记。
+//! 应用状态：会话、设置、凭据库、HTTP 客户端、AI 取消登记、工作区与 autosave 计时。
 //!
 //! 整体用 `Arc<AppState>` 交给 Tauri 管理：异步命令需要把状态搬进 `spawn` 的任务里，
 //! `tauri::State<'_, T>` 活在调用栈上搬不走，所以命令里统一 `state.inner().clone()`。
 
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex, MutexGuard};
+use std::time::Instant;
 
 use app_core::Session;
-use app_ipc::Settings;
+use app_ipc::{Settings, WorkspaceInfo};
 use platform::{AppPaths, CredentialStore};
+
+/// 工作区：根目录 + 扫描结果 + 正在跑的监视器。
+///
+/// 三者绑在一起换（打开新目录 = 停旧的、换根、重扫），所以放同一个锁里，
+/// 不会出现"根换了但监视的还是旧目录"这种中间态。
+#[derive(Default)]
+pub struct WorkspaceState {
+    pub root: Option<PathBuf>,
+    pub info: WorkspaceInfo,
+    /// 换目录或关工作区时 drop 它 ⇒ 线程收到停止位退出
+    pub watcher: Option<crate::watcher::WatchHandle>,
+}
 
 pub struct AppState {
     pub session: Mutex<Session>,
@@ -19,6 +33,13 @@ pub struct AppState {
     pub http: reqwest::Client,
     /// 正在跑的 AI 请求：request_id → 取消标志
     pub cancels: Mutex<HashMap<String, Arc<AtomicBool>>>,
+    /// 正在跑的工作区搜索：request_id → 取消标志
+    pub search_cancels: Mutex<HashMap<String, Arc<AtomicBool>>>,
+    pub workspace: Mutex<WorkspaceState>,
+    /// autosave：doc_id → 到期时刻（改正文时登记，后台线程到点落盘）
+    pub autosave: Mutex<HashMap<String, Instant>>,
+    /// 未落盘文档的草稿目录
+    pub recovery_dir: PathBuf,
 }
 
 impl AppState {
@@ -29,6 +50,7 @@ impl AppState {
             .timeout(std::time::Duration::from_secs(300))
             .build()
             .unwrap_or_default();
+        let recovery_dir = app_core::recovery::dir_for(&paths.data_dir);
         Self {
             session: Mutex::new(Session::default()),
             settings: Mutex::new(settings),
@@ -36,6 +58,10 @@ impl AppState {
             creds,
             http,
             cancels: Mutex::new(HashMap::new()),
+            search_cancels: Mutex::new(HashMap::new()),
+            workspace: Mutex::new(WorkspaceState::default()),
+            autosave: Mutex::new(HashMap::new()),
+            recovery_dir,
         }
     }
 
@@ -49,6 +75,18 @@ impl AppState {
 
     pub fn cancels(&self) -> MutexGuard<'_, HashMap<String, Arc<AtomicBool>>> {
         lock(&self.cancels)
+    }
+
+    pub fn search_cancels(&self) -> MutexGuard<'_, HashMap<String, Arc<AtomicBool>>> {
+        lock(&self.search_cancels)
+    }
+
+    pub fn workspace(&self) -> MutexGuard<'_, WorkspaceState> {
+        lock(&self.workspace)
+    }
+
+    pub fn autosave(&self) -> MutexGuard<'_, HashMap<String, Instant>> {
+        lock(&self.autosave)
     }
 
     pub fn persist_settings(&self, s: &Settings) -> Result<(), String> {
@@ -92,6 +130,52 @@ impl AppState {
         let snapshot = s.clone();
         drop(s);
         let _ = self.persist_settings(&snapshot);
+    }
+
+    /* ---------------- autosave 计时 ---------------- */
+
+    /// 正文改动后登记到期时刻（毫秒阈值来自设置）。
+    pub fn mark_autosave(&self, doc_id: &str) {
+        let ms = self.settings().editor.autosave_ms.max(500);
+        self.autosave()
+            .insert(doc_id.to_string(), Instant::now() + std::time::Duration::from_millis(ms as u64));
+    }
+
+    pub fn cancel_autosave(&self, doc_id: &str) {
+        self.autosave().remove(doc_id);
+    }
+
+    /* ---------------- 写路径守卫（fs scope） ---------------- */
+
+    /// 写文件前的守门。
+    ///
+    /// 规则只有一条：**打开着工作区、且设置里开了"限制在工作区内"时**，
+    /// 目标必须落在工作区根内（或本来就是已打开文档所在的那个文件）。
+    ///
+    /// 默认不开这条：自由「另存为」到桌面是常见需求，开成默认只会莫名挡住人。
+    /// 但工作区界面自己的写操作（新建/重命名/删除）**永远**经
+    /// `workspace::resolve_in_root`，那条路不受这个开关影响 —— 它本来就出不去。
+    pub fn check_writable(&self, path: &Path) -> Result<(), String> {
+        let restrict = self.settings().editor.restrict_to_workspace;
+        if !restrict {
+            return Ok(());
+        }
+        let root = self.workspace().root.clone();
+        let Some(root) = root else {
+            return Ok(()); // 没有边界可对照
+        };
+        if app_core::workspace::inside(&root, path) {
+            return Ok(());
+        }
+        // 例外：这个文件本来就是会话里开着的（用户只是把它存回原处）
+        let s = self.session();
+        if s.id_by_path(&path.to_string_lossy()).is_some() {
+            return Ok(());
+        }
+        Err(format!(
+            "「限制在工作区内」已开启，不能写到工作区外：{}（可在 设置 → 编辑器 里关掉）",
+            path.display()
+        ))
     }
 }
 

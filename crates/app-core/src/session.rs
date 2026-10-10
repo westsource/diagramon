@@ -9,6 +9,7 @@ use std::path::Path;
 use app_ipc::{Doc, FormatId, Session as SessionPayload, ViewMode};
 
 use crate::document;
+use crate::format;
 
 pub struct Entry {
     pub doc: Doc,
@@ -116,6 +117,43 @@ impl Session {
         self.entries.iter().find(|e| e.doc.id == id).map(|e| &e.doc)
     }
 
+    /// 按磁盘路径找已打开的文档 id（路径一律正斜杠比较）。
+    /// watcher 收到外部改动时要靠它把"哪个文件"对到"哪个标签页"。
+    pub fn id_by_path(&self, path: &str) -> Option<String> {
+        let want = path.replace('\\', "/");
+        self.entries
+            .iter()
+            .find(|e| e.doc.path.as_deref().map(|p| p.replace('\\', "/")) == Some(want.clone()))
+            .map(|e| e.doc.id.clone())
+    }
+
+    /// 关掉窗口后重启：把草稿仓里的未落盘文档收进会话。
+    ///
+    /// 收进来的文档**仍是脏的**（它确实还没落盘），名字保持原样 ——
+    /// 界面会标注"上次未保存"，让用户自己决定存哪儿。
+    pub fn adopt_draft(&mut self, id: String, name: String, format: FormatId, body: String) -> Doc {
+        // 让新建编号跳过已恢复的号，否则会撞 id
+        if let Some(n) = id.rsplit('-').next().and_then(|s| s.parse::<u32>().ok()) {
+            self.untitled_seq = self.untitled_seq.max(n);
+        }
+        let doc = Doc {
+            id,
+            path: None,
+            name,
+            format,
+            body: document::normalize_newlines(body),
+            dirty: true,
+            view_mode: format::default_view_mode(format),
+            caret_line: 1,
+            caret_col: 1,
+            layout: if format == FormatId::Dot { Some("dot".into()) } else { None },
+        };
+        let id = doc.id.clone();
+        self.entries.push(Entry::born_dirty(doc));
+        self.active = Some(id.clone());
+        self.get(&id).cloned().expect("刚插入")
+    }
+
     pub fn entry_mut(&mut self, id: &str) -> Option<&mut Entry> {
         self.entries.iter_mut().find(|e| e.doc.id == id)
     }
@@ -179,6 +217,19 @@ impl Session {
         if let Some(p) = path {
             document::retarget(&mut e.doc, p);
         }
+        e.mark_saved();
+        Some(e.doc.clone())
+    }
+
+    /// 从磁盘重读正文（外部改动后选「用磁盘版本」）。
+    ///
+    /// 读回来即视为干净 —— 因为这正是磁盘上此刻的内容。
+    /// 文件没了/读不动就返回 `None`，由调用方如实报错，**不要**悄悄退回旧正文。
+    pub fn reload(&mut self, id: &str) -> Option<Doc> {
+        let path = self.get(id)?.path.clone()?;
+        let body = std::fs::read_to_string(&path).ok()?;
+        let e = self.entry_mut(id)?;
+        e.doc.body = document::normalize_newlines(body);
         e.mark_saved();
         Some(e.doc.clone())
     }
@@ -293,5 +344,78 @@ mod tests {
         let (opened, failed) = s.open_paths(&["E:/definitely/not/here.mmd".into()]);
         assert!(opened.is_empty());
         assert_eq!(failed.len(), 1);
+    }
+
+    #[test]
+    fn id_by_path_matches_across_slash_styles() {
+        let dir = std::env::temp_dir().join("diagramon-session-test");
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("lookup.mmd");
+        std::fs::write(&p, "flowchart TD\n").unwrap();
+        let mut s = Session::default();
+        let (opened, _) = s.open_paths(&[p.to_string_lossy().to_string()]);
+        let id = &opened[0];
+
+        let windows_style = p.to_string_lossy().replace('/', "\\");
+        assert_eq!(s.id_by_path(&windows_style).as_deref(), Some(id.as_str()));
+        assert_eq!(s.id_by_path("E:/nope.mmd"), None);
+    }
+
+    #[test]
+    fn adopted_draft_comes_back_dirty_and_keeps_its_name() {
+        let mut s = Session::default();
+        let d = s.adopt_draft(
+            "untitled-7".into(),
+            "未命名-7.mmd".into(),
+            FormatId::Mermaid,
+            "flowchart TD\r\n    A-->B\r\n".into(),
+        );
+        assert_eq!(d.id, "untitled-7");
+        assert_eq!(d.name, "未命名-7.mmd");
+        assert!(d.dirty, "恢复回来的文档确实还没落盘");
+        assert_eq!(d.body, "flowchart TD\n    A-->B\n", "换行要归一");
+        assert_eq!(s.payload().active.as_deref(), Some("untitled-7"));
+        assert_eq!(s.dirty_count(), 1);
+    }
+
+    #[test]
+    fn new_doc_after_adopting_does_not_collide_with_recovered_id() {
+        let mut s = Session::default();
+        s.adopt_draft("untitled-9".into(), "n.mmd".into(), FormatId::Mermaid, "a\n".into());
+        let fresh = s.new_doc(FormatId::Mermaid);
+        assert_eq!(fresh.id, "untitled-10", "编号要跳过已恢复的号，否则 id 会撞");
+    }
+
+    #[test]
+    fn reload_picks_up_external_edit_and_clears_dirty() {
+        let dir = std::env::temp_dir().join("diagramon-session-test");
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("reload.mmd");
+        std::fs::write(&p, "flowchart TD\n").unwrap();
+
+        let mut s = Session::default();
+        let (opened, _) = s.open_paths(&[p.to_string_lossy().to_string()]);
+        let id = opened[0].clone();
+        s.set_body(&id, "flowchart TD\n    A-->B\n".into());
+        assert_eq!(s.dirty_count(), 1);
+
+        // 外部把文件改了
+        std::fs::write(&p, "flowchart LR\n    X-->Y\n").unwrap();
+        let d = s.reload(&id).expect("读得到");
+        assert_eq!(d.body, "flowchart LR\n    X-->Y\n", "应采用磁盘版本");
+        assert_eq!(s.dirty_count(), 0, "与磁盘一致就算干净");
+    }
+
+    #[test]
+    fn reload_of_missing_file_reports_none_instead_of_lying() {
+        let dir = std::env::temp_dir().join("diagramon-session-test");
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("gone.mmd");
+        std::fs::write(&p, "flowchart TD\n").unwrap();
+        let mut s = Session::default();
+        let (opened, _) = s.open_paths(&[p.to_string_lossy().to_string()]);
+        std::fs::remove_file(&p).unwrap();
+        assert!(s.reload(&opened[0]).is_none(), "文件没了就该返回 None，不能假装成功");
+        assert!(s.reload("nope").is_none());
     }
 }

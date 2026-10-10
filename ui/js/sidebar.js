@@ -2,8 +2,10 @@
  *
  * 设计取向：
  *   - 侧栏只读 state 与 app_info，不自己维护格式清单（一律 state.formatList）。
- *   - 「工作区树」没有独立 IPC：把真实会话里打开文档的 path 归并成一棵树，
- *     如实标注「完整工作区扫描尚未接入」，不伪造目录。
+ *   - 「工作区树」现在是**真的**：树来自 Rust 的 `workspace_get`（扫盘结果），
+ *     不是从前端把已打开文档的路径拼出来的赝品。没打开工作区时如实说没打开。
+ *   - 写操作（新建 / 重命名 / 删除）一律经 state 的 workspace_* 命令，
+ *     路径守卫在 Rust 侧（`resolve_in_root`）—— 前端不自己拼绝对路径。
  *   - 转换中心六方向全列（可用来自 app_info.formats[].convert_to，不可用来自
  *     i18n 里的说明文案），不可用方向给理由，不做「藏起来」。
  *   - 云端为未登录态：明确写「云网关未接入」，不伪造余额。
@@ -23,7 +25,6 @@ window.DGM = window.DGM || {};
   /* 折叠状态与搜索词都留在模块里：重渲染时用它们恢复现场。 */
   const collapsed = new Set();
   let searchQuery = "";
-  let searchUseRegex = false;
 
   /* ------------------------------------------------------------------ 打开文档 */
 
@@ -67,32 +68,180 @@ window.DGM = window.DGM || {};
 
   /* ------------------------------------------------------------------ 资源管理器 */
 
-  /** 把真实会话里文档的 path 归并成目录树。返回 {label, children}。 */
-  function buildTree(docs) {
-    const withPath = docs.filter((d) => d.path);
-    if (!withPath.length) return null;
-    const dirOf = (p) => p.replace(/\\/g, "/").split("/").slice(0, -1).filter(Boolean);
-
-    // 共同前缀目录
-    let common = dirOf(withPath[0].path);
-    for (const d of withPath.slice(1)) {
-      const parts = dirOf(d.path);
-      let i = 0;
-      while (i < common.length && i < parts.length && common[i] === parts[i]) i += 1;
-      common = common.slice(0, i);
-    }
-
-    const root = { name: common.length ? common[common.length - 1] : t("side.openEditors"), dirs: new Map(), files: [] };
-    for (const d of withPath) {
-      const parts = d.path.replace(/\\/g, "/").split("/").filter(Boolean);
-      let node = root;
-      for (const seg of parts.slice(common.length, parts.length - 1)) {
-        if (!node.dirs.has(seg)) node.dirs.set(seg, { name: seg, dirs: new Map(), files: [] });
-        node = node.dirs.get(seg);
+  async function openFolderFlow() {
+    try {
+      const info = await state.openFolder();
+      if (info) {
+        state.pushOutput(t("status.wsOpened", { name: info.name }), "ok");
+        if ((state.panels().sidebar_view || "explorer") !== "explorer") {
+          DGM.shell.setSidebarView("explorer");
+        }
       }
-      node.files.push({ doc: d, name: parts[parts.length - 1] || d.name });
+    } catch (e) {
+      DGM.toast({ icon: "alert", title: t("status.wsFailed"), sub: String((e && e.message) || e), warn: true });
     }
-    return root;
+  }
+
+  function wsHeader() {
+    const box = h("div", "ws-head");
+    const root = state.workspace.root;
+    const name = h("div", "ws-name");
+    name.innerHTML = `${icon("folderOpen", "ico-sm")}<span class="nm">${esc(root ? state.workspace.name : t("side.workspace"))}</span>`;
+    if (root) name.title = root;
+    box.appendChild(name);
+
+    const acts = h("div", "ws-acts");
+    if (root) {
+      acts.innerHTML =
+        `<button class="icon-btn" data-a="new" title="${esc(t("side.ws.newFile"))}">${icon("plus", "ico-sm")}</button>` +
+        `<button class="icon-btn" data-a="refresh" title="${esc(t("side.ws.refresh"))}">${icon("refresh", "ico-sm")}</button>` +
+        `<button class="icon-btn" data-a="close" title="${esc(t("side.ws.closeWs"))}">${icon("close", "ico-sm")}</button>`;
+    } else {
+      acts.innerHTML = `<button class="icon-btn" data-a="open" title="${esc(t("side.ws.openFolder"))}">${icon("folderOpen", "ico-sm")}</button>`;
+    }
+    acts.addEventListener("click", async (e) => {
+      const b = e.target.closest("button");
+      if (!b) return;
+      e.stopPropagation();
+      const a = b.dataset.a;
+      try {
+        if (a === "open") return void openFolderFlow();
+        if (a === "refresh") {
+          await state.refreshWorkspace();
+          return void DGM.status(t("side.ws.refresh"), "");
+        }
+        if (a === "close") {
+          await state.closeWorkspace();
+          return;
+        }
+        if (a === "new") return void newFileFlow();
+      } catch (err) {
+        DGM.status(t("status.wsFailed") + ": " + String((err && err.message) || err), "err");
+      }
+    });
+    box.appendChild(acts);
+    return box;
+  }
+
+  async function newFileFlow() {
+    if (!state.workspace.root) return;
+    const name = await DGM.dialogs.input({
+      title: t("side.ws.newFile"),
+      icon: "plus",
+      label: t("side.ws.newPrompt"),
+      placeholder: "architecture",
+      hint: t("side.ws.newPrompt"),
+    });
+    if (!name) return;
+    await state.newWorkspaceFile(state.workspace.root, name, "mermaid");
+  }
+
+  function isOpenPath(p) {
+    return state.docs.some((d) => d.path && d.path === p);
+  }
+
+  function wsNode(node, depth) {
+    const wrap = h("div", "side-node");
+    const indent = depth ? " indent-" + Math.min(depth, 2) : "";
+
+    if (node.dir) {
+      const key = "ws:" + node.path;
+      const open = !collapsed.has(key);
+      const row = h("button", "tree-row ws-dir" + indent);
+      row.innerHTML = `${icon("chevD", "ico-sm chev")}${icon(open ? "folderOpen" : "folder", "ico-sm")}<span class="nm">${esc(node.name)}</span>`;
+      if (!open) row.querySelector(".chev").style.transform = "rotate(-90deg)";
+      const kids = h("div", "ws-kids");
+      kids.hidden = !open;
+      node.children.forEach((c) => kids.appendChild(wsNode(c, depth + 1)));
+      row.addEventListener("click", () => {
+        if (collapsed.has(key)) collapsed.delete(key);
+        else collapsed.add(key);
+        kids.hidden = !kids.hidden;
+        row.querySelector(".chev").style.transform = kids.hidden ? "rotate(-90deg)" : "";
+        row.querySelector("use").setAttribute("href", kids.hidden ? "#i-folder" : "#i-folderOpen");
+      });
+      wrap.title = node.path;
+      wrap.append(row, kids);
+      return wrap;
+    }
+
+    const row = h("button", "tree-row ws-file" + indent + (isOpenPath(node.path) ? " on" : ""));
+    row.append(fmtDot(node.format), h("span", "nm", esc(node.name)));
+    row.title = node.path;
+    const more = h("button", "x-row", icon("more", "ico-sm"));
+    more.title = t("side.ws.rowMore");
+    more.addEventListener("click", (e) => {
+      e.stopPropagation();
+      fileMenu(node, more);
+    });
+    row.appendChild(more);
+    row.addEventListener("click", () => openWorkspaceFile(node));
+    wrap.appendChild(row);
+    return wrap;
+  }
+
+  function fileMenu(node, anchor) {
+    const open = state.docs.find((d) => d.path === node.path);
+    DGM.pop.near(
+      [
+        { label: t("side.ws.openFile"), icon: "file", act: "open", disabled: !!open },
+        { sep: true },
+        { label: t("side.ws.rename"), icon: "wand", act: "rename" },
+        { label: t("side.ws.delete"), icon: "trash", act: "delete" },
+        { sep: true },
+        { label: t("side.ws.reveal"), icon: "folderOpen", act: "reveal" },
+      ],
+      anchor,
+      (it) => runFileAct(it.act, node),
+    );
+  }
+
+  async function runFileAct(act, node) {
+    try {
+      if (act === "open") return void openWorkspaceFile(node);
+      if (act === "reveal") {
+        const ok = await state.revealPath(node.path);
+        if (!ok) DGM.toast({ icon: "info", title: t("side.ws.reveal"), sub: node.path });
+        return;
+      }
+      if (act === "rename") {
+        const name = await DGM.dialogs.input({
+          title: t("side.ws.rename"),
+          icon: "wand",
+          label: t("side.ws.renamePrompt"),
+          value: node.name,
+        });
+        if (!name || name === node.name) return;
+        await state.renameWorkspaceEntry(node.path, name);
+        return;
+      }
+      if (act === "delete") {
+        const yes = await DGM.dialogs.confirm({
+          title: t("common.delete"),
+          ok: t("common.delete"),
+          danger: true,
+          body: esc(t("side.ws.deleteConfirm", { name: node.name })),
+          warn: t("side.ws.deleteWarn"),
+        });
+        if (!yes) return;
+        await state.deleteWorkspaceEntry(node.path);
+      }
+    } catch (e) {
+      DGM.status(t("status.wsFailed") + ": " + String((e && e.message) || e), "err");
+    }
+  }
+
+  async function openWorkspaceFile(node) {
+    const open = state.docs.find((d) => d.path === node.path);
+    if (open) return void openDocAt(open.id);
+    try {
+      await state.openPaths([node.path]);
+      if (DGM.editor && DGM.editor.loadActive) DGM.editor.loadActive();
+      if (DGM.preview && DGM.preview.schedule) DGM.preview.schedule();
+      state.refreshDerived(state.active);
+    } catch (e) {
+      DGM.status(t("status.openFailed") + ": " + String((e && e.message) || e), "err");
+    }
   }
 
   function docRow(d, on) {
@@ -111,51 +260,44 @@ window.DGM = window.DGM || {};
     return row;
   }
 
-  function treeNode(node, depth, activeId) {
-    const wrap = h("div", "side-node");
-    const row = h("button", "tree-row" + (depth ? " indent-" + Math.min(depth, 2) : ""));
-    const open = !collapsed.has("tree:" + node.name + ":" + depth);
-    row.innerHTML = `${icon("chevD", "ico-sm chev")}${icon(open ? "folderOpen" : "folder", "ico-sm")}<span class="nm">${esc(node.name)}</span>`;
-    if (!open) row.querySelector(".chev").style.transform = "rotate(-90deg)";
-    const kids = h("div");
-    kids.hidden = !open;
-    for (const [, sub] of node.dirs) kids.appendChild(treeNode(sub, depth + 1, activeId));
-    for (const f of node.files) {
-      const d = f.doc;
-      const r = h("button", "tree-row indent-" + Math.min(depth + 1, 2) + (d.id === activeId ? " on" : ""));
-      r.append(fmtDot(d.format), h("span", "nm", esc(d.name)));
-      r.addEventListener("click", () => openDocAt(d.id));
-      kids.appendChild(r);
+  function statsLine() {
+    const ws = state.workspace;
+    const box = h("div", "ws-stats");
+    box.append(h("span", "", esc(t("side.ws.count", { n: ws.file_count, m: ws.dir_count }))));
+    if (ws.truncated) {
+      const warn = h("span", "warn", `${icon("warn", "ico-sm")}${esc(t("side.ws.truncated", { n: ws.file_count }))}`);
+      box.appendChild(warn);
     }
-    row.addEventListener("click", () => {
-      const key = "tree:" + node.name + ":" + depth;
-      if (collapsed.has(key)) collapsed.delete(key);
-      else collapsed.add(key);
-      kids.hidden = !kids.hidden;
-      row.querySelector(".chev").style.transform = kids.hidden ? "rotate(-90deg)" : "";
-      row.querySelector("use").setAttribute("href", kids.hidden ? "#i-folder" : "#i-folderOpen");
-    });
-    wrap.append(row, kids);
-    return wrap;
+    return box;
   }
 
   function viewExplorer() {
     const box = h("div");
     const activeId = state.active;
 
+    box.appendChild(wsHeader());
+
+    if (!state.workspace.root) {
+      box.appendChild(tip(esc(t("side.ws.none"))));
+      const acts = h("div", "side-acts");
+      acts.innerHTML = `<button class="btn sm" data-a="open">${icon("folderOpen")}${esc(t("side.ws.openFolder"))}</button>`;
+      acts.addEventListener("click", () => openFolderFlow());
+      box.appendChild(acts);
+    } else {
+      const tree = state.workspace.tree || [];
+      if (!tree.length) {
+        box.appendChild(tip(esc(t("side.ws.emptyDir"))));
+      } else {
+        box.appendChild(section("wsTree", esc(state.workspace.name), tree.map((n) => wsNode(n, 0))));
+      }
+      box.appendChild(statsLine());
+    }
+
     // 打开的编辑器
     const docRows = state.docs.length
       ? state.docs.map((d) => docRow(d, d.id === activeId))
       : [tip(t("status.noDoc"))];
     box.appendChild(section("open", esc(t("side.openEditors")), docRows));
-
-    // 工作区（真实会话路径归并 + 诚实标注）
-    const tree = buildTree(state.docs);
-    if (tree) {
-      box.appendChild(section("ws", esc(tree.name), [treeNode(tree, 0, activeId)]));
-    } else {
-      box.appendChild(section("ws", esc(t("side.openEditors")), [tip(esc(t("side.noWorkspace")))]));
-    }
 
     // 最近打开（settings.recent）
     const recent = (state.settings && state.settings.recent) || [];
@@ -189,107 +331,116 @@ window.DGM = window.DGM || {};
 
   /* ------------------------------------------------------------------ 搜索 */
 
-  function matchLines(body, query, useRegex) {
-    const lines = body.split("\n");
-    const out = [];
+  function highlight(text, query, useRegex, caseSensitive) {
+    if (!query) return esc(text);
+    const flags = caseSensitive ? "g" : "gi";
     let re = null;
     if (useRegex) {
       try {
-        re = new RegExp(query, "gi");
-      } catch (e) {
-        return { error: String(e && e.message), hits: [] };
-      }
-    }
-    const needle = query.toLowerCase();
-    lines.forEach((ln, i) => {
-      if (re) {
-        re.lastIndex = 0;
-        if (re.test(ln)) out.push({ line: i + 1, text: ln });
-      } else if (needle && ln.toLowerCase().indexOf(needle) >= 0) {
-        out.push({ line: i + 1, text: ln });
-      }
-    });
-    return { error: null, hits: out };
-  }
-
-  function highlight(text, query, useRegex) {
-    if (!query) return esc(text);
-    if (useRegex) {
-      try {
-        const re = new RegExp(query, "gi");
-        return esc(text).replace(re, (m) => `<mark>${m}</mark>`);
+        re = new RegExp(query, flags);
       } catch (e) {
         return esc(text);
       }
+    } else {
+      re = new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), flags);
     }
-    const idx = text.toLowerCase().indexOf(query.toLowerCase());
-    if (idx < 0) return esc(text);
-    // 逐处高亮（保留大小写）
-    const re = new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi");
     return esc(text).replace(re, (m) => `<mark>${m}</mark>`);
   }
 
   function renderSearchResults(box) {
     box.innerHTML = "";
-    const q = searchQuery.trim();
+    const q = state.search.query.trim();
     if (!q) {
       box.appendChild(tip(esc(t("side.search.hint"))));
       return;
     }
-    const textDocs = state.docs.filter((d) => state.isTextDoc(d));
-    let total = 0;
-    let files = 0;
-    let regexError = null;
-    for (const d of textDocs) {
-      const res = matchLines(d.body || "", q, searchUseRegex);
-      if (res.error) {
-        regexError = res.error;
-        break;
-      }
-      if (!res.hits.length) continue;
-      files += 1;
-      total += res.hits.length;
-      const f = state.docFmt(d);
-      const head = h("h4", "", `${icon("chevD", "ico-sm chev")}${icon("file", "ico-sm")}<span class="nm">${esc(d.name)}</span><span class="meta">${res.hits.length}</span>`);
+    const hits = state.search.hits || [];
+    const done = state.search.done;
+
+    // 按文件分组（结果本来就是按文件顺序推过来的，用 Map 保序）
+    const groups = new Map();
+    for (const hit of hits) {
+      const key = hit.path || hit.name;
+      if (!groups.has(key)) groups.set(key, { name: hit.name, format: hit.format, path: hit.path, rows: [] });
+      groups.get(key).rows.push(hit);
+    }
+
+    for (const [, g] of groups) {
+      const f = state.fmtById(g.format);
+      const head = h("h4", "", `${icon("chevD", "ico-sm chev")}${icon("file", "ico-sm")}<span class="nm">${esc(g.name)}</span><span class="meta">${g.rows.length}</span>`);
+      head.title = g.path || g.name;
       const list = h("div", "side-list");
-      res.hits.slice(0, 40).forEach((hit) => {
+      g.rows.slice(0, 200).forEach((hit) => {
         const row = h("button", "tree-row indent-1");
-        row.innerHTML = `<span class="meta">${hit.line}</span><span class="nm hit">${highlight(hit.text, q, searchUseRegex)}</span>`;
-        row.addEventListener("click", () => openDocAt(d.id, hit.line));
+        row.innerHTML = `<span class="meta">${hit.line}:${hit.column}</span><span class="nm hit">${highlight(hit.text, q, state.search.regex, state.search.caseSensitive)}</span>`;
+        row.title = g.path ? `${g.path}:${hit.line}:${hit.column}` : `L${hit.line}`;
+        row.addEventListener("click", () => state.openSearchHit(hit));
         list.appendChild(row);
       });
       const sec = h("div", "side-section");
       head.addEventListener("click", () => sec.classList.toggle("collapsed"));
       sec.append(head, list);
-      sec.title = f.name;
+      sec.dataset.fmt = f.name;
       box.appendChild(sec);
     }
-    if (regexError) {
-      box.appendChild(tip(`${esc(t("side.search.regexError"))}: <code>${esc(regexError)}</code>`));
+
+    if (done && done.error) {
+      box.appendChild(tip(`${esc(t("side.search.regexError"))}: <code>${esc(done.error)}</code>`));
       return;
     }
-    box.appendChild(total ? tip(esc(t("side.search.summary", { n: total, m: files }))) : tip(esc(t("side.search.empty"))));
+    if (state.search.running) {
+      box.appendChild(tip(esc(t("side.search.searching"))));
+      return;
+    }
+    if (!hits.length) {
+      box.appendChild(tip(esc(t("side.search.empty"))));
+      return;
+    }
+    box.appendChild(tip(esc(t("side.search.summary", { n: done.total, m: done.files }))));
+    if (done.truncated) box.appendChild(tip(esc(t("side.search.truncated", { n: done.total }))));
   }
+
+  let searchTimer = 0;
 
   function viewSearch() {
     const box = h("div");
+    const ws = state.workspace.root;
+    const scope = h("div", "search-scope");
+    scope.innerHTML = ws
+      ? `${icon("folderOpen", "ico-sm")}<span>${esc(t("side.search.scopeWorkspace"))}</span>`
+      : `${icon("file", "ico-sm")}<span>${esc(t("side.search.scopeOpen"))}</span>`;
+    box.appendChild(scope);
+
     const field = h("div", "field");
     field.innerHTML =
-      `<input id="side-search-input" type="text" placeholder="${esc(t("side.search.placeholder"))}">` +
-      `<label class="search-regex"><input type="checkbox" id="side-search-regex"${searchUseRegex ? " checked" : ""}>.*</label>` +
-      `<span class="hint">${esc(t("side.search.hint"))}</span>`;
+      `<input id="side-search-input" type="text" placeholder="${esc(t("side.search.placeholder"))}" spellcheck="false">` +
+      `<label class="search-regex"><input type="checkbox" id="side-search-regex"${state.search.regex ? " checked" : ""}>.*</label>` +
+      `<label class="search-regex" title="Aa"><input type="checkbox" id="side-search-case"${state.search.caseSensitive ? " checked" : ""}>Aa</label>`;
     const input = $("input", field);
-    input.value = searchQuery;
+    input.value = searchQuery || state.search.query || "";
     const results = h("div", "search-results");
+
     input.addEventListener("input", () => {
       searchQuery = input.value;
-      renderSearchResults(results);
+      clearTimeout(searchTimer);
+      // 去抖：全库搜索有真实 IO，别每敲一个字就扫一遍
+      searchTimer = setTimeout(() => state.runSearch(searchQuery), 220);
     });
     $("input[type=checkbox]", field).addEventListener("change", (e) => {
-      searchUseRegex = e.target.checked;
-      renderSearchResults(results);
+      state.runSearch(searchQuery, { regex: e.target.checked });
     });
-    box.append(field, results);
+    $("#side-search-case", field).addEventListener("change", (e) => {
+      state.runSearch(searchQuery, { caseSensitive: e.target.checked });
+    });
+
+    if (!ws) box.appendChild(tip(esc(t("side.search.needWorkspace"))));
+
+    const stop = h("div", "side-acts");
+    stop.hidden = !state.search.running;
+    stop.innerHTML = `<button class="btn sm ghost" data-a="stop">${icon("close")}${esc(t("side.search.stop"))}</button>`;
+    stop.addEventListener("click", () => state.cancelSearch());
+
+    box.append(field, stop, results);
     renderSearchResults(results);
     return box;
   }
@@ -510,6 +661,18 @@ window.DGM = window.DGM || {};
   DGM.bus.on("issues:changed", () => {
     /* 问题不直接进侧栏，但打开列表的脏标会随会话刷新，这里不重复渲染 */
   });
+  // 工作区与搜索（第 4 步）：只在对应的视图里重渲染，免得在转换中心时白刷一遍
+  DGM.bus.on("workspace:changed", () => {
+    const v = state.panels().sidebar_view || "explorer";
+    if (v === "explorer" || v === "search") render();
+  });
+  DGM.bus.on("search:changed", () => {
+    if ((state.panels().sidebar_view || "explorer") === "search") render();
+  });
+  DGM.bus.on("fs:changed", () => {
+    const v = state.panels().sidebar_view || "explorer";
+    if (v === "explorer") render();
+  });
 
-  DGM.sidebar = { render, focusSearch, openDocAt, buildTree };
+  DGM.sidebar = { render, focusSearch, openDocAt, openFolderFlow, newFileFlow };
 })();

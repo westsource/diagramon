@@ -49,6 +49,23 @@ window.DGM = window.DGM || {};
     outlineByDoc: {},
     scopeByDoc: {},
 
+    /* 工作区（真源在 Rust：结构对齐 app-ipc 的 WorkspaceInfo） */
+    workspace: { root: null, name: "", tree: [], truncated: false, file_count: 0, dir_count: 0 },
+    /** 外部改动与本地未保存撞上了，等着用户选 —— 每条 {path, docId, name} */
+    conflicts: [],
+
+    /* 全库搜索（结果由 Rust 经 search://hit 推进来） */
+    search: {
+      scope: "open", // workspace | open
+      query: "",
+      regex: false,
+      caseSensitive: false,
+      running: false,
+      requestId: null,
+      hits: [],
+      done: null,
+    },
+
     // 本地日志与用量（仅本机统计：调用次数与 tokens；信用点归云网关，未接入不伪造）
     logs: { output: [], convert: [] },
     usage: { calls: 0, prompt: 0, completion: 0, byModel: {} },
@@ -127,9 +144,359 @@ window.DGM = window.DGM || {};
     state.active = session ? session.active : null;
     if (!state.active && state.docs.length) state.active = state.docs[0].id;
 
+    await loadWorkspace();
+    bindEvents();
+
     applyThemeAttrs();
     emit("settings:changed");
     emit("session:changed");
+  }
+
+  /* ------------------------------------------------------------------ 事件订阅 */
+
+  let eventsBound = false;
+  function bindEvents() {
+    if (eventsBound) return;
+    eventsBound = true;
+
+    // 工作区文件被外部改动：干净的直接重载，脏的挂起来问用户
+    ipc.on("fs://changed", (list) => handleFsChanges(list));
+
+    // 全库搜索（Rust 流式）
+    ipc.on("search://hit", (hit) => {
+      if (!hit) return;
+      state.search.hits.push(hit);
+      emit("search:changed");
+    });
+    ipc.on("search://done", (done) => {
+      state.search.running = false;
+      state.search.done = done || null;
+      state.search.requestId = null;
+      emit("search:changed");
+    });
+
+    // autosave 落了盘：把标签页的脏标清掉
+    ipc.on("doc://autosaved", (doc) => {
+      if (!doc) return;
+      upsertDoc(doc);
+      emit("session:changed");
+      setStatus(t("status.autosaved", { name: doc.name }), "ok");
+    });
+
+    // 第二个实例转交进来的文件（单实例）
+    ipc.on("open://paths", (ev) => {
+      const paths = (ev && ev.paths) || [];
+      if (!paths.length) return;
+      openPaths(paths).then(() => {
+        if (DGM.editor && DGM.editor.loadActive) DGM.editor.loadActive();
+        if (DGM.preview && DGM.preview.schedule) DGM.preview.schedule();
+        refreshDerived(state.active);
+        emit("open:paths", paths);
+      });
+    });
+  }
+
+  /* ------------------------------------------------------------------ 工作区 */
+
+  async function loadWorkspace() {
+    try {
+      const info = await ipc.invoke("workspace_get");
+      applyWorkspace(info);
+    } catch (e) {
+      applyWorkspace(null);
+    }
+  }
+
+  function applyWorkspace(info) {
+    state.workspace = info && info.root
+      ? info
+      : { root: null, name: "", tree: [], truncated: false, file_count: 0, dir_count: 0 };
+    state.search.scope = state.workspace.root ? "workspace" : "open";
+    emit("workspace:changed");
+  }
+
+  /** 打开一个目录（不传就弹系统目录选择框）。 */
+  async function openFolder(path) {
+    let dir = path || "";
+    if (!dir) {
+      const picked = await ipc.dialog.pickPaths({ directory: true, multiple: false });
+      dir = (picked && picked[0]) || "";
+    }
+    if (!dir && ipc.isMock) dir = "E:/OpenCode/diagramon/docs"; // mock 没有目录对话框
+    if (!dir) return null;
+    const info = await ipc.invoke("workspace_open", { path: dir });
+    applyWorkspace(info);
+    setStatus(t("status.wsOpened", { name: info.name }), "ok");
+    return info;
+  }
+
+  async function refreshWorkspace() {
+    if (!state.workspace.root) return null;
+    const info = await ipc.invoke("workspace_get");
+    applyWorkspace(info);
+    return info;
+  }
+
+  async function closeWorkspace() {
+    const info = await ipc.invoke("workspace_close");
+    applyWorkspace(info);
+    state.search.hits = [];
+    state.search.done = null;
+    setStatus(t("status.wsClosed"), "");
+  }
+
+  /** 在文件管理器里显示（真机上由 opener 插件完成）。 */
+  async function revealPath(path) {
+    const T = window.__TAURI__;
+    if (T && T.opener && typeof T.opener.open === "function") {
+      // 打开所在目录（opener 没有 reveal 语义，退而求其次：打开父目录）
+      const dir = String(path).replace(/\\/g, "/").replace(/\/[^/]*$/, "");
+      try {
+        await T.opener.open(dir || path);
+        return true;
+      } catch (e) {
+        return false;
+      }
+    }
+    return false;
+  }
+
+  /* ------------------------------------------------------------------ 外部改动 */
+
+  function handleFsChanges(list) {
+    if (!Array.isArray(list) || !list.length) return;
+    let treeDirty = false;
+    let touched = false;
+
+    for (const c of list) {
+      if (c.kind === "dir" || !c.doc_id) {
+        treeDirty = true;
+        continue;
+      }
+      const d = state.doc(c.doc_id);
+      if (!d) {
+        treeDirty = true;
+        continue;
+      }
+      if (c.conflicts) {
+        if (!state.conflicts.some((x) => x.docId === c.doc_id)) {
+          state.conflicts.push({ path: c.path, docId: c.doc_id, name: d.name });
+        }
+        touched = true;
+        continue;
+      }
+      if (c.kind === "removed") {
+        setStatus(t("fs.removed", { name: d.name }), "warn");
+        treeDirty = true;
+        touched = true;
+        continue;
+      }
+      // 干净 → 直接采用磁盘版本（不必打扰用户）
+      reloadDoc(c.doc_id);
+      touched = true;
+    }
+
+    if (treeDirty) refreshWorkspace();
+    if (touched) emit("fs:changed");
+  }
+
+  /** 外部改动后"用磁盘版本"。 */
+  async function reloadDoc(id) {
+    try {
+      const doc = await ipc.invoke("doc_reload", { id });
+      applyResult(doc);
+      if (state.active === id) {
+        if (DGM.editor && DGM.editor.loadActive) DGM.editor.loadActive();
+        if (DGM.preview && DGM.preview.schedule) DGM.preview.schedule();
+        refreshDerived(id);
+      }
+      setStatus(t("fs.reloaded", { name: doc.name }), "ok");
+      emit("session:changed");
+    } catch (e) {
+      setStatus(String((e && e.message) || e), "err");
+    }
+  }
+
+  /** 冲突处理后收口（两种选择都从列表里摘掉）。 */
+  function resolveConflict(docId) {
+    state.conflicts = state.conflicts.filter((c) => c.docId !== docId);
+    emit("fs:changed");
+  }
+
+  /* ------------------------------------------------------------------ 搜索 */
+
+  /** 跑一次搜索：有工作区走 Rust 全库，没有就只搜已打开的文档。 */
+  async function runSearch(query, opts) {
+    const o = opts || {};
+    state.search.query = query;
+    if (o.regex != null) state.search.regex = !!o.regex;
+    if (o.caseSensitive != null) state.search.caseSensitive = !!o.caseSensitive;
+    state.search.hits = [];
+    state.search.done = null;
+
+    // 上一次还没跑完的先叫停
+    if (state.search.requestId) {
+      ipc.invoke("search_cancel", { id: state.search.requestId }).catch(() => {});
+      state.search.requestId = null;
+    }
+
+    if (!query.trim()) {
+      state.search.running = false;
+      emit("search:changed");
+      return;
+    }
+    if (!state.workspace.root) {
+      searchOpenDocs(query);
+      emit("search:changed");
+      return;
+    }
+
+    const requestId = "s-" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+    state.search.requestId = requestId;
+    state.search.running = true;
+    state.search.scope = "workspace";
+    emit("search:changed");
+    try {
+      await ipc.invoke("search_run", {
+        req: {
+          request_id: requestId,
+          query,
+          regex: state.search.regex,
+          case_sensitive: state.search.caseSensitive,
+          max_results: 500,
+        },
+      });
+    } catch (e) {
+      state.search.running = false;
+      state.search.done = { request_id: requestId, total: 0, files: 0, truncated: false, error: String((e && e.message) || e) };
+      emit("search:changed");
+    }
+  }
+
+  /** 没有工作区时的退路：只在已打开文档里找（老行为，保留）。 */
+  function searchOpenDocs(query) {
+    state.search.scope = "open";
+    state.search.running = false;
+    const hits = [];
+    let re = null;
+    if (state.search.regex) {
+      try {
+        re = new RegExp(query, state.search.caseSensitive ? "g" : "gi");
+      } catch (e) {
+        state.search.done = { total: 0, files: 0, truncated: false, error: String((e && e.message) || e) };
+        state.search.hits = [];
+        return;
+      }
+    }
+    const needle = state.search.caseSensitive ? query : query.toLowerCase();
+    let files = 0;
+    for (const d of state.docs) {
+      if (!state.isTextDoc(d) && !d.body) continue;
+      let n = 0;
+      const lines = String(d.body || "").split("\n");
+      for (let i = 0; i < lines.length; i += 1) {
+        const line = lines[i];
+        let col = -1;
+        if (re) {
+          re.lastIndex = 0;
+          const m = re.exec(line);
+          if (m) col = m.index;
+        } else {
+          const idx = (state.search.caseSensitive ? line : line.toLowerCase()).indexOf(needle);
+          if (idx >= 0) col = idx;
+        }
+        if (col < 0) continue;
+        n += 1;
+        hits.push({
+          path: d.path || "",
+          name: d.name,
+          format: d.format,
+          line: i + 1,
+          column: col + 1,
+          text: line.length > 240 ? line.slice(0, 240) + "…" : line,
+          docId: d.id,
+        });
+        if (hits.length >= 500) break;
+      }
+      if (n) files += 1;
+      if (hits.length >= 500) break;
+    }
+    state.search.hits = hits;
+    state.search.done = { total: hits.length, files, truncated: hits.length >= 500, error: null };
+  }
+
+  async function cancelSearch() {
+    if (!state.search.requestId) return;
+    try {
+      await ipc.invoke("search_cancel", { id: state.search.requestId });
+    } catch (e) {
+      /* 已经结束了 */
+    }
+    state.search.requestId = null;
+    state.search.running = false;
+    emit("search:changed");
+  }
+
+  /** 点一条搜索结果：已打开就激活并跳行，没打开就先打开。 */
+  async function openSearchHit(hit) {
+    let id = hit.docId || null;
+    if (!id) {
+      const found = state.docs.find((d) => hit.path && d.path === hit.path);
+      if (found) id = found.id;
+    }
+    if (!id && hit.path) {
+      await openPaths([hit.path]);
+      const d = state.docs.find((x) => x.path === hit.path);
+      id = d ? d.id : null;
+    }
+    if (!id) return null;
+    await activateDoc(id);
+    if (DGM.editor && DGM.editor.loadActive) DGM.editor.loadActive();
+    if (DGM.editor && DGM.editor.gotoLine) DGM.editor.gotoLine(hit.line, hit.column);
+    if (DGM.preview && DGM.preview.schedule) DGM.preview.schedule();
+    refreshDerived(id);
+    return id;
+  }
+
+  /** 单实例 / 文件关联转交后，把会话与界面重新对齐。 */
+  async function syncSession() {
+    const session = await ipc.invoke("session_get");
+    applyResult(session);
+    emit("session:changed");
+  }
+
+  /* ------------------------------------------------------------------ 工作区里的写操作 */
+  //
+  // 三条都**只**走 Rust 的 workspace_* 命令，路径在那边经 `resolve_in_root` 挡一次
+  // （见 app-core::workspace）。前端不自己拼绝对路径，也就没有"绕过守卫"这条缝。
+
+  async function newWorkspaceFile(dir, name, format) {
+    const path = await ipc.invoke("workspace_new_file", { dir, name, format });
+    await refreshWorkspace();
+    await openPaths([path]);
+    if (DGM.editor && DGM.editor.loadActive) DGM.editor.loadActive();
+    if (DGM.preview && DGM.preview.schedule) DGM.preview.schedule();
+    refreshDerived(state.active);
+    return path;
+  }
+
+  async function renameWorkspaceEntry(path, name) {
+    const next = await ipc.invoke("workspace_rename", { path, name });
+    await refreshWorkspace();
+    // 会话里开着的那个文档要跟着改路径，否则它下次保存会写回旧名字
+    const open = state.docs.find((d) => d.path === path);
+    if (open) {
+      open.path = next;
+      open.name = String(next).split("/").pop();
+      emit("session:changed");
+    }
+    return next;
+  }
+
+  async function deleteWorkspaceEntry(path) {
+    await ipc.invoke("workspace_delete", { path });
+    await refreshWorkspace();
+    emit("fs:changed");
   }
 
   /* ------------------------------------------------------------------ 设置 */
@@ -451,6 +818,23 @@ window.DGM = window.DGM || {};
     addUsage,
     setStatus,
     exportWrite,
+    // 工作区 / 文件系统 / 搜索（第 4 步）
+    bindEvents,
+    loadWorkspace,
+    applyWorkspace,
+    openFolder,
+    refreshWorkspace,
+    closeWorkspace,
+    revealPath,
+    reloadDoc,
+    resolveConflict,
+    runSearch,
+    cancelSearch,
+    openSearchHit,
+    syncSession,
+    newWorkspaceFile,
+    renameWorkspaceEntry,
+    deleteWorkspaceEntry,
   });
 
   // 系统主题变化时（未显式锁定）跟随

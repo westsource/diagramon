@@ -2,6 +2,10 @@
 //!
 //! 命名与载荷**逐字段对齐** `crates/app-ipc/src/lib.rs`（那里是唯一真源）。
 //! 这里只做三件事：校验入参、动状态、必要时派任务；业务逻辑一律下沉到 `app-core` / `ai`。
+//!
+//! **参数命名约定**：命令参数一律**单个词**（`id` / `path` / `name` / `req`）。
+//! Tauri 会对命令参数做驼峰↔下划线转换，多词参数一旦两侧不一致就只在真机上炸
+//! （报 "invalid args"，测试里看不见）。单词参数没有这个坑。
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -113,6 +117,9 @@ pub fn doc_close(state: State<'_, Arc<AppState>>, id: String) -> R<SessionPayloa
     if !state.session().close(&id) {
         return Err(format!("文档不存在：{id}"));
     }
+    // 用户明确关掉了这个文档 ⇒ 它的草稿也该消失（"不保存"是一种表达）
+    state.cancel_autosave(&id);
+    app_core::recovery::remove(&state.recovery_dir, &id);
     Ok(state.session().payload())
 }
 
@@ -123,7 +130,22 @@ pub fn doc_set_body(state: State<'_, Arc<AppState>>, id: String, body: String) -
     if !s.set_body(&id, body) {
         return Err(format!("文档不存在：{id}"));
     }
-    Ok(s.get(&id).map(|d| d.dirty).unwrap_or(false))
+    let dirty = s.get(&id).map(|d| d.dirty).unwrap_or(false);
+    drop(s);
+    // autosave 计时归 Rust：正文一改就重新起表
+    if state.settings().editor.autosave {
+        state.mark_autosave(&id);
+    }
+    Ok(dirty)
+}
+
+/// 从磁盘重读（watcher 报"外部改过了"且本地没未保存改动时走这条）。
+#[tauri::command]
+pub fn doc_reload(state: State<'_, Arc<AppState>>, id: String) -> R<Doc> {
+    state
+        .session()
+        .reload(&id)
+        .ok_or_else(|| format!("读不到磁盘内容（文件被删了或读不动）：{id}"))
 }
 
 #[tauri::command]
@@ -175,7 +197,8 @@ pub fn doc_scope(state: State<'_, Arc<AppState>>, id: String) -> R<String> {
     Ok(app_core::scope::current_scope(d.format, &d.body, d.caret_line))
 }
 
-fn atomic_write(path: &Path, contents: &str) -> R<()> {
+/// 原子写：先写临时文件再 rename —— 写一半断电也不会留下半个文件。
+pub(crate) fn atomic_write(path: &Path, contents: &str) -> R<()> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir).map_err(|e| format!("建目录失败：{e}"))?;
     }
@@ -201,6 +224,8 @@ pub fn doc_save_as(state: State<'_, Arc<AppState>>, id: String, path: String) ->
 }
 
 fn save_to(state: &AppState, id: &str, path: &Path) -> R<Doc> {
+    // fs scope：开了"限制在工作区内"时，这里是唯一的守门点
+    state.check_writable(path)?;
     let body = {
         let s = state.session();
         s.get(id).ok_or_else(|| format!("文档不存在：{id}"))?.body.clone()
@@ -210,6 +235,9 @@ fn save_to(state: &AppState, id: &str, path: &Path) -> R<Doc> {
         .session()
         .commit_saved(id, Some(path))
         .ok_or_else(|| format!("文档不存在：{id}"))?;
+    // 落了盘：autosave 的倒计时取消，草稿仓里那份也没用了
+    state.cancel_autosave(id);
+    app_core::recovery::remove(&state.recovery_dir, id);
     state.remember_recent(
         saved.path.as_deref().unwrap_or_default(),
         &saved.name,
@@ -220,7 +248,11 @@ fn save_to(state: &AppState, id: &str, path: &Path) -> R<Doc> {
 
 /// 导出：把前端渲染好的图片（base64）落到用户选的路径。
 #[tauri::command]
-pub fn export_write(path: String, base64: String) -> R<String> {
+pub fn export_write(
+    state: State<'_, Arc<AppState>>,
+    path: String,
+    base64: String,
+) -> R<String> {
     let payload = match base64.split_once(",") {
         // 容忍 data URL 前缀
         Some((head, tail)) if head.starts_with("data:") => tail.to_string(),
@@ -230,6 +262,7 @@ pub fn export_write(path: String, base64: String) -> R<String> {
         .decode(payload.trim())
         .map_err(|e| format!("图片数据不是合法 base64：{e}"))?;
     let p = PathBuf::from(&path);
+    state.check_writable(&p)?;
     if let Some(dir) = p.parent() {
         std::fs::create_dir_all(dir).map_err(|e| format!("建目录失败：{e}"))?;
     }
@@ -382,8 +415,8 @@ pub async fn ai_chat(
 }
 
 #[tauri::command]
-pub fn ai_cancel(state: State<'_, Arc<AppState>>, request_id: String) -> R<()> {
-    match state.cancels().get(&request_id) {
+pub fn ai_cancel(state: State<'_, Arc<AppState>>, id: String) -> R<()> {
+    match state.cancels().get(&id) {
         Some(flag) => {
             flag.store(true, Ordering::Relaxed);
             Ok(())

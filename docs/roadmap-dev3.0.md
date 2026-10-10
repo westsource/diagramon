@@ -154,7 +154,7 @@ DIAGRAMON_SELFTEST=1 ./target/debug/diagramon.exe                         # 真�
 
 ---
 
-## 第 4 步 · 工作区与文件系统
+## 第 4 步 · 工作区与文件系统 ✅ 已完成
 
 四件事共享同一套"工作区根 + watcher"机制，放一起做，省一轮重复。
 
@@ -177,6 +177,29 @@ DIAGRAMON_SELFTEST=1 ./target/debug/diagramon.exe                         # 真�
 - 关掉窗口再开，未保存内容能恢复（autosave）。
 
 **涉及面**：中—大。
+
+**落地**：
+- `crates/app-core/src/workspace.rs` —— 扫描 / 全库搜索 / 路径守卫，**纯函数 + 21 项单测**
+  （跳过 `.git`/`node_modules`/`target`，只收本应用认的扩展名，不含图表文件的目录不出现）；
+- `crates/app-core/src/recovery.rs` —— 未落盘文档的草稿仓（一个文档一个 JSON，坏一个不连累别的）；
+- 契约新增 `WorkspaceNode`/`WorkspaceInfo`/`SearchRequest`/`SearchHit`/`SearchDone`/`FsChange`，
+  命令 `workspace_{open,get,close,new_file,rename,delete}`、`search_{run,cancel,once}`、`doc_reload`，
+  事件 `fs://changed`、`search://hit|done`、`open://paths`、`doc://autosaved`；
+- `src-tauri/src/watcher.rs` —— `notify` 递归监视 + 350ms 去抖 + **回声抑制**
+  （比对磁盘内容与文档正文，自己写出去的不上报）+ 冲突判定；
+- autosave **归 Rust**：后台线程每秒醒一次，到期就落盘 —— 前端定时器在后台窗口
+  会被 WebView2 节流到 ~1 次/秒，靠不住；
+- 单实例：`tauri-plugin-single-instance`，第二个进程把命令行里的图表文件转交给前端；
+- 冲突 UI：编辑区顶上一条横幅（「用磁盘版本」/「保留我的」）—— 需要决策的状态不做成会自己消失的 toast。
+
+**fs scope 的真实落点（如实说明，别被名字带偏）**：
+- 由工作区界面发起的写操作（新建/重命名/删除）**永远**经 `workspace::resolve_in_root`，
+  `..`、绝对路径一律拒绝 —— 这条不受任何开关影响；
+- 「另存为 / 导出」的路径来自系统对话框，那是**用户本人的授权**，默认放行；
+  想收紧就开 设置 → 编辑器 →「只允许在工作区内读写文件」（默认关，开了才会拦）。
+
+**验证**：`check.mjs` 自检新增 11 条工作区断言（扫描/守卫/搜索行列号/重命名/删除/多词参数一致性）；
+`cargo test -p app-core` 新增 33 项单测。
 
 ---
 

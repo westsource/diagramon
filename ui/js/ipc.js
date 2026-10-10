@@ -372,12 +372,17 @@ digraph Pipeline {
     return Mock._seq;
   }
 
+  /** mock 工作区的默认根：从示例文档的路径推出来，好让浏览器里也能看到一棵真树。 */
+  const MOCK_WS_ROOT = "E:/OpenCode/diagramon/docs";
+
   const Mock = {
     _seq: 0,
     _ai: new Map(), // request_id -> {timer, aborted}
     docs: [],
     active: "d1",
     settings: null,
+    /** mock 工作区（结构对齐 app-ipc 的 WorkspaceInfo） */
+    ws: { root: null, name: "", tree: [], truncated: false, file_count: 0, dir_count: 0 },
 
     _seed() {
       this.docs = [
@@ -387,13 +392,16 @@ digraph Pipeline {
         { id: "d4", path: "E:/OpenCode/diagramon/scratch/白板草图.excalidraw", name: "白板草图.excalidraw", format: "excalidraw", body: EXCALIDRAW_SRC, dirty: true, view_mode: "preview", caret_line: 4, caret_col: 1, layout: null },
       ];
       this.active = "d1";
+      // mock 里默认就"打开着"这个示例工作区：否则浏览器原型永远是空树，
+      // 看不出这步做了什么。真机上要不要打开由用户点「打开文件夹」决定。
+      this.ws = this._wsFromDocs(MOCK_WS_ROOT);
       this.settings = {
         theme: "light",
         density: "normal",
         accent: "pine",
         locale: "zh-CN",
         panels: { activitybar: true, sidebar: true, sidebar_view: "explorer", ai: true, bottom: true, bottom_tab: "problems", sidebar_w: 236, ai_w: 344, panel_h: 168, split_src: 46 },
-        editor: { font_size: 13, debounce_ms: 350, lint: true, per_doc_view: true, default_view: "split" },
+        editor: { font_size: 13, debounce_ms: 350, lint: true, per_doc_view: true, default_view: "split", autosave: true, autosave_ms: 5000, restrict_to_workspace: false },
         ai: {
           models: [
             { id: "gw-fast", name: "diagram-fast（云网关）", provider: "custom", base_url: "https://api.diagramon.app/v1/ai", model: "diagram-fast", max_tokens: 4096, temperature: 0.4, has_key: true, key_hint: "gw-…7f2a" },
@@ -419,6 +427,101 @@ digraph Pipeline {
     },
     _clone(x) {
       return JSON.parse(JSON.stringify(x));
+    },
+    /** 从已打开文档的路径堆出一棵树（真机那侧是 Rust 扫盘；mock 里等价物就是这些文档）。 */
+    _wsFromDocs(root) {
+      const base = String(root || "").replace(/\\/g, "/").replace(/\/$/, "");
+      const docs = this.docs.filter((d) => d.path && (!base || d.path.startsWith(base)));
+      const dirs = new Map();
+      const files = [];
+      for (const d of docs) {
+        const p = d.path.replace(/\\/g, "/");
+        const rest = base && p.startsWith(base) ? p.slice(base.length).replace(/^\//, "") : p;
+        const parts = rest.split("/").filter(Boolean);
+        if (parts.length < 2) {
+          files.push({ name: parts[0] || d.name, path: p, dir: false, format: d.format, children: [] });
+          continue;
+        }
+        let cur = dirs;
+        for (const seg of parts.slice(0, -1)) {
+          if (!cur.has(seg)) cur.set(seg, new Map());
+          cur = cur.get(seg);
+        }
+        cur.__files = (cur.__files || []).concat([{ name: parts[parts.length - 1], path: p, dir: false, format: d.format, children: [] }]);
+      }
+      const build = (map, prefix) => {
+        const out = [];
+        for (const [seg, sub] of map) {
+          if (seg === "__files") continue;
+          const path = prefix + "/" + seg;
+          out.push({ name: seg, path, dir: true, format: null, children: build(sub, path) });
+        }
+        for (const f of map.__files || []) out.push(f);
+        return out;
+      };
+      const tree = build(dirs, base);
+      const count = (nodes) => nodes.reduce((n, x) => n + (x.dir ? count(x.children) : 1), 0);
+      const dirCount = (nodes) => nodes.reduce((n, x) => n + (x.dir ? 1 + dirCount(x.children) : 0), 0);
+      return {
+        root: base || null,
+        name: base.split("/").filter(Boolean).pop() || "",
+        tree: tree.concat(files),
+        truncated: false,
+        file_count: count(tree) + files.length,
+        dir_count: dirCount(tree),
+      };
+    },
+    /** mock 版全库搜索：命中形状与 Rust 侧逐字段一致（行列都按字符算）。 */
+    _search(req) {
+      const q = String(req.query == null ? "" : req.query);
+      const done = { request_id: req.request_id || "mock", total: 0, files: 0, truncated: false, error: null };
+      const hits = [];
+      if (!q.trim()) return { hits, done };
+      let re = null;
+      if (req.regex) {
+        try {
+          re = new RegExp(q, req.case_sensitive ? "g" : "gi");
+        } catch (e) {
+          done.error = String((e && e.message) || e);
+          return { hits, done };
+        }
+      }
+      const limit = req.max_results ? req.max_results : 500;
+      const needle = req.case_sensitive ? q : q.toLowerCase();
+      for (const d of this.docs) {
+        if (!d.path) continue;
+        let fileHits = 0;
+        const lines = String(d.body || "").split("\n");
+        for (let i = 0; i < lines.length; i += 1) {
+          const line = lines[i];
+          let col = -1;
+          if (re) {
+            re.lastIndex = 0;
+            const m = re.exec(line);
+            if (m) col = m.index;
+          } else {
+            const idx = (req.case_sensitive ? line : line.toLowerCase()).indexOf(needle);
+            if (idx >= 0) col = idx;
+          }
+          if (col < 0) continue;
+          done.total += 1;
+          fileHits += 1;
+          hits.push({
+            path: d.path, name: d.name, format: d.format, line: i + 1,
+            column: col + 1, text: line.length > 240 ? line.slice(0, 240) + "…" : line,
+          });
+          if (done.total >= limit) {
+            done.truncated = true;
+            break;
+          }
+        }
+        if (done.total >= limit) {
+          done.files += 1;
+          break;
+        }
+        if (fileHits) done.files += 1;
+      }
+      return { hits, done };
     },
     _session() {
       return { docs: this._clone(this.docs), active: this.active };
@@ -577,6 +680,85 @@ digraph Pipeline {
 
         case "doc_scope":
           return this._scope(args.id);
+
+        case "doc_reload": {
+          const d = this._doc(args.id);
+          if (!d) throw new Error("文档不存在：" + args.id);
+          return this._clone(d);
+        }
+
+        /* ---- 工作区（mock：从已打开文档的路径反推出一棵真树） ---- */
+        case "workspace_get":
+          return this._clone(this.ws);
+
+        case "workspace_open": {
+          const root = args.path || MOCK_WS_ROOT;
+          const docs = this.docs.filter((d) => d.path && d.path.startsWith(root));
+          if (!docs.length) throw new Error("mock 工作区里没有图表文件：" + root);
+          this.ws = { ...this._wsFromDocs(root), root, name: root.split(/[\\/]/).filter(Boolean).pop() };
+          return this._clone(this.ws);
+        }
+
+        case "workspace_close":
+          this.ws = this._wsFromDocs("");
+          return this._clone(this.ws);
+
+        case "workspace_new_file": {
+          const dir = String(args.dir || "").replace(/\\/g, "/").replace(/\/$/, "");
+          const f = this._fmt(args.format);
+          let name = String(args.name || "").trim();
+          if (name && !/\.[a-z0-9]+$/i.test(name)) name += f.exts[0];
+          if (!name) throw new Error("名称为空");
+          const path = dir + "/" + name;
+          if (this.docs.some((d) => d.path === path)) throw new Error("同名文件已存在：" + name);
+          const doc = {
+            id: this._newId("n"), path, name, format: f.id, body: f.default_body,
+            dirty: true, view_mode: f.split_view ? "split" : "preview",
+            caret_line: 1, caret_col: 1, layout: f.layouts.length ? f.layouts[0] : null,
+          };
+          this.docs.push(doc);
+          this.active = doc.id;
+          this.ws = this._wsFromDocs(this.ws.root);
+          return path;
+        }
+
+        case "workspace_rename": {
+          const d = this.docs.find((x) => x.path === args.path);
+          if (!d) throw new Error("找不到：" + args.path);
+          let name = String(args.name || "").trim();
+          const dot = d.path.lastIndexOf(".");
+          if (name && !/\.[a-z0-9]+$/i.test(name)) name += d.path.slice(dot);
+          d.path = d.path.replace(/[^\\/]+$/, name);
+          d.name = name;
+          this.ws = this._wsFromDocs(this.ws.root);
+          return d.path;
+        }
+
+        case "workspace_delete": {
+          const i = this.docs.findIndex((x) => x.path === args.path);
+          if (i < 0) throw new Error("找不到：" + args.path);
+          const [gone] = this.docs.splice(i, 1);
+          if (this.active === gone.id) this.active = this.docs[0] ? this.docs[0].id : null;
+          this.ws = this._wsFromDocs(this.ws.root);
+          return null;
+        }
+
+        case "search_run": {
+          const req = args.req || {};
+          const { hits, done } = this._search(req);
+          // 逐条推，模拟流式（mock 下 setTimeout 可用；真机那侧由 Rust 推）
+          hits.forEach((h) => setTimeout(() => emitLocal("search://hit", h), 0));
+          setTimeout(() => emitLocal("search://done", done), 0);
+          return null;
+        }
+
+        case "search_cancel":
+          return null;
+
+        case "search_once": {
+          const { hits, done } = this._search(args.req || {});
+          return [hits, done];
+        }
 
         case "export_write":
           // mock：不落盘，只回报目标路径

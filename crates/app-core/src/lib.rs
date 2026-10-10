@@ -8,8 +8,10 @@ pub mod document;
 pub mod format;
 pub mod lint;
 pub mod outline;
+pub mod recovery;
 pub mod scope;
 pub mod session;
 pub mod settings;
+pub mod workspace;
 
 pub use session::{Entry, Session};

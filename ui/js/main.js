@@ -152,6 +152,17 @@ window.DGM = window.DGM || {};
     DGM.bus.on("issues:changed", () => DGM.shell.renderStatus());
     DGM.bus.on("scope:changed", () => DGM.shell.renderStatus());
     DGM.bus.on("status:changed", () => DGM.shell.renderStatus());
+    // 工作区与外部改动（第 4 步）
+    DGM.bus.on("workspace:changed", () => {
+      DGM.shell.render();
+    });
+    DGM.bus.on("fs:changed", () => {
+      DGM.shell.renderFsBanner();
+      DGM.shell.render();
+    });
+    DGM.bus.on("search:changed", () => {
+      if (DGM.sidebar) DGM.sidebar.render();
+    });
 
     // 语言切换时整页重渲染（各模块文案都走 i18n）
     DGM.i18n.onChange(() => {
@@ -282,6 +293,17 @@ window.DGM = window.DGM || {};
   /** 对象 → base64（分块，避免 apply 参数过多） */
   function enc(obj) {
     const bytes = new TextEncoder().encode(JSON.stringify(obj, null, 2));
+    let bin = "";
+    for (let i = 0; i < bytes.length; i += 0x8000) {
+      bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+    }
+    return btoa(bin);
+  }
+
+  /** 裸文本 → base64。给"造一个真实文件"用 —— `enc` 走 JSON.stringify，
+   *  会把换行转义成字面 `\n`、再裹一层引号，写出去就不是两行源码了。 */
+  function encRaw(str) {
+    const bytes = new TextEncoder().encode(str);
     let bin = "";
     for (let i = 0; i < bytes.length; i += 0x8000) {
       bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
@@ -473,6 +495,59 @@ window.DGM = window.DGM || {};
         convertErr = (e && e.message) || String(e);
       }
       ok("dot → mermaid 如实报未实现（不是静默成功）", convertErr.includes("实验方向"), convertErr.slice(0, 60));
+
+      // ── 工作区与文件系统（第 4 步）：全是纯 IPC，不靠定时器 ──
+      // 造一个真实目录：借 export_write 的"父目录会自动建"这一特性
+      const wsDir = reportPath.replace(/[/\\][^/\\]+$/, "") + "/ws-selftest";
+      await invoke("export_write", { path: wsDir + "/flows/demo.mmd", base64: encRaw("flowchart TD\n    A([开始]) --> B{判断}\n") });
+
+      const wsInfo = await invoke("workspace_open", { path: wsDir });
+      ok("打开工作区返回根与树", wsInfo.root && Array.isArray(wsInfo.tree) && wsInfo.tree.length > 0, wsInfo.root);
+      ok("树里只有本应用认的文件", wsInfo.file_count === 1 && wsInfo.dir_count === 1, `${wsInfo.file_count}/${wsInfo.dir_count}`);
+
+      const got = await invoke("workspace_get");
+      ok("workspace_get 与刚扫的一致", got.root === wsInfo.root && got.file_count === wsInfo.file_count, got.file_count);
+
+      const hits = await invoke("search_once", { req: { request_id: "selftest", query: "判断", max_results: 0 } });
+      // "    A([开始]) --> B{判断}"：判断 在第 19 个字符处（1 起）。
+      // 若按字节算会得到 22（中文一个字 3 字节）—— 这条断言就是把"字符 vs 字节"钉死。
+      ok("全库搜索按字符给列号", hits[0].length === 1 && hits[0][0].line === 2 && hits[0][0].column === 19, JSON.stringify(hits[0].map((x) => `${x.line}:${x.column}`)));
+      const hitsBad = await invoke("search_once", { req: { request_id: "selftest", query: "a(b", regex: true } });
+      ok("坏正则如实报错而不是当没命中", !!hitsBad[1].error, hitsBad[1].error);
+
+      const made = await invoke("workspace_new_file", { dir: wsDir, name: "selftest-made", format: "dot" });
+      ok("新建文件补齐扩展名并落盘", /selftest-made\.dot$/.test(made), made);
+
+      let traversal = "";
+      try {
+        await invoke("workspace_new_file", { dir: wsDir, name: "../escape", format: "mermaid" });
+      } catch (e) {
+        traversal = (e && e.message) || String(e);
+      }
+      ok("路径守卫挡住 ../ 逃逸", traversal.length > 0, traversal.slice(0, 50));
+
+      const renamed = await invoke("workspace_rename", { path: made, name: "selftest-renamed" });
+      ok("重命名沿用原扩展名", /selftest-renamed\.dot$/.test(renamed), renamed);
+
+      const afterRename = await invoke("search_once", { req: { request_id: "selftest", query: "digraph" } });
+      ok("搜索扫到刚建的文件", afterRename[0].length === 1 && /selftest-renamed\.dot$/.test(afterRename[0][0].path), afterRename[0].map((x) => x.name).join(","));
+
+      await invoke("workspace_delete", { path: renamed });
+      const back = await invoke("workspace_get");
+      ok("删除后树回到 1 个文件", back.file_count === 1, back.file_count);
+
+      // 多词命令参数的命名一致性（ai_cancel 曾在两侧各写一套，真机上才炸）
+      let cancelErr = "";
+      try {
+        await invoke("ai_cancel", { id: "no-such-request" });
+      } catch (e) {
+        cancelErr = (e && e.message) || String(e);
+      }
+      ok("ai_cancel 的参数能被解析（多词参数两侧一致）", cancelErr.includes("结束"), cancelErr.slice(0, 60));
+
+      await invoke("workspace_close");
+      const closed = await invoke("workspace_get");
+      ok("关闭工作区后根为空", !closed.root, closed.root);
     } catch (e) {
       note("selftest:error " + String((e && e.message) || e));
       ok("自检过程无异常", false, String((e && e.stack) || (e && e.message) || e));

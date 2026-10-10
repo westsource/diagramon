@@ -193,11 +193,26 @@ pub struct EditorPrefs {
     pub lint: bool,
     pub per_doc_view: bool,
     pub default_view: ViewMode,
+    /// autosave：由 **Rust 侧**计时落盘（改正文后经过 `autosave_ms` 就写）
+    pub autosave: bool,
+    pub autosave_ms: u32,
+    /// 打开工作区后，是否把文件读写限制在工作区内。
+    /// 默认关：自由「另存为」到别处是常见需求，开成默认会莫名挡住用户。
+    pub restrict_to_workspace: bool,
 }
 
 impl Default for EditorPrefs {
     fn default() -> Self {
-        Self { font_size: 13, debounce_ms: 350, lint: true, per_doc_view: true, default_view: ViewMode::Split }
+        Self {
+            font_size: 13,
+            debounce_ms: 350,
+            lint: true,
+            per_doc_view: true,
+            default_view: ViewMode::Split,
+            autosave: true,
+            autosave_ms: 5000,
+            restrict_to_workspace: false,
+        }
     }
 }
 
@@ -380,6 +395,98 @@ pub struct ConvertOutcome {
     pub notes: Vec<String>,
 }
 
+/* ---------------- 工作区与文件系统 ---------------- */
+
+/// 工作区树的一个节点。目录带 `children`，文件不带。
+///
+/// `format` 只对文件有意义（界面据此画那个格式色点），目录恒为 `None`。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkspaceNode {
+    pub name: String,
+    /// 一律正斜杠的绝对路径。前端只当 id 用，不自己拼。
+    pub path: String,
+    pub dir: bool,
+    #[serde(default)]
+    pub format: Option<FormatId>,
+    #[serde(default)]
+    pub children: Vec<WorkspaceNode>,
+}
+
+/// 一次工作区扫描的结果。`root` 为 `None` = 没有打开工作区。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct WorkspaceInfo {
+    pub root: Option<String>,
+    /// 根目录的显示名（取自最后一段路径）
+    pub name: String,
+    pub tree: Vec<WorkspaceNode>,
+    /// 撞上扫描上限 ⇒ 树不完整。**如实报**，界面要写出来。
+    pub truncated: bool,
+    pub file_count: u32,
+    pub dir_count: u32,
+}
+
+/// 一次全库搜索的请求。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SearchRequest {
+    pub request_id: String,
+    pub query: String,
+    #[serde(default)]
+    pub regex: bool,
+    #[serde(default)]
+    pub case_sensitive: bool,
+    /// 0 = 用默认上限
+    #[serde(default)]
+    pub max_results: u32,
+}
+
+/// 一条命中。结果按 `search://hit` 逐条推进来（大仓库不阻塞界面）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SearchHit {
+    pub path: String,
+    pub name: String,
+    pub format: FormatId,
+    /// 1 起
+    pub line: u32,
+    /// 1 起，按**字符**计（中文一个算一个，别用字节）
+    pub column: u32,
+    /// 命中所在行的原文（去尾换行，超长截断）
+    pub text: String,
+}
+
+/// 搜索收尾。`error` 非空 = 没跑（正则写错了之类），不是"没命中"。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SearchDone {
+    pub request_id: String,
+    pub total: u32,
+    pub files: u32,
+    /// 撞上命中上限
+    pub truncated: bool,
+    pub error: Option<String>,
+}
+
+/// 外部文件变动（watcher 去抖后）。
+///
+/// `doc_id` 非空 = 这个文件正开着；`conflicts` = 开着**且本地有未保存改动**，
+/// 界面必须问用户，不能直接覆盖。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FsChange {
+    pub path: String,
+    /// created | modified | removed | dir
+    pub kind: String,
+    #[serde(default)]
+    pub doc_id: Option<String>,
+    #[serde(default)]
+    pub conflicts: bool,
+}
+
+/// 单实例转交：第二个进程把命令行里的文件交给已在跑的实例。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct OpenPathsEvent {
+    pub paths: Vec<String>,
+}
+
 /// 开发开关的环境变量名（前后端与文档统一引用，别各写一份字符串）。
 pub const ENV_SELFTEST: &str = "DIAGRAMON_SELFTEST";
 pub const ENV_SELFTEST_REPORT: &str = "DIAGRAMON_SELFTEST_REPORT";
@@ -389,6 +496,16 @@ pub mod events {
     pub const AI_DELTA: &str = "ai://delta";
     pub const AI_DONE: &str = "ai://done";
     pub const AI_FAILED: &str = "ai://failed";
+    /// 工作区文件被改动（批量 `Vec<FsChange>`）
+    pub const FS_CHANGED: &str = "fs://changed";
+    /// 搜索逐条命中
+    pub const SEARCH_HIT: &str = "search://hit";
+    /// 搜索收尾
+    pub const SEARCH_DONE: &str = "search://done";
+    /// 单实例转交进来的文件
+    pub const OPEN_PATHS: &str = "open://paths";
+    /// autosave 落了盘（载荷 `Doc`）
+    pub const DOC_AUTOSAVED: &str = "doc://autosaved";
 }
 
 /// 命令名常量（与 `ui/js/ipc.js` 逐字对应，避免两侧拼错字符串）。
@@ -407,9 +524,20 @@ pub mod commands {
     pub const DOC_SET_CARET: &str = "doc_set_caret";
     pub const DOC_SET_VIEW_MODE: &str = "doc_set_view_mode";
     pub const DOC_SET_LAYOUT: &str = "doc_set_layout";
+    pub const DOC_RELOAD: &str = "doc_reload";
     pub const DOC_ISSUES: &str = "doc_issues";
     pub const DOC_OUTLINE: &str = "doc_outline";
     pub const DOC_SCOPE: &str = "doc_scope";
+    pub const WORKSPACE_OPEN: &str = "workspace_open";
+    pub const WORKSPACE_GET: &str = "workspace_get";
+    pub const WORKSPACE_CLOSE: &str = "workspace_close";
+    pub const WORKSPACE_NEW_FILE: &str = "workspace_new_file";
+    pub const WORKSPACE_RENAME: &str = "workspace_rename";
+    pub const WORKSPACE_DELETE: &str = "workspace_delete";
+    pub const SEARCH_RUN: &str = "search_run";
+    pub const SEARCH_CANCEL: &str = "search_cancel";
+    /// 同步版搜索：只给自检/诊断用（正常路径走 `search_run` 的事件流）
+    pub const SEARCH_ONCE: &str = "search_once";
     pub const EXPORT_WRITE: &str = "export_write";
     pub const CRED_SET: &str = "cred_set";
     pub const CRED_DELETE: &str = "cred_delete";

@@ -63,6 +63,8 @@ window.DGM = window.DGM || {};
       "ai.model": "mi.aiModel", "ai.apply": "mi.aiApply", "ai.history": "mi.aiHistory",
       "file.new": "mi.new", "file.open": "mi.open", "file.save": "mi.save", "file.saveAs": "mi.saveAs",
       "file.recent": "mi.openRecent", "file.cloud": "mi.cloudDocs",
+      "file.openFolder": "mi.openFolder", "file.closeFolder": "mi.closeWorkspace",
+      "file.searchWorkspace": "mi.searchWorkspace", "file.newFileHere": "mi.newFileHere",
       "view.mode.source": "mi.modeSource", "view.mode.split": "mi.modeSplit", "view.mode.preview": "mi.modePreview",
       "view.sidebar": "mi.sidebar", "view.ai": "mi.aiPanel", "view.panel": "mi.panel",
       "view.activitybar": "mi.activitybar", "view.fullscreen": "mi.fullscreen",
@@ -225,13 +227,6 @@ window.DGM = window.DGM || {};
     p.style.left = x + "px";
     p.style.top = y + "px";
   }
-  function hideSub() {
-    const p = el.popSub;
-    if (p) {
-      p.hidden = true;
-      p.innerHTML = "";
-    }
-  }
   function hidePop() {
     if (el.pop) {
       el.pop.hidden = true;
@@ -239,7 +234,25 @@ window.DGM = window.DGM || {};
     }
     hideSub();
   }
-  DGM.pop = { show: showPop, hide: hidePop, hideSub };
+
+  /** 在一个元素旁边弹出菜单（侧栏行尾的「更多」用它）。 */
+  function popNear(items, anchor, onPick) {
+    const r = anchor.getBoundingClientRect();
+    showPop(items, { x: r.right - 160, y: r.bottom + 4 }, (it) => {
+      hidePop();
+      onPick(it);
+    }, "menu");
+  }
+
+  function hideSub() {
+    const p = el.popSub;
+    if (p) {
+      p.hidden = true;
+      p.innerHTML = "";
+    }
+  }
+
+  DGM.pop = { show: showPop, hide: hidePop, hideSub, near: popNear };
 
   /* ------------------------------------------------------------------ 菜单栏 */
 
@@ -269,6 +282,10 @@ window.DGM = window.DGM || {};
             children: state.formatList.map((f) => ({ label: f.name, icon: "file", act: "new:" + f.id, kbd: f.exts[0] })),
           },
           { label: t("mi.open"), kbd: "Ctrl+O", icon: "folderOpen", act: "cmd:file.open" },
+          { label: t("mi.openFolder"), icon: "folderOpen", act: "cmd:file.openFolder" },
+          { label: t("mi.closeWorkspace"), icon: "close", act: "cmd:file.closeFolder", disabled: !state.workspace.root },
+          { label: t("mi.searchWorkspace"), kbd: "Ctrl+Shift+H", icon: "search", act: "cmd:file.searchWorkspace", disabled: !state.workspace.root },
+          { label: t("mi.newFileHere"), icon: "plus", act: "cmd:file.newFileHere", disabled: !state.workspace.root },
           { label: t("mi.openRecent"), icon: "clock", kbd: "Ctrl+R", children: recentItems },
           { sep: true },
           { label: t("mi.cloudSave"), icon: "cloud", act: "tip:side.cloud.gwOff", disabled: true },
@@ -981,6 +998,8 @@ window.DGM = window.DGM || {};
     if (mod && k === "b") { e.preventDefault(); return togglePanel("sidebar"); }
     if (mod && k === "j") { e.preventDefault(); return togglePanel("bottom"); }
     if (mod && e.shiftKey && k === "f") { e.preventDefault(); return zenMode(); }
+    // Ctrl+Shift+H：工作区搜索（VS Code 的 Find in Files 位；Ctrl+Shift+F 被全屏占了）
+    if (mod && e.shiftKey && k === "h") { e.preventDefault(); return runCommand("file.searchWorkspace"); }
     if (mod && k === "i" && !e.shiftKey) { e.preventDefault(); return DGM.ai.focus("chat"); }
     if (mod && e.shiftKey && k === "i") { e.preventDefault(); return DGM.dialogs.vision(); }
     if (mod && k === "s" && !e.shiftKey) { e.preventDefault(); return saveActive(false); }
@@ -1078,6 +1097,26 @@ window.DGM = window.DGM || {};
     cmd({ id: "file.saveAs", group: "file", icon: "save", kbd: "Ctrl+Shift+S", run: () => saveActive(true), avail: () => (state.activeDoc() ? true : { why: t("status.noDoc") }) });
     cmd({ id: "file.recent", group: "file", icon: "clock", kbd: "Ctrl+R", run: () => DGM.dialogs.history() });
     cmd({ id: "file.cloud", group: "file", icon: "cloud", run: () => setSidebarView("cloud") });
+    // 工作区（第 4 步）：树/搜索/外部跟随都要先有一个根目录
+    cmd({ id: "file.openFolder", group: "file", icon: "folderOpen", run: () => DGM.sidebar && DGM.sidebar.openFolderFlow && DGM.sidebar.openFolderFlow() });
+    cmd({
+      id: "file.closeFolder", group: "file", icon: "close",
+      run: () => state.closeWorkspace(),
+      avail: () => (state.workspace.root ? true : { why: t("side.ws.none") }),
+    });
+    cmd({
+      id: "file.searchWorkspace", group: "file", icon: "search", kbd: "Ctrl+Shift+H",
+      run: () => {
+        setSidebarView("search");
+        if (DGM.sidebar && DGM.sidebar.focusSearch) DGM.sidebar.focusSearch();
+      },
+      avail: () => (state.workspace.root ? true : { why: t("side.search.needWorkspace") }),
+    });
+    cmd({
+      id: "file.newFileHere", group: "file", icon: "plus",
+      run: () => DGM.sidebar && DGM.sidebar.newFileFlow && DGM.sidebar.newFileFlow(),
+      avail: () => (state.workspace.root ? true : { why: t("side.ws.none") }),
+    });
 
     cmd({ id: "view.mode.source", group: "view", icon: "code", kbd: "Ctrl+1", run: () => setMode("source"), avail: () => (state.isTextDoc(state.activeDoc()) ? true : { why: t("status.canvasFormatSub") }) });
     cmd({ id: "view.mode.split", group: "view", icon: "splitV", kbd: "Ctrl+2", run: () => setMode("split"), avail: () => (state.isTextDoc(state.activeDoc()) ? true : { why: t("status.canvasFormatSub") }) });
@@ -1120,6 +1159,47 @@ window.DGM = window.DGM || {};
     cmd({ id: "help.update", group: "help", icon: "refresh", run: () => toast({ icon: "refresh", title: t("mi.checkUpdate"), sub: "" }) });
   }
 
+  /* ------------------------------------------------------------------ 外部改动横幅 */
+
+  /**
+   * 外部改动与本地未保存撞上了：只在编辑区顶上挂一条，让用户二选一。
+   *
+   * 为什么不用 toast：这是个**需要决策**的状态，不是一条通知 —— toast 会自己消失，
+   * 而这个选择不做，下一次保存就会把磁盘上的东西覆盖掉。
+   */
+  function renderFsBanner() {
+    const box = $("#fs-banner");
+    if (!box) return;
+    const list = state.conflicts || [];
+    if (!list.length) {
+      box.hidden = true;
+      box.innerHTML = "";
+      box.onclick = null;
+      return;
+    }
+    const c = list[0];
+    box.hidden = false;
+    box.innerHTML =
+      `${icon("warn")}<span class="fb-txt"><b>${esc(t("fs.conflict.title", { name: c.name }))}</b><span>${esc(t("fs.conflict.desc"))}</span></span>` +
+      `<span class="sp"></span>` +
+      (list.length > 1 ? `<span class="fb-more">+${list.length - 1}</span>` : "") +
+      `<button class="btn sm ghost" data-a="theirs">${esc(t("fs.conflict.theirs"))}</button>` +
+      `<button class="btn sm" data-a="keep">${esc(t("fs.conflict.keep"))}</button>`;
+    box.onclick = async (e) => {
+      const b = e.target.closest("button");
+      if (!b) return;
+      try {
+        if (b.dataset.a === "theirs") {
+          await state.reloadDoc(c.docId);
+        }
+        state.resolveConflict(c.docId);
+      } catch (err) {
+        status(String((err && err.message) || err), "err");
+      }
+      renderFsBanner();
+    };
+  }
+
   /* ------------------------------------------------------------------ 渲染编排 */
 
   /** 把当前文档的视图模式落到 #split 的 class 上（CSS 用 .mode-* 决定哪一面隐藏）。 */
@@ -1137,6 +1217,7 @@ window.DGM = window.DGM || {};
     renderMenubar();
     renderActivity();
     renderStatus();
+    renderFsBanner();
     if (DGM.sidebar) DGM.sidebar.render();
     if (DGM.tabs) {
       DGM.tabs.render();
@@ -1165,6 +1246,7 @@ window.DGM = window.DGM || {};
     renderMenubar,
     renderActivity,
     renderStatus,
+    renderFsBanner,
     applyLayoutVars,
     applyMockBadge,
     bind,

@@ -393,7 +393,7 @@ window.DGM = window.DGM || {};
 
   function cancel() {
     const id = state.ui.aiRequestId;
-    if (id) ipc.invoke("ai_cancel", { request_id: id }).catch(() => {});
+    if (id) ipc.invoke("ai_cancel", { id }).catch(() => {});
     const m = findMsg(id);
     if (m) {
       m.streaming = false;

@@ -39,6 +39,8 @@ serde_json = { workspace = true }
 # 与 ai crate 同一个 reqwest 版本，避免两份 TLS 栈同时链进二进制
 reqwest = { version = "0.13", default-features = false, features = ["json", "native-tls", "charset", "http2", "stream"] }
 base64 = "0.22"
+notify = "8.2.0"
+tauri-plugin-single-instance = "2.5.2"
 
 [target.'cfg(windows)'.dependencies]
 platform-windows = { workspace = true }
