@@ -3,6 +3,7 @@
 //! 这一层**不碰窗口、不碰平台差异**：文件 IO 在 `src-tauri` 的命令层，凭据在 `platform`。
 //! 因此它可以被 `cargo test` 直接覆盖（各模块尾部都有 `#[cfg(test)]`）。
 
+pub mod cloudmap;
 pub mod convert;
 pub mod document;
 pub mod format;

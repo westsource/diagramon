@@ -586,6 +586,9 @@ pub struct CloudDoc {
     pub format: FormatId,
     pub size: u64,
     pub updated_at: String,
+    /// 乐观锁版本号：下次保存原样带回（`If-Match`）。新建是 0。
+    #[serde(default)]
+    pub version: u64,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

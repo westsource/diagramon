@@ -557,18 +557,25 @@ window.DGM = window.DGM || {};
     return state.cloud.docs;
   }
 
-  /** 把当前文档存到云端。已在云端（记着 cloudId）就更新，否则新建并记下 id。 */
+  /** 把当前文档存到云端。
+   *
+   *  乐观锁三件套都在文档上记着：`cloudId`（服务端认的 id）、
+   *  `cloudVersion`（上次存/取的版本号）。新建传 version=0（If-Match: 0 = 仅当不存在时创建）；
+   *  更新必须带版本号 —— 服务端 If-Match 省略 = 仅当不存在时创建，会直接 409（联调实测）。
+   *  存成功后把新版本号记回去，下次保存才是"更新"。
+   */
   async function cloudSaveActive() {
     const d = state.activeDoc();
     if (!d) return null;
     const saved = await ipc.invoke("cloud_doc_save", {
       id: d.cloudId || "",
+      version: d.cloudVersion || 0,
       name: d.name,
       format: d.format,
       body: d.body,
     });
-    // 服务端认下的 id 要记在会话里，下次保存才是"更新"而不是再建一份
     d.cloudId = saved.id;
+    d.cloudVersion = saved.version;
     emit("session:changed");
     await cloudDocs();
     return saved;
@@ -580,6 +587,7 @@ window.DGM = window.DGM || {};
     const doc = await ipc.invoke("doc_new", { format: body.format });
     if (doc) {
       doc.cloudId = body.id;
+      doc.cloudVersion = body.version; // 乐观锁起点：下次保存带这个版本号
       doc.name = body.name || doc.name;
       doc.body = body.body;
       await ipc.invoke("doc_set_body", { id: doc.id, body: body.body });

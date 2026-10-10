@@ -428,6 +428,11 @@ fn debug_browser_args() -> Option<String> {
          --disable-background-timer-throttling --disable-backgrounding-occluded-windows \
          --disable-renderer-backgrounding",
     );
+    // **自检必须直连**：Tauri 2 的 invoke 在 Windows 上走 `http://ipc.localhost`，
+    // 系统代理（clash 之类）若没把它排除，请求/响应就会被间歇性吞掉 ——
+    // 表现正是"Rust 执行完了、前端 await 永不结算、卡点每次还不一样"。
+    // 自检不需要任何外网，直接把代理整个关掉。
+    args.push_str(" --no-proxy-server --proxy-bypass-list=<-loopback>;");
     Some(args)
 }
 

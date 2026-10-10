@@ -296,9 +296,25 @@ DIAGRAMON_SELFTEST=1 ./target/debug/diagramon.exe                         # 真�
   **base_url 留空 = 云端整体关闭**，一切照旧离线工作 —— 离线优先是产品底色。
 - mock 后端同步实现（浏览器原型里能走通登录 → 列表 → 存 → 开 → 删）。
 
-**验证**：`cargo test` 133 项全绿；i18n 中英各 643 键一致。
-端到端（连真实服务端）需要跑起来的 `service/`，本机未做 —— 客户端到服务端的字段口径
-以 `app/schemas/__init__.py` 的 pydantic 模型为准逐字段对齐（camelCase）。
+**验证**：`cargo test` 137 项全绿（含 `app-core::cloudmap` 5 项契约映射单测）；
+i18n 中英各 643 键一致。
+
+**端到端联调（本机起 service 实测）**：SQLite/PG 本地起 `uvicorn app.main:app`，
+按 `cloud.rs` 的确切口径走完 ① 登录 → ② /auth/me → ③ 新建(If-Match:0) →
+④ 更新(If-Match=上一版) → ⑤ 过期版本保存 → ⑥ 列表 → ⑦ 取回 → ⑧ 删除 → ⑨ 退出。
+**抓到并修掉两个真 bug**：
+1. `cloud_doc_save` 的更新路径不带 If-Match —— 服务端 `If-Match` **省略 = 仅当不存在时创建**，
+   必 409。改成标准乐观锁：文档记 `cloudVersion`（存/取返回的版本号），保存原样带回；
+   409 `version_conflict` 原样透传，不静默覆盖。
+2. `cloud_logout` 没带 `refreshToken` —— 服务端靠它吊销会话族，不带就是幂等空操作
+   （实测 logout 后 access token 仍活到过期）。补上后实测 refresh 返回 `token_revoked`。
+
+另确认两条服务端约束（客户端透传服务端文案即可）：
+- 同名文档 → 409 `name_taken`（"云端已有同名文档，请改名"）；
+- free 套餐 → 403 `membership_required`（"当前计划不含云端存储"）。
+
+映射函数（`AuthOut`/列表项/PUT 响应 → 契约类型）下沉到 **`app-core::cloudmap`**，
+单测用**真实服务端响应的原样 JSON 片段**做夹具 —— pydantic 字段名一漂移，`cargo test` 立刻红。
 
 ---
 

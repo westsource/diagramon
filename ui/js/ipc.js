@@ -796,11 +796,19 @@ digraph Pipeline {
           };
         case "cloud_doc_save": {
           if (!this._cloud.signed) throw new Error("尚未登录云网关");
+          // 乐观锁与真实服务端同口径：version=0 = 仅当不存在时创建；
+          // 带版本但不匹配 = 409 version_conflict（客户端如实透传给用户）
           const id = args.id || "cld-" + this._newId("");
           const ex = this._cloud.docs.find((d) => d.id === id);
+          if (!ex && args.id) throw new Error("云端没有这份文档（版本冲突或已删除）");
+          if (ex && args.version && ex.version !== args.version) {
+            throw new Error("云网关 409：文档已被其它设备修改（version_conflict）");
+          }
+          const nextVer = (ex ? ex.version : 0) + 1;
           const doc = {
             id, name: args.name, path: "", format: args.format,
             size: String(args.body || "").length, updated_at: new Date().toISOString(),
+            version: nextVer,
           };
           if (ex) Object.assign(ex, doc);
           else this._cloud.docs.push(doc);
@@ -810,7 +818,7 @@ digraph Pipeline {
           if (!this._cloud.signed) throw new Error("尚未登录云网关");
           const d = this._cloud.docs.find((x) => x.id === args.id);
           if (!d) throw new Error("云端没有这份文档：" + args.id);
-          return { id: d.id, name: d.name, format: d.format, body: this._fmt(d.format).default_body, version: 3 };
+          return { id: d.id, name: d.name, format: d.format, body: this._fmt(d.format).default_body, version: d.version || 1 };
         }
         case "cloud_doc_delete": {
           if (!this._cloud.signed) throw new Error("尚未登录云网关");

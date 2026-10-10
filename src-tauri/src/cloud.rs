@@ -17,6 +17,7 @@ use std::sync::Arc;
 
 use serde_json::{json, Value};
 
+use app_core::cloudmap::{account_of, doc_of, str_of, u64_of};
 use app_ipc::{CloudAccount, CloudDoc, CloudDocBody, CloudDocList, CloudStatus, FormatId};
 use tauri::State;
 
@@ -84,51 +85,6 @@ async fn call_json(
     serde_json::from_str::<Value>(&text).map_err(|e| format!("云网关响应不是合法 JSON：{e}"))
 }
 
-/* ------------------------------------------------------------------ 映射 */
-
-/// 服务端是 camelCase；这里把**形状**收敛成契约类型，前端不碰原始 JSON。
-fn account_of(v: &Value) -> CloudAccount {
-    let user = v.get("user").cloned().unwrap_or(Value::Null);
-    let membership = v.get("membership").cloned().unwrap_or(Value::Null);
-    CloudAccount {
-        email: str_of(&user, &["email"]),
-        display_name: str_of(&user, &["displayName", "name"]),
-        role: str_of(&user, &["role"]),
-        plan_name: str_of(&membership, &["planName"]),
-        used_bytes: u64_of(&membership, &["usedBytes"]),
-        quota_bytes: u64_of(&membership, &["quotaBytes"]),
-    }
-}
-
-fn str_of(v: &Value, keys: &[&str]) -> String {
-    for k in keys {
-        if let Some(s) = v.get(k).and_then(|x| x.as_str()) {
-            return s.to_string();
-        }
-    }
-    String::new()
-}
-
-fn u64_of(v: &Value, keys: &[&str]) -> u64 {
-    for k in keys {
-        if let Some(n) = v.get(k).and_then(|x| x.as_u64()) {
-            return n;
-        }
-    }
-    0
-}
-
-fn doc_of(v: &Value) -> CloudDoc {
-    CloudDoc {
-        id: str_of(v, &["id"]),
-        name: str_of(v, &["name"]),
-        path: str_of(v, &["path"]),
-        format: FormatId::from_str_opt(&str_of(v, &["format"])).unwrap_or(FormatId::Mermaid),
-        size: u64_of(v, &["size"]),
-        updated_at: str_of(v, &["updatedAt"]),
-    }
-}
-
 /* ------------------------------------------------------------------ 命令 */
 
 /// 登录。成功后 access/refresh 进凭据库，返回**账户快照**（不含令牌）。
@@ -193,11 +149,20 @@ pub async fn cloud_login(
     Ok(account_of(&v))
 }
 
-/// 退出登录：尽力吊销服务端会话，然后**无论如何**清掉本地令牌。
+/// 退出登录。
+///
+/// 服务端的 `/auth/logout` 靠请求体里的 **refreshToken** 吊销整个会话族 ——
+/// 不带它就是个幂等空操作（联调实测：logout 后 access token 仍活到过期）。
+/// access token 本身是短命 JWT（默认 30 分钟），服务端不吊销，这是标准 JWT 语义。
+///
+/// 吊销失败不拦着清本地令牌 —— 用户要的是"退出"，不是"服务端确认退出"。
 #[tauri::command]
 pub async fn cloud_logout(state: State<'_, Arc<AppState>>) -> R<bool> {
-    // 吊销失败不拦着清令牌 —— 用户要的是"退出"，不是"服务端确认退出"
-    let _ = call_json(state.inner(), reqwest::Method::POST, "/auth/logout", None, true).await;
+    let refresh = state.creds.get(CLOUD_REFRESH_KEY).map_err(|e| e.to_string())?;
+    if let Some(rt) = refresh {
+        let body = json!({ "refreshToken": rt });
+        let _ = call_json(state.inner(), reqwest::Method::POST, "/auth/logout", Some(body), false).await;
+    }
     state.creds.delete(CLOUD_ACCESS_KEY).map_err(|e| e.to_string())?;
     state.creds.delete(CLOUD_REFRESH_KEY).map_err(|e| e.to_string())?;
     Ok(true)
@@ -246,11 +211,17 @@ pub async fn cloud_docs_list(state: State<'_, Arc<AppState>>) -> R<CloudDocList>
 
 /// 存一份文档到云端（新建与更新同一入口；`id` 为空 = 由本机生成新 id）。
 ///
-/// 返回服务端分配的 id（新建时前端要记住它，下次保存就是更新）。
+/// `version` 是**乐观锁**：新建传 0（`If-Match: 0` = 仅当不存在时创建）；
+/// 更新必须带上次存/取时拿到的版本号 —— 服务端 `If-Match` **省略 = 仅当不存在时创建**，
+/// 省略会直接 409（联调实测踩过）。409 的响应体带 `contentHash/updatedAt`，
+/// 原样透传给前端，让用户知道"云端已被别的设备改过"。
+///
+/// 返回服务端分配的 id 与新版本号，前端要记下来供下次保存用。
 #[tauri::command]
 pub async fn cloud_doc_save(
     state: State<'_, Arc<AppState>>,
     id: String,
+    version: u64,
     name: String,
     format: String,
     body: String,
@@ -260,9 +231,6 @@ pub async fn cloud_doc_save(
     } else {
         id.trim().to_string()
     };
-    // If-Match: 0 = 仅当不存在时创建；带 id 更新时用 0 会被服务端拒（版本冲突），
-    // 所以更新走"不带头"的宽松写 —— 云文档没有本地未保存冲突的场景，最后写者赢。
-    let if_match = if id.trim().is_empty() { Some("0".to_string()) } else { None };
     let payload = json!({
         "name": name,
         "format": format,
@@ -273,22 +241,19 @@ pub async fn cloud_doc_save(
     let base = base_url(state.inner())?;
     let url = format!("{base}/documents/{doc_id}");
     let token = access_token(state.inner()).await?;
-    let mut req = state
+    let resp = state
         .http
         .request(reqwest::Method::PUT, &url)
         .header(ACCESS_KEY_HEADER, format!("Bearer {token}"))
-        .json(&payload);
-    if let Some(m) = if_match {
-        req = req.header("If-Match", m);
-    }
-    let resp = req
+        .header("If-Match", version.to_string())
+        .json(&payload)
         .send()
         .await
         .map_err(|e| format!("连不上云网关（{url}）：{e}"))?;
     let status = resp.status();
     let text = resp.text().await.unwrap_or_default();
     if !status.is_success() {
-        return Err(format!("云网关 {status}：{}", text.chars().take(200).collect::<String>()));
+        return Err(format!("云网关 {status}：{}", text.chars().take(300).collect::<String>()));
     }
     let v = serde_json::from_str::<Value>(&text).unwrap_or(Value::Null);
     let saved_id = {
@@ -302,6 +267,7 @@ pub async fn cloud_doc_save(
         format: FormatId::from_str_opt(&format).unwrap_or(FormatId::Mermaid),
         size: body.len() as u64,
         updated_at: str_of(&v, &["updatedAt"]),
+        version: u64_of(&v, &["version"]),
     })
 }
 
