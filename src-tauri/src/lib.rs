@@ -128,6 +128,11 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_clipboard_manager::init())
+        // 更新器与"装完自动重启"。"检查更新"从本地 toast 换成真实检查（第 7 步）。
+        // 更新源在 tauri.conf.json 的 plugins.updater；产物要签名，
+        // 签名密钥走 TAURI_SIGNING_PRIVATE_KEY 环境变量（见 docs/roadmap-dev3.0.md 第 7 步）。
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .register_asynchronous_uri_scheme_protocol("dgm", move |_ctx, request, responder| {
             let roots = roots.clone();
             let path = request.uri().path().to_string();

@@ -302,7 +302,7 @@ DIAGRAMON_SELFTEST=1 ./target/debug/diagramon.exe                         # 真�
 
 ---
 
-## 第 7 步 · 发布
+## 第 7 步 · 发布 ✅ 已完成（代码侧；签名与更新源是发布方手续）
 
 **要做的事**
 
@@ -310,8 +310,6 @@ DIAGRAMON_SELFTEST=1 ./target/debug/diagramon.exe                         # 真�
 - **三平台打包**：`bundle.active = true`；Windows（msi/nsis）、macOS（dmg）、Linux（AppImage/deb）。
 - **签名与公证**：Windows 代码签名、macOS notarize（Linux 可免）。
 - 崩溃与日志上报（可选）。
-
-**前置**：第 1–5 步稳定即可发布，云网关不阻塞。
 
 **完成判据**
 
@@ -321,17 +319,43 @@ DIAGRAMON_SELFTEST=1 ./target/debug/diagramon.exe                         # 真�
 
 **涉及面**：中，但大量外部账号与证书手续。
 
+**落地**：
+- `bundle.active = true`、`targets: "all"`、`createUpdaterArtifacts: true`，
+  并补齐 `category / shortDescription / longDescription`（打包元数据一次给全）。
+- **updater 插件接入**（`tauri-plugin-updater` + `tauri-plugin-process`），
+  更新源模板 `https://updates.diagramon.app/{{target}}/{{arch}}/{{current_version}}`；
+  能力位加 `updater:default` 与 `process:allow-restart`。
+  **注意**：updater 默认走 rustls→`ring`，在 **windows-gnu** 工具链上 `ar` 编不过
+  （binutils 的老坑）—— 改用 `--no-default-features --features native-tls`，与 reqwest 同一套 TLS。
+- **"检查更新"从本地 toast 换成真实检查**（shell.js `checkUpdate`）：
+  已最新 / 有新版（确认 → 下载 → 自动重启）/ 出错，三种结果都如实呈现；
+  updater 抛错绝不装作"已最新"。便携版/浏览器原型没有更新器，也如实说。
+- **文件关联**已在第 4 步写进 `bundle.fileAssociations`（6 个扩展名）。
+
+**发布方仍需办理的手续（代码之外，本机做不了）**：
+1. 生成签名密钥对：`cargo tauri signer generate`，私钥进 `TAURI_SIGNING_PRIVATE_KEY` 环境变量，
+   **公钥填进 `tauri.conf.json` 的 `plugins.updater.pubkey`**（现在是空串 —— 填之前
+   updater 会报错，界面会如实显示"更新失败"，不会装作没更新）；
+2. 更新源域名 `updates.diagramon.app` 落地（静态 JSON + 各平台产物）；
+3. Windows 代码签名证书 / macOS 开发者账号与 notarize。
+
 ---
 
-## 第 8 步 · 硬化与质量（贯穿全程）
+## 第 8 步 · 硬化与质量（贯穿全程）— 部分落地
 
 **要做的事**
 
-- **语法校验换真 AST**：现在是手写扫描器（括号/引号/标签配对 + JSON 解析），
+- **语法校验换真 AST**（未做）：现在是手写扫描器（括号/引号/标签配对 + JSON 解析），
   只能报"能确证"的问题。换成真 Mermaid / DOT 解析器后，能报真实行列与语义问题。
-- **画布型大纲**：现在写着"由图形引擎解析，接线在下一步"（依赖第 2 步的画布实例）。
-- **大文档性能**：渲染防抖、虚拟滚动、WASM 实例复用；万行图不卡。
-- **i18n 收口**：`ui/js/i18n.js` 1276 行，中英词条要对齐（本机有 i18n 一致性审计能力，可直接跑一遍）。
+  这是剩余项里最大的一块，需要引入/绑定上游解析器，单独立项做。
+- **画布型大纲**（未做）：现在写着"由图形引擎解析，接线在下一步"（依赖第 2 步的画布实例，
+  drawio 侧要经 `getScene`/mxfile 反解，Excalidraw 侧要遍历 elements）。
+- **大文档性能**（部分 ✅）：渲染防抖已有、护栏已加；**虚拟滚动与 WASM 实例复用**未做
+  —— 万行图即使点了"仍要渲染"也仍会卡，护栏只是把"不知道会卡"变成"知道且可选"。
+- **i18n 收口 ✅**：中英各 643 键完全一致（每步新增词条两侧同步加，用脚本比对键集）。
+- **大文档护栏 ✅**：`app-core::guard`（4 项单测）—— 行数/字节超阈值时预览**先问一句**
+  （"仍要渲染"放行），不默默把 WASM 引擎拖死。阈值经 `app_info.limits` 下发，
+  数字只存一份（app-core），前端不藏第二份。
 - **无障碍与键盘全通路**：所有交互可键盘到达。
 
 **完成判据**

@@ -6,6 +6,7 @@
 pub mod convert;
 pub mod document;
 pub mod format;
+pub mod guard;
 pub mod lint;
 pub mod outline;
 pub mod pixels;

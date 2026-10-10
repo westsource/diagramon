@@ -547,7 +547,7 @@ digraph Pipeline {
       args = args || {};
       switch (cmd) {
         case "app_info":
-          return { version: "3.0.0-mock", platform: "mock", formats: this._clone(FORMATS) };
+          return { version: "3.0.0-mock", platform: "mock", formats: this._clone(FORMATS), limits: { preview_max_lines: 5000, preview_max_bytes: 409600 } };
 
         // mock 下**故意不给转换结果**：转换器只有 Rust 侧一份实现
         // （`crates/app-core/src/convert.rs`），在浏览器里再写一份 best-effort

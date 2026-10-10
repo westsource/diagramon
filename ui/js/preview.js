@@ -213,6 +213,25 @@ window.DGM = window.DGM || {};
     renderTimer = setTimeout(renderActive, 60);
   }
 
+  /** 预览阈值（app_info.limits），取不到就退成一个很大的数（等于不设防 —— 但不会崩） */
+  function L() {
+    const l = state.appInfo && state.appInfo.limits;
+    return {
+      preview_max_lines: (l && l.preview_max_lines) || Number.MAX_SAFE_INTEGER,
+      preview_max_bytes: (l && l.preview_max_bytes) || Number.MAX_SAFE_INTEGER,
+    };
+  }
+
+  function overLimit(body) {
+    const lim = L();
+    if (lim.preview_max_lines === Number.MAX_SAFE_INTEGER) return false;
+    const lines = body.split("\n").length;
+    return lines > lim.preview_max_lines || body.length > lim.preview_max_bytes;
+  }
+
+  /** 用户点过"仍要渲染"之后，本次会话对这个文档放行 */
+  let forceRender = false;
+
   async function renderActive() {
     nodes();
     const d = state.activeDoc();
@@ -239,6 +258,31 @@ window.DGM = window.DGM || {};
     if (!body.trim()) {
       toolsVisible(false);
       note(t("preview.empty"));
+      return;
+    }
+
+    // 大文档护栏：先问一句，而不是默默把 WASM 引擎拖死（决定权在用户，代价要说清）。
+    // 阈值来自 app_info.limits（唯一真源在 app-core::guard），前端只比数字、不藏第二份。
+    if (!forceRender && overLimit(body)) {
+      const lines = body.split("\n").length;
+      const kb = Math.round(body.length / 1024);
+      const why = lines > L().preview_max_lines
+        ? t("preview.guard.tooManyLines", { n: lines, max: L().preview_max_lines })
+        : t("preview.guard.tooBig", { n: kb, max: Math.round(L().preview_max_bytes / 1024) });
+      const node = h("div", "preview-note pv-guard");
+      node.innerHTML =
+        `<span>${esc(t("preview.guard.title"))}<br><small>${esc(why)}</small></span>` +
+        `<button class="mini-btn" id="pv-guard-go">${esc(t("preview.guard.go"))}</button>`;
+      lastSvg = "";
+      showNode(node);
+      toolsVisible(false);
+      const go = $("#pv-guard-go");
+      if (go) {
+        go.addEventListener("click", () => {
+          forceRender = true;
+          renderActive().finally(() => { forceRender = false; });
+        });
+      }
       return;
     }
 

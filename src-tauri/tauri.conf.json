@@ -14,8 +14,9 @@
     }
   },
   "bundle": {
-    "active": false,
+    "active": true,
     "targets": "all",
+    "createUpdaterArtifacts": true,
     "fileAssociations": [
       { "ext": ["mmd", "mermaid"], "name": "Diagramon Mermaid", "description": "Mermaid 图表（Diagramon）", "role": "Editor" },
       { "ext": ["dot", "gv"], "name": "Diagramon Graphviz DOT", "description": "Graphviz DOT 图表（Diagramon）", "role": "Editor" },
@@ -25,6 +26,17 @@
     "icon": [
       "icons/icon.ico",
       "icons/icon.png"
-    ]
+    ],
+    "category": "DeveloperTool",
+    "shortDescription": "AI 优先的多格式图表编辑器",
+    "longDescription": "Diagramon：本地优先的多格式图表编辑器。Mermaid / Graphviz DOT / drawio / Excalidraw 共用一套工作区，AI 是第一公民。"
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "",
+      "endpoints": [
+        "https://updates.diagramon.app/{{target}}/{{arch}}/{{current_version}}"
+      ]
+    }
   }
 }

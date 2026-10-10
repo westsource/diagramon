@@ -382,12 +382,21 @@ pub struct DevFlags {
     pub mock: bool,
 }
 
-/// 启动信息：版本、平台、格式注册表、开发开关。
+/// 预览/派生数据的护栏阈值。**数字的真源在 `app-core::guard`**，
+/// 前端只比大小、不藏第二份（藏了就会漂移）。
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct Limits {
+    pub preview_max_lines: u32,
+    pub preview_max_bytes: u32,
+}
+
+/// 启动信息：版本、平台、格式注册表、护栏阈值、开发开关。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppInfo {
     pub version: String,
     pub platform: String,
     pub formats: Vec<FormatInfo>,
+    pub limits: Limits,
     pub dev: DevFlags,
 }
 

@@ -39,6 +39,7 @@ pub fn app_info(state: State<'_, Arc<AppState>>) -> AppInfo {
         version: env!("CARGO_PKG_VERSION").to_string(),
         platform: std::env::consts::OS.to_string(),
         formats: app_core::format::registry(),
+        limits: app_core::guard::limits(),
         dev: dev_flags(&state.paths),
     }
 }

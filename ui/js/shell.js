@@ -1156,7 +1156,7 @@ window.DGM = window.DGM || {};
     cmd({ id: "help.keys", group: "help", icon: "keyboard", kbd: "Ctrl+K Ctrl+S", run: () => DGM.dialogs.keys() });
     cmd({ id: "help.guide", group: "help", icon: "info", run: () => DGM.dialogs.guide() });
     cmd({ id: "help.about", group: "help", icon: "info", run: () => DGM.dialogs.about() });
-    cmd({ id: "help.update", group: "help", icon: "refresh", run: () => toast({ icon: "refresh", title: t("mi.checkUpdate"), sub: "" }) });
+    cmd({ id: "help.update", group: "help", icon: "refresh", run: () => checkUpdate() });
   }
 
   /* ------------------------------------------------------------------ 外部改动横幅 */
@@ -1198,6 +1198,50 @@ window.DGM = window.DGM || {};
       }
       renderFsBanner();
     };
+  }
+
+  /* ------------------------------------------------------------------ 更新器（第 7 步） */
+
+  /**
+   * 检查更新。走 tauri-plugin-updater（更新源与公钥在 tauri.conf.json）。
+   *
+   * 三种结果都如实呈现：已是最新 / 有新版（确认后下载并重启）/ 出错。
+   * 公钥没配或更新源不可达时 updater 会抛错 —— 那是发布方的问题，不要装作"已最新"。
+   */
+  async function checkUpdate() {
+    const T = window.__TAURI__;
+    const up = T && T.updater;
+    if (!up || typeof up.check !== "function") {
+      toast({ icon: "info", title: t("mi.checkUpdate"), sub: t("update.unavailable"), warn: true });
+      return;
+    }
+    status(t("update.checking"), "");
+    try {
+      const update = await up.check();
+      if (!update) {
+        status(t("update.upToDate"), "ok");
+        toast({ icon: "check", title: t("update.upToDate"), sub: "" });
+        return;
+      }
+      const yes = await DGM.dialogs.confirm({
+        title: t("update.available", { version: update.version }),
+        body: esc((update.body || "").slice(0, 600)),
+        ok: t("update.install"),
+      });
+      if (!yes) return;
+      status(t("update.downloading"), "");
+      await update.downloadAndInstall((ev) => {
+        if (ev.event === "Started") status(t("update.downloading"), "");
+        else if (ev.event === "Finished") status(t("update.restarting"), "ok");
+      });
+      // 装完自动重启（tauri-plugin-process）；杀不掉就提示用户手动开
+      const proc = T.process;
+      if (proc && typeof proc.relaunch === "function") await proc.relaunch();
+      else toast({ icon: "refresh", title: t("update.installed"), sub: t("update.restartManual") });
+    } catch (e) {
+      status(t("update.failed"), "err");
+      toast({ icon: "alert", title: t("update.failed"), sub: String((e && e.message) || e), warn: true });
+    }
   }
 
   /* ------------------------------------------------------------------ 渲染编排 */
