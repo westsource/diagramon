@@ -330,15 +330,36 @@ pub struct AiFailed {
     pub message: String,
 }
 
-/// 启动信息：版本、平台、格式注册表。
+/// 开发开关：由后端按环境变量如实声明，前端不猜。
+///
+/// 用途之一是自检：`DIAGRAMON_SELFTEST=1` 时后端把报告路径交出来，
+/// 前端跑一遍真实 IPC 断言再落盘（避免"注入时机"这类脆弱玩法）。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DevFlags {
+    /// `DIAGRAMON_SELFTEST_REPORT`（或数据目录下的默认路径）
+    pub selftest_report: Option<String>,
+    /// `DIAGRAMON_DEBUG_PORT`，仅记录，便于前端/评测脚本确认
+    pub debug_port: Option<u16>,
+    /// 是否跑在 mock 后端（仅前端有 mock 时才有意义，后端恒 false）
+    pub mock: bool,
+}
+
+/// 启动信息：版本、平台、格式注册表、开发开关。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppInfo {
     pub version: String,
     pub platform: String,
     pub formats: Vec<FormatInfo>,
+    pub dev: DevFlags,
 }
 
 /// 事件名常量（与前端 `ipc.on(...)` 逐字对应）。
+/// 开发开关的环境变量名（前后端与文档统一引用，别各写一份字符串）。
+pub const ENV_SELFTEST: &str = "DIAGRAMON_SELFTEST";
+pub const ENV_SELFTEST_REPORT: &str = "DIAGRAMON_SELFTEST_REPORT";
+pub const ENV_DEBUG_PORT: &str = "DIAGRAMON_DEBUG_PORT";
+
 pub mod events {
     pub const AI_DELTA: &str = "ai://delta";
     pub const AI_DONE: &str = "ai://done";

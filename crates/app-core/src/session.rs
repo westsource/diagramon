@@ -146,13 +146,14 @@ impl Session {
     pub fn set_view_mode(&mut self, id: &str, mode: ViewMode) -> bool {
         match self.entry_mut(id) {
             Some(e) => {
-                // 文本型才允许三态；画布型一律预览（前端也按能力位显示控件）
-                e.doc.view_mode = if crate::format::info(e.doc.format).split_view {
-                    mode
+                // 画布型没有分屏：**拒绝**而不是悄悄改成预览 ——
+                // 静默改写会把"前端不该显示的控件被调用了"这种 bug 藏起来。
+                if crate::format::info(e.doc.format).split_view || mode == ViewMode::Preview {
+                    e.doc.view_mode = mode;
+                    true
                 } else {
-                    ViewMode::Preview
-                };
-                true
+                    false
+                }
             }
             None => false,
         }
@@ -218,11 +219,11 @@ mod tests {
         s.commit_saved(&d.id, None);
         assert_eq!(s.dirty_count(), 0);
 
+        let original = s.get(&d.id).unwrap().body.clone(); // 必须在改动之前取
         s.set_body(&d.id, "flowchart TD\n".into());
         assert_eq!(s.dirty_count(), 1, "改过就是脏");
 
         // 改回去 —— 布尔标志做不到这一点
-        let original = s.get(&d.id).unwrap().body.clone();
         s.set_body(&d.id, original);
         assert_eq!(s.dirty_count(), 0, "正文与已保存一致时应恢复干净");
     }
@@ -250,11 +251,12 @@ mod tests {
     }
 
     #[test]
-    fn view_mode_is_clamped_for_canvas_formats() {
+    fn canvas_formats_reject_split_view() {
         let mut s = Session::default();
         let d = s.new_doc(FormatId::Drawio);
-        assert!(!s.set_view_mode(&d.id, ViewMode::Split), "画布型不接受分屏");
-        assert_eq!(s.get(&d.id).unwrap().view_mode, ViewMode::Preview);
+        assert!(!s.set_view_mode(&d.id, ViewMode::Split), "画布型不接受分屏，且要明确拒绝");
+        assert_eq!(s.get(&d.id).unwrap().view_mode, ViewMode::Preview, "拒绝后取值不变");
+        assert!(s.set_view_mode(&d.id, ViewMode::Preview), "预览是画布型唯一合法值");
     }
 
     #[test]

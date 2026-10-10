@@ -8,8 +8,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use app_ipc::{
-    events, AiChatRequest, AiDelta, AiDone, AiFailed, AiModel, AppInfo, Doc, FormatId, Issue,
-    OutlineGroup, Session as SessionPayload, Settings, ViewMode,
+    events, AiChatRequest, AiDelta, AiDone, AiFailed, AiModel, AppInfo, DevFlags, Doc, FormatId,
+    Issue, OutlineGroup, Session as SessionPayload, Settings, ViewMode,
 };
 use base64::Engine as _;
 use tauri::{AppHandle, Emitter, State};
@@ -21,11 +21,26 @@ type R<T> = Result<T, String>;
 /* ---------------- 应用信息与设置 ---------------- */
 
 #[tauri::command]
-pub fn app_info() -> AppInfo {
+pub fn app_info(state: State<'_, Arc<AppState>>) -> AppInfo {
+    // 前端起来的第一件事就是拉 app_info —— 这行日志等于"前端活着的证据"
+    #[cfg(debug_assertions)]
+    eprintln!("diagramon|app_info|called");
     AppInfo {
         version: env!("CARGO_PKG_VERSION").to_string(),
         platform: std::env::consts::OS.to_string(),
         formats: app_core::format::registry(),
+        dev: dev_flags(&state.paths),
+    }
+}
+
+/// 开发开关：按环境变量如实声明（见 `crate::selftest_report` 与 `debug_browser_args`）。
+fn dev_flags(paths: &platform::AppPaths) -> DevFlags {
+    DevFlags {
+        selftest_report: crate::selftest_report(paths),
+        debug_port: std::env::var(app_ipc::ENV_DEBUG_PORT)
+            .ok()
+            .and_then(|v| v.trim().parse::<u16>().ok()),
+        mock: false,
     }
 }
 
@@ -219,6 +234,15 @@ pub fn export_write(path: String, base64: String) -> R<String> {
     }
     std::fs::write(&p, bytes).map_err(|e| format!("写入失败：{e}"))?;
     Ok(path)
+}
+
+/// 调试通道：前端把"我走到哪一步"打到 stdout。
+///
+/// 为什么需要它：WebView 里的 `console.log` 在真机上没人看得见（本机还不能开 CDP），
+/// 而"卡在哪一步"是排查白窗/卡死的第一件事。自检与故障排查都靠它。
+#[tauri::command]
+pub fn debug_note(text: String) {
+    eprintln!("diagramon|note|{text}");
 }
 
 /* ---------------- 凭据（密钥永不回传前端） ---------------- */

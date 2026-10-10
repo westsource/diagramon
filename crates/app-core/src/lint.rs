@@ -86,17 +86,20 @@ fn mermaid(body: &str) -> Vec<Issue> {
             }
         }
 
-        // 标签里的裸 < / > ：mermaid 10+ 会当 HTML 解析，实测会直接渲染报错
-        if let Some(start) = text.find('[') {
-            if let Some(end) = text[start..].find(']') {
-                let label = &text[start..start + end];
-                if label.contains('<') || label.contains('>') {
-                    out.push(warn(
-                        line,
-                        "标签里有裸的 < 或 >，Mermaid 10+ 会当成 HTML 标签解析",
-                        "写成 &lt; / &gt;，或用引号把标签包起来",
-                    ));
-                }
+        // 标签里的裸 < / > ：mermaid 10+ 会当 HTML 解析，实测会直接渲染报错。
+        // 方括号节点与花括号判定节点都要查 —— 实测踩过 `M{连续失败 >= 5?}` 这一种。
+        let label_ranges = [('[', ']'), ('{', '}')];
+        for (open, close) in label_ranges {
+            let Some(start) = text.find(open) else { continue };
+            let Some(len) = text[start..].find(close) else { continue };
+            let label = &text[start..start + len];
+            if label.contains('<') || label.contains('>') {
+                out.push(warn(
+                    line,
+                    "标签里有裸的 < 或 >，Mermaid 10+ 会当成 HTML 标签解析",
+                    "写成 &lt; / &gt;，或用引号把标签包起来",
+                ));
+                break; // 同一行报一次就够
             }
         }
     }

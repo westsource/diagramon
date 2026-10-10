@@ -8,21 +8,7 @@
   },
   "app": {
     "withGlobalTauri": true,
-    "windows": [
-      {
-        "label": "main",
-        "title": "Diagramon",
-        "width": 1440,
-        "height": 900,
-        "minWidth": 1000,
-        "minHeight": 640,
-        "center": true,
-        "resizable": true,
-        "decorations": false,
-        "transparent": false,
-        "dragDropEnabled": true
-      }
-    ],
+    "windows": [],
     "security": {
       "csp": null
     }

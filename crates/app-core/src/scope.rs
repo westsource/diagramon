@@ -7,8 +7,11 @@ use app_ipc::FormatId;
 
 /// 返回光标行所处的作用域名；不在任何 subgraph/cluster 里时返回空串。
 ///
-/// `line` 为 1 起的行号；语义是「包含这一行的最内层作用域」，
-/// 所以在 `subgraph` 那一行本身就应显示该作用域名。
+/// 语义是「包含这一行的最内层作用域」，两条边界都对使用者有利：
+/// * 光标停在 `subgraph` 那一行 ⇒ 已经算在该作用域内（不会刚写完就显示空）；
+/// * 光标停在 `end` 那一行 ⇒ **仍算在内**（收尾行属于这个块），
+///   否则从块内往下挪一行，状态栏的作用域会闪一下消失。
+/// 也就是说：光标行上的 `end` 不参与弹栈。
 pub fn current_scope(format: FormatId, body: &str, line: u32) -> String {
     if !matches!(format, FormatId::Mermaid | FormatId::Dot) {
         return String::new();
@@ -16,7 +19,9 @@ pub fn current_scope(format: FormatId, body: &str, line: u32) -> String {
     let upto = line.max(1) as usize;
     let mut stack: Vec<String> = Vec::new();
 
-    for raw in body.lines().take(upto) {
+    for (idx, raw) in body.lines().take(upto).enumerate() {
+        // 光标所在行上的 end 不弹栈（见上）
+        let on_caret_line = idx + 1 == upto;
         let text = raw.trim();
         if text.is_empty() || text.starts_with("//") || text.starts_with('#') || text.starts_with("%%") {
             continue;
@@ -26,7 +31,7 @@ pub fn current_scope(format: FormatId, body: &str, line: u32) -> String {
                 if let Some(rest) = text.strip_prefix("subgraph") {
                     let name = rest.trim();
                     stack.push(if name.is_empty() { "(匿名)".into() } else { name.to_string() });
-                } else if text == "end" {
+                } else if text == "end" && !on_caret_line {
                     stack.pop();
                 }
             }
@@ -41,7 +46,7 @@ pub fn current_scope(format: FormatId, body: &str, line: u32) -> String {
                         .next()
                         .unwrap_or("");
                     stack.push(if name.is_empty() { "(匿名)".into() } else { name.to_string() });
-                } else if text == "}" {
+                } else if text == "}" && !on_caret_line {
                     stack.pop();
                 }
             }

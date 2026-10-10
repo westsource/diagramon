@@ -26,30 +26,71 @@ fn row(name: impl Into<String>, kind: &str, line: u32) -> OutlineRow {
     OutlineRow { name: name.into(), kind: kind.to_string(), line }
 }
 
-/// 从 `A([开始])` / `B{判断}` 这类写法里抠出显示名。
-fn mermaid_label(text: &str) -> String {
-    for (open, close) in [("([", "])"), ("[(", ")]"), ("[[", "]]"), ("{{", "}}"), ("[", "]"), ("(", ")"), ("{", "}")] {
-        if let Some(i) = text.find(open) {
-            if let Some(j) = text[i + open.len()..].find(close) {
-                let label = text[i + open.len()..i + open.len() + j].trim();
-                if !label.is_empty() {
-                    return label.to_string();
+/// 扫出一行里所有「id + 标签」的节点声明。
+///
+/// **边行也要扫**：`A([开始]) --> B[打开登录页]` 里 A、B 都是节点，
+/// 只认"纯声明行"的话，实际文档（几乎全是边行）在侧栏大纲里会一个节点都没有。
+/// 顺带支持 `A([开始])` 这种括号套括号的圆角节点。
+fn mermaid_nodes_in(text: &str) -> Vec<(String, String)> {
+    let chars: Vec<char> = text.chars().collect();
+    let mut out: Vec<(String, String)> = Vec::new();
+    let mut i = 0;
+    while i < chars.len() {
+        let open = chars[i];
+        if matches!(open, '[' | '(' | '{') {
+            // 往回找紧邻的标识符
+            let mut j = i;
+            while j > 0 {
+                let c = chars[j - 1];
+                if c.is_alphanumeric() || c == '_' || c == '-' {
+                    j -= 1;
+                } else {
+                    break;
+                }
+            }
+            let id: String = chars[j..i].iter().collect();
+            if !id.is_empty() {
+                let close = match open {
+                    '[' => ']',
+                    '(' => ')',
+                    _ => '}',
+                };
+                let mut depth = 0usize;
+                let mut k = i;
+                let mut end = None;
+                while k < chars.len() {
+                    if chars[k] == open {
+                        depth += 1;
+                    } else if chars[k] == close {
+                        depth -= 1;
+                        if depth == 0 {
+                            end = Some(k);
+                            break;
+                        }
+                    }
+                    k += 1;
+                }
+                if let Some(e) = end {
+                    let raw: String = chars[i + 1..e].iter().collect();
+                    let label = raw
+                        .trim_matches(|c| matches!(c, '(' | ')' | '[' | ']' | '{' | '}'))
+                        .trim();
+                    out.push((id.clone(), if label.is_empty() { id } else { label.to_string() }));
+                    i = e; // 跳到闭合处，内层不再重复扫
                 }
             }
         }
+        i += 1;
     }
-    // 没有标签就退回节点 id
-    text.split_whitespace()
-        .next()
-        .unwrap_or_default()
-        .trim_end_matches(&['[', '(', '{'][..])
-        .to_string()
+    out
 }
 
 fn mermaid(body: &str) -> Vec<OutlineGroup> {
     let mut clusters = Vec::new();
     let mut nodes = Vec::new();
     let mut edges = Vec::new();
+    // 同一节点常在多行里出现，按 id 去重，行号取第一次出现的
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
 
     for (idx, raw) in body.lines().enumerate() {
         let line = idx as u32 + 1;
@@ -65,14 +106,15 @@ fn mermaid(body: &str) -> Vec<OutlineGroup> {
         if text == "end" || text.starts_with("classDef") || text.starts_with("class ") || text.starts_with("style ") {
             continue;
         }
+
+        for (id, label) in mermaid_nodes_in(text) {
+            if seen.insert(id) {
+                nodes.push(row(label, "node", line));
+            }
+        }
+
         if text.contains("-->") || text.contains("---") || text.contains("-.-") || text.contains("==>") {
             edges.push(row(text.split_whitespace().take(6).collect::<Vec<_>>().join(" "), "edge", line));
-            continue;
-        }
-        // 形如 `A[标签]` / `B{判定}` 的声明行
-        let head = text.split_whitespace().next().unwrap_or("");
-        if head.contains('[') || head.contains('(') || head.contains('{') {
-            nodes.push(row(mermaid_label(head), "node", line));
         }
     }
 
