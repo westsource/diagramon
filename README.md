@@ -30,8 +30,31 @@ tools/               drawio / Excalidraw 承载页（画布型格式用，接线
 
 ```bash
 cargo run -p diagramon            # 起客户端（Windows 需 WebView2 运行时）
-cargo test -p app-core -p ai -p platform -p platform-windows   # 纯逻辑单测
+node tools/dev/check.mjs          # 一条命令验收：单测 + 真机 IPC 自检
 ```
+
+`check.mjs` 做四件事，顺序固定：**杀残留实例 → 构建 → Rust 单测 → 启动客户端跑真实 IPC 断言**
+（前端把结果落成 `ui/.shots/selftest-report.json`，脚本读出来逐项打印）。
+全绿退出码 0；有失败 1;基础设施问题（构建失败 / 报告没产出）2。
+
+顺序里每一步都在防一个踩过的坑：残留实例会让链接报 `Permission denied`（看着像代码错）；
+忘了删旧报告会读到上一次的结果；构建与自检抢同一个 exe。
+
+单独跑自检也可以：
+
+```bash
+DIAGRAMON_SELFTEST=1 ./target/debug/diagramon.exe   # 报告写到数据目录
+DIAGRAMON_SELFTEST_REPORT=<绝对路径>                 # 或指定位置
+```
+
+> 自检为什么由**页面自己**跑一遍、而不是外面用 CDP 断言：本机 WebView2 不认
+> `--remote-debugging-port`（wry 默认传 `--disable-features=…`，宿主一旦显式传参，
+> WebView2 就不再读 `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS`）。
+> 页面自跑不依赖桌面输入注入，反而更稳。`tools/dev/cdp-probe.py` 留给能开调试端口的机器。
+>
+> 写自检时有一条硬规矩：**不要用 `setTimeout` 轮询等界面**。
+> WebView2 对后台窗口把定时器节流到约 1 次/秒，`60 × 50ms` 的等待循环实际要跑一分多钟。
+> 直接查 DOM 或用应用自身的 API。
 
 **不开客户端也能看界面**：直接用浏览器打开 `ui/index.html`。
 检测不到 Tauri 时会切到内置 **mock 后端**（示例文档、假 AI 流式、假问题列表），
@@ -75,6 +98,13 @@ fs 作用域限工作区目录，密钥只允许 Rust 读。
 外壳与全部面板、标签页与会话、文件打开/保存/另存、语法校验与行内报错、大纲、
 当前作用域、mermaid 与 graphviz 预览与导出、AI 三页签（对话 / 识图 / 改图）流式对话、
 设置五页签与明暗主题、命令面板与对话框、内部 mock 后端。
+
+**验收闭环（第一步）**
+`node tools/dev/check.mjs` 一条命令跑完「单测 + 真机 IPC 自检」。
+真机自检 16/16 全绿：契约版本与四格式注册表、设置局部更新不清空其它字段、
+新建文档与语法校验（正常不报错 / 裸 `>=` 报警告）、大纲三组与中文标签、
+状态栏作用域、画布型拒绝分屏、界面五块工作区与标签页跟随会话。
+涵盖 Rust 75 项单测（app-core 48 / ai 17 / platform 5 / platform-windows 5）。
 
 **下一步**
 完整拆分见 [`docs/roadmap-dev3.0.md`](docs/roadmap-dev3.0.md)（含依赖关系、每步的完成判据、待拍板项）。
