@@ -463,8 +463,20 @@ window.DGM = window.DGM || {};
     }
   }
 
-  /** 剪贴板写 PNG：优先 navigator.clipboard，失败/不支持时回退（并如实返回 false）。 */
+  /**
+   * 剪贴板写 PNG。
+   *
+   * 优先走**原生**（arboard，win32 剪贴板）：WebView2 的 `navigator.clipboard`
+   * 在各版本上行为不一致，后台窗口甚至会直接拒写 —— 这条路赌不起。
+   * 原生不可用（mock 模式）才落回浏览器 API，仍失败就如实返回 false。
+   */
   async function copyImageDataUrl(dataUrl) {
+    try {
+      const ok = await DGM.ipc.invoke("clip_write_image", { base64: dataUrl });
+      if (ok) return true;
+    } catch (e) {
+      /* mock / 命令不存在 → 落回浏览器 API */
+    }
     try {
       if (navigator.clipboard && window.ClipboardItem) {
         const blob = await (await fetch(dataUrl)).blob();
@@ -472,7 +484,7 @@ window.DGM = window.DGM || {};
         return true;
       }
     } catch (e) {
-      /* 落回下面 */
+      /* 落到下面 */
     }
     return false;
   }

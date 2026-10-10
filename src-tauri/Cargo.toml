@@ -12,8 +12,9 @@ name = "diagramon_lib"
 # 桌面端只经 `rlib` 被 main.rs 链接；不产出 cdylib/staticlib
 # （Windows GNU 工具链下 cdylib 的导出序号会溢出，移动端不在范围内）。
 crate-type = ["rlib"]
-# 装配层不含单元测试：行为验证走「运行应用 + 截图 + CDP 断言」。
-# `src-tauri/tests/` 下的集成测试不受影响。
+# 装配层不含单元测试：测试二进制链上 tauri/wry 后启动即
+# STATUS_ENTRYPOINT_NOT_FOUND（WebView2 的 DLL 不在 deps 目录旁），跑不起来。
+# 纯函数一律下沉到 app-core 去测；行为验证走真机自检。
 test = false
 
 [[bin]]
@@ -41,6 +42,10 @@ reqwest = { version = "0.13", default-features = false, features = ["json", "nat
 base64 = "0.22"
 notify = "8.2.0"
 tauri-plugin-single-instance = "2.5.2"
+xcap = "0.9.8"
+arboard = "3.6.1"
+image = { version = "0.25.10", default-features = false, features = ["png"] }
+windows-sys = { version = "0.61.2", features = ["Win32_UI_WindowsAndMessaging", "Win32_Foundation"] }
 
 [target.'cfg(windows)'.dependencies]
 platform-windows = { workspace = true }

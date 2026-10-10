@@ -40,6 +40,8 @@ pub struct AppState {
     pub autosave: Mutex<HashMap<String, Instant>>,
     /// 未落盘文档的草稿目录
     pub recovery_dir: PathBuf,
+    /// 识图截屏的冻结帧（框选期间有效）
+    pub vision: crate::vision::Frames,
 }
 
 impl AppState {
@@ -62,6 +64,7 @@ impl AppState {
             workspace: Mutex::new(WorkspaceState::default()),
             autosave: Mutex::new(HashMap::new()),
             recovery_dir,
+            vision: crate::vision::Frames::new(),
         }
     }
 

@@ -337,6 +337,10 @@ pub struct AiDone {
     pub model: String,
     pub prompt_tokens: Option<u32>,
     pub completion_tokens: Option<u32>,
+    /// "server" = 供应商在流末尾回报的；"none" = 没回报。
+    /// **界面据此标注来源**（P3 拍板：两种都留，但别混成一个数，更别把"没有"当 0）。
+    #[serde(default)]
+    pub usage_source: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -487,6 +491,40 @@ pub struct OpenPathsEvent {
     pub paths: Vec<String>,
 }
 
+/* ---------------- 识图截屏 / 原生剪贴板 ---------------- */
+
+/// 一块屏幕。`x/y` 是虚拟桌面里的**逻辑**坐标，`width/height` 是**物理**像素
+/// —— 两者不等是常态（缩放 150% 时 logical 1000 = physical 1500），
+/// 混用一次 DPI 就崩，所以字段名写死，不许前端自己换算。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MonitorInfo {
+    pub id: String,
+    pub name: String,
+    pub width: u32,
+    pub height: u32,
+    pub x: i32,
+    pub y: i32,
+    pub scale: f32,
+    pub is_primary: bool,
+}
+
+/// 一次"冻结帧"：把屏幕定格成一张图，供 overlay 上框选。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VisionFrame {
+    pub monitor: MonitorInfo,
+    /// PNG dataURL。只在本进程内存里，不落盘。
+    pub data_url: String,
+}
+
+/// 框选结果：**物理像素**，相对被截的那块屏。
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct VisionRect {
+    pub x: u32,
+    pub y: u32,
+    pub w: u32,
+    pub h: u32,
+}
+
 /// 开发开关的环境变量名（前后端与文档统一引用，别各写一份字符串）。
 pub const ENV_SELFTEST: &str = "DIAGRAMON_SELFTEST";
 pub const ENV_SELFTEST_REPORT: &str = "DIAGRAMON_SELFTEST_REPORT";
@@ -506,6 +544,8 @@ pub mod events {
     pub const OPEN_PATHS: &str = "open://paths";
     /// autosave 落了盘（载荷 `Doc`）
     pub const DOC_AUTOSAVED: &str = "doc://autosaved";
+    /// 识图框选完成（载荷 `String` dataURL；取消时是 `null`）
+    pub const VISION_PICKED: &str = "vision://picked";
 }
 
 /// 命令名常量（与 `ui/js/ipc.js` 逐字对应，避免两侧拼错字符串）。
@@ -544,4 +584,9 @@ pub mod commands {
     pub const CONVERT_TEXT: &str = "convert_text";
     pub const AI_CHAT: &str = "ai_chat";
     pub const AI_CANCEL: &str = "ai_cancel";
+    pub const MONITORS_LIST: &str = "monitors_list";
+    pub const VISION_FRAME: &str = "vision_frame";
+    pub const VISION_CROP: &str = "vision_crop";
+    pub const VISION_CANCEL: &str = "vision_cancel";
+    pub const CLIP_WRITE_IMAGE: &str = "clip_write_image";
 }

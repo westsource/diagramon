@@ -3,6 +3,11 @@
 //! 命名与载荷**逐字段对齐** `crates/app-ipc/src/lib.rs`（那里是唯一真源）。
 //! 这里只做三件事：校验入参、动状态、必要时派任务；业务逻辑一律下沉到 `app-core` / `ai`。
 //!
+//! **返回值约定**：`async` 命令**一律返回有意义的值**（bool/String/结构体），
+//! 不许返回 `Result<(), _>` —— `async` + 单元类型 `Ok(())` 的响应会被
+//! WebView2/wry 静默丢弃，前端 `await` 永不结算且无任何报错（真机实测，
+//! 曾让 AI 对话整条链路卡死）。`sync` 命令返回 `()` 没问题。
+//!
 //! **参数命名约定**：命令参数一律**单个词**（`id` / `path` / `name` / `req`）。
 //! Tauri 会对命令参数做驼峰↔下划线转换，多词参数一旦两侧不一致就只在真机上炸
 //! （报 "invalid args"，测试里看不见）。单词参数没有这个坑。
@@ -336,7 +341,7 @@ pub async fn ai_chat(
     app: AppHandle,
     state: State<'_, Arc<AppState>>,
     req: AiChatRequest,
-) -> R<()> {
+) -> R<bool> {
     let st = state.inner().clone();
     let model = resolve_model(&st, &req.model_id)?;
 
@@ -392,6 +397,7 @@ pub async fn ai_chat(
                         model: used_model,
                         prompt_tokens: usage.prompt_tokens,
                         completion_tokens: usage.completion_tokens,
+                        usage_source: if usage.reported() { "server" } else { "none" }.to_string(),
                     },
                 );
             }
@@ -411,7 +417,11 @@ pub async fn ai_chat(
         st.cancels().remove(&request_id);
     });
 
-    Ok(())
+    // **不能返回 `Ok(())`**：`async` 命令返回 `Result<(), String>` 时，
+    // 响应会被 WebView2/wry 静默丢掉，前端 `await` 永远不结算（真机实测）。
+    // `sync` + `()` 没问题（doc_set_caret / cred_set），所以规矩是：
+    // **async 命令一律返回有意义的值**。
+    Ok(true)
 }
 
 #[tauri::command]

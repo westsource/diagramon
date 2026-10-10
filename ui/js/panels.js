@@ -123,11 +123,18 @@ window.DGM = window.DGM || {};
     const u = state.usage;
     const box = h("div", "usage");
     const models = Object.keys(u.byModel);
+    /** 没回报就画"—"并解释，绝不画 0 —— 0 会被读成"这次调用没花 token"。 */
+    const cell = (v, has) =>
+      has ? String(v) : `<span class="dim" title="${esc(t("panel.usage.notReported"))}">—</span>`;
     const rows = models.length
       ? models
           .map((m) => {
             const r = u.byModel[m];
-            return `<tr><td>${esc(m)}</td><td class="n">${r.calls}</td><td class="n">${r.prompt}</td><td class="n">${r.completion}</td></tr>`;
+            const has = r.reported > 0;
+            return (
+              `<tr><td>${esc(m)}</td><td class="n">${r.calls}</td>` +
+              `<td class="n">${cell(r.prompt, has)}</td><td class="n">${cell(r.completion, has)}</td></tr>`
+            );
           })
           .join("")
       : `<tr><td colspan="4" class="n">${esc(t("panel.output.empty"))}</td></tr>`;
@@ -137,7 +144,7 @@ window.DGM = window.DGM || {};
       `<div class="usage-kpi"><span class="lb">${esc(t("panel.usage.prompt"))}</span><span class="num">${u.prompt}</span><span class="unit">tokens</span></div>` +
       `<div class="usage-kpi"><span class="lb">${esc(t("panel.usage.completion"))}</span><span class="num">${u.completion}</span><span class="unit">tokens</span></div>` +
       `</div>` +
-      `<div class="usage-note">${esc(t("panel.usage.creditNote"))}</div>` +
+      `<div class="usage-note">${esc(t("panel.usage.source", { reported: u.reported, calls: u.calls }))}<br>${esc(t("panel.usage.creditNote"))}</div>` +
       `<table class="usage-table"><thead><tr>` +
       `<th>${esc(t("set.ai.models"))}</th>` +
       `<th class="n">${esc(t("panel.usage.calls"))}</th>` +

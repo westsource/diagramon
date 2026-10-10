@@ -40,6 +40,16 @@ pub struct Usage {
     pub completion_tokens: Option<u32>,
 }
 
+impl Usage {
+    /// 供应商有没有在流里回报用量。
+    ///
+    /// 没回报时这两个 `Option` 是 `None` —— **界面必须显示"未回报"，不能当 0**，
+    /// 否则"本地估算"和"服务端实报"就混成一个数了（P3 拍板）。
+    pub fn reported(&self) -> bool {
+        self.prompt_tokens.is_some() || self.completion_tokens.is_some()
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum ChatError {
     #[error("已取消")]

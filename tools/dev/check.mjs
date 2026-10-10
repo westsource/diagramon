@@ -16,7 +16,7 @@
  */
 
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -111,6 +111,27 @@ async function main() {
     await new Promise((r) => setTimeout(r, 2500));
   }
 
+  step("前端语法检查（node --check，几秒钟，省掉一次 3 分钟的无效构建）");
+  {
+    // 真实教训：`const cv` 在两个作用域里重复声明，整页 JS 一行都没执行，
+    // 自检报告自然是没产出 —— 这种错 3 秒能查出来，构建完才发现要 3 分钟。
+    const files = readdirSync(join(ROOT, "ui", "js"))
+      .filter((f) => f.endsWith(".js"))
+      .map((f) => join(ROOT, "ui", "js", f));
+    const bad = [];
+    for (const f of files) {
+      // 注意：本机 spawnSync + stdio:"pipe" 直接 EBUSY（连 cmd.exe 都起不来），
+      // 必须给文件描述符 —— 这是 check.mjs 全文唯一一处不是 "inherit" 的 stdio。
+      const r = spawnSync(process.execPath, ["--check", f], { stdio: ["ignore", 1, 2] });
+      if (r.status !== 0) bad.push(f);
+    }
+    if (bad.length) {
+      log(C.red("前端语法错误：\n" + bad.join("\n")));
+      process.exit(2);
+    }
+    log(C.dim(`  ${files.length} 个文件，全部可解析`));
+  }
+
   step("构建 diagramon");
   if (run("cargo", ["build", "-p", "diagramon", "--message-format", "short"]) !== 0) {
     log(C.red("构建失败 —— 先修编译错误"));
@@ -136,34 +157,57 @@ async function main() {
 
   step("真机自检（启动客户端 → 前端跑真实 IPC 断言 → 落盘报告）");
   mkdirSync(SHOTS, { recursive: true });
-  rmSync(REPORT, { force: true });
   for (const f of ["enter", "phase", "timeout", "err", "fallback"]) {
     rmSync(join(SHOTS, `selftest-report.${f}.json`), { force: true });
   }
 
-  const app = spawn(EXE, [], {
-    cwd: ROOT,
-    env: { ...process.env, DIAGRAMON_SELFTEST: "1", DIAGRAMON_SELFTEST_REPORT: REPORT },
-    stdio: ["ignore", "pipe", "pipe"],
-  });
+  /**
+   * 跑一场自检，返回报告（或 null = 没产出）。
+   *
+   * **为什么整场重试**：本机的 WebView2 会挂起"不被前台"的窗口 —— 定时器全停、
+   * invoke 响应（走 ExecuteScript 投递）**偶发被丢**。Rust 侧命令明明执行完了，
+   * 前端的 `await` 却永不结算，无报错、无 pagehide，卡在哪一条每次还不一样
+   * （排查一个下午：convert / workspace_delete / workspace_get / clip 都中过招）。
+   * 前端没有任何定时器可用（都被挂起），所以**只能在场次级别重试**：
+   * 一场不产出报告就再来一场，直到某一场的窗口恰好没被挂起。
+   * 这也符合验收的语义 —— 要的是"能跑出一份报告"，而不是"任何一次都必须成"。
+   */
+  const ATTEMPTS = Number(process.env.DGM_SELFTEST_ATTEMPTS || 6);
+  const TIMEOUT = Number(process.env.DGM_SELFTEST_TIMEOUT || 90_000);
+  let report = null;
   let appOut = "";
-  app.stdout.on("data", (b) => (appOut += b));
-  app.stderr.on("data", (b) => (appOut += b));
-
-  const report = await waitForReport(Number(process.env.DGM_SELFTEST_TIMEOUT || 120_000));
-  killStale();
-  app.kill();
-
-  // 应用日志留一份，失败时好用
-  try {
-    const { writeFileSync } = await import("node:fs");
-    writeFileSync(APP_LOG, appOut, "utf8");
-  } catch {
-    /* 日志写不进去不影响结论 */
+  for (let attempt = 1; attempt <= ATTEMPTS && !report; attempt += 1) {
+    if (attempt > 1) {
+      // 给被杀实例的 msedgewebview2 子进程松手的时间（它们还占着 user-data 目录时，
+      // 新实例连页面 load 事件都不来 —— 这是已知的坑，见第 1 步）
+      await new Promise((r) => setTimeout(r, 4000));
+      step(`第 ${attempt}/${ATTEMPTS} 次自检（上一场没产出报告 —— 渲染进程被挂起，重试）`);
+    }
+    rmSync(REPORT, { force: true });
+    const app = spawn(EXE, [], {
+      cwd: ROOT,
+      env: { ...process.env, DIAGRAMON_SELFTEST: "1", DIAGRAMON_SELFTEST_REPORT: REPORT },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let out = "";
+    app.stdout.on("data", (b) => (out += b));
+    app.stderr.on("data", (b) => (out += b));
+    report = await waitForReport(TIMEOUT);
+    killStale();
+    app.kill();
+    appOut = out;
+    try {
+      const { writeFileSync } = await import("node:fs");
+      writeFileSync(APP_LOG, out, "utf8");
+    } catch {
+      /* 日志写不进去不影响结论 */
+    }
+    // 报告里若有**真失败**（断言没过），重试也不会变绿 —— 直接收下，别浪费回合
+    if (report && report.failed.length) break;
   }
 
   if (!report) {
-    log(C.red("自检报告没产出（60s 超时）"));
+    log(C.red(`自检报告没产出（${ATTEMPTS} 次尝试均超时）`));
     dumpDiagnostics();
     process.exit(2);
   }

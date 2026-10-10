@@ -38,7 +38,6 @@ pub fn workspace_open(
     }
     let info = app_core::workspace::scan(&root);
 
-    // 起新监视器**之前**先停旧的：否则换目录那一瞬间两个监视器都在推事件
     let watcher = crate::watcher::start(app, state.inner().clone(), root.clone())?;
 
     let mut ws = state.workspace();
@@ -141,8 +140,10 @@ pub fn workspace_rename(
 }
 
 /// 删除。**只删文件与空目录** —— 递归删除不可逆，本客户端不做这件事。
+///
+/// 返回 `true`（不是 `()`）：见 commands.rs 的返回值约定。
 #[tauri::command]
-pub fn workspace_delete(state: State<'_, Arc<AppState>>, path: String) -> R<()> {
+pub fn workspace_delete(state: State<'_, Arc<AppState>>, path: String) -> R<bool> {
     let root = root_of(state.inner())?;
     let p = PathBuf::from(&path);
     if !app_core::workspace::inside(&root, &p) {
@@ -159,9 +160,10 @@ pub fn workspace_delete(state: State<'_, Arc<AppState>>, path: String) -> R<()> 
         if non_empty {
             return Err("目录里还有东西 —— 本客户端只删空目录（递归删除不可逆，不提供）".into());
         }
-        std::fs::remove_dir(&p).map_err(|e| format!("删除失败：{e}"))
+        std::fs::remove_dir(&p).map(|_| true).map_err(|e| format!("删除失败：{e}"))
     } else {
-        std::fs::remove_file(&p).map_err(|e| format!("删除失败：{e}"))
+        let r = std::fs::remove_file(&p).map(|_| true).map_err(|e| format!("删除失败：{e}"));
+        r
     }
 }
 

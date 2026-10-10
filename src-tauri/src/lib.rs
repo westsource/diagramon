@@ -8,6 +8,7 @@
 
 mod commands;
 mod state;
+mod vision;
 mod watcher;
 mod workspace_cmds;
 
@@ -81,7 +82,16 @@ pub fn run() {
     }
 
     let creds = credential_store(&paths);
-    let app_state = Arc::new(AppState::new(paths, creds));
+    let mut app_state = AppState::new(paths, creds);
+
+    // 自检的草稿写到**临时目录**，绝不碰真实草稿仓：
+    // 自检会新建一堆未命名文档，autosave 把它们写进草稿仓；若写的是真仓，
+    // 下一次自检又全部恢复回来 —— 草稿越滚越多（实测滚到 13 份），每次都在
+    // 十几个未命名文档 + 两个画布引擎之上跑断言，负载不可控，表现为"非确定性卡死"。
+    if selftest_on() {
+        app_state.recovery_dir = std::env::temp_dir().join("diagramon-selftest-recovery");
+        let _ = std::fs::remove_dir_all(&app_state.recovery_dir); // 只清自己的临时目录
+    }
 
     let roots = Arc::new(AssetRoots::detect(ui_dir()));
     eprintln!(
@@ -93,7 +103,10 @@ pub fn run() {
 
     // 上次没保存完的（草稿仓里有）：先收进会话，再开命令行文件 —— 这样命令行那个
     // 文件拿到活动标签页，符合"我点它就是要看它"的直觉。
-    restore_drafts(&app_state);
+    // 自检时跳过：见上面"自检的草稿写到临时目录"的说明，同理 —— 自检要的是干净会话。
+    if !selftest_on() {
+        restore_drafts(&app_state);
+    }
     open_cli_files(&app_state);
 
     tauri::Builder::default()
@@ -150,7 +163,7 @@ pub fn run() {
                 responder.respond(response);
             });
         })
-        .manage(app_state)
+        .manage(Arc::new(app_state))
         .setup(|app| {
             let paths = app.state::<Arc<AppState>>().paths.clone();
             build_main_window(app, &paths)?;
@@ -193,6 +206,13 @@ pub fn run() {
             workspace_cmds::search_run,
             workspace_cmds::search_cancel,
             workspace_cmds::search_once,
+            vision::monitors_list,
+            vision::vision_capture_start,
+            vision::vision_frame,
+            vision::vision_crop,
+            vision::vision_cancel,
+            vision::clip_write_image,
+            vision::clip_read_image,
         ])
         .run(tauri::generate_context!())
         .expect("Diagramon 启动失败");
@@ -312,6 +332,11 @@ fn build_main_window(app: &mut tauri::App, paths: &AppPaths) -> Result<(), Box<d
         .inner_size(1440.0, 900.0)
         .min_inner_size(1000.0, 640.0)
         .decorations(false) // 自绘标题栏（拖动区 + 三个窗口按钮在前端）
+        // 自检时置顶：WebView2 会挂起"被遮挡"的窗口 —— 定时器全停、
+        // invoke 响应（走 ExecuteScript 投递）被丢，自检就变成非确定性的静默卡死。
+        // 从脚本里拉起来的窗口几乎必然被终端/IDE 盖住，所以自检要置顶，
+        // 让遮挡判定永远判"可见"。反节流开关（debug_browser_args）同此目的，双保险。
+        .always_on_top(crate::selftest_on())
         .center();
 
     if let Some(args) = debug_browser_args() {
@@ -330,6 +355,13 @@ fn build_main_window(app: &mut tauri::App, paths: &AppPaths) -> Result<(), Box<d
     Ok(())
 }
 
+/// `DIAGRAMON_SELFTEST=1` 是否开着（自检要干净会话与临时草稿目录）。
+fn selftest_on() -> bool {
+    std::env::var(app_ipc::ENV_SELFTEST)
+        .map(|v| !v.trim().is_empty() && v.trim() != "0")
+        .unwrap_or(false)
+}
+
 /// 自检开关。`DIAGRAMON_SELFTEST=1` ⇒ 后端把自己的开关交代出来（`app_info.dev`），
 /// 前端据此跑一遍**真实 IPC** 断言，并用 `export_write` 把报告写到指定路径。
 ///
@@ -342,10 +374,7 @@ fn build_main_window(app: &mut tauri::App, paths: &AppPaths) -> Result<(), Box<d
 /// `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS`）。自检由页面自己跑，且不依赖桌面输入注入。
 /// `tools/dev/cdp-probe.py` 留给能开调试端口的机器。
 pub(crate) fn selftest_report(paths: &AppPaths) -> Option<String> {
-    let on = std::env::var(app_ipc::ENV_SELFTEST)
-        .map(|v| !v.trim().is_empty() && v.trim() != "0")
-        .unwrap_or(false);
-    if !on {
+    if !selftest_on() {
         return None;
     }
     Some(std::env::var(app_ipc::ENV_SELFTEST_REPORT).unwrap_or_else(|_| {
@@ -357,16 +386,36 @@ pub(crate) fn selftest_report(paths: &AppPaths) -> Option<String> {
     }))
 }
 
-/// `DIAGRAMON_DEBUG_PORT=9333` ⇒ 打开 CDP 端口，供 `tools/dev/cdp-probe.py` 连入。
+/// 自检 / CDP 调试时给 WebView2 加**反节流**开关。
+///
+/// 为什么必须有：WebView2 对"被遮挡的后台窗口"不只是把 `setTimeout` 节流到 ~1 次/秒，
+/// 它会**整体挂起渲染进程** —— 定时器全停、`ExecuteScript`（也就是 invoke 响应的
+/// 投递通道）被丢弃。表现为：Rust 侧命令明明执行完了，前端的 `await` 却永远不结算，
+/// 无报错、无 pagehide、每次卡的位置还不一样。曾经因此把一个不存在的 bug 查了五轮。
+///
+/// 这四个开关是 Chromium/WebView2 通用的反后台节流组合：
+/// 关遮挡判定 + 关定时器节流 + 关"被遮挡即降级" + 关渲染进程后台降级。
 fn debug_browser_args() -> Option<String> {
-    let port = std::env::var(app_ipc::ENV_DEBUG_PORT).ok()?;
-    let port = port.trim();
-    if port.is_empty() {
+    let selftest = std::env::var(app_ipc::ENV_SELFTEST)
+        .map(|v| !v.trim().is_empty() && v.trim() != "0")
+        .unwrap_or(false);
+    let port = std::env::var(app_ipc::ENV_DEBUG_PORT)
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty());
+    if !selftest && port.is_none() {
         return None;
     }
-    Some(format!(
-        "--remote-debugging-port={port} --disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection"
-    ))
+    let mut args = String::new();
+    if let Some(p) = port {
+        args.push_str(&format!("--remote-debugging-port={p} "));
+    }
+    args.push_str(
+        "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection,CalculateNativeWinOcclusion \
+         --disable-background-timer-throttling --disable-backgrounding-occluded-windows \
+         --disable-renderer-backgrounding",
+    );
+    Some(args)
 }
 
 /// Windows 用 DPAPI；其它平台暂时用明文兜底（仅够开发，正式适配层补齐后删除）。

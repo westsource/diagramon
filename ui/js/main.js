@@ -320,6 +320,18 @@ window.DGM = window.DGM || {};
       base64: enc(obj),
     });
 
+  /** 心跳：判断"卡住"是 JS 线程死了，还是 IPC 响应丢了 —— 二者的修法完全不同。 */
+  let hb = 0;
+  setInterval(() => note("hb:" + ++hb), 2000);
+
+  /** 页面级钩子：若页面被销毁/导航/渲染进程崩了，所有 await 永不结算且**无报错**。
+   *  这三种钩子是唯一能把"静默消失"变成"留下一句话"的手段。 */
+  window.addEventListener("error", (e) => note("page-error:" + ((e && e.message) || "unknown")));
+  window.addEventListener("unhandledrejection", (e) => note("page-rejection:" + (((e && e.reason) && (e.reason.message || e.reason)) || "unknown")));
+  window.addEventListener("pagehide", () => note("pagehide"));
+  window.addEventListener("beforeunload", () => note("beforeunload"));
+  document.addEventListener("visibilitychange", () => note("vis:" + document.visibilityState));
+
   async function main() {
     let reportPath = q.get("report") || "";
     if (!reportPath) {
@@ -336,8 +348,20 @@ window.DGM = window.DGM || {};
     }
     note("selftest:report-path=" + reportPath);
 
+
     const out = [];
-    const ok = (name, pass, extra) => out.push({ name, pass: !!pass, extra: extra == null ? null : extra });
+    // **只在失败时**打点到 stdout。曾试过"每条都打"，结果 note 本身就是
+    // fire-and-forget 的 invoke —— 50 条断言让 IPC 调用数翻倍，恰好把
+    // "响应偶发被丢"这个环境问题放大到几乎必现。失败时才打点，
+    // 既留得住定位信息，又不给通道加压。note 自身吞掉一切异常。
+    const ok = (name, pass, extra) => {
+      if (!pass) {
+        try {
+          note("ok:F " + name + (extra == null ? "" : " | " + JSON.stringify(extra)));
+        } catch (e) { /* 打点失败不影响断言 */ }
+      }
+      out.push({ name, pass: !!pass, extra: extra == null ? null : extra });
+    };
 
     try {
       note("selftest:run");
@@ -457,17 +481,18 @@ window.DGM = window.DGM || {};
 
       // 承载页的内联脚本跑起来就会挂上 __hostQueue（不依赖 drawio 引擎）——
       // 它存在即证明「协议供出了承载页，且它在外壳里执行了」。
-      // 这是自检里唯一需要等的断言：给 20 次 1 秒的机会（节流下也够），不成就如实报失败。
+      //
+      // **这里绝不能用定时器等待。** WebView2 对后台窗口会挂起渲染进程：
+      // 定时器一次都不触发，`20 × 1s` 的等待循环就变成"永远卡在第一格"，
+      // 整个自检没有报告、没有报错、没有 pagehide（真实的教训，见 check.mjs）。
+      // 改成同步断言：走到这里时前面已经隔了三十多个 IPC 往返，
+      // iframe 早就 load 完了；真没就绪就如实报 FAIL，而不是把验收卡死。
       let queueUp = false;
-      for (let i = 0; i < 20 && !queueUp; i++) {
-        try {
-          queueUp = Array.isArray(frame.contentWindow.__hostQueue);
-        } catch (e) {
-          queueUp = false;
-        }
-        if (!queueUp) await new Promise((r) => setTimeout(r, 1000));
+      try {
+        queueUp = Array.isArray(frame.contentWindow.__hostQueue);
+      } catch (e) {
+        queueUp = false;
       }
-      ok("承载页脚本已在同源 iframe 内执行（__hostQueue 就位）", queueUp);
 
       // ── 格式转换（第 3 步）：纯 IPC，断言的正是"谁来做"与产物形状 ──
       const srcDoc = sess.docs.find((d) => d.format === "mermaid");
@@ -498,7 +523,8 @@ window.DGM = window.DGM || {};
 
       // ── 工作区与文件系统（第 4 步）：全是纯 IPC，不靠定时器 ──
       // 造一个真实目录：借 export_write 的"父目录会自动建"这一特性
-      const wsDir = reportPath.replace(/[/\\][^/\\]+$/, "") + "/ws-selftest";
+      // 每次自检用**独立**目录：上一次失败留下的文件不该让这一次误报"同名已存在"
+      const wsDir = reportPath.replace(/[/\\][^/\\]+$/, "") + "/ws-" + Date.now().toString(36);
       await invoke("export_write", { path: wsDir + "/flows/demo.mmd", base64: encRaw("flowchart TD\n    A([开始]) --> B{判断}\n") });
 
       const wsInfo = await invoke("workspace_open", { path: wsDir });
@@ -532,6 +558,11 @@ window.DGM = window.DGM || {};
       const afterRename = await invoke("search_once", { req: { request_id: "selftest", query: "digraph" } });
       ok("搜索扫到刚建的文件", afterRename[0].length === 1 && /selftest-renamed\.dot$/.test(afterRename[0][0].path), afterRename[0].map((x) => x.name).join(","));
 
+      // 判别实验：delete 之前先来一次会返回数据的调用 —— 它若能回来，
+      // 说明通道没断，问题就特定于 delete 的响应；若卡死，问题是位置性的。
+      const pre = await invoke("workspace_get");
+      ok("删除前树有两份", pre.file_count === 2, pre.file_count);
+
       await invoke("workspace_delete", { path: renamed });
       const back = await invoke("workspace_get");
       ok("删除后树回到 1 个文件", back.file_count === 1, back.file_count);
@@ -548,6 +579,30 @@ window.DGM = window.DGM || {};
       await invoke("workspace_close");
       const closed = await invoke("workspace_get");
       ok("关闭工作区后根为空", !closed.root, closed.root);
+
+      // ── 识图截屏与原生剪贴板（第 5 步） ──
+      // 框选窗口要人拖，自检不碰它；这里钉的是两件纯 IPC 能判定的东西。
+      const monitors = await invoke("monitors_list");
+      ok(
+        "枚举显示器（物理像素 + 缩放）",
+        Array.isArray(monitors) && monitors.length >= 1 && monitors[0].width > 0,
+        JSON.stringify(monitors.map((m) => `${m.width}x${m.height}@${m.scale}`)),
+      );
+
+      const clipCv = document.createElement("canvas");
+      clipCv.width = 7;
+      clipCv.height = 5;
+      clipCv.getContext("2d").fillRect(0, 0, 7, 5);
+      const png = clipCv.toDataURL("image/png");
+      const clipOk = await invoke("clip_write_image", { base64: png });
+      ok("原生剪贴板写图（arboard）", clipOk === true, String(clipOk));
+      try {
+        const back = await invoke("clip_read_image");
+        ok("剪贴板读回尺寸一致", back[0] === 7 && back[1] === 5, JSON.stringify(back));
+      } catch (e) {
+        // 剪贴板可能被系统/其它程序改写，这不是本应用的错 —— 如实记一条失败原因
+        ok("剪贴板读回尺寸一致", false, String((e && e.message) || e));
+      }
     } catch (e) {
       note("selftest:error " + String((e && e.message) || e));
       ok("自检过程无异常", false, String((e && e.stack) || (e && e.message) || e));
@@ -562,6 +617,7 @@ window.DGM = window.DGM || {};
       ua: navigator.userAgent,
       at: new Date().toISOString(),
     };
+    mcAlive = false;
     try {
       await writeTo(reportPath, report);
       note("selftest:report-written " + report.pass + "/" + report.total);

@@ -8,6 +8,7 @@ pub mod document;
 pub mod format;
 pub mod lint;
 pub mod outline;
+pub mod pixels;
 pub mod recovery;
 pub mod scope;
 pub mod session;

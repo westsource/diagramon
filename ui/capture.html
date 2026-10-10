@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Diagramon 截屏</title>
+<style>
+  /* 这页自成一体：不引 app.css（工作台的整套变量/布局对它没意义），
+     也不依赖明暗主题 —— 截屏选区永远是暗遮罩 + 亮边框，跟系统主题无关。 */
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; }
+  body {
+    background: #101314; color: #e8ecea; cursor: crosshair;
+    font: 13px/1.6 -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+    user-select: none; -webkit-user-select: none;
+  }
+  #shot { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+  /* 选区：一圈白边 + 巨大 box-shadow 把四周压暗（"挖洞"效果，零 JS 额外节点） */
+  #sel {
+    position: absolute; border: 1px solid #fff; border-radius: 2px;
+    box-shadow: 0 0 0 100000px rgba(0, 0, 0, .45);
+    display: none; pointer-events: none;
+  }
+  #sel .size {
+    position: absolute; left: 0; top: -22px; padding: 0 6px; border-radius: 3px;
+    background: rgba(0, 0, 0, .75); color: #fff;
+    font: 11px/20px var(--mono, Consolas, monospace); white-space: nowrap;
+  }
+  #bar {
+    position: absolute; left: 50%; top: 14px; transform: translateX(-50%);
+    display: flex; align-items: center; gap: 10px;
+    padding: 8px 12px; border-radius: 8px;
+    background: rgba(12, 14, 15, .86); border: 1px solid rgba(255, 255, 255, .14);
+    cursor: default;
+  }
+  #bar span { color: #cfd6d4; }
+  #bar button {
+    padding: 4px 10px; border-radius: 6px; cursor: pointer;
+    border: 1px solid rgba(255, 255, 255, .22);
+    background: transparent; color: #e8ecea; font: inherit; font-size: 12px;
+  }
+  #bar button:hover { background: rgba(255, 255, 255, .12); }
+  #err {
+    position: absolute; left: 50%; bottom: 18px; transform: translateX(-50%);
+    max-width: 80%; padding: 8px 14px; border-radius: 8px;
+    background: rgba(140, 40, 30, .9); color: #fff; display: none;
+  }
+</style>
+</head>
+<body>
+  <img id="shot" alt="">
+  <div id="sel"><span class="size" id="size"></span></div>
+  <div id="bar">
+    <span id="hint" data-i18n="cap.hint"></span>
+    <button id="all" data-i18n="cap.all"></button>
+    <button id="cancel" data-i18n="cap.cancel"></button>
+  </div>
+  <div id="err"></div>
+  <script src="/js/i18n.js"></script>
+  <script src="/js/capture.js"></script>
+</body>
+</html>

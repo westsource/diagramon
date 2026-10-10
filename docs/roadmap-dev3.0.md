@@ -203,7 +203,7 @@ DIAGRAMON_SELFTEST=1 ./target/debug/diagramon.exe                         # 真�
 
 ---
 
-## 第 5 步 · AI 补齐
+## 第 5 步 · AI 补齐 ✅ 已完成
 
 **要做的事**
 
@@ -220,6 +220,43 @@ DIAGRAMON_SELFTEST=1 ./target/debug/diagramon.exe                         # 真�
 - 用量记录与网关对得上。
 
 **涉及面**：中。
+
+**落地**：
+- **截屏 = "冻结帧"方案**（`src-tauri/src/vision.rs` + `ui/capture.html` + `ui/js/capture.js`）：
+  先把鼠标所在的那块屏截成一张 PNG 存进内存，再在它上面开一个无边框、置顶、贴满整屏的
+  overlay 窗口；overlay 把这张图**当背景**铺开，用户拖出的矩形是在"图"上量，
+  量完乘 `img.naturalWidth / img.clientWidth` 换回物理像素 —— DPI 虚拟化、缩放、
+  多屏偏移全都不用碰。裁剪用**缓存的原图**（不截第二次：屏幕上的弹窗/光标会变）。
+  取舍：只截鼠标所在的那块屏，跨屏一次框选不做（收益配不上复杂度，代码里有注释）。
+- **像素算法下沉到 `app-core::pixels`**（裁剪越界夹取 / PNG 编码，5 项单测）。
+  装配层（src-tauri）的测试二进制链上 tauri/wry 后启动即
+  `STATUS_ENTRYPOINT_NOT_FOUND`（WebView2 的 DLL 不在 deps 目录旁），跑不起来，
+  所以凡想被单测钉住的都必须下沉 —— 这条写进了 `src-tauri/Cargo.toml` 的注释。
+- **剪贴板走原生**：`clip_write_image`（arboard → win32 剪贴板），`clip_read_image`
+  读回尺寸供自检比对。`copyImageDataUrl` 优先原生，失败才落回 `navigator.clipboard`。
+- **用量口径（P3 落地）**：`AiDone.usage_source` = `server` / `none`；token **只累计供应商
+  实报的调用**，没回报的显示 `—` 并给 title 说明，绝不显示 0，也不掺本地估算。
+- **重试 / 取消**：沿用既有 `ai_cancel`；顺带修了 `ai_cancel` 的参数命名（见第 4 步）。
+
+**验证**：自检新增 4 条断言（显示器枚举、剪贴板写图、读回尺寸、工作区残留）；
+`cargo test` 133 项全绿（新增 5 项像素单测）；i18n 中英各 626 键一致。
+
+> **如实说明**：本机自检当前**间歇性跑不出报告** —— WebView2 会挂起"不被前台"的窗口，
+> 定时器全停、invoke 响应偶发被丢（见下），与第 4/5 步的代码无关。17:35 的一次完整运行
+> 已把第 4/5 步的全部新断言跑绿（工作区 11 条、显示器、ai_cancel、关工作区），
+> 剩下没跑到的只有剪贴板两条（其正确性由 `app-core::pixels` 的 PNG 往返单测 +
+> `clip_read_image` 的尺寸断言覆盖）。check.mjs 已加整场重试与前置语法检查，
+> 在能真正前台运行的机器上可直接复跑。
+
+**额外修掉的一个真 bug（比本步内容更重要）**：`async` 命令返回 `Result<(), String>`
+时，响应会被 WebView2/wry **静默丢弃** —— 前端 `await` 永不结算，无报错、无 pagehide、
+每次卡的位置还不一样。排查花了一下午（`sync + ()` 正常，`async + ()` 必丢）。
+`ai_chat` 正是这个签名，等于 AI 对话在真机上整条链路是坏的。
+规矩写进了 `commands.rs` 头注释：**async 命令一律返回有意义的值**。
+顺带把自检里唯一的定时器等待（`__hostQueue` 20×1s）改成同步断言 ——
+定时器在后台窗口会被整体挂起，等待循环会变成"永远卡在第一格"；
+自检的草稿也改写到临时目录（曾滚到 13 份未命名文档，负载不可控）；
+`check.mjs` 前置了 `node --check` 语法检查。
 
 ---
 

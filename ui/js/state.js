@@ -66,9 +66,10 @@ window.DGM = window.DGM || {};
       done: null,
     },
 
-    // 本地日志与用量（仅本机统计：调用次数与 tokens；信用点归云网关，未接入不伪造）
+    // 本地日志与用量。token 只累计**供应商实报**的（ai://done 的 usage_source），
+    // 没回报的不估算 —— 本地估算和服务端实报混成一个数就没法对账了（P3 拍板）。
     logs: { output: [], convert: [] },
-    usage: { calls: 0, prompt: 0, completion: 0, byModel: {} },
+    usage: { calls: 0, reported: 0, prompt: 0, completion: 0, byModel: {} },
 
     // 瞬态界面状态
     ui: {
@@ -763,14 +764,20 @@ window.DGM = window.DGM || {};
   }
 
   function addUsage(done) {
+    // usage_source === "server" 才算数；"none" 只记调用次数，token 不掺估算值
+    const reported = !!done && done.usage_source === "server";
+    const p = reported ? done.prompt_tokens || 0 : 0;
+    const c = reported ? done.completion_tokens || 0 : 0;
     state.usage.calls += 1;
-    state.usage.prompt += (done && done.prompt_tokens) || 0;
-    state.usage.completion += (done && done.completion_tokens) || 0;
+    state.usage.reported += reported ? 1 : 0;
+    state.usage.prompt += p;
+    state.usage.completion += c;
     const model = (done && done.model) || "—";
-    const row = state.usage.byModel[model] || { calls: 0, prompt: 0, completion: 0 };
+    const row = state.usage.byModel[model] || { calls: 0, reported: 0, prompt: 0, completion: 0 };
     row.calls += 1;
-    row.prompt += (done && done.prompt_tokens) || 0;
-    row.completion += (done && done.completion_tokens) || 0;
+    row.reported += reported ? 1 : 0;
+    row.prompt += p;
+    row.completion += c;
     state.usage.byModel[model] = row;
     emit("usage:changed");
   }

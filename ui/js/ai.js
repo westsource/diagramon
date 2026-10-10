@@ -301,19 +301,34 @@ window.DGM = window.DGM || {};
   async function pickImage() {
     const picked = await ipc.dialog.pickImage();
     if (!picked || !picked.dataUrl) return;
-    const out = await compressImage(picked.dataUrl);
+    await attachDataUrl(picked.dataUrl, picked.name);
+    DGM.toast({ icon: "image", title: t("ai.attached"), sub: t("ai.attachedDesc") });
+  }
+
+  /** 把一张图（dataURL）挂到识图输入上。截屏与选文件共用这一条路。 */
+  async function attachDataUrl(dataUrl, name) {
+    const out = await compressImage(dataUrl);
     if (!out) {
       DGM.toast({ icon: "alert", title: t("ai.attach"), sub: t("exp.rasterFail"), warn: true });
-      return;
+      return null;
     }
     state.ui.aiAttachment = {
-      name: picked.name,
+      name: name || "image.png",
       dataUrl: out.dataUrl,
       meta: t("ai.vision.compress", { w: out.w, h: out.h }),
     };
     if (tab() !== "vision") state.ui.aiTab = "vision";
     render();
-    DGM.toast({ icon: "image", title: t("ai.attached"), sub: t("ai.attachedDesc") });
+    return state.ui.aiAttachment;
+  }
+
+  /** 框选屏幕一块区域 → 直接进识图 tab（Rust 冻结帧 + overlay，见 vision.rs）。 */
+  async function startCapture() {
+    try {
+      await ipc.invoke("vision_capture_start");
+    } catch (e) {
+      DGM.toast({ icon: "alert", title: t("ai.screenshot"), sub: String((e && e.message) || e), warn: true });
+    }
   }
 
   /* ------------------------------------------------------------------ 发送 / 流式 */
@@ -614,7 +629,7 @@ window.DGM = window.DGM || {};
     const att = $("#ai-attach");
     if (att) att.addEventListener("click", pickImage);
     const shot = $("#ai-screenshot");
-    if (shot) shot.addEventListener("click", () => DGM.toast({ icon: "scan", title: t("ai.screenshot"), sub: t("common.notWired") }));
+    if (shot) shot.addEventListener("click", startCapture);
     const ctx = $("#ai-context");
     if (ctx) {
       ctx.addEventListener("click", () => {
@@ -637,6 +652,13 @@ window.DGM = window.DGM || {};
     ipc.on("ai://delta", onDelta);
     ipc.on("ai://done", onDone);
     ipc.on("ai://failed", onFailed);
+    // 截屏框选完成（Rust 发来 dataURL；取消时是 null）
+    ipc.on("vision://picked", (dataUrl) => {
+      if (!dataUrl) return;
+      attachDataUrl(dataUrl, "screen.png").then(() => {
+        DGM.toast({ icon: "scan", title: t("ai.attached"), sub: t("ai.attachedDesc") });
+      });
+    });
   }
 
   DGM.bus.on("settings:changed", render);
