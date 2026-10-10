@@ -1,0 +1,401 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Diagramon dev3.0 —— 界面原型与设计说明</title>
+<link rel="stylesheet" href="./proto.css">
+</head>
+<body>
+<div class="doc-page">
+<div class="doc-wrap">
+
+  <header class="doc-hero">
+    <span class="logo-lg"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6.5h5.5v5H4z"/><path d="M14.5 12.5H20v5h-5.5z"/><path d="M6.75 11.5v3.2a1.8 1.8 0 0 0 1.8 1.8h4.2"/></svg></span>
+    <div>
+      <h1>Diagramon dev3.0 · 界面原型</h1>
+      <p>Rust + Tauri 2 + WebView2 的新客户端界面方案。AI 画图是第一公民，四种格式（Mermaid / Graphviz DOT / drawio / Excalidraw）共用一套工作区与画布手势，格式互转单向且理由透明，面板沿用 VS Code 的肌肉记忆。淡雅配色，明暗双主题。</p>
+      <div class="acts">
+        <a class="btn primary" href="./app.html">打开交互原型</a>
+        <a class="btn" href="./app.html?theme=dark">暗色主题</a>
+        <a class="btn" href="./app.html?zen=1">全屏预览</a>
+        <a class="btn ghost" href="./app.html?open=palette">命令面板</a>
+      </div>
+    </div>
+  </header>
+
+  <nav class="doc-nav">
+    <a href="#principles">设计原则</a>
+    <a href="#anatomy">布局解剖</a>
+    <a href="#formats">格式与承载</a>
+    <a href="#convert">格式互转</a>
+    <a href="#panels">面板与键位</a>
+    <a href="#ai">AI 第一公民</a>
+    <a href="#color">配色</a>
+    <a href="#shots">截图索引</a>
+    <a href="#impl">实施映射</a>
+    <a href="#open">待拍板</a>
+  </nav>
+
+  <!-- 1 设计原则 -->
+  <section class="doc-sec" id="principles">
+    <h2><span class="n">1</span>设计原则</h2>
+    <p class="lead">五条原则决定每个控件的去留。原型里所有"看起来多出来的东西"都能在这五条里找到出处，找不到就该删。</p>
+    <div class="card-grid">
+      <div class="card hl">
+        <h4><svg class="ico"><use href="#i-sparkles"></use></svg>AI 是第一公民，不是侧边挂件</h4>
+        <p>旧版把 AI 塞在编辑器下方的折叠条里，新版纳为常驻右栏，与编辑器平级。三件事永远一键可达：描述生成（Ctrl+I）、识图（Ctrl+Shift+I）、审查改图。生成结果必须点「应用」才落进编辑器，可回退。</p>
+      </div>
+      <div class="card">
+        <h4><svg class="ico"><use href="#i-layout"></use></svg>面板模型抄 VS Code，不发明</h4>
+        <p>活动栏 / 侧栏 / 编辑区 / 右栏 / 底部面板五块，开合键位沿用 Ctrl+B、Ctrl+J、Ctrl+Shift+P、Ctrl+1~3。用户的肌肉记忆是资产，重学成本是负债。</p>
+      </div>
+      <div class="card">
+        <h4><svg class="ico"><use href="#i-splitV"></use></svg>文本型与画布型，两种承载说清楚</h4>
+        <p>Mermaid / DOT 是文本：源码 + 预览可分屏，源码窗口可整块隐藏（Ctrl+3）。drawio / Excalidraw 是画布：画布即编辑器，没有分屏 —— 控件不藏起来装死，而是明确写「画布即编辑器」。</p>
+      </div>
+      <div class="card">
+        <h4><svg class="ico"><use href="#i-swap"></use></svg>转换单向，不可用的方向给理由</h4>
+        <p>Mermaid → drawio / Excalidraw / DOT 是单向的：结果另开标签页，原文件不动。反向（画布 → 语义）需要几何反推，计划 v3.1；转换中心把不可用方向列出来并写明原因，而不是藏起来让用户猜。</p>
+      </div>
+      <div class="card">
+        <h4><svg class="ico"><use href="#i-palette"></use></svg>淡雅 = 低饱和 + 颜色自带解释</h4>
+        <p>底色是冷灰白（不是纯白），强调色松绿，AI 用藕紫区分。语义色（成功/警告/错误）与四种格式标识色全局统一；凡用颜色表达状态的地方，旁边一定有文字或 title 说明阈值与成因。</p>
+      </div>
+      <div class="card">
+        <h4><svg class="ico"><use href="#i-moon"></use></svg>明暗双主题：一处变量，全量生效</h4>
+        <p>所有颜色只经 CSS 变量取值，切主题只改 <code>&lt;html data-theme&gt;</code>。预览里的 SVG 图形、代码高亮、画布点阵全部走同一套变量 —— 包括四个渲染页（mermaid / graphviz / drawio / excalidraw）也要跟着换色。</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- 2 布局解剖 -->
+  <section class="doc-sec" id="anatomy">
+    <h2><span class="n">2</span>布局解剖</h2>
+    <p class="lead">五块工作区 + 标题栏 + 状态栏。每块都可独立隐藏并记住状态；隐藏不销毁（画布的撤销历史还在）。<b>没有面包屑</b>：文件路径在标题栏居中显示、在侧栏高亮，面包屑是第三次重复；它唯一不重复的信息（当前行所在的 subgraph / cluster）挪到了状态栏行列号旁边。</p>
+    <svg viewBox="0 0 980 560" class="anatomy" role="img" aria-label="工作区布局解剖图">
+      <defs>
+        <style>
+          .a-box { fill: var(--surface); stroke: var(--border-strong); stroke-width: 1.3; }
+          .a-fill { fill: var(--surface-2); stroke: var(--border-strong); stroke-width: 1.3; }
+          .a-acc { fill: var(--accent-soft); stroke: var(--accent); stroke-width: 1.4; }
+          .a-ai { fill: var(--ai-soft); stroke: var(--ai); stroke-width: 1.4; }
+          .a-t { fill: var(--ink); font: 600 12px var(--font-ui); }
+          .a-s { fill: var(--muted); font: 10.5px var(--font-ui); }
+          .a-k { fill: var(--accent); font: 600 10px var(--font-mono); }
+          .a-line { stroke: var(--muted); stroke-width: 1; stroke-dasharray: 3 3; }
+        </style>
+      </defs>
+      <!-- 标题栏 -->
+      <rect class="a-fill" x="10" y="10" width="960" height="34" rx="6"/>
+      <text class="a-t" x="24" y="31">标题栏</text>
+      <text class="a-s" x="76" y="31">品牌 · 菜单（文件/编辑/视图/AI/账户/帮助）· 居中文档标题 · 命令面板 / 主题 / 自定义布局 / 窗口按钮</text>
+      <!-- 活动栏 -->
+      <rect class="a-fill" x="10" y="52" width="44" height="452" rx="6"/>
+      <text class="a-t" x="18" y="76" transform="rotate(90 18 76)">活动栏</text>
+      <text class="a-s" x="20" y="480">5 视图 + AI</text>
+      <!-- 侧栏 -->
+      <rect class="a-box" x="62" y="52" width="196" height="452" rx="6"/>
+      <text class="a-t" x="76" y="76">侧栏</text>
+      <text class="a-s" x="76" y="96">资源管理器 · 搜索 · 转换中心</text>
+      <text class="a-s" x="76" y="112">云端 · 当前图大纲</text>
+      <text class="a-k" x="76" y="134">Ctrl+B</text>
+      <!-- 编辑区 -->
+      <rect class="a-box" x="266" y="52" width="470" height="452" rx="6"/>
+      <text class="a-t" x="280" y="76">编辑区</text>
+      <rect class="a-fill" x="280" y="88" width="442" height="26" rx="4"/>
+      <text class="a-s" x="290" y="105">标签页（格式色圆点 + 未保存点 + 关闭）· 视图模式切换</text>
+      <rect class="a-acc" x="280" y="120" width="206" height="276" rx="5"/>
+      <text class="a-t" x="292" y="142">源码窗口</text>
+      <text class="a-s" x="292" y="160">行号 · 语法高亮 · 当前行</text>
+      <text class="a-s" x="292" y="176">报错行内标注 + 让 AI 修</text>
+      <text class="a-k" x="292" y="198">Ctrl+1 仅源码</text>
+      <rect x="490" y="120" width="8" height="276" fill="var(--border-strong)" rx="3"/>
+      <text class="a-s" x="494" y="262" text-anchor="middle">拖</text>
+      <rect class="a-box" x="502" y="120" width="220" height="276" rx="5"/>
+      <text class="a-t" x="514" y="142">预览 / 画布</text>
+      <text class="a-s" x="514" y="160">点阵底 · 平移缩放手势</text>
+      <text class="a-s" x="514" y="176">浮动：复制图片 / 导出</text>
+      <text class="a-k" x="514" y="198">Ctrl+3 仅预览（源码隐藏）</text>
+      <rect class="a-fill" x="280" y="404" width="442" height="86" rx="5"/>
+      <text class="a-t" x="292" y="426">底部面板</text>
+      <text class="a-s" x="292" y="444">问题（带行号跳转）· 输出 · 转换记录 · AI 用量</text>
+      <text class="a-k" x="292" y="466">Ctrl+J</text>
+      <!-- AI 面板 -->
+      <rect class="a-ai" x="744" y="52" width="226" height="452" rx="6"/>
+      <text class="a-t" x="758" y="76">AI 面板</text>
+      <text class="a-s" x="758" y="96">对话生成 · 识图 · 改图</text>
+      <text class="a-s" x="758" y="112">模型档位 · 历史会话</text>
+      <text class="a-s" x="758" y="128">代码卡：应用 / 应用为 drawio / 回退</text>
+      <text class="a-k" x="758" y="150">Ctrl+Shift+A · Ctrl+I · Ctrl+Shift+I</text>
+      <!-- 状态栏 -->
+      <rect class="a-fill" x="10" y="512" width="960" height="28" rx="6"/>
+      <text class="a-s" x="24" y="530">状态栏：面板开关 · 问题计数 · AI 档位 · 信用点 ｜ 布局引擎 · 视图模式 · 缩放 · 行列 · 编码 · 格式</text>
+      <!-- 标注线 -->
+      <line class="a-line" x1="494" y1="396" x2="494" y2="430"/>
+    </svg>
+    <div class="callout mt">
+      <svg class="ico"><use href="#i-info"></use></svg>
+      <span><b>两处"显式占位"是硬约束。</b>工作区四列与分屏三列都必须写死 grid-column：display:none 的元素不参与 grid 自动布局，隐藏侧栏或源码窗口后，剩下的面板会掉进第一列（宽 0）整块空白。原型里这两个 bug 都真实踩过，已写进注释。</span>
+    </div>
+  </section>
+
+  <!-- 3 格式与承载 -->
+  <section class="doc-sec" id="formats">
+    <h2><span class="n">3</span>格式与承载</h2>
+    <p class="lead">格式注册表是单一真源（真实实现里在 <code>crates/app-core/src/format.rs</code>）：扩展名、承载方式、能力位集中定义，UI 不维护第二份清单。</p>
+    <table class="spec">
+      <thead><tr><th>格式</th><th>扩展名</th><th>承载</th><th>分屏</th><th>AI 直出</th><th>特有</th></tr></thead>
+      <tbody>
+        <tr><td><span class="chip mermaid">Mermaid</span></td><td><code>.mmd .mermaid</code></td><td>页内渲染（mermaid.js 随包）</td><td>源码 / 分屏 / 预览</td><td>是</td><td>转换的唯一源格式</td></tr>
+        <tr><td><span class="chip dot">Graphviz DOT</span></td><td><code>.dot .gv</code></td><td>页内渲染（wasm-graphviz 随包）</td><td>源码 / 分屏 / 预览</td><td>是</td><td>六种布局引擎，状态栏切换、增量更新不重载 WASM</td></tr>
+        <tr><td><span class="chip drawio">drawio</span></td><td><code>.drawio</code></td><td>自托管 embed 画布</td><td>画布即编辑器</td><td>经 Mermaid 转换</td><td>文件是 mxfile XML；单一保存入口；autosave 回写正文</td></tr>
+        <tr><td><span class="chip excalidraw">Excalidraw</span></td><td><code>.excalidraw</code></td><td>库型实例化画布</td><td>画布即编辑器</td><td>经 Mermaid 转换</td><td>文件是场景 JSON；手绘风；字体随包零 CDN</td></tr>
+      </tbody>
+    </table>
+    <div class="callout mt">
+      <svg class="ico"><use href="#i-hand"></use></svg>
+      <span><b>画布手势四处一致：</b>滚轮平移 · Shift+滚轮横向 · Ctrl+滚轮以光标缩放 · 拖拽平移 · 双击或 Ctrl+0 适应视图。缩放读数只在状态栏出现一处，避免同屏两个互相矛盾的数字。</span>
+    </div>
+  </section>
+
+  <!-- 4 格式互转 -->
+  <section class="doc-sec" id="convert">
+    <h2><span class="n">4</span>格式互转</h2>
+    <p class="lead">三个入口：菜单「文件 → 转换为」、预览头「转换」按钮、侧栏「转换中心」。全部单向；结果另开标签页，原文件保持不动。</p>
+    <table class="spec">
+      <thead><tr><th>方向</th><th>状态</th><th>实现方式</th><th>语义</th></tr></thead>
+      <tbody>
+        <tr><td>Mermaid → drawio</td><td><span class="chip">已实现</span></td><td>drawio 自带解析器接管</td><td>单向；画布改动不回写源码</td></tr>
+        <tr><td>Mermaid → Excalidraw</td><td><span class="chip">已实现</span></td><td>@excalidraw/mermaid-to-excalidraw，页内完成</td><td>单向</td></tr>
+        <tr><td>Mermaid → DOT</td><td><span class="chip">新增</span></td><td>本地 AST 映射</td><td>节点 → node，边 → edge，subgraph → cluster</td></tr>
+        <tr><td>DOT → Mermaid</td><td><span class="chip">实验</span></td><td>仅 flowchart 子集</td><td>布局反推方向不定，record 形状跳过并报告</td></tr>
+        <tr><td>drawio → Mermaid</td><td><span class="chip">计划 v3.1</span></td><td>几何 → 语义反推</td><td>转换中心列出并给理由，不藏</td></tr>
+        <tr><td>Excalidraw → Mermaid</td><td><span class="chip">计划 v3.1</span></td><td>手绘元素无稳定语义</td><td>同上</td></tr>
+      </tbody>
+    </table>
+    <div class="callout warn mt">
+      <svg class="ico"><use href="#i-alert"></use></svg>
+      <span><b>不可用 ≠ 不存在。</b>转换中心把六个方向全部列出：可用的给实现方式，不可用的给原因与计划版本。用户看到「计划 v3.1」比看到一个消失的菜单项更踏实。</span>
+    </div>
+  </section>
+
+  <!-- 5 面板与键位 -->
+  <section class="doc-sec" id="panels">
+    <h2><span class="n">5</span>面板与键位</h2>
+    <p class="lead">键位表在应用内「帮助 → 键盘快捷键总表」可查；这里只列改变布局的那一组。</p>
+    <table class="spec">
+      <thead><tr><th>键</th><th>作用</th><th>说明</th></tr></thead>
+      <tbody>
+        <tr><td><span class="kbd">Ctrl+B</span></td><td>侧栏</td><td>五个视图：资源管理器 / 搜索 / 转换中心 / 云端 / 大纲（Alt+1~5 直达）</td></tr>
+        <tr><td><span class="kbd">Ctrl+J</span></td><td>底部面板</td><td>问题（带行号跳转）/ 输出 / 转换记录 / AI 用量；高度可拖</td></tr>
+        <tr><td><span class="kbd">Ctrl+Shift+A</span></td><td>AI 面板</td><td>隐藏不销毁会话；活动栏上的 AI 图标带未读角标</td></tr>
+        <tr><td><span class="kbd">Ctrl+1 / 2 / 3</span></td><td>仅源码 / 分屏 / 仅预览</td><td>仅对文本型格式；「仅预览」即隐藏源码窗口</td></tr>
+        <tr><td><span class="kbd">Ctrl+Shift+P</span> / <span class="kbd">F1</span></td><td>命令面板</td><td>无前缀直接输入也能问 AI、开文档、跑转换</td></tr>
+        <tr><td><span class="kbd">Ctrl+Shift+F</span></td><td>全屏预览</td><td>一次隐藏所有面板；再按恢复之前的布局</td></tr>
+        <tr><td><span class="kbd">Ctrl+K Ctrl+T</span></td><td>明暗主题</td><td>另有「跟随系统」；选择写入 settings.json</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <!-- 6 AI -->
+  <section class="doc-sec" id="ai">
+    <h2><span class="n">6</span>AI 第一公民</h2>
+    <p class="lead">AI 面板是工作区的一等公民：常驻右栏、独立配色（藕紫，与强调色区分）、三个 tab 覆盖三种意图。</p>
+    <div class="card-grid">
+      <div class="card">
+        <h4><svg class="ico"><use href="#i-sparkles"></use></svg>对话生成</h4>
+        <ul>
+          <li>当前文档源码自动作为上下文，面板头标明来自哪个文件</li>
+          <li>代码卡带格式徽章与行数，动作：应用 / 应用为 drawio / 回退 / 复制</li>
+          <li>如实标出本次实际档位与信用点消耗（自动选档时由服务端回报）</li>
+          <li>渲染失败把报错原文回修一次，第二次调用会在消息里注明</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h4><svg class="ico"><use href="#i-scan"></use></svg>识图</h4>
+        <ul>
+          <li>截图区域 / 选文件 / 粘贴三条路；&gt;1568px 自动压缩</li>
+          <li>图片只在内存：不落盘、不进会话记录，发送前有上传告知</li>
+          <li>结果带置信度条（结构 / 文字 / 连线方向），低置信项明确提示核对</li>
+          <li>画布型格式没有直出：先 Mermaid 再一键「应用为 drawio / Excalidraw」</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h4><svg class="ico"><use href="#i-wand"></use></svg>改图（审查）</h4>
+        <ul>
+          <li>只改局部，不重写整张图；建议逐条列出，可单条应用</li>
+          <li>与「问题」面板联动：语法问题同时出现在两处，跳转同一行</li>
+          <li>源码窗口右上角「AI」按钮 = 把当前正文送进改图 tab</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- 7 配色 -->
+  <section class="doc-sec" id="color">
+    <h2><span class="n">7</span>配色</h2>
+    <p class="lead">两套主题各一组变量；语义色与格式色在两套里都有对应值（暗色提亮、降饱和）。强调色可在设置里换，只影响 --accent 一族。</p>
+    <h3>亮色（默认）</h3>
+    <div class="swatches">
+      <div class="sw"><span class="chipc c-bg"></span><span class="info"><b>--bg</b><span>#f7f8f8</span></span></div>
+      <div class="sw"><span class="chipc c-surface"></span><span class="info"><b>--surface</b><span>#ffffff</span></span></div>
+      <div class="sw"><span class="chipc c-surface2"></span><span class="info"><b>--surface-2</b><span>#f2f4f3</span></span></div>
+      <div class="sw"><span class="chipc c-border"></span><span class="info"><b>--border</b><span>#e2e5e4</span></span></div>
+      <div class="sw"><span class="chipc c-ink"></span><span class="info"><b>--ink</b><span>#232b2a</span></span></div>
+      <div class="sw"><span class="chipc c-muted"></span><span class="info"><b>--muted</b><span>#7d8887</span></span></div>
+      <div class="sw"><span class="chipc c-accent"></span><span class="info"><b>--accent 松绿</b><span>#3d7d72</span></span></div>
+      <div class="sw"><span class="chipc c-ai"></span><span class="info"><b>--ai 藕紫</b><span>#7b6ca6</span></span></div>
+    </div>
+    <h3>暗色</h3>
+    <div class="swatches">
+      <div class="sw"><span class="chipc c-d-bg"></span><span class="info"><b>--bg</b><span>#16191a</span></span></div>
+      <div class="sw"><span class="chipc c-d-surface"></span><span class="info"><b>--surface</b><span>#1c2021</span></span></div>
+      <div class="sw"><span class="chipc c-d-surface3"></span><span class="info"><b>--surface-3</b><span>#242929</span></span></div>
+      <div class="sw"><span class="chipc c-d-border"></span><span class="info"><b>--border</b><span>#2b3132</span></span></div>
+      <div class="sw"><span class="chipc c-d-ink"></span><span class="info"><b>--ink</b><span>#d8dedd</span></span></div>
+      <div class="sw"><span class="chipc c-d-muted"></span><span class="info"><b>--muted</b><span>#838d8c</span></span></div>
+      <div class="sw"><span class="chipc c-d-accent"></span><span class="info"><b>--accent</b><span>#6fb2a3</span></span></div>
+      <div class="sw"><span class="chipc c-d-ai"></span><span class="info"><b>--ai</b><span>#a99bd4</span></span></div>
+    </div>
+    <h3>语义色与格式色（两套主题成对）</h3>
+    <div class="swatches">
+      <div class="sw"><span class="chipc c-ok"></span><span class="info"><b>--ok</b><span>#46885a / #79b98a</span></span></div>
+      <div class="sw"><span class="chipc c-warn"></span><span class="info"><b>--warn</b><span>#a97a26 / #d0a45e</span></span></div>
+      <div class="sw"><span class="chipc c-err"></span><span class="info"><b>--err</b><span>#b0554a / #dd8b7f</span></span></div>
+      <div class="sw"><span class="chipc c-accent"></span><span class="info"><b>mermaid</b><span>#3d7d72 / #6fb2a3</span></span></div>
+      <div class="sw"><span class="chipc c-dot"></span><span class="info"><b>dot</b><span>#a07f36 / #cfa95f</span></span></div>
+      <div class="sw"><span class="chipc c-drawio"></span><span class="info"><b>drawio</b><span>#4a7196 / #7ea6cc</span></span></div>
+      <div class="sw"><span class="chipc c-excali"></span><span class="info"><b>excalidraw</b><span>#8a6f9e / #b39ac9</span></span></div>
+    </div>
+    <div class="callout mt">
+      <svg class="ico"><use href="#i-info"></use></svg>
+      <span><b>颜色必须自带解释。</b>用量条 80% 转黄、95% 转红，阈值写在注脚里；问题计数用 warn/err 图标而非裸色块；格式色只出现在圆点、徽章与标签页顶条三处，不做大面积铺色。</span>
+    </div>
+  </section>
+
+  <!-- 8 截图索引 -->
+  <section class="doc-sec" id="shots">
+    <h2><span class="n">8</span>截图索引</h2>
+    <p class="lead">以下截图由本机 Chrome 无头模式对原型实截（1680×1000），每张对应一个 URL 状态；点图打开该状态。</p>
+    <div class="shots">
+      <div class="shot"><a href="./app.html"><img src="./shots/01-light-split.png" alt="亮色分屏"><span class="cap"><b>亮色 · 分屏</b><span>默认态：侧栏资源管理器 + 源码/预览分屏 + AI 面板 + 底部问题面板</span></span></a></div>
+      <div class="shot"><a href="./app.html?theme=dark"><img src="./shots/02-dark-split.png" alt="暗色分屏"><span class="cap"><b>暗色 · 分屏</b><span>同一状态切暗色：图形、代码高亮、点阵底全部跟随变量</span></span></a></div>
+      <div class="shot"><a href="./app.html?mode=preview"><img src="./shots/03-light-preview-nosrc.png" alt="仅预览"><span class="cap"><b>仅预览（源码窗口隐藏）</b><span>Ctrl+3：源码整块隐藏，预览铺满；浮动导出与缩放控件保留</span></span></a></div>
+      <div class="shot"><a href="./app.html?doc=d3"><img src="./shots/04-drawio-canvas.png" alt="drawio 画布"><span class="cap"><b>drawio · 画布即编辑器</b><span>无分屏；视图模式区明确写「画布即编辑器」而非藏起控件</span></span></a></div>
+      <div class="shot"><a href="./app.html?view=convert"><img src="./shots/05-convert-center.png" alt="转换中心"><span class="cap"><b>侧栏 · 转换中心</b><span>从当前文档出发的转换卡 + 全方向矩阵（不可用给理由）</span></span></a></div>
+      <div class="shot"><a href="./app.html?doc=d4"><img src="./shots/06-excalidraw.png" alt="Excalidraw"><span class="cap"><b>Excalidraw · 手绘风</b><span>画布承载；文件仍是场景 JSON</span></span></a></div>
+      <div class="shot"><a href="./app.html?theme=dark&mode=preview"><img src="./shots/07-dark-preview.png" alt="暗色仅预览"><span class="cap"><b>暗色 · 仅预览</b><span>暗色下点阵底与图形描边都降了对比，不刺眼</span></span></a></div>
+      <div class="shot"><a href="./app.html?open=palette"><img src="./shots/08-palette.png" alt="命令面板"><span class="cap"><b>命令面板</b><span>无前缀混合：文档 / 新建 / 转换（不可用置灰带理由）/ AI 命令</span></span></a></div>
+      <div class="shot"><a href="./app.html?open=convert"><img src="./shots/09-convert-dialog.png" alt="转换对话框"><span class="cap"><b>转换对话框</b><span>源 → 目标 + 结果预览 + 单向告知；目标可切换</span></span></a></div>
+      <div class="shot"><a href="./app.html?open=vision"><img src="./shots/10-vision-dialog.png" alt="识图对话框"><span class="cap"><b>识图对话框</b><span>拖放/截图/粘贴 + 输出格式（画布型禁用并说明）+ 上传告知</span></span></a></div>
+      <div class="shot"><a href="./app.html?open=settings&tab=appearance"><img src="./shots/11-settings.png" alt="设置-外观"><span class="cap"><b>设置 · 外观</b><span>主题三选（含跟随系统）· 密度 · 强调色；即时生效</span></span></a></div>
+      <div class="shot"><a href="./app.html?close=all"><img src="./shots/12-welcome.png" alt="欢迎页"><span class="cap"><b>欢迎页（无文档）</b><span>AI 入口置顶 + 新建四格式 + 最近文件；不是死路</span></span></a></div>
+      <div class="shot"><a href="./app.html?zen=1"><img src="./shots/13-zen.png" alt="全屏预览"><span class="cap"><b>全屏预览</b><span>Ctrl+Shift+F：所有面板隐藏，只留图与最小控制</span></span></a></div>
+      <div class="shot"><a href="./app.html?zen=1&theme=dark"><img src="./shots/14-dark-zen.png" alt="暗色全屏"><span class="cap"><b>暗色 · 全屏预览</b><span>暗色下的沉浸看图态</span></span></a></div>
+      <div class="shot"><a href="./app.html?nosidebar=1"><img src="./shots/15-narrow.png" alt="窄窗"><span class="cap"><b>窄窗（1280×800）</b><span>侧栏收起后布局不塌；AI 面板收窄到 300px</span></span></a></div>
+      <div class="shot"><a href="./app.html?ai=vision"><img src="./shots/16-ai-vision.png" alt="识图会话"><span class="cap"><b>AI · 识图会话</b><span>图片卡 + 置信度条 + 应用为 drawio；图片不落盘的告知在顶</span></span></a></div>
+      <div class="shot"><a href="./app.html?panel=usage"><img src="./shots/17-panel-usage.png" alt="AI 用量"><span class="cap"><b>底部面板 · AI 用量</b><span>已用/剩余/还能画多少张 + 阈值刻度 + 分档明细</span></span></a></div>
+      <div class="shot"><a href="./app.html?panel=convert"><img src="./shots/18-panel-convert.png" alt="转换记录"><span class="cap"><b>底部面板 · 转换记录</b><span>每次转换的方向、成败与语义说明，可回溯</span></span></a></div>
+      <div class="shot"><a href="./app.html?doc=d4&theme=dark"><img src="./shots/19-dark-excalidraw.png" alt="暗色 Excalidraw"><span class="cap"><b>暗色 · Excalidraw</b><span>手绘描边在暗色下提亮，纸感换成深色板</span></span></a></div>
+      <div class="shot"><a href="./app.html?view=convert&theme=dark"><img src="./shots/20-dark-convert.png" alt="暗色转换中心"><span class="cap"><b>暗色 · 转换中心</b><span>矩阵与转换卡在暗色下的可读性</span></span></a></div>
+    </div>
+  </section>
+
+  <!-- 9 实施映射 -->
+  <section class="doc-sec" id="impl">
+    <h2><span class="n">9</span>实施映射（原型 → dev2.0 代码）</h2>
+    <p class="lead">原型的每一块都对应 dev2.0 已有的落点或明确的缺口；照这张表施工不会 invent 新结构。</p>
+    <table class="spec">
+      <thead><tr><th>原型块</th><th>dev2.0 落点</th><th>说明</th></tr></thead>
+      <tbody>
+        <tr><td>格式注册表 / 转换矩阵</td><td><code>crates/app-core/src/format.rs</code></td><td>原型 proto-data.js 的 FORMATS / CONVERSIONS 即其数据面镜像；新增 Mermaid→DOT 的映射器放 app-core</td></tr>
+        <tr><td>命令面板 / 菜单 / 键位</td><td><code>ui/app.js</code> + <code>crates/app-ipc</code></td><td>命令 id 与 IPC 命令一一对应；act 分发字符串即命令名</td></tr>
+        <tr><td>源码编辑器</td><td><code>ui/vendor/editor.bundle.js</code>（CodeMirror 6）</td><td>原型的行号/高亮/报错行是示意；真实走 CM6 语言包与语法校验行号（stage1b/1e 已验收）</td></tr>
+        <tr><td>预览 / 画布承载</td><td><code>ui/preview.js</code>、<code>ui/canvas.js</code></td><td>四承载页由 dgm 协议同源提供；主题变量需下发到承载页（新增）</td></tr>
+        <tr><td>AI 面板</td><td><code>ui/ai.js</code> + <code>crates/ai</code></td><td>BYOK 已通；云网关/识图档/用量回报接服务端 /v1/ai/*；面板三 tab 对应生成/识图/改图提示词集</td></tr>
+        <tr><td>侧栏五视图</td><td>新增 <code>ui/sidebar.js</code></td><td>资源管理器/搜索/云端/大纲在 main 有行为参照；转换中心是新视图</td></tr>
+        <tr><td>底部面板</td><td>新增 <code>ui/panel.js</code></td><td>问题=语法校验结果（stage1e）；输出=渲染日志；转换记录与 AI 用量为新数据面</td></tr>
+        <tr><td>主题</td><td><code>ui/styles.css</code> 变量 + settings.json</td><td>data-theme 持久化；承载页换色经 postMessage 或 URL 参数下发</td></tr>
+        <tr><td>布局状态记忆</td><td>settings.json</td><td>面板开合、分屏比例、每标签视图模式、主题、密度</td></tr>
+      </tbody>
+    </table>
+
+    <h3>9.1 运行时分工：哪些归 Rust/Tauri，哪些留在 WebView</h3>
+    <p class="lead">一句话原则：<b>摸"机器状态"的归原生，摸"渲染与交互"的归 WebView</b>。四个渲染引擎（mermaid.js / wasm-graphviz / drawio / Excalidraw）全是 JS/WASM，只能在 WebView 里跑；反过来，密钥、磁盘、watcher、网络只允许 Rust 碰。</p>
+    <div class="split-cols">
+      <div class="col-card native">
+        <h4><svg class="ico"><use href="#i-chip"></use></svg>Rust / Tauri 原生（crates/）</h4>
+        <ul>
+          <li><b>窗口与生命周期</b>：创建/恢复、单实例、文件关联双击打开、更新器；Windows caption 按钮走 <code>titleBarStyle: Overlay</code>（原生），菜单仍自绘</li>
+          <li><b>文件系统</b>：打开/保存/另存、原子写、autosave 计时、最近文件、工作区扫描（资源管理器的树数据）、文件 watcher（notify → 事件推 WebView）</li>
+          <li><b>搜索</b>：全工作区文本搜索，Rust 流式回结果</li>
+          <li><b>解析与诊断</b>：mermaid / dot 的 AST（app-core）、校验行号、大纲树、当前作用域 —— 单一真源，WebView 只渲染不重算</li>
+          <li><b>注册表与纯 Rust 转换</b>：<code>format.rs</code>；Mermaid→DOT 的 AST 映射器</li>
+          <li><b>AI 网络层</b>：reqwest + SSE 流式；BYOK 密钥存 DPAPI/钥匙串（永不进 WebView）；代理/重试/取消；信用点缓存；识图图片压缩</li>
+          <li><b>截图区域</b>：无边框 overlay 窗口 + 屏幕捕获</li>
+          <li><b>写出出口</b>：剪贴板 PNG、导出落盘</li>
+          <li><b>设置持久化</b>：settings.json（主题/密度/面板状态/分屏比例/每标签视图模式）</li>
+        </ul>
+      </div>
+      <div class="col-card web">
+        <h4><svg class="ico"><use href="#i-layout"></use></svg>WebView（ui/）</h4>
+        <ul>
+          <li><b>全部界面 chrome</b>：五块工作区、标题栏菜单、命令面板、对话框、toast、状态栏 —— 原型里的一切</li>
+          <li><b>编辑器</b>：CodeMirror 6（高亮/光标/编辑）；诊断与大纲拿原生数据渲染</li>
+          <li><b>文本型渲染</b>：mermaid.js、wasm-graphviz（WASM）</li>
+          <li><b>画布型承载</b>：drawio embed、Excalidraw 实例；手势、浮动导出、缩放读数</li>
+          <li><b>主题应用</b>：CSS 变量 + 向四个承载页转发</li>
+          <li><b>布局与键位</b>：状态机、分发、显隐的工作副本（持久化归原生）</li>
+          <li><b>AI 渲染</b>：流式展示、代码卡、置信度条、应用/回退</li>
+          <li><b>库型转换</b>：Mermaid→drawio（drawio 解析器）、Mermaid→Excalidraw（@excalidraw/…）—— 上游是 JS 库，进不了 Rust</li>
+          <li><b>导出序列化</b>：SVG serialize / canvas.toBlob，字节交原生落盘</li>
+        </ul>
+      </div>
+    </div>
+    <table class="spec" style="margin-top:14px">
+      <thead><tr><th>边界</th><th>名字</th><th>用途</th></tr></thead>
+      <tbody>
+        <tr><td>web→原生 commands</td><td><code>fs.read/write/list · workspace.tree · search.run · parse.outline · parse.diagnostics · convert.rust · ai.send/cancel · vision.capture · clip.write_png · export.write · settings.get/set · window.*</code></td><td>一切磁盘/网络/系统动作；原型 proto.js 的 act 名即命令名</td></tr>
+        <tr><td>原生→web events</td><td><code>fs.changed · diag.updated · ai.chunk/done/usage · search.hit · theme.system</code></td><td>增量推送，WebView 不轮询</td></tr>
+        <tr><td>安全边界</td><td>Tauri 2 capabilities</td><td>fs scope 限工作区目录；密钥只在 Rust 可读，WebView 只见掩码后四位与连接状态</td></tr>
+      </tbody>
+    </table>
+    <div class="callout warn mt">
+      <svg class="ico"><use href="#i-alert"></use></svg>
+      <span><b>四个灰区（已给倾向）：</b>① 菜单栏——原生菜单白送加速器与无障碍，但做不出"图标+置灰理由"；保持自绘，加速器在原生注册后转发。② 库型转换执行处——主 WebView 按需跑会卡大文档；倾向隐藏 offscreen WebView worker，结果经事件回传。③ 剪贴板图片——ClipboardItem 在 WebView2 各版本不稳；倾向原生 arboard 写 PNG 字节。④ 承载页换色——postMessage 增量 + URL 参数只作首载，避免画布重建闪烁。</span>
+    </div>
+  </section>
+
+  <!-- 10 待拍板 -->
+  <section class="doc-sec" id="open">
+    <h2><span class="n">10</span>待拍板</h2>
+    <p class="lead">原型跑出来的四个问题，都不影响开工，但影响细节。</p>
+    <div class="card-grid">
+      <div class="card"><h4>① AI 面板默认开还是收</h4><p>第一公民主张默认开；但 1280 宽以下会挤到编辑区。建议：≥1440 默认开，以下收成活动栏角标 + 一键展开。</p></div>
+      <div class="card"><h4>② Mermaid→DOT 的 subgraph 语义</h4><p>映射成 cluster 会丢 classDef 样式。建议：转换记录里注明「样式未迁移」，不静默丢。</p></div>
+      <div class="card"><h4>③ 识图置信度要不要展示</h4><p>展示了能解释「为什么这节点名字怪」；不展示界面更干净。建议：默认折叠成一行「2 处低置信，点击核对」。</p></div>
+      <div class="card"><h4>④ 暗色下画布底</h4><p>drawio / Excalidraw 上游默认白纸。建议：承载页注入主题变量把画布底换成 --canvas-bg，导出仍按用户选择（透明/白/跟随）。</p></div>
+    </div>
+  </section>
+
+  <footer class="doc-foot">
+    <span>Diagramon dev3.0 界面原型 · 数据与图形为示意，不连真实渲染引擎与网络</span>
+    <span>原型目录 <code>client2/design/ui-proto/</code> · 实施时 proto.css / proto.js 并入 <code>ui/</code> 后删除本目录</span>
+  </footer>
+</div>
+</div>
+<script src="./proto-icons.js"></script>
+<script>
+  // 说明页只借图标精灵与主题切换；不加载主交互脚本
+  (function () {
+    try {
+      var t = localStorage.getItem("dgm-proto-theme");
+      if (!t && window.matchMedia && matchMedia("(prefers-color-scheme: dark)").matches) t = "dark";
+      if (t) document.documentElement.dataset.theme = t;
+      try { if (new URLSearchParams(location.search).get("full")) document.documentElement.classList.add("full"); } catch (e) {}
+    } catch (e) {}
+  })();
+</script>
+</body>
+</html>
