@@ -1,0 +1,11 @@
+[package]
+name = "assets"
+description = "Diagramon 资产服务：自定义协议路径 → 随包资产文件"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+mime_guess = "2"
+percent-encoding = "2"

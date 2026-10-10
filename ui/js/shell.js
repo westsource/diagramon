@@ -782,6 +782,22 @@ window.DGM = window.DGM || {};
   async function saveActive(as) {
     const d = state.activeDoc();
     if (!d) return;
+
+    // 画布型：落盘前先把画布里的最新内容取出来。
+    // drawio 自己的 autosave 是 1.5s 去抖，用户「改完立刻按 Ctrl+S」时会输给它 ——
+    // 这里主动要一次 XML，不让保存读到旧正文。
+    if (state.isCanvasDoc(d) && DGM.canvas && DGM.canvas.supports(d.format)) {
+      try {
+        const body = await DGM.canvas.flush(d.format);
+        if (typeof body === "string" && body && body !== d.body) {
+          await state.setBodyNow(d.id, body);
+        }
+      } catch (e) {
+        // 取不到就按当前正文存，但要让用户知道这次可能不是最新的
+        state.pushOutput(`画布取正文失败，按当前正文保存：${(e && e.message) || e}`, "warn");
+      }
+    }
+
     let path = d.path;
     if (as || !path) {
       const picked = await ipc.dialog.pickSavePath({ defaultPath: suggestedName(d) });
@@ -1166,6 +1182,10 @@ window.DGM = window.DGM || {};
     closeDocWithConfirm,
     formatSource,
     quit,
+    // 供画布承载转发来的快捷键用（见 ui/js/canvas.js 的 forwardHotkey）：
+    // 画布里的焦点在 iframe 内，键不落本站的 window，只能由承载页入队带回组合名，
+    // 这里再翻回命令 id。
+    runCommand,
     el,
   };
   DGM.registerCommands = registerCommands; // main.js 在模块齐全后调用

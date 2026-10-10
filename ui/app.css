@@ -1775,3 +1775,11 @@ html[data-theme="dark"] .canvas-stage[data-engine="dot"] svg path,
 html[data-theme="dark"] .canvas-stage[data-engine="dot"] svg polygon,
 html[data-theme="dark"] .canvas-stage[data-engine="dot"] svg polyline,
 html[data-theme="dark"] .canvas-stage[data-engine="dot"] svg ellipse { stroke: var(--fg); }
+
+/* ---- 19. 画布承载面（drawio / Excalidraw 的同源 iframe） ------------------ */
+/* 承载面铺满整个预览容器：它自己管视口与滚动，
+   所以容器要退出「居中 + 滚动 + 点阵底」那套（那是给 SVG 舞台用的）。 */
+.canvas-host { position: absolute; inset: 0; display: block; }
+.canvas-host[hidden] { display: none; }
+.canvas-host .canvas-frame { width: 100%; height: 100%; border: 0; display: block; background: var(--canvas-bg); }
+.canvas-viewport.is-canvas-host { display: block; overflow: hidden; background-image: none; }

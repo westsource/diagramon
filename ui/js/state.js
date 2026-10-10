@@ -215,7 +215,13 @@ window.DGM = window.DGM || {};
   }
 
   async function closeDoc(id) {
+    // 画布型：连同它的承载实例一起销毁，否则常驻 iframe 会一直留着已关文档的内容
+    const closing = state.doc(id);
     const res = await ipc.invoke("doc_close", { id });
+    if (closing && state.isCanvasDoc(closing) && DGM.canvas && DGM.canvas.supports(closing.format)) {
+      const stillOpen = ((res && res.docs) || state.docs).some((d) => d.format === closing.format);
+      if (!stillOpen) DGM.canvas.teardown(closing.format);
+    }
     applyResult(res);
     delete state.issuesByDoc[id];
     delete state.outlineByDoc[id];

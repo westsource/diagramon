@@ -90,6 +90,8 @@
           </div>
           <div class="canvas-viewport" id="canvas-viewport">
             <div class="canvas-stage" id="canvas-stage"><!-- JS 渲染 --></div>
+            <!-- 画布型格式的承载面（drawio / Excalidraw 的同源 iframe，由 canvas.js 管理） -->
+            <div class="canvas-host" id="canvas-host" hidden></div>
             <div class="zoom-pill">
               <button id="zoom-out" title="缩小  Ctrl+-"><svg class="ico ico-sm"><use href="#i-zoomOut"></use></svg></button>
               <span class="val" id="zoom-val">100%</span>
@@ -220,6 +222,7 @@
 <script charset="utf-8" src="./js/panels.js"></script>
 <script charset="utf-8" src="./js/tabs.js"></script>
 <script charset="utf-8" src="./js/editor.js"></script>
+<script charset="utf-8" src="./js/canvas.js"></script>
 <script charset="utf-8" src="./js/preview.js"></script>
 <script charset="utf-8" src="./js/ai.js"></script>
 <script charset="utf-8" src="./js/dialogs.js"></script>

@@ -121,7 +121,7 @@ async function main() {
 
   if (!testOnly) {
     step("Rust 纯逻辑单测");
-    const testArgs = ["test", "-p", "app-ipc", "-p", "app-core", "-p", "platform", "-p", "platform-windows", "-p", "ai", "--message-format", "short"];
+    const testArgs = ["test", "-p", "app-ipc", "-p", "app-core", "-p", "assets", "-p", "platform", "-p", "platform-windows", "-p", "ai", "--message-format", "short"];
     if (run("cargo", testArgs) !== 0) {
       log(C.red("单测失败"));
       process.exit(1);

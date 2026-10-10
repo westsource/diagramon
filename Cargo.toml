@@ -6,6 +6,7 @@
 # 分工（见 design/ui-proto/index.html §9.1）：
 #   app-core   文档模型、格式注册表、语法校验、大纲、作用域 —— 纯逻辑，无平台依赖
 #   app-ipc    前后端契约（唯一真源，前端不维护第二份清单）
+#   assets     自定义协议 `dgm` 的路径解析（外壳与四个承载页同源的实现）
 #   platform   平台适配层 trait（凭据、路径）
 #   ai         AI 供应商（BYOK：OpenAI 兼容 / Ollama / 自定义）
 #   src-tauri  Tauri 装配与命令层
@@ -14,6 +15,7 @@ resolver = "2"
 members = [
     "crates/app-ipc",
     "crates/app-core",
+    "crates/assets",
     "crates/platform",
     "crates/platform-windows",
     "crates/ai",
@@ -29,6 +31,7 @@ repository = "https://github.com/westsource/diagramon"
 [workspace.dependencies]
 app-ipc = { path = "crates/app-ipc" }
 app-core = { path = "crates/app-core" }
+assets = { path = "crates/assets" }
 platform = { path = "crates/platform" }
 platform-windows = { path = "crates/platform-windows" }
 ai = { path = "crates/ai" }

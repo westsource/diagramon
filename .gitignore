@@ -393,3 +393,6 @@ ui/.shots/
 
 # 设置与凭据的本地态（若被指到仓库内）
 *.dgm-tmp
+
+# 随包资产根（由 tools/fetch-assets.mjs 汇出，98MB 不入库）
+/assets/

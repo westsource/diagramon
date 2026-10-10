@@ -49,7 +49,7 @@ DIAGRAMON_SELFTEST=1 ./target/debug/diagramon.exe                         # 真�
 
 ---
 
-## 第 1 步 · 闭环验收与开发环路
+## 第 1 步 · 闭环验收与开发环路 ✅ 已完成
 
 **为什么排在第一个**：现在改一行代码，没人能告诉你有没有把别的弄坏。先把"能验证"做出来，
 后面每一步才敢动手。
@@ -71,9 +71,12 @@ DIAGRAMON_SELFTEST=1 ./target/debug/diagramon.exe                         # 真�
 
 **涉及面**：小。纯收尾，不新增功能。
 
+**落地**：`tools/dev/check.mjs`（杀残留实例 → 构建 → 单测 → 真机自检 → 读报告）。
+真机自检 26/26、Rust 单测 80 项全绿。
+
 ---
 
-## 第 2 步 · 画布承载 + `dgm` 资产协议 ★关键路径
+## 第 2 步 · 画布承载 + `dgm` 资产协议 ★关键路径 ✅ 已完成
 
 **为什么重要**：drawio / Excalidraw 现在**完全不可用** —— 承载页躺在 `tools/*-host/`，
 但 76MB / 22MB 的运行时既没进包、也没被 serve；dev2.0 有过的 `dgm` 自定义协议没重建。
@@ -102,7 +105,16 @@ DIAGRAMON_SELFTEST=1 ./target/debug/diagramon.exe                         # 真�
 - 导出 PNG / SVG 落盘正确；
 - 画布编辑后标签页出现脏标，"保存"能清掉。
 
-**涉及面**：大。新增一个 crate + 打通 76MB 资产链路 + 一个新的事件通道。
+**涉及面**：大。新增一个 crate + 打通 98MB 资产链路 + 一个新的事件通道。
+
+**落地**：`crates/assets`（协议路径解析，8 项单测）+ `src-tauri` 的 `dgm` 协议注册
+（`WebviewUrl` 三平台差异处理）+ `ui/js/canvas.js`（搬运与协议翻译）+
+宿主桥复用承载页既有的 `__hostQueue` / `__apply` 契约 +
+`tools/fetch-assets.mjs`（打包前汇出 `assets/`，开发期走源工作树不复制）。
+验证：`check.mjs` 26/26；`tools/dev/canvas_probe.py` 真 drawio 9/9 + 截图。
+**P1 已按倾向落地**：随包（`assets/` 由脚本汇出，仓库不存 98MB）。
+**P4 部分落地**：Excalidraw 走自己的 `appState.theme`；drawio 只换画布底色，
+不动图形配色 —— 「导出底色三选」仍未定，留到第 3 步之后一起收。
 
 ---
 

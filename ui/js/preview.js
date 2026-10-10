@@ -2,7 +2,8 @@
  *
  * - 文本型（Mermaid / DOT）：先 parse 校验再 render，报错解析出行号，不留在页面上
  *   半渲染的残迹。DOT 走 vendor 里的 graphviz（ESM，加载失败时显式提示）。
- * - 画布型（drawio / Excalidraw）：不假装能编辑，渲染「承载页已就绪」空态。
+ * - 画布型（drawio / Excalidraw）：交给 `DGM.canvas`（同源 iframe 承载面），
+ *   本模块只切可见面并把工具条/缩放接到承载页的钩子上。
  * - 手势：滚轮平移 / Shift 横向 / Ctrl 以光标为中心缩放 / 拖拽 / 双击适应视图。
  * - 动态尺寸只经 CSS 自定义属性（--pan-x/--pan-y/--zoom）。
  */
@@ -82,6 +83,11 @@ window.DGM = window.DGM || {};
   }
 
   function fit() {
+    // 画布型：缩放归承载页管（它暴露 __hostFit，用的是 drawio 自己的 Fit Page）
+    if (canvasMode) {
+      DGM.canvas.hostFit(lastFormat);
+      return;
+    }
     const { viewport } = nodes();
     if (!viewport) return;
     const size = contentSize();
@@ -97,6 +103,10 @@ window.DGM = window.DGM || {};
   }
 
   function zoomBy(factor, origin) {
+    if (canvasMode) {
+      DGM.canvas.hostZoomBy(lastFormat, factor);
+      return;
+    }
     const { viewport } = nodes();
     if (!viewport) return;
     const rect = viewport.getBoundingClientRect();
@@ -112,8 +122,23 @@ window.DGM = window.DGM || {};
 
   /* ------------------------------------------------------------------ 提示态 */
 
+  /** 当前可见面是不是画布承载（决定缩放/导出往哪条路走）。 */
+  let canvasMode = false;
+
+  /** 从画布承载面切回页内舞台（SVG）。 */
+  function exitCanvas() {
+    const { stage, viewport } = nodes();
+    canvasMode = false;
+    if (stage) stage.hidden = false;
+    if (viewport) viewport.classList.remove("is-canvas-host");
+    const ct = $("#canvas-tools");
+    if (ct) ct.classList.remove("is-canvas");
+    if (DGM.canvas) DGM.canvas.hide();
+  }
+
   function clearStage() {
     const { stage, viewport } = nodes();
+    exitCanvas();
     if (!stage) return;
     stage.innerHTML = "";
     stage.hidden = false;
@@ -208,6 +233,7 @@ window.DGM = window.DGM || {};
       return;
     }
 
+    exitCanvas();
     setSub(t("preview.remoteOff"));
     const body = d.body || "";
     if (!body.trim()) {
@@ -279,26 +305,42 @@ window.DGM = window.DGM || {};
     fit();
   }
 
-  /* ------------------------------------------------------------------ 画布型空态 */
+  /* ------------------------------------------------------------------ 画布型承载 */
 
+  /**
+   * 画布型格式（drawio / Excalidraw）。
+   *
+   * 承载面由 `DGM.canvas` 管（同源 iframe），它负责「画布 ↔ 正文」的搬运；
+   * 这里只做三件事：切可见面、把工具条摆到画布该有的位置、把缩放的读数接上。
+   */
   function renderCanvas(d, fmt) {
     nodes();
-    const hostName = `tools/${d.format}-host`;
-    const ext = (fmt.exts && fmt.exts[0]) || "." + d.format;
-    const box = h("div", "canvas-empty");
-    box.innerHTML =
-      `<span class="ce-hero">${icon("hand")}</span>` +
-      `<h3>${esc(t("preview.canvasReady"))}</h3>` +
-      `<p>${t("preview.canvasReadyDesc", { name: esc(fmt.name), host: esc(hostName) })}</p>` +
-      `<div class="ce-facts">` +
-      `<span class="chip">${esc(t("preview.canvasFact.host", { host: hostName }))}</span>` +
-      `<span class="chip">${esc(t("preview.canvasFact.surface"))}</span>` +
-      `<span class="chip">${esc(t("preview.canvasFact.file", { ext }))}</span>` +
-      `</div>`;
+    const { stage, viewport } = nodes();
+    const host = DGM.canvas;
+
+    // 承载页没接上（理论上不会发生）：如实说不支持，不给一个假的编辑面
+    if (!host || !host.supports(d.format) || !host.show(d)) {
+      canvasMode = false;
+      if (stage) stage.hidden = false;
+      if (viewport) viewport.classList.remove("is-canvas-host");
+      note(t("preview.canvas.noHost", { name: fmt.name, id: d.format }));
+      toolsVisible(false);
+      return;
+    }
+
+    canvasMode = true;
+    lastFormat = d.format;
     lastSvg = "";
-    setSub(t("status.canvasNotReady"));
-    showNode(box);
-    toolsVisible(false);
+
+    // 让承载面铺满：SVG 舞台收起来，容器不再居中/滚动（画布自己管视口）
+    if (stage) stage.hidden = true;
+    if (viewport) viewport.classList.add("is-canvas-host");
+
+    setSub(t("preview.canvas.sub", { name: fmt.name }));
+    toolsVisible(true);
+    const ct = $("#canvas-tools");
+    // 画布自带工具栏，本站的浮动工具条往上让一让
+    if (ct) ct.classList.add("is-canvas");
   }
 
   /* ------------------------------------------------------------------ 头部 / 工具 */
@@ -329,6 +371,13 @@ window.DGM = window.DGM || {};
   }
 
   async function toPngDataUrl() {
+    // 画布型：让承载页自己导出（drawio 的 export / Excalidraw 的 exportToBlob），
+    // 本站只把 data URI 拿回来落盘
+    if (canvasMode) {
+      const data = await DGM.canvas.exportPng(lastFormat, 2, false);
+      if (!data) throw new Error(t("exp.canvasFail"));
+      return data;
+    }
     if (!lastSvg) throw new Error(t("exp.noContent"));
     const doc = new DOMParser().parseFromString(lastSvg, "image/svg+xml");
     const svg = doc.documentElement;
@@ -380,6 +429,11 @@ window.DGM = window.DGM || {};
   }
 
   async function exportSvg() {
+    // 承载协议没有 SVG 导出档（drawio 只给 XML / PNG）——如实说，别假装导了个空的
+    if (canvasMode) {
+      DGM.toast({ icon: "alert", title: t("exp.svg"), sub: t("exp.canvasNoSvg"), warn: true });
+      return;
+    }
     if (!lastSvg) {
       DGM.toast({ icon: "alert", title: t("exp.svg"), sub: t("exp.noContent"), warn: true });
       return;
@@ -523,9 +577,10 @@ window.DGM = window.DGM || {};
     fit,
     zoomIn: () => zoomBy(1.2),
     zoomOut: () => zoomBy(1 / 1.2),
-    resetZoom: resetView,
-    hasContent: () => !!lastSvg,
-    isCanvasFormat: () => lastFormat === "drawio" || lastFormat === "excalidraw",
+    resetZoom: () => (canvasMode ? fit() : resetView()),
+    hasContent: () => canvasMode || !!lastSvg,
+    isCanvasFormat: () => canvasMode,
+    canvasMode: () => canvasMode,
     toPngDataUrl,
     describeError,
     exportPng,

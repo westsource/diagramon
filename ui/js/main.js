@@ -216,6 +216,8 @@ window.DGM = window.DGM || {};
     DGM.shell.bind();
     note("boot:5-shell-bound");
     DGM.editor.bind();
+    // 画布承载面（同源 iframe）：先给容器再 bind，否则第一次渲染找不到挂载点
+    DGM.canvas.init({ container: document.getElementById("canvas-host") });
     DGM.preview.bind();
     DGM.ai.bind();
     if (DGM.palette && DGM.palette.bind) DGM.palette.bind();
@@ -389,6 +391,61 @@ window.DGM = window.DGM || {};
 
       // ── 界面跟上会话（标签页数量） ──
       ok("标签页跟上了会话", document.querySelectorAll("#tabs .tab").length >= 2, document.querySelectorAll("#tabs .tab").length);
+
+      // ── 画布承载（第 2 步）：同源 iframe 真的挂上去了吗 ──
+      //
+      // 这里只断言**同步可判定**的东西。drawio 的 `init` 要等它自己的引擎起来，
+      // 而本机 WebView2 会把后台窗口的定时器节流到约 1 次/秒 —— 在自检里等它
+      // 只会把报告拖到超时。真正的「载入 → 回写」验证在 tools/dev/canvas-probe.mjs
+      // （那边用普通 HTTP 起同样的目录布局，定时器不受节流，能踏实等）。
+      if (st && st.activateDoc) await st.activateDoc(cv.id);
+      await invoke("doc_activate", { id: cv.id });
+      // 直接渲染，绕过 preview.schedule 的 60ms 去抖 —— 后台窗口的定时器被节流到约 1 次/秒，
+      // 等去抖等于把这条断言变成随机结果
+      await DGM.preview.render();
+      const canvasHost = document.getElementById("canvas-host");
+      const frame = canvasHost && canvasHost.querySelector("iframe");
+      ok("画布承载面已挂载", !!frame, frame && frame.getAttribute("src"));
+      ok("承载页指向 /drawio/host.html", !!frame && /\/drawio\/host\.html$/.test(frame.getAttribute("src")));
+      ok("承载面容器可见", !!canvasHost && !canvasHost.hidden);
+
+      // 同源证明：跨源时读 contentWindow.location 会抛，读得到就是同源
+      let sameOrigin = false;
+      try {
+        sameOrigin = typeof frame.contentWindow.location.href === "string";
+      } catch (e) {
+        sameOrigin = false;
+      }
+      ok("承载页与外壳同源（可直读 contentWindow）", sameOrigin);
+      ok("canvas 模块认得两种画布格式", !!(DGM.canvas && DGM.canvas.supports("drawio") && DGM.canvas.supports("excalidraw")));
+
+      // dgm 协议真的把资产供出来了吗 —— 用 fetch 断言，不走定时器（后台窗口的定时器被节流）
+      const headOk = async (path) => {
+        try {
+          const r = await fetch(path, { method: "HEAD" });
+          return r.ok;
+        } catch (e) {
+          return false;
+        }
+      };
+      ok("协议能供出承载页 /drawio/host.html", await headOk("/drawio/host.html"));
+      ok("协议能供出 drawio 应用 /drawio/index.html", await headOk("/drawio/index.html"));
+      ok("协议能供出 Excalidraw /excalidraw/index.html", await headOk("/excalidraw/index.html"));
+      ok("协议能供出外壳自己的 /js/canvas.js", await headOk("/js/canvas.js"));
+
+      // 承载页的内联脚本跑起来就会挂上 __hostQueue（不依赖 drawio 引擎）——
+      // 它存在即证明「协议供出了承载页，且它在外壳里执行了」。
+      // 这是自检里唯一需要等的断言：给 20 次 1 秒的机会（节流下也够），不成就如实报失败。
+      let queueUp = false;
+      for (let i = 0; i < 20 && !queueUp; i++) {
+        try {
+          queueUp = Array.isArray(frame.contentWindow.__hostQueue);
+        } catch (e) {
+          queueUp = false;
+        }
+        if (!queueUp) await new Promise((r) => setTimeout(r, 1000));
+      }
+      ok("承载页脚本已在同源 iframe 内执行（__hostQueue 就位）", queueUp);
     } catch (e) {
       note("selftest:error " + String((e && e.message) || e));
       ok("自检过程无异常", false, String((e && e.stack) || (e && e.message) || e));
