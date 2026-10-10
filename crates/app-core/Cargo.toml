@@ -1,0 +1,12 @@
+[package]
+name = "app-core"
+description = "Diagramon 文档模型、格式注册表、语法校验、大纲与作用域（无平台依赖）"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+app-ipc = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }

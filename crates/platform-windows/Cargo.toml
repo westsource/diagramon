@@ -1,0 +1,11 @@
+[package]
+name = "platform-windows"
+description = "Diagramon Windows 平台适配层：DPAPI（按当前用户加密）凭据存储"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+platform = { workspace = true }
+sha2 = "0.10"

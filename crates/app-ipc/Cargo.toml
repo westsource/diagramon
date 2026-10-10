@@ -1,0 +1,10 @@
+[package]
+name = "app-ipc"
+description = "Diagramon 前后端契约：命令与事件载荷（单一真源）"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+serde = { workspace = true }

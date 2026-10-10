@@ -1,0 +1,50 @@
+# Diagramon dev3.0 —— Rust + Tauri 2 工作区
+#
+# 按 design/ui-proto/（界面原型与设计说明）重建：AI 画图是第一公民，
+# 四种格式（Mermaid / Graphviz DOT / drawio / Excalidraw）共用一套工作区与画布手势。
+#
+# 分工（见 design/ui-proto/index.html §9.1）：
+#   app-core   文档模型、格式注册表、语法校验、大纲、作用域 —— 纯逻辑，无平台依赖
+#   app-ipc    前后端契约（唯一真源，前端不维护第二份清单）
+#   platform   平台适配层 trait（凭据、路径）
+#   ai         AI 供应商（BYOK：OpenAI 兼容 / Ollama / 自定义）
+#   src-tauri  Tauri 装配与命令层
+[workspace]
+resolver = "2"
+members = [
+    "crates/app-ipc",
+    "crates/app-core",
+    "crates/platform",
+    "crates/platform-windows",
+    "crates/ai",
+    "src-tauri",
+]
+
+[workspace.package]
+version = "3.0.0"
+edition = "2021"
+license = "Apache-2.0"
+repository = "https://github.com/westsource/diagramon"
+
+[workspace.dependencies]
+app-ipc = { path = "crates/app-ipc" }
+app-core = { path = "crates/app-core" }
+platform = { path = "crates/platform" }
+platform-windows = { path = "crates/platform-windows" }
+ai = { path = "crates/ai" }
+
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
+
+# 开发构建只保留行号表（panic 回溯仍有 文件:行），丢掉类型/变量/字符串那几百 MB。
+# 需要单步调试变量时临时改成 `debug = true`。
+[profile.dev]
+debug = "line-tables-only"

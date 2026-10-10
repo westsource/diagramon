@@ -1,0 +1,43 @@
+[package]
+name = "diagramon"
+description = "Diagramon —— 多格式图表编辑器（Tauri 2 外壳，AI 为第一公民）"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+default-run = "diagramon"
+
+[lib]
+name = "diagramon_lib"
+# 桌面端只经 `rlib` 被 main.rs 链接；不产出 cdylib/staticlib
+# （Windows GNU 工具链下 cdylib 的导出序号会溢出，移动端不在范围内）。
+crate-type = ["rlib"]
+# 装配层不含单元测试：行为验证走「运行应用 + 截图 + CDP 断言」。
+# `src-tauri/tests/` 下的集成测试不受影响。
+test = false
+
+[[bin]]
+name = "diagramon"
+path = "src/main.rs"
+test = false
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+app-ipc = { workspace = true }
+app-core = { workspace = true }
+ai = { workspace = true }
+platform = { workspace = true }
+tauri = { version = "2", features = ["image-png"] }
+tauri-plugin-dialog = "2"
+tauri-plugin-opener = "2"
+tauri-plugin-clipboard-manager = "2"
+serde = { workspace = true }
+serde_json = { workspace = true }
+# 与 ai crate 同一个 reqwest 版本，避免两份 TLS 栈同时链进二进制
+reqwest = { version = "0.13", default-features = false, features = ["json", "native-tls", "charset", "http2", "stream"] }
+base64 = "0.22"
+
+[target.'cfg(windows)'.dependencies]
+platform-windows = { workspace = true }
