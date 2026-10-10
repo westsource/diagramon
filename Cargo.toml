@@ -38,3 +38,10 @@ lto = true
 codegen-units = 1
 panic = "abort"
 strip = true
+
+# 开发构建：只保留行号表（panic 回溯里仍有 文件:行），丢掉类型/变量/字符串那几百 MB。
+# 实测本机：完整 DWARF 下 debug 产物 265 MB（其中 .debug_* 约 184 MB）；
+# windows-gnu 上 `split-debuginfo` 不生效（不会拆出旁挂文件），所以只能这样减。
+# 需要单步调试变量时，临时改成 `debug = true` 再构建即可。
+[profile.dev]
+debug = "line-tables-only"
