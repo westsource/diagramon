@@ -29,6 +29,7 @@ tauri-build = { version = "2", features = [] }
 app-ipc = { workspace = true }
 app-core = { workspace = true }
 assets = { workspace = true }
+ai = { workspace = true }
 platform = { workspace = true }
 tauri = { version = "2", features = ["image-png"] }
 tauri-plugin-dialog = "2"

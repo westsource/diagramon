@@ -208,6 +208,7 @@
     if (tab) DGM.editor.setLanguage(tab.format);
     DGM.editor.setValue(body);
     renderTabs();
+    if (DGM.ai) await DGM.ai.onTabChanged(tab);
     await rerender();
   }
 
@@ -518,6 +519,15 @@
           { label: t("save"), accel: "Ctrl+S", onClick: () => save(false) },
           { label: t("saveAs"), accel: "Ctrl+Shift+S", onClick: () => save(true) },
           { kind: "separator" },
+          {
+            label: t("convertTo"),
+            kind: "submenu",
+            items: [
+              { label: "drawio", onClick: () => convertActiveTo("drawio").catch((e) => status(e.message, true)) },
+              { label: "Excalidraw", onClick: () => convertActiveTo("excalidraw").catch((e) => status(e.message, true)) },
+            ],
+          },
+          { kind: "separator" },
           { label: t("recentFiles"), kind: "submenu", items: recentItems },
           { kind: "separator" },
           { label: t("close"), accel: "Ctrl+W", onClick: () => state.activeId && closeTab(state.activeId) },
@@ -535,6 +545,7 @@
               onClick: () => DGM.i18n.setLang(code),
             })),
           },
+          { label: t("aiSettings"), onClick: () => DGM.ai.open() },
         ],
       },
       {
@@ -607,6 +618,7 @@
       onZoom: (s) => (el.statusZoom.textContent = `${Math.round(s * 100)}%`),
       onStatus: status,
       onErrorLine: (line) => DGM.editor.revealLine(line),
+      onRenderError: (text) => DGM.ai && DGM.ai.handleRenderError(text),
     });
     DGM.canvas.init({
       container: el.previewCanvas,
@@ -626,6 +638,7 @@
     setupLayoutSelector();
     setupExportButtons();
     DGM.dialogs.init();
+    if (DGM.ai) DGM.ai.init();
 
     state.info = await DGM.invoke("app_info");
     const formats = await DGM.invoke("formats");
@@ -666,6 +679,18 @@
     }
   }
 
+  /** 由 AI 面板调用：整体替换当前标签正文（走与键入同一条落地链路）。 */
+  function setActiveBody(body) {
+    const tab = activeTab();
+    if (!tab) return;
+    DGM.editor.setValue(body);
+    DGM.invoke("set_body", { id: tab.id, body }).then((updated) => {
+      upsertTab(updated);
+      renderTabs();
+      rerender();
+    });
+  }
+
   DGM.app = {
     status,
     currentExportStem,
@@ -680,6 +705,7 @@
     closeTab,
     convertActiveTo,
     exportCurrent,
+    setActiveBody,
     isCanvasFormat,
     refreshRecent,
     renderMenu,

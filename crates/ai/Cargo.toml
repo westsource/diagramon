@@ -1,0 +1,14 @@
+[package]
+name = "ai"
+description = "Diagramon AI 供应商实现（BYOK：OpenAI 兼容 / Ollama）与提示词"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+app-ipc = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+reqwest = { version = "0.13", default-features = false, features = ["json", "native-tls", "charset", "http2"] }
+thiserror = { workspace = true }

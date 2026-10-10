@@ -7,6 +7,7 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod ai;
 mod commands;
 mod state;
 
@@ -183,6 +184,20 @@ pub fn run() {
             commands::recent_prune,
             commands::cli_paths,
             commands::app_dirs,
+            ai::ai_state,
+            ai::ai_settings_save,
+            ai::ai_key_set,
+            ai::ai_key_delete,
+            ai::ai_generate,
+            ai::ai_generate_from_image,
+            ai::ai_repair,
+            ai::ai_conversation_key,
+            ai::ai_conversation_load,
+            ai::ai_conversation_save,
+            ai::ai_conversation_clear,
+            ai::ai_default_base_url,
+            ai::ai_validate_model,
+            ai::ai_endpoints,
             commands::quit,
         ])
         .run(tauri::generate_context!())

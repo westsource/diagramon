@@ -12,6 +12,8 @@ pub struct AppState {
     platform: Box<dyn Platform>,
     settings: Mutex<Settings>,
     settings_path: PathBuf,
+    /// 复用连接池的 HTTP 客户端（AI 调用）。
+    pub http: ai::HttpClient,
 }
 
 impl AppState {
@@ -27,6 +29,7 @@ impl AppState {
             platform,
             settings: Mutex::new(settings),
             settings_path,
+            http: ai::new_client(),
         }
     }
 

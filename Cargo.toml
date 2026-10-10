@@ -8,6 +8,7 @@ members = [
     "crates/app-ipc",
     "crates/app-core",
     "crates/assets",
+    "crates/ai",
     "crates/platform",
     "crates/platform-windows",
     "src-tauri",
@@ -23,6 +24,7 @@ repository = "https://github.com/westsource/diagramon"
 app-ipc = { path = "crates/app-ipc" }
 app-core = { path = "crates/app-core" }
 assets = { path = "crates/assets" }
+ai = { path = "crates/ai" }
 platform = { path = "crates/platform" }
 platform-windows = { path = "crates/platform-windows" }
 

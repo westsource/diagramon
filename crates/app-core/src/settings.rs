@@ -45,6 +45,8 @@ pub struct Settings {
     pub update_manifest_url: Option<String>,
     /// 最近打开的文件（最新在前）。
     pub recent_files: Vec<RecentFile>,
+    /// AI 相关设置（模型列表、选中模型、对话目录等；密钥不在此处）。
+    pub ai: app_ipc::AiSettings,
 }
 
 impl Default for Settings {
@@ -57,6 +59,7 @@ impl Default for Settings {
             last_update_check: 0,
             update_manifest_url: None,
             recent_files: Vec::new(),
+            ai: app_ipc::AiSettings::default(),
         }
     }
 }

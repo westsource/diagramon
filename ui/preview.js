@@ -26,6 +26,7 @@
     onZoom: null,
     onStatus: null,
     onErrorLine: null,
+    onRenderError: null,
   };
 
   let mermaidReady = false;
@@ -224,6 +225,7 @@
       el.tools.hidden = true;
       if (state.onStatus) state.onStatus(described.text, true);
       if (described.line && state.onErrorLine) state.onErrorLine(described.line);
+      if (state.onRenderError) state.onRenderError(described.text);
     }
   }
 
@@ -309,6 +311,7 @@
       state.onZoom = (opts && opts.onZoom) || null;
       state.onStatus = (opts && opts.onStatus) || null;
       state.onErrorLine = (opts && opts.onErrorLine) || null;
+      state.onRenderError = (opts && opts.onRenderError) || null;
     },
     render,
     fit: () => view.fit(),

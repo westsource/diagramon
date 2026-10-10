@@ -23,6 +23,7 @@
       </div>
       <div class="toolbar-spacer"></div>
       <div class="toolbar-group" id="format-badge"></div>
+      <button class="tb-btn" id="btn-ai" data-i18n="aiAssistant" title="AI 助手">AI 助手</button>
     </header>
 
     <nav class="tabbar">
@@ -45,6 +46,24 @@
           <button class="pt-btn" id="btn-copy-png" data-i18n="copyPng" data-i18n-title="copyPngTip">复制图片</button>
         </div>
       </section>
+
+      <aside class="ai-panel" id="ai-panel" hidden>
+        <header class="ai-head">
+          <select id="ai-model" class="ai-model"></select>
+          <button class="ai-icon" id="ai-settings" data-i18n-title="aiSettingsTitle" title="AI 设置">⚙</button>
+          <button class="ai-icon" id="ai-clear" data-i18n-title="aiClearTitle" title="清空对话">🗑</button>
+          <button class="ai-icon" id="ai-close" data-i18n-title="close" title="收起">×</button>
+        </header>
+        <div class="ai-messages" id="ai-messages"></div>
+        <div class="ai-input">
+          <textarea id="ai-text" rows="3" data-i18n-title="aiInputTitle" placeholder="描述你想要的图…"></textarea>
+          <div class="ai-input-actions">
+            <button class="tb-btn" id="ai-image" data-i18n-title="aiImageTip" title="识图：截图 → 代码">图片</button>
+            <button class="tb-btn primary" id="ai-send" data-i18n="aiSend">发送</button>
+          </div>
+        </div>
+      </aside>
+      <input type="file" id="ai-image-file" accept="image/*" hidden />
     </main>
 
     <footer class="statusbar">
@@ -67,6 +86,7 @@
   <script src="./menu.js"></script>
   <script src="./preview.js"></script>
   <script src="./canvas.js"></script>
+  <script src="./ai.js"></script>
   <script src="./vendor/editor.bundle.js"></script>
   <script src="./editor.js"></script>
   <script src="./app.js"></script>

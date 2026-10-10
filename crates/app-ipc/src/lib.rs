@@ -149,6 +149,132 @@ pub struct CredentialRecord {
     pub value: String,
 }
 
+/// AI 供应商。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AiProvider {
+    OpenAi,
+    Custom,
+    Ollama,
+}
+
+impl AiProvider {
+    pub fn default_base_url(self) -> &'static str {
+        match self {
+            AiProvider::OpenAi | AiProvider::Custom => "https://api.openai.com/v1",
+            AiProvider::Ollama => "http://localhost:11434",
+        }
+    }
+
+    /// API Key 是否必填（自建网关与本地模型可以不带）。
+    pub fn requires_key(self) -> bool {
+        matches!(self, AiProvider::OpenAi)
+    }
+}
+
+/// 一个模型配置。**不含 API Key** —— 密钥只经平台凭据库存取。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AiModelConfig {
+    pub id: String,
+    pub name: String,
+    pub provider: AiProvider,
+    /// 用户填写的地址（可能带尾部端点路径，发送前清洗）。
+    pub base_url: String,
+    pub model_id: String,
+    pub max_tokens: u32,
+    pub temperature: f32,
+}
+
+impl Default for AiModelConfig {
+    fn default() -> Self {
+        Self {
+            id: String::new(),
+            name: String::new(),
+            provider: AiProvider::OpenAi,
+            base_url: AiProvider::OpenAi.default_base_url().to_string(),
+            model_id: "gpt-4o-mini".to_string(),
+            max_tokens: 4096,
+            temperature: 0.7,
+        }
+    }
+}
+
+/// 对话消息。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AiChatMessage {
+    /// `system` / `user` / `assistant`
+    pub role: String,
+    pub text: String,
+    /// 图片（data URL）；仅视觉请求使用。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image_data_url: Option<String>,
+}
+
+impl AiChatMessage {
+    pub fn system(text: impl Into<String>) -> Self {
+        Self { role: "system".into(), text: text.into(), image_data_url: None }
+    }
+    pub fn user(text: impl Into<String>) -> Self {
+        Self { role: "user".into(), text: text.into(), image_data_url: None }
+    }
+    pub fn user_with_image(text: impl Into<String>, image: impl Into<String>) -> Self {
+        Self { role: "user".into(), text: text.into(), image_data_url: Some(image.into()) }
+    }
+    pub fn assistant(text: impl Into<String>) -> Self {
+        Self { role: "assistant".into(), text: text.into(), image_data_url: None }
+    }
+}
+
+/// AI 相关设置（随 `settings.json` 落盘；密钥不在这里）。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct AiSettings {
+    pub models: Vec<AiModelConfig>,
+    pub selected_model_id: Option<String>,
+    /// 对话历史目录；`None` = 应用数据目录下的 `Conversations`。
+    pub conversation_storage_path: Option<String>,
+    /// 渲染失败后自动回修一次。
+    pub render_feedback_retry: bool,
+    /// 识图首次上传告知已确认。
+    pub vision_notice_accepted: bool,
+}
+
+impl Default for AiSettings {
+    fn default() -> Self {
+        Self {
+            models: Vec::new(),
+            selected_model_id: None,
+            conversation_storage_path: None,
+            render_feedback_retry: true,
+            vision_notice_accepted: false,
+        }
+    }
+}
+
+/// 对话读写请求（按文档稳定身份寻址）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConversationRecord {
+    /// 稳定身份键（本地路径的 SHA256）。
+    pub key: String,
+    pub messages: Vec<AiChatMessage>,
+}
+
+/// 前端需要的 AI 状态快照（模型列表 + 哪些模型已有密钥 + 若干开关）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AiStateSnapshot {
+    pub models: Vec<AiModelConfig>,
+    pub selected_model_id: Option<String>,
+    /// 已在系统凭据库里配置了 API Key 的模型 id。
+    pub models_with_key: Vec<String>,
+    pub render_feedback_retry: bool,
+    pub vision_notice_accepted: bool,
+    pub conversation_storage_path: Option<String>,
+}
+
 /// 统一错误载荷（`invoke` 的 `Err` 侧）。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
