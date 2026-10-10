@@ -260,6 +260,11 @@ window.DGM = window.DGM || {};
 
     note("boot:8-urlstate");
     applyUrlState();
+
+    // 云端状态：后台拉一次（失败也不影响启动 —— 侧栏如实显示"未登录/未配置"）
+    if (state.cloudRefresh) {
+      state.cloudRefresh().catch((e) => note("cloud-refresh-failed " + String((e && e.message) || e)));
+    }
     note("boot:done");
   }
 

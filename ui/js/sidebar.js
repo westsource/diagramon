@@ -530,38 +530,158 @@ window.DGM = window.DGM || {};
     return box;
   }
 
-  /* ------------------------------------------------------------------ 云端（未登录） */
+  /* ------------------------------------------------------------------ 云端（真实数据） */
 
+  /** 云端视图。三态如实呈现：未配置 / 未登录 / 已登录，一个都不伪造。 */
   function viewCloud() {
     const box = h("div");
+    const cloud = state.cloud;
+    const configured = !!((state.settings.cloud || {}).base_url || "").trim();
+
+    if (!configured) {
+      const me = h("div", "cloud-me");
+      me.innerHTML =
+        `<span class="avatar">${icon("user", "ico-sm")}</span>` +
+        `<span class="who"><b>${esc(t("side.cloud.notSignedIn"))}</b><small>${esc(t("set.cloud.account"))}</small></span>`;
+      box.appendChild(me);
+      box.appendChild(tip(`<b>${esc(t("side.cloud.noBaseUrl"))}</b><br>${esc(t("side.cloud.noBaseUrlDesc"))}`));
+      const acts = h("div", "side-acts");
+      acts.innerHTML = `<button class="btn sm" data-a="cfg">${icon("settings")}${esc(t("side.cloud.configure"))}</button>`;
+      acts.addEventListener("click", () => DGM.dialogs.settings("cloud"));
+      box.appendChild(acts);
+      return box;
+    }
+
+    // ── 账户头 ──
     const me = h("div", "cloud-me");
-    me.innerHTML =
-      `<span class="avatar">${icon("user", "ico-sm")}</span>` +
-      `<span class="who"><b>${esc(t("side.cloud.notSignedIn"))}</b><small>${esc(t("side.cloud.account"))}</small></span>`;
+    if (cloud.status.signed_in && cloud.status.account) {
+      const a = cloud.status.account;
+      me.innerHTML =
+        `<span class="avatar">${icon("user", "ico-sm")}</span>` +
+        `<span class="who"><b>${esc(a.email || t("side.cloud.signedIn"))}</b>` +
+        `<small>${esc(a.plan_name || "")}${a.quota_bytes ? ` · ${fmtBytes(a.used_bytes)} / ${fmtBytes(a.quota_bytes)}` : ""}</small></span>`;
+    } else {
+      me.innerHTML =
+        `<span class="avatar">${icon("user", "ico-sm")}</span>` +
+        `<span class="who"><b>${esc(t("side.cloud.notSignedIn"))}</b><small>${esc(t("side.cloud.accountSub"))}</small></span>`;
+    }
     box.appendChild(me);
 
-    box.appendChild(tip(`<b>${esc(t("side.cloud.gwOff"))}</b><br>${esc(t("side.cloud.gwOffDesc"))}`));
+    // ── 未登录：内联登录表单 ──
+    if (!cloud.status.signed_in) {
+      const form = h("div", "cloud-login");
+      form.innerHTML =
+        `<label><span>${esc(t("side.cloud.email"))}</span><input id="cloud-email" type="text" spellcheck="false" autocomplete="off"></label>` +
+        `<label><span>${esc(t("side.cloud.password"))}</span><input id="cloud-pass" type="password" autocomplete="off"></label>` +
+        `<div class="cloud-login-acts">` +
+        `<button class="btn sm primary" id="cloud-go">${icon("cloud")}${esc(t("side.cloud.signIn"))}</button>` +
+        `<span class="hint" id="cloud-err">${esc(cloud.lastError || "")}</span></div>`;
+      const go = () => {
+        const email = form.querySelector("#cloud-email").value.trim();
+        const pass = form.querySelector("#cloud-pass").value;
+        const err = form.querySelector("#cloud-err");
+        if (!email || !pass) {
+          err.textContent = t("side.cloud.needBoth");
+          return;
+        }
+        err.textContent = t("side.cloud.signingIn");
+        state
+          .cloudLogin(email, pass)
+          .then(() => DGM.toast({ icon: "cloud", title: t("side.cloud.signedIn"), sub: email }))
+          .catch((e) => (err.textContent = String((e && e.message) || e)));
+      };
+      form.querySelector("#cloud-go").addEventListener("click", go);
+      form.querySelector("#cloud-pass").addEventListener("keydown", (e) => {
+        if (e.key === "Enter") go();
+      });
+      box.appendChild(form);
+      return box;
+    }
+
+    // ── 已登录：文档列表 + 动作 ──
+    const acts = h("div", "side-acts");
+    acts.innerHTML =
+      `<button class="btn sm" data-a="save">${icon("save")}${esc(t("side.cloud.saveUp"))}</button>` +
+      `<button class="btn sm ghost" data-a="refresh">${icon("refresh")}${esc(t("side.ws.refresh"))}</button>` +
+      `<button class="btn sm ghost" data-a="out">${icon("close")}${esc(t("side.cloud.signOut"))}</button>`;
+    acts.addEventListener("click", async (e) => {
+      const b = e.target.closest("button");
+      if (!b) return;
+      try {
+        if (b.dataset.a === "save") {
+          const d = state.activeDoc();
+          if (!d) return void DGM.toast({ icon: "info", title: t("status.noDoc"), sub: "", warn: true });
+          const saved = await state.cloudSaveActive();
+          DGM.toast({ icon: "cloud", title: t("side.cloud.saved"), sub: saved.name });
+        } else if (b.dataset.a === "refresh") {
+          await state.cloudDocs();
+        } else if (b.dataset.a === "out") {
+          await state.cloudLogout();
+        }
+      } catch (err) {
+        DGM.toast({ icon: "alert", title: t("status.wsFailed"), sub: String((err && err.message) || err), warn: true });
+      }
+    });
+    box.appendChild(acts);
+
+    if (cloud.lastError) box.appendChild(tip(`${esc(t("side.cloud.error"))}: <code>${esc(cloud.lastError)}</code>`));
 
     const sec = h("div", "side-section");
-    const hd = h("h4", "", `${icon("chevD", "ico-sm chev")}${icon("cloud", "ico-sm")}${esc(t("side.cloud.docs"))}`);
+    const docs = cloud.docs;
+    const n = docs && docs.items ? docs.items.length : 0;
+    const hd = h("h4", "", `${icon("chevD", "ico-sm chev")}${icon("cloud", "ico-sm")}${esc(t("side.cloud.docs"))}<span class="meta">${n}</span>`);
     const list = h("div", "side-list");
-    list.appendChild(tip(esc(t("side.cloud.docsEmpty"))));
+    if (cloud.loading) {
+      list.appendChild(tip(esc(t("common.loading"))));
+    } else if (!docs) {
+      list.appendChild(tip(esc(t("side.cloud.docsEmpty"))));
+    } else if (!n) {
+      list.appendChild(tip(esc(t("side.cloud.docsEmpty"))));
+    } else {
+      docs.items.forEach((doc) => {
+        const row = h("button", "tree-row indent-1");
+        row.append(fmtDot(doc.format), h("span", "nm", esc(doc.name)));
+        const x = h("button", "x-row", icon("trash", "ico-sm"));
+        x.title = t("side.ws.delete");
+        x.addEventListener("click", async (e) => {
+          e.stopPropagation();
+          const yes = await DGM.dialogs.confirm({
+            title: t("common.delete"),
+            ok: t("common.delete"),
+            danger: true,
+            body: esc(t("side.cloud.deleteConfirm", { name: doc.name })),
+          });
+          if (yes) state.cloudDeleteDoc(doc.id).catch((err) => DGM.status(String((err && err.message) || err), "err"));
+        });
+        row.appendChild(x);
+        row.title = `${doc.path || "/"} · ${fmtBytes(doc.size)}`;
+        row.addEventListener("click", () =>
+          state.cloudOpenDoc(doc.id).catch((err) => DGM.status(String((err && err.message) || err), "err")),
+        );
+        list.appendChild(row);
+      });
+    }
     hd.addEventListener("click", () => sec.classList.toggle("collapsed"));
     sec.append(hd, list);
     box.appendChild(sec);
 
-    const acts = h("div", "side-acts");
-    acts.innerHTML =
-      `<button class="btn sm" data-a="up" disabled>${icon("cloud")}${esc(t("side.cloud.saveUp"))}</button>` +
-      `<button class="btn sm" data-a="down" disabled>${icon("download")}${esc(t("side.cloud.pull"))}</button>`;
-    acts.addEventListener("click", (e) => {
-      const b = e.target.closest("button");
-      if (b && b.disabled) {
-        DGM.toast({ icon: "cloud", title: t("side.cloud.gwOff"), sub: t("side.cloud.gwOffDesc"), warn: true });
-      }
-    });
-    box.appendChild(acts);
+    if (docs && docs.quota_bytes) {
+      const bar = h("div", "cloud-quota");
+      bar.title = `${fmtBytes(docs.used_bytes)} / ${fmtBytes(docs.quota_bytes)}`;
+      bar.innerHTML =
+        `<progress max="100" value="${Math.min(100, Math.round((docs.used_bytes / docs.quota_bytes) * 100))}"></progress>` +
+        `<span class="hint">${esc(fmtBytes(docs.used_bytes))} / ${esc(fmtBytes(docs.quota_bytes))}</span>`;
+      box.appendChild(bar);
+    }
     return box;
+  }
+
+  /** 字节数的人话形式。0 就是 0，不猜。 */
+  function fmtBytes(n) {
+    n = Number(n) || 0;
+    if (n < 1024) return `${n} B`;
+    if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+    return `${(n / 1024 / 1024).toFixed(1)} MB`;
   }
 
   /* ------------------------------------------------------------------ 大纲 */
@@ -672,6 +792,9 @@ window.DGM = window.DGM || {};
   DGM.bus.on("fs:changed", () => {
     const v = state.panels().sidebar_view || "explorer";
     if (v === "explorer") render();
+  });
+  DGM.bus.on("cloud:changed", () => {
+    if ((state.panels().sidebar_view || "explorer") === "cloud") render();
   });
 
   DGM.sidebar = { render, focusSearch, openDocAt, openFolderFlow, newFileFlow };

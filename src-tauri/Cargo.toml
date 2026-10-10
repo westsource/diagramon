@@ -46,6 +46,7 @@ xcap = "0.9.8"
 arboard = "3.6.1"
 image = { version = "0.25.10", default-features = false, features = ["png"] }
 windows-sys = { version = "0.61.2", features = ["Win32_UI_WindowsAndMessaging", "Win32_Foundation"] }
+uuid = { version = "1.28.0", features = ["v4"] }
 
 [target.'cfg(windows)'.dependencies]
 platform-windows = { workspace = true }

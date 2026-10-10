@@ -483,11 +483,16 @@ window.DGM = window.DGM || {};
   }
 
   function pCloud() {
+    const c = (state.settings && state.settings.cloud) || {};
+    const signed = !!(state.cloud && state.cloud.status && state.cloud.status.signed_in);
+    const acct = signed && state.cloud.status.account;
     return `
-      <div class="cloud-me"><span class="avatar">${icon("user", "ico-sm")}</span><span class="who"><b>${esc(t("side.cloud.notSignedIn"))}</b><small>${esc(t("set.cloud.account"))}</small></span></div>
-      <div class="callout warn">${icon("cloud")}<span><b>${esc(t("set.cloud.offTitle"))}</b><br>${esc(t("set.cloud.offDesc"))}</span></div>
-      <div class="switch on ro"><span class="track"></span><span class="txt">${esc(t("set.cloud.offlineGuard"))}<small>${esc(t("set.cloud.offlineGuardHint"))}</small></span></div>
-      <div class="switch ro"><span class="track"></span><span class="txt">${esc(t("set.cloud.telemetry"))}</span></div>`;
+      <div class="field"><label>${esc(t("set.cloud.baseUrl"))}</label>
+        <input type="text" id="c-baseurl" value="${esc(c.base_url || "")}" placeholder="https://api.example.com/v1" spellcheck="false">
+        <span class="hint">${esc(t("set.cloud.baseUrlHint"))}</span></div>
+      <div class="cloud-me"><span class="avatar">${icon("user", "ico-sm")}</span><span class="who"><b>${signed && acct ? esc(acct.email || t("side.cloud.signedIn")) : esc(t("side.cloud.notSignedIn"))}</b><small>${signed && acct ? esc(acct.plan_name || "") : esc(t("set.cloud.account"))}</small></span></div>
+      <div class="callout ${signed ? "" : "warn"}">${icon("cloud")}<span>${signed ? esc(t("set.cloud.signedInDesc")) : esc(t("set.cloud.offDesc"))}</span></div>
+      <div class="callout">${icon("info")}<span>${t("set.cloud.offlineGuard")}<br>${esc(t("set.cloud.offlineGuardHint"))}</span></div>`;
   }
 
   const PANES = { appearance: pAppearance, editor: pEditor, ai: pAI, convert: pConvert, cloud: pCloud };
@@ -533,6 +538,14 @@ window.DGM = window.DGM || {};
         const ms = Math.min(60000, Math.max(500, Number(auto.value) || 5000));
         auto.value = String(ms);
         state.patchSettings({ editor: { autosave_ms: ms } });
+      });
+    }
+
+    const baseUrl = $("#c-baseurl");
+    if (baseUrl) {
+      baseUrl.addEventListener("change", async () => {
+        await state.patchSettings({ cloud: { base_url: baseUrl.value.trim() } });
+        await state.cloudRefresh();
       });
     }
 

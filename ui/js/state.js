@@ -66,6 +66,14 @@ window.DGM = window.DGM || {};
       done: null,
     },
 
+    /* 云网关。账户与额度都是服务端给的；未登录就是未登录，不伪造（P6 原则） */
+    cloud: {
+      status: { signed_in: false, base_url: "", account: null },
+      docs: null, // CloudDocList | null
+      loading: false,
+      lastError: "",
+    },
+
     // 本地日志与用量。token 只累计**供应商实报**的（ai://done 的 usage_source），
     // 没回报的不估算 —— 本地估算和服务端实报混成一个数就没法对账了（P3 拍板）。
     logs: { output: [], convert: [] },
@@ -500,6 +508,97 @@ window.DGM = window.DGM || {};
     emit("fs:changed");
   }
 
+  /* ------------------------------------------------------------------ 云网关 */
+
+  /** 拉云端状态（登录与否 + 账户快照）。掉线/未配置都如实落地，不伪造。 */
+  async function cloudRefresh() {
+    state.cloud.loading = true;
+    emit("cloud:changed");
+    try {
+      state.cloud.status = (await ipc.invoke("cloud_status")) || { signed_in: false, base_url: "", account: null };
+      state.cloud.lastError = "";
+    } catch (e) {
+      state.cloud.lastError = String((e && e.message) || e);
+      state.cloud.status = { signed_in: false, base_url: "", account: null };
+    }
+    state.cloud.loading = false;
+    emit("cloud:changed");
+    if (state.cloud.status.signed_in) await cloudDocs();
+    return state.cloud.status;
+  }
+
+  async function cloudLogin(email, password) {
+    const account = await ipc.invoke("cloud_login", { email, password });
+    state.cloud.status = { signed_in: true, base_url: (state.settings.cloud || {}).base_url || "", account };
+    emit("cloud:changed");
+    await cloudDocs();
+    return account;
+  }
+
+  async function cloudLogout() {
+    await ipc.invoke("cloud_logout");
+    state.cloud.status = { signed_in: false, base_url: (state.settings.cloud || {}).base_url || "", account: null };
+    state.cloud.docs = null;
+    emit("cloud:changed");
+  }
+
+  async function cloudDocs() {
+    if (!state.cloud.status.signed_in) return null;
+    state.cloud.loading = true;
+    emit("cloud:changed");
+    try {
+      state.cloud.docs = await ipc.invoke("cloud_docs_list");
+      state.cloud.lastError = "";
+    } catch (e) {
+      state.cloud.lastError = String((e && e.message) || e);
+    }
+    state.cloud.loading = false;
+    emit("cloud:changed");
+    return state.cloud.docs;
+  }
+
+  /** 把当前文档存到云端。已在云端（记着 cloudId）就更新，否则新建并记下 id。 */
+  async function cloudSaveActive() {
+    const d = state.activeDoc();
+    if (!d) return null;
+    const saved = await ipc.invoke("cloud_doc_save", {
+      id: d.cloudId || "",
+      name: d.name,
+      format: d.format,
+      body: d.body,
+    });
+    // 服务端认下的 id 要记在会话里，下次保存才是"更新"而不是再建一份
+    d.cloudId = saved.id;
+    emit("session:changed");
+    await cloudDocs();
+    return saved;
+  }
+
+  async function cloudOpenDoc(id) {
+    const body = await ipc.invoke("cloud_doc_open", { id });
+    // 云文档没有磁盘路径：开成一个"无路径"的文档，cloudId 记着，保存时回写云端
+    const doc = await ipc.invoke("doc_new", { format: body.format });
+    if (doc) {
+      doc.cloudId = body.id;
+      doc.name = body.name || doc.name;
+      doc.body = body.body;
+      await ipc.invoke("doc_set_body", { id: doc.id, body: body.body });
+      upsertDoc(doc);
+      state.active = doc.id;
+      emit("session:changed");
+      if (DGM.editor && DGM.editor.loadActive) DGM.editor.loadActive();
+      if (DGM.preview && DGM.preview.schedule) DGM.preview.schedule();
+      await refreshDerived(doc.id);
+      doc.cloudId = body.id;
+    }
+    return doc;
+  }
+
+  async function cloudDeleteDoc(id) {
+    await ipc.invoke("cloud_doc_delete", { id });
+    await cloudDocs();
+  }
+
   /* ------------------------------------------------------------------ 设置 */
 
   function applyThemeAttrs() {
@@ -842,6 +941,13 @@ window.DGM = window.DGM || {};
     newWorkspaceFile,
     renameWorkspaceEntry,
     deleteWorkspaceEntry,
+    cloudRefresh,
+    cloudLogin,
+    cloudLogout,
+    cloudDocs,
+    cloudSaveActive,
+    cloudOpenDoc,
+    cloudDeleteDoc,
   });
 
   // 系统主题变化时（未显式锁定）跟随

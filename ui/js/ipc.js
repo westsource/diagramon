@@ -383,6 +383,15 @@ digraph Pipeline {
     settings: null,
     /** mock 工作区（结构对齐 app-ipc 的 WorkspaceInfo） */
     ws: { root: null, name: "", tree: [], truncated: false, file_count: 0, dir_count: 0 },
+    /** mock 云端（结构对齐 app-ipc 的 CloudStatus / CloudDocList） */
+    _cloud: {
+      signed: false,
+      account: null,
+      docs: [
+        { id: "cld-1", name: "登录流程.mmd", path: "flows/", format: "mermaid", size: 1024, updated_at: "2026-10-10T10:00:00Z" },
+        { id: "cld-2", name: "渲染管线.dot", path: "arch/", format: "dot", size: 2048, updated_at: "2026-10-09T18:30:00Z" },
+      ],
+    },
 
     _seed() {
       this.docs = [
@@ -412,6 +421,7 @@ digraph Pipeline {
           render_retry: true,
           context_from_doc: true,
         },
+        cloud: { base_url: "https://api.diagramon.app/v1", device_id: "" },
         recent: [
           { path: "E:/OpenCode/diagramon/docs/flows/登录流程.mmd", name: "登录流程.mmd", format: "mermaid", opened_at: 0 },
           { path: "E:/OpenCode/diagramon/docs/arch/渲染管线.dot", name: "渲染管线.dot", format: "dot", opened_at: 0 },
@@ -754,6 +764,60 @@ digraph Pipeline {
 
         case "search_cancel":
           return null;
+
+        /* ---- 云网关（mock：一个内存账户 + 两份示例文档） ---- */
+        case "cloud_status": {
+          const cfg = (this.settings.cloud || {}).base_url || "";
+          return this._cloud.signed
+            ? { signed_in: true, base_url: cfg, account: this._cloud.account }
+            : { signed_in: false, base_url: cfg, account: null };
+        }
+        case "cloud_login": {
+          if (!(this.settings.cloud || {}).base_url) throw new Error("云网关未配置：先在 设置 → 云端 里填服务地址");
+          const { email } = args;
+          if (!email || !args.password) throw new Error("邮箱和密码都要填");
+          this._cloud.signed = true;
+          this._cloud.account = {
+            email, display_name: email.split("@")[0], role: "user", plan_name: "Free",
+            used_bytes: 20480, quota_bytes: 104857600,
+          };
+          return this._cloud.account;
+        }
+        case "cloud_logout":
+          this._cloud.signed = false;
+          return true;
+        case "cloud_docs_list":
+          if (!this._cloud.signed) throw new Error("尚未登录云网关");
+          return {
+            items: this._cloud.docs.map((d) => ({ ...d })),
+            has_more: false,
+            used_bytes: this._cloud.docs.reduce((n, d) => n + d.size, 0),
+            quota_bytes: 104857600,
+          };
+        case "cloud_doc_save": {
+          if (!this._cloud.signed) throw new Error("尚未登录云网关");
+          const id = args.id || "cld-" + this._newId("");
+          const ex = this._cloud.docs.find((d) => d.id === id);
+          const doc = {
+            id, name: args.name, path: "", format: args.format,
+            size: String(args.body || "").length, updated_at: new Date().toISOString(),
+          };
+          if (ex) Object.assign(ex, doc);
+          else this._cloud.docs.push(doc);
+          return { ...doc };
+        }
+        case "cloud_doc_open": {
+          if (!this._cloud.signed) throw new Error("尚未登录云网关");
+          const d = this._cloud.docs.find((x) => x.id === args.id);
+          if (!d) throw new Error("云端没有这份文档：" + args.id);
+          return { id: d.id, name: d.name, format: d.format, body: this._fmt(d.format).default_body, version: 3 };
+        }
+        case "cloud_doc_delete": {
+          if (!this._cloud.signed) throw new Error("尚未登录云网关");
+          const i = this._cloud.docs.findIndex((x) => x.id === args.id);
+          if (i >= 0) this._cloud.docs.splice(i, 1);
+          return true;
+        }
 
         case "search_once": {
           const { hits, done } = this._search(args.req || {});

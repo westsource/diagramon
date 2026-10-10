@@ -6,6 +6,7 @@
 //! 外壳与资产都由自定义协议 `dgm` 提供（不是只用它供资产），这样**外壳页与四个承载页
 //! 同源**：iframe 通信不受跨源限制，离线守卫只需管一个 origin。
 
+mod cloud;
 mod commands;
 mod state;
 mod vision;
@@ -213,6 +214,13 @@ pub fn run() {
             vision::vision_cancel,
             vision::clip_write_image,
             vision::clip_read_image,
+            cloud::cloud_login,
+            cloud::cloud_logout,
+            cloud::cloud_status,
+            cloud::cloud_docs_list,
+            cloud::cloud_doc_save,
+            cloud::cloud_doc_open,
+            cloud::cloud_doc_delete,
         ])
         .run(tauri::generate_context!())
         .expect("Diagramon 启动失败");

@@ -265,6 +265,22 @@ pub struct RecentEntry {
     pub opened_at: i64,
 }
 
+/// 云网关偏好。`base_url` 为空 = 未配置（界面如实写"未配置"，不伪造状态）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct CloudPrefs {
+    /// 如 `https://api.diagramon.app/v1`
+    pub base_url: String,
+    /// 本机设备标识（首登生成一次；服务端用它识别会话）
+    pub device_id: String,
+}
+
+impl Default for CloudPrefs {
+    fn default() -> Self {
+        Self { base_url: String::new(), device_id: String::new() }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
@@ -279,6 +295,7 @@ pub struct Settings {
     pub panels: PanelPrefs,
     pub editor: EditorPrefs,
     pub ai: AiPrefs,
+    pub cloud: CloudPrefs,
     pub recent: Vec<RecentEntry>,
 }
 
@@ -292,6 +309,7 @@ impl Default for Settings {
             panels: PanelPrefs::default(),
             editor: EditorPrefs::default(),
             ai: AiPrefs::default(),
+            cloud: CloudPrefs::default(),
             recent: Vec::new(),
         }
     }
@@ -525,6 +543,61 @@ pub struct VisionRect {
     pub h: u32,
 }
 
+/* ---------------- 云网关 ---------------- */
+
+/// 登录后的账户快照。**令牌永不回前端**（存凭据库，同 AI 密钥）。
+///
+/// 存储额度三个数都是**服务端给的**，本地不推算、不伪造 —— 未登录就显示未登录。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CloudAccount {
+    pub email: String,
+    pub display_name: String,
+    pub role: String,
+    pub plan_name: String,
+    pub used_bytes: u64,
+    pub quota_bytes: u64,
+}
+
+/// 云端状态。`base_url` 为空 = 用户还没配网关地址。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct CloudStatus {
+    pub signed_in: bool,
+    pub base_url: String,
+    pub account: Option<CloudAccount>,
+}
+
+/// 云文档列表项。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CloudDoc {
+    pub id: String,
+    pub name: String,
+    /// 服务端的目录路径（`""` = 根）
+    pub path: String,
+    pub format: FormatId,
+    pub size: u64,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct CloudDocList {
+    pub items: Vec<CloudDoc>,
+    pub has_more: bool,
+    pub used_bytes: u64,
+    pub quota_bytes: u64,
+}
+
+/// 取回一份云文档：前端据此开新标签页。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CloudDocBody {
+    pub id: String,
+    pub name: String,
+    pub format: FormatId,
+    pub body: String,
+    pub version: u64,
+}
+
 /// 开发开关的环境变量名（前后端与文档统一引用，别各写一份字符串）。
 pub const ENV_SELFTEST: &str = "DIAGRAMON_SELFTEST";
 pub const ENV_SELFTEST_REPORT: &str = "DIAGRAMON_SELFTEST_REPORT";
@@ -546,6 +619,8 @@ pub mod events {
     pub const DOC_AUTOSAVED: &str = "doc://autosaved";
     /// 识图框选完成（载荷 `String` dataURL；取消时是 `null`）
     pub const VISION_PICKED: &str = "vision://picked";
+    /// 云端状态变化（载荷 `CloudStatus`）
+    pub const CLOUD_CHANGED: &str = "cloud://changed";
 }
 
 /// 命令名常量（与 `ui/js/ipc.js` 逐字对应，避免两侧拼错字符串）。
@@ -589,4 +664,11 @@ pub mod commands {
     pub const VISION_CROP: &str = "vision_crop";
     pub const VISION_CANCEL: &str = "vision_cancel";
     pub const CLIP_WRITE_IMAGE: &str = "clip_write_image";
+    pub const CLOUD_LOGIN: &str = "cloud_login";
+    pub const CLOUD_LOGOUT: &str = "cloud_logout";
+    pub const CLOUD_STATUS: &str = "cloud_status";
+    pub const CLOUD_DOCS_LIST: &str = "cloud_docs_list";
+    pub const CLOUD_DOC_SAVE: &str = "cloud_doc_save";
+    pub const CLOUD_DOC_OPEN: &str = "cloud_doc_open";
+    pub const CLOUD_DOC_DELETE: &str = "cloud_doc_delete";
 }

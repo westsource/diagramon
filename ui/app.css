@@ -1693,6 +1693,23 @@ body.no-mock .mock-badge { display: none; }
 /* 云端未登录态的头像（用图标而非文字） */
 .cloud-me .avatar { display: inline-flex; align-items: center; justify-content: center; }
 
+/* 云端登录表单（第 6 步）：内联在侧栏里，不做弹窗 —— 登录是高频小动作 */
+.cloud-login { display: flex; flex-direction: column; gap: 8px; padding: 10px 4px 0; }
+.cloud-login label { display: flex; flex-direction: column; gap: 3px; font-size: var(--fs-xs); color: var(--muted); }
+.cloud-login input {
+  width: 100%; padding: 6px 8px; border-radius: 6px;
+  border: 1px solid var(--line, color-mix(in srgb, var(--ink) 14%, transparent));
+  background: var(--surface-2, transparent); color: var(--ink); font: inherit; font-size: var(--fs-sm);
+}
+.cloud-login input:focus { outline: 1px solid var(--accent); }
+.cloud-login-acts { display: flex; align-items: center; gap: 8px; }
+.cloud-login-acts .hint { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--err, #b0554a); }
+
+/* 云端配额条：用 <progress>，数字如实来自服务端 */
+.cloud-quota { display: flex; align-items: center; gap: 8px; padding: 10px 4px 0; }
+.cloud-quota progress { flex: 1; min-width: 0; height: 6px; }
+.cloud-quota .hint { flex: 0 0 auto; font-size: var(--fs-xs); color: var(--faint); }
+
 /* ============================================================================
  * §19.10 工作区（第 4 步）：真实目录树 / 冲突横幅
  * ========================================================================== */

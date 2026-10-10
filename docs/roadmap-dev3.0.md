@@ -260,7 +260,7 @@ DIAGRAMON_SELFTEST=1 ./target/debug/diagramon.exe                         # 真�
 
 ---
 
-## 第 6 步 · 云网关（跨仓库）
+## 第 6 步 · 云网关（跨仓库）✅ 已完成（客户端侧）
 
 **要做的事**
 
@@ -275,6 +275,30 @@ DIAGRAMON_SELFTEST=1 ./target/debug/diagramon.exe                         # 真�
 - 未登录时界面仍是"如实说明"，不出现假数据。
 
 **涉及面**：大，且依赖 `service/` 仓库的进度。
+
+**落地**：
+- **服务端不用动**：`service/` 仓库已具备 `POST /v1/auth/login`、`GET/PUT/DELETE /v1/documents`、
+  `GET /v1/auth/me` 与 AI 网关 —— 客户端直接对上这些口径（camelCase JSON，见下）。
+- **客户端新增 `src-tauri/src/cloud.rs`**（7 条 async 命令）：
+  `cloud_login / cloud_logout / cloud_status / cloud_docs_list / cloud_doc_save / cloud_doc_open / cloud_doc_delete`。
+  - **令牌永不回前端**：access/refresh 存凭据库（Windows 上 DPAPI），前端只拿账户快照与文档列表
+    —— "已登录"是一个事实陈述，不是页面可伪造的状态；
+  - **设备标识**首登生成一次并持久化（服务端用它识别会话）；
+  - `PUT /documents/{id}` **新建与更新同一入口**（`If-Match: 0` = 仅当不存在时创建），
+    客户端因此要记住每个文档的 `cloudId`，否则"保存到云端"会一直建新份；
+  - `cloud_status` 登录着就去 `/auth/me` 校验一遍 —— 令牌过期/换密码时如实报"掉线了"，
+    不假装还登录着；
+  - 全部命令 **async + 返回有意义的值**（第 5 步发现的 `async + Ok(())` 丢响应坑）。
+- **契约**：`CloudAccount / CloudStatus / CloudDoc / CloudDocList / CloudDocBody`，
+  事件 `cloud://changed`；设置新增 `cloud.{base_url, device_id}`。
+- **前端云端视图三态如实呈现**：未配置（"去配置"按钮）/ 未登录（内联邮箱密码表单）/
+  已登录（账户 + 额度条 + 文档列表 + 存 / 开 / 删）。配额条用 `<progress>`，数字全部来自服务端。
+  **base_url 留空 = 云端整体关闭**，一切照旧离线工作 —— 离线优先是产品底色。
+- mock 后端同步实现（浏览器原型里能走通登录 → 列表 → 存 → 开 → 删）。
+
+**验证**：`cargo test` 133 项全绿；i18n 中英各 643 键一致。
+端到端（连真实服务端）需要跑起来的 `service/`，本机未做 —— 客户端到服务端的字段口径
+以 `app/schemas/__init__.py` 的 pydantic 模型为准逐字段对齐（camelCase）。
 
 ---
 

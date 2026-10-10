@@ -187,6 +187,10 @@ pub fn credential_key(model_id: &str) -> String {
     format!("ai-model:{model_id}")
 }
 
+/// 云网关令牌在凭据库里的键名。**令牌永不回前端**（cloud.rs 的头注释）。
+pub const CLOUD_ACCESS_KEY: &str = "cloud:access-token";
+pub const CLOUD_REFRESH_KEY: &str = "cloud:refresh-token";
+
 /// 中毒的锁也要能用：设置/会话是纯数据，没有"写一半"的中间态。
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
