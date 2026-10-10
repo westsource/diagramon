@@ -446,6 +446,33 @@ window.DGM = window.DGM || {};
         if (!queueUp) await new Promise((r) => setTimeout(r, 1000));
       }
       ok("承载页脚本已在同源 iframe 内执行（__hostQueue 就位）", queueUp);
+
+      // ── 格式转换（第 3 步）：纯 IPC，断言的正是"谁来做"与产物形状 ──
+      const srcDoc = sess.docs.find((d) => d.format === "mermaid");
+      const srcBody = "flowchart TD\n    A([开始]) --> B{判断}\n    B -- 是 --> C([结束])\n    subgraph 风控\n        L --> M\n    end\n    classDef danger fill:#f8e9e6,stroke:#b0554a;\n    class L danger;\n";
+      await invoke("doc_set_body", { id: srcDoc.id, body: srcBody });
+
+      const toDot = await invoke("convert_text", { req: { from: "mermaid", to: "dot", source: srcBody } });
+      ok("mermaid → dot 由 Rust 完成", toDot.engine === "rust" && toDot.body.includes("digraph G"), toDot.engine);
+      ok("DOT 里带上了节点与标签", toDot.body.includes("label=\"开始\"") && toDot.body.includes("shape=diamond"), "");
+      ok("subgraph 变成了 cluster", toDot.body.includes("subgraph cluster_0") && toDot.body.includes("label=\"风控\""));
+      ok("classDef 样式挂到了节点上", toDot.body.includes("fillcolor=\"#f8e9e6\""));
+      ok("保真度说明非空（有损就要写清）", Array.isArray(toDot.notes) && toDot.notes.length > 0, toDot.notes.join(" / "));
+
+      const toDrawio = await invoke("convert_text", { req: { from: "mermaid", to: "drawio", source: srcBody } });
+      ok("mermaid → drawio 交给引擎（不是 Rust）", toDrawio.engine === "drawio" && toDrawio.body === "", toDrawio.engine);
+      ok("引擎方向给出原因", (toDrawio.notes[0] || "").includes("drawio"), toDrawio.notes[0]);
+
+      const toXcal = await invoke("convert_text", { req: { from: "mermaid", to: "excalidraw", source: srcBody } });
+      ok("mermaid → Excalidraw 交给引擎", toXcal.engine === "excalidraw", toXcal.engine);
+
+      let convertErr = "";
+      try {
+        await invoke("convert_text", { req: { from: "dot", to: "mermaid", source: "digraph G { a -> b }" } });
+      } catch (e) {
+        convertErr = (e && e.message) || String(e);
+      }
+      ok("dot → mermaid 如实报未实现（不是静默成功）", convertErr.includes("实验方向"), convertErr.slice(0, 60));
     } catch (e) {
       note("selftest:error " + String((e && e.message) || e));
       ok("自检过程无异常", false, String((e && e.stack) || (e && e.message) || e));

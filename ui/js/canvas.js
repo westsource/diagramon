@@ -36,6 +36,18 @@ window.DGM = window.DGM || {};
   /** 每个格式一份常驻实例：切标签页不重建，保留画布内的撤销历史。 */
   const hosts = {};
 
+  /**
+   * 登记一次「下一次 show 改用 Mermaid 源码载入」。
+   *
+   * 转换中心用它：先建目标格式的新文档，再把源码交给承载页 ——
+   * 由 drawio / Excalidraw **自己的** Mermaid 导入器解析，而不是让 Rust 再实现一遍。
+   */
+  let pendingConversion = null;
+
+  function setPendingConversion(format, source) {
+    pendingConversion = { format, source };
+  }
+
   let container = null;
   let activeFormat = null;
   let pollTimer = 0;
@@ -159,6 +171,7 @@ window.DGM = window.DGM || {};
           e.lastApplied = json;
           if (e.loadedDoc) state.setBody(e.loadedDoc, json);
         }
+        if (json) settle(format, "scene", json);
         break;
       }
 
@@ -347,6 +360,14 @@ window.DGM = window.DGM || {};
     e.ready = false; // 新文档要等新一轮 init
     e.pending.length = 0;
 
+    // 转换：这次载入的不是正文，而是 Mermaid 源码（交给引擎自己的导入器）
+    if (pendingConversion && pendingConversion.format === format) {
+      const source = pendingConversion.source;
+      pendingConversion = null;
+      loadMermaid(format, source);
+      return true;
+    }
+
     const body = doc.body || "";
 
     if (format === "drawio") {
@@ -395,7 +416,18 @@ window.DGM = window.DGM || {};
   function flush(format) {
     const e = hosts[format];
     if (!e || !e.frame || e.loadedDoc === null) return Promise.resolve(null);
-    if (format !== "drawio") return Promise.resolve(e.lastApplied || null);
+    if (format !== "drawio") {
+      // Excalidraw：`scene` 事件只在真实变更时推，外部载入（setScene / loadMermaid）
+      // 之后被静默挡掉，所以这里**主动要一次**；等它回来再返回。
+      return new Promise((resolve) => {
+        e.waiters.push({ kind: "scene", resolve });
+        send(format, { action: "getScene" });
+        setTimeout(() => {
+          const w = takeWaiter(format, "scene");
+          if (w) w.resolve(e.lastApplied || null);
+        }, FLUSH_TIMEOUT_MS);
+      });
+    }
     return new Promise((resolve) => {
       e.waiters.push({ kind: "xml", resolve });
       send(format, { action: "export", format: "xml" });
@@ -403,6 +435,30 @@ window.DGM = window.DGM || {};
         const w = takeWaiter(format, "xml");
         if (w) w.resolve(null);
       }, FLUSH_TIMEOUT_MS);
+    });
+  }
+
+  /**
+   * 等画布产出**与 `before` 不同**的正文。
+   *
+   * 转换用：把 Mermaid 源码交给引擎解析后要取回结果。不能固定 sleep ——
+   * 解析耗时取决于图的大小；也不能只取一次 —— 引擎是异步的，早取会拿到空图。
+   * 所以轮询 `flush()`，直到内容变了或试完为止（返回空串表示没等到）。
+   */
+  function waitForBody(format, before, tries) {
+    const max = tries || 30;
+    return new Promise((resolve) => {
+      let i = 0;
+      const tick = () => {
+        flush(format)
+          .then((body) => {
+            if (typeof body === "string" && body.trim() && body !== before) return resolve(body);
+            if (++i >= max) return resolve("");
+            setTimeout(tick, 600);
+          })
+          .catch(() => resolve(""));
+      };
+      tick();
     });
   }
 
@@ -471,8 +527,10 @@ window.DGM = window.DGM || {};
     hide,
     teardown,
     flush,
+    waitForBody,
     exportPng,
     loadMermaid,
+    setPendingConversion,
     syncThemeAll,
     hostZoom,
     hostFit,

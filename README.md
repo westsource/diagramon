@@ -14,7 +14,7 @@ AI 既可用自有 Key 直连（BYOK：OpenAI 兼容 / Ollama / 自定义），�
 ```
 crates/
   app-ipc/           前后端契约（唯一真源，前端不维护第二份字段清单）
-  app-core/          格式注册表 · 文档与会话 · 语法校验 · 大纲 · 作用域 · 设置合并
+  app-core/          格式注册表 · 文档与会话 · 语法校验 · 大纲 · 作用域 · 格式转换 · 设置合并
   assets/            自定义协议 `dgm` 的路径解析（外壳与四个承载页同源的实现）
   ai/                提示词与供应商（BYOK 流式对话）
   platform/          平台适配层接口（凭据、路径）+ 非 Windows 的明文兜底
@@ -129,11 +129,11 @@ fs 作用域限工作区目录，密钥只允许 Rust 读。
 
 **验收闭环（第一步）**
 `node tools/dev/check.mjs` 一条命令跑完「单测 + 真机 IPC 自检」。
-真机自检 26/26 全绿：契约版本与四格式注册表、设置局部更新不清空其它字段、
+真机自检 35/35 全绿：契约版本与四格式注册表、设置局部更新不清空其它字段、
 新建文档与语法校验（正常不报错 / 裸 `>=` 报警告）、大纲三组与中文标签、
 状态栏作用域、画布型拒绝分屏、界面五块工作区与标签页跟随会话、
 画布承载面挂载与同源可读、`dgm` 协议供得出四个挂载点与外壳自身。
-Rust 单测 83 项（app-core 48 / ai 17 / assets 8 / platform 5 / platform-windows 5）。
+Rust 单测 100 项（app-core 65 / ai 17 / assets 8 / platform 5 / platform-windows 5）。
 
 **画布承载（第二步）**
 drawio / Excalidraw 现在**真的能编辑**：
@@ -148,10 +148,27 @@ drawio / Excalidraw 现在**真的能编辑**：
 验证：`check.mjs` 26/26；`canvas_probe.py` 9/9（真 drawio 引擎起来、推进去取回来、换一版再取回，
 截图见 `ui/.shots/canvas-drawio.png`）。
 
+**格式转换（第三步）**
+`mermaid → dot` 由 **Rust** 直接算（`crates/app-core/src/convert.rs`）：
+节点四类形状、六种边（含内联/管道标签）、subgraph、classDef/class/style、direction、注释。
+`mermaid → drawio` / `mermaid → Excalidraw` **不重新实现解析器** ——
+交给各自的引擎（drawio 的 `drawio-mermaid`、Excalidraw 的 `mermaid-to-excalidraw`），
+前端把源码经承载页递过去、再把结果取回来写进新标签页。
+
+两个关键设计：
+- **`plan()` 给出结构化的「谁来做」**（`rust` / `drawio` / `excalidraw` / `none`），
+  前端按它分支 —— 不从错误文案里猜引擎，文案一改就崩。
+- **转换有损就要写清**：结果里带 `notes`，逐条列出「哪类信息没迁移」
+  （subgraph→cluster 丢样式、体育场形/非对称形退化、样式只迁移四个键…）。
+  对话框直接把 notes 显示出来，不静默丢。
+
+原先前端那段 best-effort 的 mermaid→dot（正则拼 DOT、subgraph 直接不管、classDef 丢掉）
+已删除 —— 同一件事只留一处实现。
+
 **下一步**
 完整拆分见 [`docs/roadmap-dev3.0.md`](docs/roadmap-dev3.0.md)（含依赖关系、每步的完成判据、待拍板项）。
 摘要：① 闭环验收与开发环路 ✅ → ② drawio / Excalidraw 画布承载 + `dgm` 资产协议 ✅（关键路径）
-→ ③ 格式转换执行 → ④ 工作区扫描 / 搜索 / watcher → ⑤ AI 补齐（区域截图、原生剪贴板）
+→ ③ 格式转换执行 ✅ → ④ 工作区扫描 / 搜索 / watcher → ⑤ AI 补齐（区域截图、原生剪贴板）
 → ⑥ 云网关 → ⑦ 发布（更新器 / 三平台打包）→ ⑧ 硬化（真 AST / 画布大纲 / 性能 / i18n）。
 
 ## 许可

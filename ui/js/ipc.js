@@ -436,6 +436,17 @@ digraph Pipeline {
         case "app_info":
           return { version: "3.0.0-mock", platform: "mock", formats: this._clone(FORMATS) };
 
+        // mock 下**故意不给转换结果**：转换器只有 Rust 侧一份实现
+        // （`crates/app-core/src/convert.rs`），在浏览器里再写一份 best-effort
+        // 就是"两处实现、互不同步"的老问题。如实报错，让人去跑真实客户端。
+        case "convert_text": {
+          const req = args.req || {};
+          throw new Error(
+            `mock 模式没有转换器（${req.from} → ${req.to}）：真实转换在 Rust 侧，` +
+              "请用 node tools/dev/check.mjs 起真实客户端，或用 python tools/dev/canvas_probe.py 验画布链路",
+          );
+        }
+
         case "settings_get":
           return this._clone(this.settings);
 

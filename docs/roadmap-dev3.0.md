@@ -118,7 +118,7 @@ DIAGRAMON_SELFTEST=1 ./target/debug/diagramon.exe                         # 真�
 
 ---
 
-## 第 3 步 · 格式转换（转换中心真正能执行）
+## 第 3 步 · 格式转换（转换中心真正能执行）✅ 已完成
 
 **要做的事**
 
@@ -141,6 +141,16 @@ DIAGRAMON_SELFTEST=1 ./target/debug/diagramon.exe                         # 真�
 - classDef 丢失这类信息在界面上有明说（不是静默）。
 
 **涉及面**：中—大。
+
+**落地**：`crates/app-core/src/convert.rs`（17 项单测）+ 契约 `ConvertRequest`/`ConvertOutcome`
++ 命令 `convert_text` + `ui/js/canvas.js` 的 `setPendingConversion` / `waitForBody`
++ Excalidraw 承载页新增 `getScene`（`scene` 事件在外部载入后被 `suppressEchoes` 挡掉，取不到结果）。
+验证：`check.mjs` 35/35；`canvas_probe.py` 10/10（含 drawio 导入 Mermaid 产出 5773 字节 mxfile）。
+**P2 已落地**：notes 逐条列出未迁移项，对话框直接显示。
+**计划外的发现（比原方案更好）**：不需要 offscreen WebView worker ——
+两个目标格式的引擎**已经在同源 iframe 里**了，直接把源码交给它们即可。
+原方案担心的「在主 WebView 里按需跑会卡大文档」在这个结构下不成立：
+解析发生在承载页自己的 realm 里。
 
 ---
 

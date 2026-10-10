@@ -106,7 +106,9 @@ async function main() {
   if (!testOnly) {
     step("杀掉残留实例（否则构建会卡在 Permission denied）");
     killStale();
-    await new Promise((r) => setTimeout(r, 800));
+    // 等久一点：被杀的实例还会带一串 msedgewebview2 子进程，它们松手前
+    // 新实例可能卡在 WebView2 的 user-data 目录上（实测表现为页面 load 事件都不来）
+    await new Promise((r) => setTimeout(r, 2500));
   }
 
   step("构建 diagramon");
@@ -148,7 +150,7 @@ async function main() {
   app.stdout.on("data", (b) => (appOut += b));
   app.stderr.on("data", (b) => (appOut += b));
 
-  const report = await waitForReport(60_000);
+  const report = await waitForReport(Number(process.env.DGM_SELFTEST_TIMEOUT || 120_000));
   killStale();
   app.kill();
 

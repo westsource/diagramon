@@ -106,6 +106,15 @@ SAMPLE_XML = (
     "</root></mxGraphModel></diagram></mxfile>"
 )
 
+# 引擎方换的输入：带一个足够特殊的标签，好在 drawio 导出的 XML 里认出来。
+# 这也是 `mermaid → drawio` 走的真实路径 —— 由 drawio 自带的 Mermaid 导入器解析，
+# Rust 侧不重新实现（见 crates/app-core/src/convert.rs 的 plan()）。
+SAMPLE_MERMAID = """flowchart TD
+    P([开始]) --> Q{网关正常?}
+    Q -- 是 --> R[DIAGRAMON_MERMAID_PROBE]
+    Q -- 否 --> P
+"""
+
 PROBE_HTML = """<!DOCTYPE html>
 <html lang="zh-CN"><head><meta charset="utf-8"><title>canvas probe</title>
 <style>
@@ -118,6 +127,7 @@ PROBE_HTML = """<!DOCTYPE html>
 <div id="log">等待断言…</div>
 <script>
 var SAMPLE = __SAMPLE__;
+var MERMAID_SRC = __MERMAID__;
 var lines = [];
 var h = document.getElementById("h");
 
@@ -249,6 +259,37 @@ function doBegin(w, done) {
         );
       })
       .then(function () {
+        // 引擎转换：把 Mermaid 源码交给 drawio 自己的导入器（这正是
+        // 「mermaid → drawio」在应用里的做法），再取回 XML 看标签在不在。
+        seen.length = 0;
+        w.__apply(JSON.stringify({
+          action: "load",
+          autosave: 1,
+          descriptor: { format: "mermaid", data: MERMAID_SRC, wrap: true },
+        }));
+        return waitFor(function () {
+          return firstOf(function (e) {
+            return e.event === "export" && String(e.format).toLowerCase() === "xml";
+          });
+        }, 3000, "（第一次 export 只是探个路）")
+          .then(function () { return true; })
+          .catch(function () { return false; })
+          .then(function () {
+            seen.length = 0;
+            w.__apply(JSON.stringify({ action: "export", format: "xml" }));
+            return waitFor(function () {
+              return firstOf(function (e) {
+                return e.event === "export" && String(e.format).toLowerCase() === "xml"
+                  && (e.xml || "").indexOf("DIAGRAMON_MERMAID_PROBE") >= 0;
+              });
+            }, 40000, "drawio 解析 Mermaid 后的 XML");
+          })
+          .then(
+            function (ex) { say("引擎转换：mermaid 源码经 drawio 导入器变成了 mxfile（" + (ex.xml || "").length + " 字节）"); },
+            function () { say("引擎转换：drawio 没有把 Mermaid 转出来（descriptor 可能不被支持）", true); },
+          );
+      })
+      .then(function () {
         if (typeof w.__hostZoom === "function") say("缩放读数可用（__hostZoom → " + w.__hostZoom() + "）");
         else say("承载页未暴露 __hostZoom", true);
         if (typeof w.__hostFit === "function") say("适应视图钩子可用（__hostFit）");
@@ -293,7 +334,10 @@ def make_handler():
 
         def do_GET(self):  # noqa: N802
             if self.path.split("?", 1)[0] == "/__probe.html":
-                body = PROBE_HTML.replace("__SAMPLE__", json.dumps(SAMPLE_XML))
+                body = (
+                    PROBE_HTML.replace("__SAMPLE__", json.dumps(SAMPLE_XML))
+                    .replace("__MERMAID__", json.dumps(SAMPLE_MERMAID))
+                )
                 data = body.encode("utf-8")
                 self.send_response(200)
                 self.send_header("content-type", MIME[".html"])

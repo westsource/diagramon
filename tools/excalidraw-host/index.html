@@ -224,6 +224,18 @@
       });
     }
 
+    if (msg.action === 'getScene') {
+      // 宿主主动要当前场景。为什么需要它：`scene` 事件只在**真实变更**时推
+      // （外部 setScene / loadMermaid 之后被 suppressEchoes 挡掉），
+      // 所以「转换拿结果」和「落盘前 flush」这两条路取不到东西。
+      // 形状与 onChange 那条 report('scene') 保持一致，消费侧只认一种。
+      report('scene', {
+        elements: out.api.getSceneElements(),
+        appState: filterAppState(out.api.getAppState()),
+      });
+      return true;
+    }
+
     if (msg.action === 'export') {
       return window.ExcalidrawApp
         .exportPng({ scale: msg.scale || 2, transparent: msg.transparent !== false })

@@ -355,6 +355,31 @@ pub struct AppInfo {
 }
 
 /// 事件名常量（与前端 `ipc.on(...)` 逐字对应）。
+/* ---------------- 格式转换 ---------------- */
+
+/// 一次转换请求。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConvertRequest {
+    pub from: FormatId,
+    pub to: FormatId,
+    pub source: String,
+}
+
+/// 一次转换的结果。
+///
+/// `notes` 不是装饰：转换是**单向有损**的，逐条写明「丢了什么」由界面如实展示，
+/// 不静默丢（见路线图的 P2 决策）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConvertOutcome {
+    /// 谁来完成这次转换：`rust` / `drawio` / `excalidraw` / `none`。
+    ///
+    /// **前端按它分支**，而不是从错误文案里猜引擎 —— 猜字符串一改文案就崩。
+    pub engine: String,
+    /// 纯 Rust 方向才有正文；引擎方向为空（由承载页产出）。
+    pub body: String,
+    pub notes: Vec<String>,
+}
+
 /// 开发开关的环境变量名（前后端与文档统一引用，别各写一份字符串）。
 pub const ENV_SELFTEST: &str = "DIAGRAMON_SELFTEST";
 pub const ENV_SELFTEST_REPORT: &str = "DIAGRAMON_SELFTEST_REPORT";
@@ -388,6 +413,7 @@ pub mod commands {
     pub const EXPORT_WRITE: &str = "export_write";
     pub const CRED_SET: &str = "cred_set";
     pub const CRED_DELETE: &str = "cred_delete";
+    pub const CONVERT_TEXT: &str = "convert_text";
     pub const AI_CHAT: &str = "ai_chat";
     pub const AI_CANCEL: &str = "ai_cancel";
 }

@@ -8,8 +8,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use app_ipc::{
-    events, AiChatRequest, AiDelta, AiDone, AiFailed, AiModel, AppInfo, DevFlags, Doc, FormatId,
-    Issue, OutlineGroup, Session as SessionPayload, Settings, ViewMode,
+    events, AiChatRequest, AiDelta, AiDone, AiFailed, AiModel, AppInfo, ConvertOutcome,
+    ConvertRequest, DevFlags, Doc, FormatId, Issue, OutlineGroup, Session as SessionPayload,
+    Settings, ViewMode,
 };
 use base64::Engine as _;
 use tauri::{AppHandle, Emitter, State};
@@ -243,6 +244,30 @@ pub fn export_write(path: String, base64: String) -> R<String> {
 #[tauri::command]
 pub fn debug_note(text: String) {
     eprintln!("diagramon|note|{text}");
+}
+
+/* ---------------- 格式转换 ---------------- */
+
+/// 格式转换。
+///
+/// 先问 `plan()`：**Rust 能算的就直接算**；引擎型的两个方向回一个带 `engine` 的空结果
+/// （附原因），由前端把源码交给承载页 —— 不把「不是 Rust 的活」当成错误。
+#[tauri::command]
+pub fn convert_text(req: ConvertRequest) -> Result<ConvertOutcome, String> {
+    let plan = app_core::convert::plan(req.from, req.to)?;
+    if matches!(plan.engine, app_core::convert::Engine::Rust) {
+        let c = app_core::convert::convert(req.from, req.to, &req.source)?;
+        return Ok(ConvertOutcome {
+            engine: plan.engine.id().to_string(),
+            body: c.body,
+            notes: c.notes,
+        });
+    }
+    Ok(ConvertOutcome {
+        engine: plan.engine.id().to_string(),
+        body: String::new(),
+        notes: vec![plan.reason],
+    })
 }
 
 /* ---------------- 凭据（密钥永不回传前端） ---------------- */

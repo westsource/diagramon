@@ -103,76 +103,80 @@ window.DGM = window.DGM || {};
   }
 
   /* ================================================================== 转换 */
-  /* 契约无 convert 命令：只对 mermaid → dot 做忠实本地预演；其余方向不伪造。 */
 
-  function mermaidToDot(src) {
-    const lines = src.split("\n");
-    let graphName = "Converted";
-    const nodes = new Map();
-    const edges = [];
-    const subs = [];
-    const styleOf = (body) => {
-      const m = body.match(/^\[([^\]]*)\]$/) || body.match(/^\(\(([^)]*)\)\)$/) || body.match(/^\(([^)]*)\)$/) || body.match(/^\{([^}]*)\}$/);
-      return m ? m[1] : body.replace(/[[\](){}\s]/g, "");
-    };
-    const decl = (id, body) => {
-      if (id && !nodes.has(id)) nodes.set(id, { label: styleOf(body), shape: body.includes("{") ? "diamond" : body.includes("(") ? "ellipse" : "box" });
-    };
-    for (const raw of lines) {
-      const s = raw.trim();
-      if (!s || s.startsWith("%%")) continue;
-      let m;
-      if ((m = /^(?:flowchart|graph)\s+(\w+)/i.exec(s))) {
-        graphName = m[1].toUpperCase().includes("LR") ? "H" : "V";
-        continue;
-      }
-      if (/^subgraph\b/i.test(s)) {
-        subs.push({ name: s.replace(/^subgraph\s*/i, "").trim(), start: true });
-        continue;
-      }
-      if (/^end$/i.test(s)) {
-        subs.push({ end: true });
-        continue;
-      }
-      if (/^(classDef|class|click|style|linkStyle|direction)\b/i.test(s)) continue;
-      // A[..] --> B{..}
-      const re = /([A-Za-z_][\w-]*)\s*(\[[^\]]*\]|\(\([^)]*\)\)|\([^)]*\)|\{[^}]*\})?/g;
-      const parts = [];
-      let mm;
-      while ((mm = re.exec(s))) parts.push({ id: mm[1], body: mm[2] || "" });
-      const arrow = /(-->|---|==>|-\.->|--x)/.test(s);
-      if (arrow && parts.length >= 2) {
-        decl(parts[0].id, parts[0].body);
-        decl(parts[parts.length - 1].id, parts[parts.length - 1].body);
-        const label = (s.match(/-{1,2}[->]?\s*\|([^|]*)\|/) || [])[1] || "";
-        edges.push({ from: parts[0].id, to: parts[parts.length - 1].id, label });
-      } else if (parts.length && parts[0].body) {
-        decl(parts[0].id, parts[0].body);
-      }
+  /**
+   * 问后端「这个方向谁来做」，纯 Rust 方向顺便把结果拿回来。
+   *
+   * 契约回的是**结构化的 `engine`**（`rust` / `drawio` / `excalidraw` / `none`），
+   * 前端按它分支 —— 不去解析错误文案猜引擎（文案一改就崩）。
+   *
+   * 上一版这里是一段前端 best-effort 的 mermaid→dot 实现（正则拼 DOT），
+   * 它会把 subgraph 当作"不精确归属"直接不管、把 classDef 丢掉，而且和 Rust 侧
+   * 将来任何改进都不会同步。现在只有一处实现：`crates/app-core/src/convert.rs`。
+   */
+  async function requestConversion(from, to, source) {
+    return DGM.ipc.invoke("convert_text", { req: { from, to, source } });
+  }
+
+  /** 归一化的方向查询结果：引擎给谁、正文（rust 才有）、保真度说明、错误。 */
+  async function planOf(from, to, source) {
+    try {
+      const out = await requestConversion(from, to, source);
+      return {
+        engine: out.engine,
+        text: out.body || "",
+        notes: out.notes || [],
+        error: "",
+      };
+    } catch (e) {
+      return { engine: "none", text: "", notes: [], error: (e && e.message) || String(e) };
     }
-    const escDot = (x) => String(x).replace(/"/g, '\\"');
-    let out = `// 由 Mermaid 本地预演得到（前端 best-effort；最终以 Rust 侧转换器为准）\ndigraph ${graphName === "V" ? "Converted" : "Converted"} {\n    rankdir=TB;\n    node [shape=box, style="rounded"];\n`;
-    const subOf = (id) => {
-      // 不做精确归属：subgraph 的成员声明在原型源码里是裸边，这里保守地不归类
+  }
+
+  /**
+   * 引擎方向：建目标格式的新文档 → 把 Mermaid 源码交给承载页 → 取回引擎产出写进正文。
+   *
+   * 为什么不自己解析：这两个目标格式的上游解析器是 JS 库
+   * （drawio 的 `drawio-mermaid`、Excalidraw 的 `mermaid-to-excalidraw`），
+   * 重新实现一遍只会得到两个不一致的解析器（见 index.html §9.1）。
+   */
+  async function convertViaEngine(to, source, srcDoc, dir) {
+    const doc = await state.newDoc(to);
+    if (!doc) return null;
+    DGM.canvas.setPendingConversion(to, source);
+    await DGM.preview.render(); // 触发 show → 把源码交给引擎
+    const body = await DGM.canvas.waitForBody(to, doc.body || "");
+    if (!body) {
+      // 取不到就**留着这个标签页**让用户自己看画布，别静默关掉
+      state.pushConvert({ from: dir.from, to, doc: srcDoc.name, ok: false, note: t("conv.engineEmpty") });
+      DGM.toast({ icon: "alert", title: t("dlg.convert.title"), sub: t("conv.engineEmpty"), warn: true });
       return null;
-    };
-    for (const [id, n] of nodes) {
-      const shape = n.shape === "diamond" ? "diamond" : n.shape === "ellipse" ? "ellipse" : "box";
-      out += `    ${id} [label="${escDot(n.label)}", shape=${shape}];\n`;
     }
-    for (const e of edges) {
-      out += `    ${e.from} -> ${e.to}${e.label ? ` [label="${escDot(e.label)}"]` : ""};\n`;
-    }
-    out += "}\n";
-    return out;
+    await state.setBodyNow(doc.id, body);
+    return doc;
   }
 
-  function localPreview(from, to, src) {
-    if (from === "mermaid" && to === "dot") return { text: mermaidToDot(src), local: true };
-    return { text: "", local: false };
+  /** 转换成功后统一收尾：刷新界面、记转换记录、提示。 */
+  function finishConvert(created, dir, srcDoc, notes) {
+    DGM.editor.loadActive();
+    DGM.preview.schedule();
+    state.refreshDerived(created.id);
+    state.pushConvert({
+      from: dir.from,
+      to: dir.to,
+      doc: srcDoc.name,
+      ok: true,
+      note: dir.how + (notes && notes.length ? " · " + notes.join("；") : ""),
+    });
+    state.pushOutput(t("dlg.convert.done", { name: state.fmtById(dir.to).name }) + " ← " + srcDoc.name, "ok");
+    DGM.toast({
+      icon: "swap",
+      title: t("dlg.convert.done", { name: state.fmtById(dir.to).name }),
+      sub: t("dlg.convert.doneSub", { file: created.name }),
+    });
   }
 
-  function convertTo(presetTo) {
+  async function convertTo(presetTo) {
     const d = state.activeDoc();
     if (!d) {
       DGM.toast({ icon: "info", title: t("dlg.convert.title"), sub: t("status.noDoc") });
@@ -197,6 +201,9 @@ window.DGM = window.DGM || {};
     let sel = presetTo ? dirs.find((c) => c.to === presetTo) : null;
     if (!sel) sel = dirs.find((c) => c.ok) || dirs[0];
 
+    // 后端说这个方向谁来做（一次询问，弹窗与执行都用它，避免两处判断不一致）
+    const plan = await planOf(sel.from, sel.to, d.body);
+
     const targets = dirs
       .map(
         (c) => `
@@ -209,12 +216,25 @@ window.DGM = window.DGM || {};
       )
       .join("");
 
-    const prev = localPreview(sel.from, sel.to, d.body);
-    const previewHtml = prev.text
-      ? `<pre class="conv-pre">${esc(prev.text)}</pre>`
-      : `<div class="callout">${icon("info")}<span>${esc(t("dlg.convert.noPreview"))}</span></div>`;
-    const meta = prev.text ? t("dlg.convert.previewMeta", { n: prev.text.split("\n").length }) : "";
+    const isRust = plan.engine === "rust";
+    const canGo = !plan.error && (isRust ? !!plan.text : plan.engine !== "none");
+    const notesHtml = plan.notes.length
+      ? `<div class="callout">${icon("info")}<span><b>${esc(t("conv.notes"))}</b><br>${plan.notes.map(esc).join("<br>")}</span></div>`
+      : "";
+
+    const previewHtml = plan.error
+      ? `<div class="callout warn">${icon("alert")}<span>${esc(plan.error)}</span></div>`
+      : isRust
+        ? `<pre class="conv-pre">${esc(plan.text)}</pre>${notesHtml}`
+        : `<div class="callout">${icon("info")}<span>${esc(plan.notes[0] || t("dlg.convert.noPreview"))}</span></div>`;
+
+    const meta = isRust && plan.text ? t("dlg.convert.previewMeta", { n: plan.text.split("\n").length }) : "";
     const newName = d.name.replace(/\.[^.]+$/, "") + (state.fmtById(sel.to).exts[0] || "." + sel.to);
+    const hint = plan.error
+      ? plan.error
+      : isRust
+        ? ""
+        : t("conv.viaEngine", { engine: state.fmtById(sel.to).name });
 
     openDialog(
       head(t("dlg.convert.titleTo", { from: state.docFmt(d).name, to: state.fmtById(sel.to).name }), "swap") +
@@ -232,9 +252,9 @@ window.DGM = window.DGM || {};
           </div>
           <div class="callout warn">${icon("alert")}<span>${t("dlg.convert.oneway", { name: esc(d.name) })}</span></div>
         </div>` +
-        foot(sel.ok && prev.text ? "" : sel.ok ? t("dlg.convert.noPreview") : t("dlg.convert.notImpl"), 
+        foot(hint,
           `<button class="btn ghost" data-close>${esc(t("common.cancel"))}</button>` +
-          `<button class="btn primary" data-act="go"${sel.ok && prev.text ? "" : " disabled"}>${icon("swap")}${esc(t("dlg.convert.go"))}</button>`),
+          `<button class="btn primary" data-act="go"${canGo ? "" : " disabled"}>${icon("swap")}${esc(t("dlg.convert.go"))}</button>`),
       true,
     );
     wire((act) => {
@@ -245,32 +265,31 @@ window.DGM = window.DGM || {};
       }
       if (act === "go") {
         close();
-        runConvert(d, sel);
+        runConvert(d, sel, plan);
       }
     });
   }
 
-  async function runConvert(srcDoc, dir) {
-    const prev = localPreview(dir.from, dir.to, srcDoc.body);
-    if (!prev.text) {
+  /** 真正执行转换。`plan` 是弹窗里那次询问的结果（复用，不重复问）。 */
+  async function runConvert(srcDoc, dir, plan) {
+    const p = plan || (await planOf(dir.from, dir.to, srcDoc.body));
+    if (p.error) {
+      DGM.toast({ icon: "alert", title: t("dlg.convert.notImpl"), sub: p.error, warn: true });
+      return;
+    }
+
+    let created = null;
+    if (p.engine === "rust") {
+      created = await state.newDoc(dir.to);
+      if (created) await state.setBodyNow(created.id, p.text);
+    } else if (p.engine !== "none") {
+      created = await convertViaEngine(dir.to, srcDoc.body, srcDoc, dir);
+    } else {
       DGM.toast({ icon: "alert", title: t("dlg.convert.notImpl"), sub: dir.how, warn: true });
       return;
     }
-    const created = await state.newDoc(dir.to);
     if (!created) return;
-    await state.setBodyNow(created.id, prev.text);
-    DGM.editor.loadActive();
-    DGM.preview.schedule();
-    state.refreshDerived(created.id);
-    state.pushConvert({
-      from: dir.from,
-      to: dir.to,
-      doc: srcDoc.name,
-      ok: true,
-      note: dir.how,
-    });
-    state.pushOutput(t("dlg.convert.done", { name: state.fmtById(dir.to).name }) + " ← " + srcDoc.name, "ok");
-    DGM.toast({ icon: "swap", title: t("dlg.convert.done", { name: state.fmtById(dir.to).name }), sub: t("dlg.convert.doneSub", { file: created.name }) });
+    finishConvert(created, dir, srcDoc, p.notes);
   }
 
   /* ================================================================== 识图 */

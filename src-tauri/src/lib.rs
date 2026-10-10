@@ -157,6 +157,7 @@ pub fn run() {
             commands::doc_save,
             commands::doc_save_as,
             commands::export_write,
+            commands::convert_text,
             commands::debug_note,
             commands::cred_set,
             commands::cred_delete,
