@@ -457,6 +457,51 @@ def main() -> int:
         else:
             fails.append("菜单里没有带子菜单的「新建」行")
 
+        # ---- 断言 10：标签栏溢出可用性（滚入视野 / 滚轮横滚 / 渐隐 / Ctrl+Tab）----
+        act0 = ev(
+            "(async () => {"
+            "  await DGM.state.activateDoc(DGM.state.docs[0].id);"
+            "  await new Promise(r => setTimeout(r, 300));"
+            "  const box = document.querySelector('#tabs');"
+            "  const on = box.querySelector('.tab.on');"
+            "  const r = on.getBoundingClientRect(), b = box.getBoundingClientRect();"
+            "  return JSON.stringify({visible: r.left >= b.left - 2 && r.right <= b.right + 2,"
+            "    sl: Math.round(box.scrollLeft), total: DGM.state.docs.length});"
+            "})()"
+        )
+        log(f"激活首标签滚入视野: {act0}")
+        try:
+            a0 = json.loads(act0)
+            if not a0.get("visible"):
+                fails.append(f"激活标签未滚入视野: {act0}")
+        except Exception as e:
+            log(f"（断言 10 解析失败：{e}）")
+
+        tb = ev("(() => { const b = document.querySelector('#tabs').getBoundingClientRect();"
+                "return JSON.stringify([b.left + b.width / 2, b.top + b.height / 2]); })()")
+        wx, wy = json.loads(tb)
+        sl0 = ev("Math.round(document.querySelector('#tabs').scrollLeft)")
+        cdp.call("Input.dispatchMouseEvent", {"type": "mouseWheel", "x": wx, "y": wy, "deltaX": 0, "deltaY": 360}, timeout=15)
+        drain(0.3)
+        sl1 = ev("Math.round(document.querySelector('#tabs').scrollLeft)")
+        faded = ev("document.querySelector('#tabs').classList.contains('fade-left')")
+        log(f"滚轮横滚: scrollLeft {sl0}→{sl1} | fade-left={faded}")
+        if not (isinstance(sl1, (int, float)) and sl1 > sl0):
+            fails.append(f"滚轮横滚未生效：{sl0}→{sl1}")
+        if not faded:
+            fails.append("滚动后左端渐隐未出现")
+
+        act_before = ev("DGM.state.active")
+        cdp.call("Input.dispatchKeyEvent", {"type": "keyDown", "modifiers": 2, "key": "Tab", "code": "Tab", "windowsVirtualKeyCode": 9}, timeout=15)
+        cdp.call("Input.dispatchKeyEvent", {"type": "keyUp", "modifiers": 2, "key": "Tab", "code": "Tab", "windowsVirtualKeyCode": 9}, timeout=15)
+        drain(0.5)
+        act_after = ev("DGM.state.active")
+        expect_next = ev("(async () => { const i = DGM.state.docs.findIndex(d => d.id === " + json.dumps(act_before) + ");"
+                         " return DGM.state.docs[(i + 1) % DGM.state.docs.length].id; })()")
+        log(f"Ctrl+Tab 切换: {str(act_before)[:8]}… → {str(act_after)[:8]}…（期望 {str(expect_next)[:8]}…）")
+        if act_after != expect_next:
+            fails.append("Ctrl+Tab 未按标签顺序循环切换")
+
         close_alive = ev(
             "(() => { const b = document.querySelector('#win-close'); "
             "if (!b) return 'no-btn'; "

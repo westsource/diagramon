@@ -1067,6 +1067,12 @@ window.DGM = window.DGM || {};
     if (mod && k === "b") { e.preventDefault(); return togglePanel("sidebar"); }
     if (mod && k === "j") { e.preventDefault(); return togglePanel("bottom"); }
     if (mod && e.shiftKey && k === "f") { e.preventDefault(); return zenMode(); }
+    // 标签循环切换（编辑器里聚焦时也要能切 —— 放在 typing 拦截之前）
+    if (mod && k === "tab") { e.preventDefault(); return DGM.tabs.cycle(e.shiftKey ? -1 : 1); }
+    if (mod && (k === "pageup" || k === "pagedown")) {
+      e.preventDefault();
+      return DGM.tabs.cycle(k === "pageup" ? -1 : 1);
+    }
     // Ctrl+Shift+H：工作区搜索（VS Code 的 Find in Files 位；Ctrl+Shift+F 被全屏占了）
     if (mod && e.shiftKey && k === "h") { e.preventDefault(); return runCommand("file.searchWorkspace"); }
     if (mod && k === "i" && !e.shiftKey) { e.preventDefault(); return DGM.ai.focus("chat"); }

@@ -20,6 +20,41 @@ window.DGM = window.DGM || {};
 
   /* ------------------------------------------------------------------ 标签条 */
 
+  /** 溢出渐隐：按滚动位置给两端挂 mask，让"左边/右边还有标签"可见。
+   *  之前滚动条被故意藏掉又没有任何指示，标签一多看不见的就是真看不见。 */
+  function updateFade() {
+    const box = $("#tabs");
+    if (!box) return;
+    const max = box.scrollWidth - box.clientWidth;
+    box.classList.toggle("fade-left", max > 0 && box.scrollLeft > 2);
+    box.classList.toggle("fade-right", max > 0 && box.scrollLeft < max - 2);
+  }
+
+  /** 把激活标签滚进视野（手动改 scrollLeft，不用 scrollIntoView ——
+   *  后者会连带滚动祖先容器，可能把整页顶歪）。 */
+  function revealActive() {
+    const box = $("#tabs");
+    const on = box && box.querySelector(".tab.on");
+    if (!on) return;
+    const r = on.getBoundingClientRect();
+    const b = box.getBoundingClientRect();
+    if (r.left < b.left) box.scrollLeft += r.left - b.left - 8;
+    else if (r.right > b.right) box.scrollLeft += r.right - b.right + 8;
+    updateFade();
+  }
+
+  /** Ctrl+Tab / Ctrl+PgUp/PgDn：沿标签顺序循环切换（shift 反向）。 */
+  function cycle(dir) {
+    if (state.docs.length < 2) return;
+    const i = state.docs.findIndex((d) => d.id === state.active);
+    const next = state.docs[(i + dir + state.docs.length) % state.docs.length];
+    state.activateDoc(next.id).then(() => {
+      if (DGM.editor && DGM.editor.loadActive) DGM.editor.loadActive();
+      if (DGM.preview && DGM.preview.schedule) DGM.preview.schedule();
+      state.refreshDerived(next.id);
+    });
+  }
+
   function renderTabs() {
     const box = $("#tabs");
     if (!box) return;
@@ -53,6 +88,7 @@ window.DGM = window.DGM || {};
       });
       box.appendChild(tab);
     }
+    revealActive();
   }
 
   /* ------------------------------------------------------------------ 视图模式 */
@@ -144,6 +180,23 @@ window.DGM = window.DGM || {};
   /* ------------------------------------------------------------------ 绑定 */
 
   function bind() {
+    const tabs = $("#tabs");
+    if (tabs) {
+      // 滚轮直接横滚标签栏（笔记本触摸板的 deltaX 天然可用）；
+      // 垂直 delta 才转成横向 —— 避免吃掉其它滚动
+      tabs.addEventListener(
+        "wheel",
+        (e) => {
+          if (Math.abs(e.deltaY) >= Math.abs(e.deltaX)) {
+            tabs.scrollLeft += e.deltaY;
+            e.preventDefault();
+          }
+        },
+        { passive: false },
+      );
+      tabs.addEventListener("scroll", updateFade, { passive: true });
+      window.addEventListener("resize", updateFade);
+    }
     const add = $("#tab-add");
     if (add) add.addEventListener("click", () => DGM.dialogs.newDoc());
     const more = $("#tab-more");
@@ -163,5 +216,5 @@ window.DGM = window.DGM || {};
   });
   DGM.bus.on("settings:changed", renderViewModes);
 
-  DGM.tabs = { render: renderTabs, renderViewModes, bind };
+  DGM.tabs = { render: renderTabs, renderViewModes, bind, cycle, updateFade };
 })();

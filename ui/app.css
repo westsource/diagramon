@@ -435,10 +435,26 @@ body.no-ai #ai-gutter { display: none; }
   scrollbar-width: none;
 }
 .tabs::-webkit-scrollbar { height: 0; }
+/* 溢出渐隐：滚动条虽藏了，但"还有标签"必须可见（tabs.js 的 updateFade 挂类） */
+.tabs.fade-left {
+  -webkit-mask-image: linear-gradient(to right, transparent 0, #000 18px);
+  mask-image: linear-gradient(to right, transparent 0, #000 18px);
+}
+.tabs.fade-right {
+  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 18px), transparent 100%);
+  mask-image: linear-gradient(to right, #000 calc(100% - 18px), transparent 100%);
+}
+.tabs.fade-left.fade-right {
+  -webkit-mask-image: linear-gradient(to right, transparent 0, #000 18px, #000 calc(100% - 18px), transparent 100%);
+  mask-image: linear-gradient(to right, transparent 0, #000 18px, #000 calc(100% - 18px), transparent 100%);
+}
 .tab {
   display: flex; align-items: center; gap: 7px;
   padding: 0 8px 0 12px;
-  min-width: 0; max-width: 210px;
+  /* min-width 是"可读下限"：压到这里就不许再缩，转由横向滚动接管 ——
+     否则 flex 会把标签无限压成色点（17 个标签时 44px/个），
+     滚动与渐隐永远不登场，"挤满"依旧 */
+  min-width: 88px; max-width: 210px;
   font-size: var(--fs-sm);
   color: var(--muted);
   background: transparent;
