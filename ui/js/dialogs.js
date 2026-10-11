@@ -412,7 +412,7 @@ window.DGM = window.DGM || {};
         <span class="hint">${esc(t("set.editor.defaultViewHint"))}</span></div>
       <div class="field-row">
         <div class="field narrow"><label>${esc(t("set.editor.fontSize"))}</label><input type="number" min="10" max="22" value="${e.font_size || 13}" id="e-fs"></div>
-        <div class="field"><label>${esc(t("set.editor.ratio"))}</label><input type="range" min="20" max="80" value="${(s.panels && s.panels.split_src) || 46}" id="e-split"><span class="hint">${esc(t("set.editor.ratioHint"))}</span></div>
+        <div class="field"><label>${esc(t("set.editor.ratio"))}</label><input type="range" min="25" max="50" value="${(s.panels && s.panels.split_src) || 33}" id="e-split"><span class="hint">${esc(t("set.editor.ratioHint"))}</span></div>
       </div>
       <div class="field"><label>${esc(t("set.editor.debounce"))}</label><input type="number" min="0" max="2000" step="50" value="${e.debounce_ms || 350}" id="e-debounce"><span class="hint">${esc(t("set.editor.debounceHint"))}</span></div>
       ${switchRow(!!e.lint, t("set.editor.lint"), "set.editor.lintHint", "lint")}
@@ -926,6 +926,5 @@ window.DGM = window.DGM || {};
     layout,
     close,
     open: openDialog,
-    _mermaidToDot: mermaidToDot,
   };
 })();

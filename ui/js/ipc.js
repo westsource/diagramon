@@ -409,7 +409,7 @@ digraph Pipeline {
         density: "normal",
         accent: "pine",
         locale: "zh-CN",
-        panels: { activitybar: true, sidebar: true, sidebar_view: "explorer", ai: true, bottom: true, bottom_tab: "problems", sidebar_w: 236, ai_w: 344, panel_h: 168, split_src: 46 },
+        panels: { activitybar: true, sidebar: true, sidebar_view: "explorer", ai: true, bottom: true, bottom_tab: "problems", sidebar_w: 236, ai_w: 344, panel_h: 168, split_src: 33 },
         editor: { font_size: 13, debounce_ms: 350, lint: true, per_doc_view: true, default_view: "split", autosave: true, autosave_ms: 5000, restrict_to_workspace: false },
         ai: {
           models: [

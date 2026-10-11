@@ -535,7 +535,11 @@ window.DGM = window.DGM || {};
     if (p.sidebar_w) root.style.setProperty("--sidebar-w", p.sidebar_w + "px");
     if (p.ai_w) root.style.setProperty("--ai-w", p.ai_w + "px");
     if (p.panel_h) root.style.setProperty("--panel-h", p.panel_h + "px");
-    const split = p.split_src || 46;
+    // 源码窗格宽度：默认 1/3，硬边界 1/4–1/2。
+    // 46 是旧默认值 —— 没手动拖过分隔条的用户存的也是 46，这里归一成新默认 33。
+    let split = p.split_src || 33;
+    if (split === 46) split = 33;
+    split = Math.max(25, Math.min(50, split));
     el.split.style.setProperty("--split-src", split + "%");
     document.body.classList.toggle("no-sidebar", !p.sidebar);
     document.body.classList.toggle("no-ai", !p.ai);
@@ -942,7 +946,8 @@ window.DGM = window.DGM || {};
       if (!dragging) return;
       const r = el.split.getBoundingClientRect();
       let pct = ((e.clientX - r.left) / r.width) * 100;
-      pct = Math.max(18, Math.min(82, pct));
+      // 源码窗格占工作区的比例：默认 1/3，夹在 1/4–1/2（用户拍板的硬边界）
+      pct = Math.max(25, Math.min(50, pct));
       el.split.style.setProperty("--split-src", pct + "%");
     });
     window.addEventListener("mouseup", () => {
@@ -950,13 +955,13 @@ window.DGM = window.DGM || {};
       dragging = false;
       document.body.classList.remove("resizing");
       el.splitter.classList.remove("drag");
-      const val = parseFloat(el.split.style.getPropertyValue("--split-src")) || 46;
+      const val = parseFloat(el.split.style.getPropertyValue("--split-src")) || 33;
       state.patchSettings({ panels: { split_src: Math.round(val) } });
       status(`源码 : 预览 = ${Math.round(val)} : ${100 - Math.round(val)}`, "");
     });
     el.splitter.addEventListener("dblclick", () => {
-      el.split.style.setProperty("--split-src", "46%");
-      state.patchSettings({ panels: { split_src: 46 } });
+      el.split.style.setProperty("--split-src", "33%");
+      state.patchSettings({ panels: { split_src: 33 } });
     });
 
     // 底部面板高度

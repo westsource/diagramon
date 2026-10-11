@@ -132,6 +132,30 @@ async function main() {
     log(C.dim(`  ${files.length} 个文件，全部可解析`));
   }
 
+  // UI 交互冒烟：语法对 ≠ 页面活着。dialogs.js 曾因一个导出引用了已删除的函数，
+  // 模块求值即抛 → DGM.dialogs 整个没赋值 → 所有对话框（含退出确认）在真机上全灭，
+  // 而语法检查、Rust 单测、甚至真机自检（不点对话框）全都是绿的。
+  // ui_probe.py 用浏览器原型（mock 后端）抓启动异常 + 程序化点击菜单。
+  step("UI 交互冒烟（浏览器原型：启动异常 / 菜单可点 / 分屏比例 / 标签挤压）");
+  {
+    const py = process.env.DGM_PYTHON || "python";
+    const r = spawnSync(py, ["tools/dev/ui_probe.py"], {
+      cwd: ROOT,
+      stdio: "inherit",
+      shell: process.platform === "win32",
+      timeout: 180_000,
+    });
+    if (r.status === 1) {
+      // 断言失败：UI 真的死了，拦下整场验收
+      log(C.red("UI 交互冒烟失败（见上方输出）"));
+      process.exit(2);
+    }
+    if (r.status !== 0) {
+      // 探针环境起不来（缺 websocket-client / 没有浏览器）：不拦验收，但要吭声
+      log(C.yellow("  （ui_probe 环境不可用，跳过 —— 需要 python + websocket-client + 本机 Chrome）"));
+    }
+  }
+
   step("构建 diagramon");
   if (run("cargo", ["build", "-p", "diagramon", "--message-format", "short"]) !== 0) {
     log(C.red("构建失败 —— 先修编译错误"));

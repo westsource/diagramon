@@ -180,7 +180,7 @@ impl Default for PanelPrefs {
             sidebar_w: 236,
             ai_w: 344,
             panel_h: 168,
-            split_src: 46,
+            split_src: 33, // 默认源码窗格占 1/3（拖拽夹在 1/4–1/2）
         }
     }
 }

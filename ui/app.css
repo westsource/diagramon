@@ -416,7 +416,17 @@ body.no-ai .ai-pane { display: none; }
   border-bottom: 1px solid var(--border);
   overflow: hidden;
 }
-.tabs { display: flex; align-items: stretch; min-width: 0; overflow-x: auto; scrollbar-width: none; }
+.tabs {
+  /* 标签过多时的挤压吸收者：flex-shrink 不设限 + 横向滚动。
+     必须显式 flex:1 1 auto —— 否则旁边的 tabbar-right 会被按比例一起压，
+     「源码/分屏/预览」按钮的文字被挤到逐字换行（真机踩过）。 */
+  flex: 1 1 auto;
+  display: flex;
+  align-items: stretch;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
 .tabs::-webkit-scrollbar { height: 0; }
 .tab {
   display: flex; align-items: center; gap: 7px;
@@ -434,9 +444,10 @@ body.no-ai .ai-pane { display: none; }
 .tab .dirty { width: 7px; height: 7px; border-radius: 50%; background: var(--ink-2); flex: 0 0 auto; }
 .tab .x { width: 17px; height: 17px; display: grid; place-items: center; border-radius: 4px; color: var(--muted); flex: 0 0 auto; }
 .tab .x:hover { background: var(--border-strong); color: var(--ink); }
-.tab-add { width: 30px; display: grid; place-items: center; color: var(--muted); }
+.tab-add { width: 30px; flex: 0 0 auto; display: grid; place-items: center; color: var(--muted); }
 .tab-add:hover { background: var(--surface-3); color: var(--ink); }
-.tabbar-right { margin-left: auto; display: flex; align-items: center; gap: 2px; padding: 0 6px; }
+/* 视图模式切换绝不被标签挤压：不许收缩、文字不许换行（否则按钮变两行高） */
+.tabbar-right { margin-left: auto; flex: 0 0 auto; display: flex; align-items: center; gap: 2px; padding: 0 6px; }
 
 /* 视图模式切换（源码/分屏/预览） */
 .viewmodes {
@@ -448,12 +459,15 @@ body.no-ai .ai-pane { display: none; }
   border: 1px solid var(--border);
   border-radius: var(--radius);
 }
+.viewmodes { flex: 0 0 auto; }
 .viewmodes button {
+  flex: 0 0 auto;
   display: flex; align-items: center; gap: 5px;
   padding: 2px 9px;
   font-size: var(--fs-xs);
   color: var(--muted);
   border-radius: var(--radius-sm);
+  white-space: nowrap;
 }
 .viewmodes button:hover { color: var(--ink); background: var(--surface-3); }
 .viewmodes button.on { color: var(--accent-ink); background: var(--accent); }
