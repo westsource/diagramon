@@ -600,6 +600,9 @@ window.DGM = window.DGM || {};
     const ex = $("#btn-export");
     if (ex) {
       ex.addEventListener("click", (e) => {
+        // 同 shell.js::showPop 的约定：锚点要 stopPropagation，
+        // 否则文档级"点外面就关"会在同一次点击里把刚弹出的导出菜单关掉。
+        e.stopPropagation();
         const r = e.currentTarget.getBoundingClientRect();
         DGM.pop.show(
           [

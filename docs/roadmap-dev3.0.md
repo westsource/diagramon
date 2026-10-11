@@ -305,6 +305,96 @@ DIAGRAMON_SELFTEST=1 ./target/debug/diagramon.exe                         # 真�
 端到端（连真实服务端）需要跑起来的 `service/`，本机未做 —— 客户端到服务端的字段口径  
 以 `app/schemas/__init__.py` 的 pydantic 模型为准逐字段对齐（camelCase）。
 
+### 第 6 步补充 · 云端界面拆分（2026-10-11）
+
+原「云端」是一个视图把三件事挤在一起：账户头 + **内联登录表单** + 扁平文档列表；
+而且活动栏的「云端文档」(Alt+4) 与底部的「账户与云端」按钮**指向同一个视图**。现在拆开：
+
+| 界面 | 入口 | 只做 |
+|---|---|---|
+| **账户**（侧栏视图 `account`，只读） | 活动栏底部「账户」(title 从「账户与云端」改为「账户」) | 邮箱 / 昵称 / 套餐 / 角色 / 存储用量；未登录时点它**直接弹登录窗口**，登录成功**落到本视图** |
+| **云端文档**（侧栏视图 `cloud`，目录树） | 活动栏「云端文档」Alt+4 | 筛选 + 目录树（目录可展开、文档是叶子）+ 打开；底部配额条 |
+| **保存到云端**（对话框） | 文件菜单 →「保存到云端…」（原来是 disabled 的说明项） | 文档名 + **单选目录树**（含「根目录」）+ 新建子目录 |
+| **登录**（独立对话框） | 未登录时点「账户」；各视图里的「登录」按钮 | 登录、重发激活邮件、跳官网注册 |
+
+- **登录状态全客户端唯一**：真源仍是 `cloud_status`（令牌在凭据库、不回前端）。
+  上面四个界面都只读 `state.cloud.status`，**不各自另存副本** —— 在一处登录成功后
+  另一处立刻是"已登录"，不会再要求登录一次。守卫见 `ui_probe.py` 断言 16 的 `signIn` 检查。
+- **登录是中途一站，不是终点**：登录窗口收 `openLogin({ onSuccess })`，登录成功后把"然后呢"续上 ——
+  从「账户」进来的切到账户视图、从「保存到云端」进来的接着开保存窗口。
+  原型里本来就有这一步（`cloud-proto.js` 登录成功时设 `S.view = "account"`），实现时漏了，
+  于是出现"登录完仍停在资源浏览器，再点「账户」只弹一句已登录"（用户实测反馈，见下）。
+- **活动栏不许拿 render 时的快照判云状态**（同一反馈的第二个成因）：`cloud:changed` 原来只喂侧栏，
+  活动栏不跟着重渲染，快照会让账户钮**永远**停在"未登录"那一支上 —— 症状就是"怎么点都切不过去，
+  换个侧栏面板再点又好了"（换面板会触发整屏重渲染，快照被刷新）。两条都改了：
+  (a) 点击时**现读** `state.panels()` / `state.cloud.status`；(b) 订阅 `cloud:changed → renderActivity`。
+  守卫见断言 18，它复现的正是这条实测路径。
+- **注册不在客户端做**（与旧客户端 `client/Views/LoginDialog.cs` 同口径）：页脚只有
+  「没有账号？去官网注册」这一个**导航动作**，按 `{cloud.base_url}/register` 打开系统浏览器；
+  打不开浏览器时把地址回显成**可复制的只读输入框**（不是一句纯文本）。
+- **新增契约**：`CloudFolder / CloudFolderList` + 命令 `cloud_folders`（镜像 `GET /v1/folders`）、
+  `cloud_folder_create`（`POST /v1/folders`，可为空目录）；`CloudDoc`/`CloudDocBody` 增加 `path`，
+  `cloud_doc_save` 显式带 `path`（服务端口径：省略/null = 原地不动，所以必须显式给）。
+  映射与单测在 `crates/app-core/src/cloudmap.rs`（夹具是真实服务端响应片段）。
+- **账户页含 AI 权益**：`CloudAccount.ai: Option<CloudAiCredit>` 映射 `membership.ai`
+  （服务端一直在返回，只是客户端原先没映射）。三条口径：
+  ① **整块缺失/为 null = 未知**（显示「—」），**不是** `enabled:false`（未开通）—— 混起来就是让老后端被显示成"没开通"；
+  ② **额度单位是「信用点」不是人民币**（服务端给整数微信用点、明确不锚定货币）；
+  ③ 剩余是 `总额 - 已用` **减出来的**（服务端只给这两个数：充值加在总额上，减法恒成立），
+  周期用服务端的 `periodEnd` 说"至 X 重置"，不猜下月 1 日。
+- **为什么非加 `cloud_folders`**：`cloud_docs_list` 只在文档项里带 `path`，**空目录根本不会出现**，
+  树就建不起来（缺层、空目录看不见）。服务端的 folders 路由正是"显式目录 ∪ 文档路径隐含的目录"。
+
+**验证**：`cargo test` 155 项全绿；i18n 中英各 717 键一致（`check.mjs` 的引用完整性步骤）；
+`ui_probe.py` **19 条断言全绿**（14 改写 / 15 登录窗口 / 16 云端树+保存窗口+AI 徽标 /
+17 AI 额度块 / 18 从「账户」登录后续做落点）。断言 18 做过红绿对照：
+把活动栏逻辑改回旧写法后，它报出的正是用户所述的现象（`viewAfter: "explorer"`、
+第二次点击毫无反应），改回修复版即全绿。  
+真机自检（`tools/dev/check.mjs`）本机沙箱跑不出报告 —— 需在用户前台跑一次确认。
+
+### 第 6 步补充② · 云网关 AI 接线（2026-10-11）
+
+**病根是接线缺失，不是显示 bug。** 模型曾经只有 `settings.ai.models`（本地 BYOK）一个来源，
+设置页自己就写着「云网关未接入：本版本只能用 BYOK」—— 所以**登录成会员也一样没有模型**。
+服务端其实全都有（`GET /v1/ai/models` + `POST /v1/ai/chat/completions`），客户端缺的是 adapter。
+
+**做法：网关在客户端眼里就是一个 OpenAI 兼容 provider。** 于是整条流式路径（SSE 解析 / 取消 /
+usage / 失败帧）一行都不用改，只有"参数从哪来"是新的：
+
+| 层 | 内容 |
+|---|---|
+| `app-ipc` | `GatewayModel{id,display_name,supports_vision,max_output}` / `GatewayModelList`、`AI_GATEWAY_MODELS`、**`GATEWAY_MODEL_PREFIX = "gw:"`** |
+| `app-core::cloudmap` | `gateway_model_of()`（缺显示名退回别名，缺 `maxOutput` 容忍；`data:[]` 不是错误） |
+| `src-tauri/cloud.rs` | `ai_gateway_models()`（`GET /ai/models`）、`gateway_resolved(alias)`：base_url = `{api_base}/ai`、key = **当前 access token 现取** |
+| `src-tauri/commands.rs` | `resolve_target()` **唯一分流点**：`gw:` 前缀 → 网关，否则本地 BYOK |
+| `crates/ai` | `Resolved.max_tokens/temperature` 改 **`Option`**：网关一律 `None`（见下） |
+| 前端 | `state.aiGateway` + `modelChoices()`（合并 + `group` 标记）；登录/登出/启动同步 |
+
+- **`gw:` 前缀而不是加 `kind` 字段**：模型 id 是**一个**用户偏好（`ai.default_model`），
+  加字段就得在每个"当前模型是谁"的地方比对两个值；而分流点其实只有一处，前缀让下游变成一件事。
+- **网关下发 `max_tokens` 一律省略**：服务端按"所选候选 × 档位"钳
+  （`max_tokens = min(max(requested, MIN_OUTPUT_TOKENS), ceiling)`）。客户端填一个数只会
+  把档位允许的长回答**截短** —— 它知道 ceiling，我们不知道。BYOK 那两个值是用户自己配的，照旧下发。
+- **分组显示**（用户拍板）：两组的"凭据从哪来"完全不同 —— 网关用当前登录令牌（用户没填过任何东西），
+  本地那组是用户自己填的密钥。混排会让人以为网关模型也要去 AI 设置里填 key。
+  分组条用**已有的** `label2` → `.pop-label`，两处选择器共用 `DGM.ai.modelItems()`。
+- **登录后自动选第一个网关模型为默认**（用户拍板）：`autoPickGatewayModel("always")`。
+  启动/回连走 `"ifMissing"` —— 只在默认**空或悬空**时补，否则每次开应用都把用户挑的模型拽回第一个。
+- **登出必须清空**：模型别名是"当前账号能用什么"，留着旧的等于让用户对着一个已经被服务端拿掉的
+  别名点半天；默认若指向网关别名则清掉，交给 `currentModel()` 回落到本地模型。
+- **文案跟着状态走**：`ai.noModels.descSignedIn/descSignedOut`（原句在网关接通后就是半句假话）、
+  `set.ai.gatewayOn/gatewayNoEntitlement/gatewaySignedOut`（替换掉「未接入」）。
+
+**顺带修掉的真 bug（探针报出来的）**：`#ai-model` 与 `#btn-export` 点下去**弹了又立刻关** ——
+文档级"点外面就关掉弹出物"的监听把**打开它的那一次点击**也算成了"外面"。
+约定：锚点必须 `e.stopPropagation()`（`#menubar` 早就这么做，只是没写成规矩，已写进 `showPop` 的注释）。
+
+**验证**：`cargo test` 161 项全绿；i18n 中英各 724 键一致（489 个静态引用零缺键）；
+`ui_probe.py` **20 条断言全绿**（新增 20：未登录无网关模型 / 登录后拿到别名且默认被自动选中 /
+**两处**选择器都有分组小标题 / 登出清空）。
+
+
+
 ---
 
 ## 第 7 步 · 发布 ✅ 已完成（代码侧；签名与更新源是发布方手续）

@@ -588,18 +588,17 @@ def main() -> int:
         except Exception as e:
             log(f"（断言 13 解析失败：{e}）")
 
-        # ---- 断言 14：账户信息在侧栏不在菜单 ----
+        # ---- 断言 14：账户入口存在且**独立**，并且不在菜单里 ----
+        # 只查结构（这里还没登录，点下去会弹登录窗口 —— 那是断言 15 的事；
+        # "切到账户视图"要等登录之后，见断言 16）。
         acct_check = ev(
-            "(async () => {"
+            "(() => {"
             "  const labels = [...document.querySelectorAll('#menubar .tb-item')].map(b => b.textContent.trim());"
             "  const inMenu = labels.some(x => x.includes('账户'));"
-            "  const act = [...document.querySelectorAll('#activitybar .act')].find(b => b.title.includes('账户与云端'));"
-            "  if (!act) return JSON.stringify({inMenu, act: 'no-btn'});"
-            "  act.click();"
-            "  await new Promise(r => setTimeout(r, 250));"
-            "  const view = DGM.state.settings.panels.sidebar_view;"
-            "  const sidebarOn = DGM.state.settings.panels.sidebar;"
-            "  return JSON.stringify({inMenu, view, sidebarOn});"
+            "  const acts = [...document.querySelectorAll('#activitybar .act')];"
+            "  const act = acts.find(b => b.title.trim() === '账户');"
+            "  const cloudBtn = acts.find(b => b.title.includes('云端文档'));"
+            "  return JSON.stringify({inMenu, noBtn: !act, distinct: !!cloudBtn && cloudBtn !== act});"
             "})()"
         )
         log(f"账户入口: {acct_check}")
@@ -607,12 +606,402 @@ def main() -> int:
             ac = json.loads(acct_check)
             if ac.get("inMenu"):
                 fails.append("菜单里仍有「账户」顶级项")
-            if ac.get("act") == "no-btn":
-                fails.append("活动栏没有账户按钮")
-            elif ac.get("view") != "cloud" or not ac.get("sidebarOn"):
-                fails.append(f"账户按钮未切到云端视图: {acct_check}")
+            if ac.get("noBtn"):
+                fails.append("活动栏没有账户按钮（title 应为「账户」）")
+            if not ac.get("distinct"):
+                fails.append("账户与云端文档共用了同一个活动栏按钮")
         except Exception as e:
             log(f"（断言 14 解析失败：{e}）")
+
+        # ---- 断言 15：未登录时点「账户」→ 直接弹登录窗口；注册地址可复制且由配置推导 ----
+        # 三件事一起验：登录搬进了独立窗口（不再内联在侧栏）、窗口只做登录（注册是跳官网的
+        # 导航动作）、回显的注册地址来自 settings.cloud.base_url 而不是硬编码域名。
+        login_check = ev(
+            "(async () => {"
+            "  const act = [...document.querySelectorAll('#activitybar .act')]"
+            "    .find(b => b.title.trim() === '账户');"
+            "  if (!act) return JSON.stringify({noact: true});"
+            "  const before = DGM.state.settings.panels.sidebar_view;"
+            "  act.click();"
+            "  await new Promise(r => setTimeout(r, 250));"
+            "  const ov = document.getElementById('overlay-dialog');"
+            "  const dlg = document.getElementById('dialog');"
+            "  const open = !!ov && ov.hidden === false;"
+            "  const link = dlg.querySelector('[data-act=register]');"
+            "  const box = dlg.querySelector('#lg-url-input');"
+            "  const inline = !!dlg.querySelector('#lg-email');"
+            "  const after = DGM.state.settings.panels.sidebar_view;"
+            "  if (link) link.click();"
+            "  await new Promise(r => setTimeout(r, 150));"
+            "  const url = box ? box.value : '';"
+            "  const base = (DGM.state.settings.cloud || {}).base_url || '';"
+            "  const ro = box ? box.readOnly : false;"
+            "  if (DGM.dialogs) DGM.dialogs.close();"
+            "  return JSON.stringify({open, hasLink: !!link, hasBox: !!box, ro, url, base,"
+            "    inline, before, after, title: (dlg.querySelector('h2') || {}).textContent || ''});"
+            "})()"
+        )
+        log(f"登录窗口: {login_check}")
+        try:
+            lc = json.loads(login_check)
+            if lc.get("noact"):
+                fails.append("活动栏没有账户按钮")
+            else:
+                if not lc.get("open"):
+                    fails.append("未登录点「账户」没有弹出登录窗口")
+                if not lc.get("inline"):
+                    fails.append("登录窗口里没有邮箱输入框")
+                if not lc.get("hasLink"):
+                    fails.append("登录窗口没有「去官网注册」链接")
+                if not lc.get("hasBox") or not lc.get("ro"):
+                    fails.append("注册地址不是可复制的只读输入框")
+                want = (lc.get("base") or "").rstrip("/") + "/register"
+                if lc.get("url") != want:
+                    fails.append(f"注册地址未由配置推导：{lc.get('url')} != {want}")
+                if lc.get("before") != lc.get("after"):
+                    fails.append(f"未登录点「账户」不该切视图：{lc.get('before')} -> {lc.get('after')}")
+        except Exception as e:
+            log(f"（断言 15 解析失败：{e}）")
+
+        # ---- 断言 16：登录后「云端文档」是目录树；「保存到云端」开的是树形选目录窗口 ----
+        # 顺带守住"登录状态只有一份"：登录是从 DGM.state.cloudLogin 做的（等价于在
+        # 任意一处登录），云端文档视图必须立刻是"已登录"的样子，而不需要再登录一次。
+        cloud_ui = ev(
+            "(async () => {"
+            "  await DGM.state.cloudLogin('probe+free@example.com', 'secret');"
+            "  DGM.shell.setSidebarView('cloud');"
+            "  await new Promise(r => setTimeout(r, 300));"
+            "  const rows = document.querySelectorAll('#side-view .ct-row').length;"
+            "  const folders = document.querySelectorAll('#side-view .ct-row .fld').length;"
+            "  const docs = document.querySelectorAll('#side-view .ct-row .sz').length;"
+            # 云端文档视图**不该**有存储用量：额度归「账户」视图（同一份服务端数据）。
+            # 这里两个都查：新的 .ct-foot 和老式的 progress 都不允许出现。
+            "  const quotaStrip = !!document.querySelector('#side-view .ct-foot');"
+            "  const quotaProgress = document.querySelectorAll('#side-view progress').length;"
+            "  const signIn = !!document.querySelector('#side-view [data-a=login]');"
+            "  const err = DGM.state.cloud.lastError || '';"
+            "  await DGM.cloud.saveDoc();"
+            "  await new Promise(r => setTimeout(r, 300));"
+            "  const dlg = document.getElementById('dialog');"
+            "  const picks = dlg.querySelectorAll('.pk-tree [data-pick]').length;"
+            "  const name = (dlg.querySelector('#cs-name') || {}).value || '';"
+            "  const canCreate = !!dlg.querySelector('#cs-new-folder');"
+            "  if (DGM.dialogs) DGM.dialogs.close();"
+            "  await new Promise(r => setTimeout(r, 100));"
+            "  const act = [...document.querySelectorAll('#activitybar .act')]"
+            "    .find(b => b.title.trim() === '账户');"
+            "  if (act) act.click();"
+            "  await new Promise(r => setTimeout(r, 250));"
+            "  const view = DGM.state.settings.panels.sidebar_view;"
+            "  const card = !!document.querySelector('#side-view .acct-card');"
+            "  const quota = !!document.querySelector('#side-view .acct-quota');"
+            # AI 权益：mock 登录后是免费套餐（enabled=false）→ 必须出现「未开通」徽标；
+            # 而"服务端没给这个字段"（ai=null）要走"—"未知，两者不能混。
+            "  const aiBadge = document.querySelector('#side-view .acct-badge');"
+            "  const aiOff = !!document.querySelector('#side-view .acct-ai-off');"
+            # 免费套餐没有额度可看 → 不该有第二条进度条（存储那条仍在）
+            "  const quotaBars = document.querySelectorAll('#side-view .acct-quota').length;"
+            "  return JSON.stringify({rows, folders, docs, quotaStrip, quotaProgress, signIn, err,"
+            "    picks, name, canCreate, view, card, quota, aiBadge: !!aiBadge,"
+            "    aiText: aiBadge ? aiBadge.textContent.trim() : '', aiOff, quotaBars});"
+            "})()"
+        )
+        log(f"云端文档树 / 保存窗口: {cloud_ui}")
+        try:
+            cu = json.loads(cloud_ui)
+            if cu.get("err"):
+                fails.append(f"云端报错：{cu.get('err')}")
+            if not cu.get("rows") or not cu.get("folders"):
+                fails.append(f"云端文档视图没有渲染目录树: {cloud_ui}")
+            if cu.get("docs", 0) < 1:
+                fails.append("云端目录树里没有文档行（只列了目录）")
+            if cu.get("signIn"):
+                fails.append("已登录后云端文档视图仍在要求登录（登录状态不统一）")
+            if cu.get("quotaStrip") or cu.get("quotaProgress"):
+                fails.append(f"云端文档视图不该显示存储用量（额度在「账户」视图）: {cloud_ui}")
+            if (cu.get("picks") or 0) < 2:
+                fails.append(f"保存到云端窗口没有目录选择树: {cloud_ui}")
+            if not cu.get("name"):
+                fails.append("保存到云端窗口没有预填文档名")
+            if not cu.get("canCreate"):
+                fails.append("保存到云端窗口缺少「新建子目录」入口")
+            # 已登录 → 点「账户」应当**切视图**（而不是再弹登录窗口）
+            if cu.get("view") != "account":
+                fails.append(f"已登录点「账户」未切到账户视图: {cu.get('view')}")
+            if not cu.get("card"):
+                fails.append("账户视图没有账户卡片")
+            if not cu.get("quota"):
+                fails.append("账户视图没有配额块（额度必须在这里能看到）")
+            if not cu.get("aiBadge"):
+                fails.append("账户视图没有 AI 权益徽标（套餐里的 AI 服务状态）")
+            if not cu.get("aiOff"):
+                fails.append(f"免费套餐的 AI 权益应显示为「未开通」: {cu.get('aiText')}")
+        except Exception as e:
+            log(f"（断言 16 解析失败：{e}）")
+
+        # ---- 断言 17：有 AI 权益时，账户视图要给出真实额度（信用点，不是 ¥） ----
+        # mock 里换一份带 enabled=true 的账户快照（等价于会员套餐），
+        # 验证：AI 行变「已开通」+ 出现第二条额度块 + 剩余与周期都写出来。
+        ai_credit = ev(
+            "(() => {"
+            "  DGM.state.cloud.status.account = Object.assign({}, DGM.state.cloud.status.account, {"
+            "    plan_name: '会员',"
+            "    ai: { enabled: true, credit_monthly_micros: 20000000, credit_used_micros: 3200000,"
+            "          period_start: '2026-10-01T00:00:00+00:00', period_end: '2026-11-01T00:00:00+00:00' } });"
+            "  DGM.shell.setSidebarView('account');"
+            "  return 1;"
+            "})()"
+        )
+        # setSidebarView 走 patchSettings（异步），等一帧再读 DOM
+        ev("(async () => { await new Promise(r => setTimeout(r, 300)); return 1; })()")
+        ai_view = ev(
+            "(() => {"
+            "  const boxes = [...document.querySelectorAll('#side-view .acct-quota')];"
+            "  const on = document.querySelector('#side-view .acct-ai-on');"
+            "  const aiBox = boxes.find(b => /AI/.test(b.querySelector('h5').textContent));"
+            "  const txt = aiBox ? aiBox.textContent.replace(/\\s+/g, ' ').trim() : '';"
+            "  return JSON.stringify({on: !!on, boxes: boxes.length, txt});"
+            "})()"
+        )
+        log(f"AI 额度块: {ai_view}")
+        try:
+            av = json.loads(ai_view)
+            if not av.get("on"):
+                fails.append(f"AI 已开通时没显示「已开通」: {ai_view}")
+            if (av.get("boxes") or 0) < 2:
+                fails.append("AI 已开通时账户视图应有两条额度块（存储 + AI）")
+            txt = av.get("txt") or ""
+            if "3.2" not in txt or "20" not in txt:
+                fails.append(f"AI 额度没显示已用/总额（3.2 / 20 信用点）: {txt}")
+            if "剩余 16.8" not in txt:
+                fails.append(f"AI 额度没显示剩余（应为 16.8 信用点）: {txt}")
+            if "¥" in txt or "元" in txt:
+                fails.append(f"AI 额度单位不该用货币符号（服务端是信用点）: {txt}")
+        except Exception as e:
+            log(f"（断言 17 解析失败：{e}）")
+
+        # ---- 断言 18：从活动栏「账户」登录 → 登录完**落到账户视图**，且按钮不会卡在旧状态 ----
+        # 用户实测路径：未登录 → 侧栏停在「资源浏览器」→ 点「账户」→ 在登录窗口里登录
+        # ⇒ 只弹一句「已登录」，账户侧栏不出现；**换过别的侧栏面板再点又能用了**。
+        # 两个成因一起守（去掉任一个这条都会红）：
+        #   ① 登录只是中途一站 —— 入口要把"登录完接着做什么"传进去（openLogin.onSuccess）
+        #   ② 活动栏不能拿 render 时的快照判 signed —— 登录/登出不会重渲染它
+        #      （`cloud:changed` 原本只喂侧栏），快照会让按钮永远停在"未登录"那一支上
+        acct_login = ev(
+            "(async () => {"
+            "  await DGM.state.cloudLogout();"
+            "  DGM.shell.setSidebarView('explorer');"
+            "  await new Promise(r => setTimeout(r, 300));"
+            "  const pick = () => [...document.querySelectorAll('#activitybar .act')]"
+            "    .find(b => b.title.trim() === '账户');"
+            "  const act = pick();"
+            "  if (!act) return JSON.stringify({noact: true});"
+            "  act.click();"
+            "  await new Promise(r => setTimeout(r, 250));"
+            "  const ov = document.getElementById('overlay-dialog');"
+            "  const dialogOpen = !!ov && ov.hidden === false;"
+            "  const viewBefore = DGM.state.settings.panels.sidebar_view;"
+            "  const em = document.getElementById('lg-email');"
+            "  const pw = document.getElementById('lg-pass');"
+            "  if (em) em.value = 'probe@example.com';"
+            "  if (pw) pw.value = 'secret';"
+            "  const ok = document.getElementById('lg-ok');"
+            "  if (ok) ok.click();"
+            "  await new Promise(r => setTimeout(r, 600));"
+            "  const viewAfter = DGM.state.settings.panels.sidebar_view;"
+            "  const sidebarOn = !!DGM.state.settings.panels.sidebar;"
+            "  const card = !!document.querySelector('#side-view .acct-card');"
+            "  const stillOpen = !!ov && ov.hidden === false;"
+            # 再点一次：应当走"已登录"分支（当前视图就是账户 → 收起侧栏），
+            # 而不是又弹登录窗口、也不该毫无反应 —— 后两者都是活动栏停在旧快照的症状
+            "  const act2 = pick();"
+            "  if (act2) act2.click();"
+            "  await new Promise(r => setTimeout(r, 300));"
+            "  const sidebarAfter2nd = !!DGM.state.settings.panels.sidebar;"
+            "  const dlgAfter2nd = !!ov && ov.hidden === false;"
+            "  const viewAfter2nd = DGM.state.settings.panels.sidebar_view;"
+            # 复原到"已登录 + 账户视图"，后面的截图要拍这个现场
+            "  DGM.shell.setSidebarView('account');"
+            "  await new Promise(r => setTimeout(r, 300));"
+            "  return JSON.stringify({dialogOpen, viewBefore, viewAfter, sidebarOn, card,"
+            "    stillOpen, sidebarAfter2nd, dlgAfter2nd, viewAfter2nd});"
+            "})()"
+        )
+        log(f"账户登录续做: {acct_login}")
+        try:
+            al = json.loads(acct_login)
+            if al.get("noact"):
+                fails.append("活动栏没有账户按钮")
+            else:
+                if not al.get("dialogOpen"):
+                    fails.append("未登录点「账户」没弹登录窗口")
+                if al.get("viewBefore") != "explorer":
+                    fails.append(f"前置状态不对（点之前应停在 explorer）: {al.get('viewBefore')}")
+                if al.get("stillOpen"):
+                    fails.append("登录成功后登录窗口没关掉")
+                if al.get("viewAfter") != "account":
+                    fails.append(f"从「账户」登录成功后应落到账户视图: {al.get('viewAfter')}")
+                if not al.get("sidebarOn"):
+                    fails.append("登录成功后侧栏没打开")
+                if not al.get("card"):
+                    fails.append("登录成功后账户视图没有账户卡片")
+                if al.get("dlgAfter2nd"):
+                    fails.append("已登录后再点「账户」又弹了登录窗口（活动栏没跟着刷新）")
+                if al.get("sidebarAfter2nd") or al.get("viewAfter2nd") != "account":
+                    fails.append(f"已登录后再点「账户」没走「当前视图就收起」这一支（按钮停在旧快照上）: {acct_login}")
+        except Exception as e:
+            log(f"（断言 18 解析失败：{e}）")
+
+        # ---- 断言 19：「保存到云端」未登录时先去登录，登录完**接着把这次保存做完** ----
+        # 同一类问题的第二个入口：登录是中途一站，回来不该把用户丢在门口。
+        save_resume = ev(
+            "(async () => {"
+            "  await DGM.state.cloudLogout();"
+            "  await new Promise(r => setTimeout(r, 200));"
+            "  await DGM.cloud.saveDoc();"
+            "  await new Promise(r => setTimeout(r, 250));"
+            "  const ov = document.getElementById('overlay-dialog');"
+            "  const loginOpen = !!ov && ov.hidden === false;"
+            "  const loginBox = !!document.getElementById('lg-email');"
+            "  const saveBox1 = !!document.getElementById('cs-name');"
+            "  const em = document.getElementById('lg-email');"
+            "  const pw = document.getElementById('lg-pass');"
+            "  if (em) em.value = 'probe@example.com';"
+            "  if (pw) pw.value = 'secret';"
+            "  const ok = document.getElementById('lg-ok');"
+            "  if (ok) ok.click();"
+            "  await new Promise(r => setTimeout(r, 800));"
+            "  const saveBox2 = !!document.getElementById('cs-name');"
+            "  const saveOpen = !!ov && ov.hidden === false;"
+            "  if (DGM.dialogs) DGM.dialogs.close();"
+            "  await new Promise(r => setTimeout(r, 120));"
+            "  return JSON.stringify({loginOpen, loginBox, saveBox1, saveBox2, saveOpen});"
+            "})()"
+        )
+        log(f"保存续做: {save_resume}")
+        try:
+            sr = json.loads(save_resume)
+            if not (sr.get("loginOpen") and sr.get("loginBox")):
+                fails.append(f"未登录点「保存到云端」没先去登录: {save_resume}")
+            if sr.get("saveBox1"):
+                fails.append(f"未登录时不该直接开保存窗口: {save_resume}")
+            if not sr.get("saveBox2"):
+                fails.append(f"登录成功后没接着打开保存窗口（这次保存没续做）: {save_resume}")
+        except Exception as e:
+            log(f"（断言 19 解析失败：{e}）")
+
+        # ---- 断言 20：云网关模型 —— 登录后有、分组显示、默认自动选中、登出后清空 ----
+        # 这条对应"登录了但 AI 面板还说没有模型"的观感问题（用户 2026-10-11 反馈），
+        # 以及用户拍板的两条：**分组显示**、**登录后自动选第一个网关模型为默认**。
+        # 四个环节一起守，缺一个都会红：
+        #   ① 未登录 → 网关模型恒为 0（靠它守住"登出必须清空"）
+        #   ② 登录（有权益）→ 出现网关模型，且默认被指到第一个
+        #   ③ AI 面板下拉与 AI 菜单子菜单**两处**都要有分组小标题（两套渲染，别只测一处）
+        #   ④ 登出 → 清空，且默认不再指向网关别名
+        gw = ev(
+            "(async () => {"
+            "  const wait = (ms) => new Promise(r => setTimeout(r, ms));"
+            "  const out = {};"
+            "  await DGM.state.cloudLogout(); await wait(250);"
+            "  out.outGw = DGM.state.gatewayModels().length;"
+            "  out.outLocal = DGM.state.modelChoices().filter(m => m.group === 'local').length;"
+            "  await DGM.state.cloudLogin('probe@example.com', 'secret'); await wait(400);"
+            "  out.inGw = DGM.state.gatewayModels().map(m => m.id);"
+            "  out.inDefault = DGM.state.ai().default_model;"
+            "  out.current = (DGM.state.currentModel() || {}).id || '';"
+            "  const aiBtn = [...document.querySelectorAll('#activitybar .act')]"
+            "    .find(b => b.title.indexOf(DGM.i18n.t('mi.aiPanel')) === 0);"
+            "  if (!DGM.state.panels().ai && aiBtn) { aiBtn.click(); await wait(250); }"
+            "  const mdl = document.querySelector('#ai-model');"
+            "  if (mdl) { mdl.click(); await wait(200); }"
+            "  out.labels = [...document.querySelectorAll('#pop .pop-label')].map(e => e.textContent.trim());"
+            "  out.rows = [...document.querySelectorAll('#pop .pop-row .lbl')].map(e => e.textContent.trim());"
+            "  const onRow = document.querySelector('#pop .pop-row.on .lbl');"
+            "  out.checked = onRow ? onRow.textContent.trim() : '';"
+            "  if (DGM.pop) DGM.pop.hide();"
+            # 菜单栏那条是**另一套渲染**（menuItems 得原样透传 label2），单独验一次
+            "  const tb = [...document.querySelectorAll('#menubar .tb-item')].find(b => b.dataset.menu === 'ai');"
+            "  if (tb) { tb.click(); await wait(150); }"
+            "  const want = DGM.i18n.t('mi.aiModel');"
+            "  const row = [...document.querySelectorAll('#pop .pop-row')].find(b => b.textContent.indexOf(want) >= 0);"
+            "  if (row) { row.dispatchEvent(new MouseEvent('mouseenter', {bubbles: true})); await wait(250); }"
+            "  out.subLabels = [...document.querySelectorAll('#pop-sub .pop-label')].map(e => e.textContent.trim());"
+            "  out.subRows = [...document.querySelectorAll('#pop-sub .pop-row .lbl')].map(e => e.textContent.trim());"
+            "  document.body.click(); await wait(120);"
+            "  await DGM.state.cloudLogout(); await wait(300);"
+            "  out.afterLogoutGw = DGM.state.gatewayModels().length;"
+            "  out.afterLogoutDefault = DGM.state.ai().default_model;"
+            "  out.afterLogoutIsGw = DGM.state.isGatewayModel(DGM.state.ai().default_model);"
+            # 复原成"会员已登录 + AI 面板可见"，后面的截图要拍这个现场
+            "  await DGM.state.cloudLogin('probe@example.com', 'secret'); await wait(400);"
+            "  if (!DGM.state.panels().ai && aiBtn) { aiBtn.click(); await wait(250); }"
+            "  const m2 = document.querySelector('#ai-model');"
+            "  if (m2) { m2.click(); await wait(200); }"
+            "  return JSON.stringify(out);"
+            "})()"
+        )
+        log(f"云网关模型: {gw}")
+        try:
+            g = json.loads(gw)
+            if g.get("outGw") != 0:
+                fails.append(f"未登录时网关模型应为空: {g.get('outGw')}")
+            if (g.get("outLocal") or 0) < 1:
+                fails.append(f"本地 BYOK 模型不该被云状态影响: {g.get('outLocal')}")
+            if g.get("inGw") != ["glm-5.2", "qwen3-max"]:
+                fails.append(f"登录后没拿到网关模型别名: {g.get('inGw')}")
+            if g.get("inDefault") != "gw:glm-5.2":
+                fails.append(f"登录后没自动选中第一个网关模型: {g.get('inDefault')}")
+            if g.get("current") != "gw:glm-5.2":
+                fails.append(f"当前模型没落到网关别名上: {g.get('current')}")
+            want_groups = ["Diagramon 云网关", "我的模型"]
+            if g.get("labels") != want_groups:
+                fails.append(f"AI 面板下拉没有两组小标题（应为 {want_groups}）: {g.get('labels')}")
+            rows = g.get("rows") or []
+            if not rows or "GLM-5.2" not in rows[0]:
+                fails.append(f"下拉里网关组没排在最前: {rows}")
+            if not any("BYOK" in r for r in rows):
+                fails.append(f"下拉里没有本地那组: {rows}")
+            if "GLM-5.2" not in (g.get("checked") or ""):
+                fails.append(f"下拉没把网关默认模型标成选中: {g.get('checked')}")
+            if g.get("subLabels") != want_groups:
+                fails.append(f"AI 菜单的模型子菜单没有分组（label2 没透传？）: {g.get('subLabels')}")
+            if not any("BYOK" in r for r in (g.get("subRows") or [])):
+                fails.append(f"AI 菜单子菜单里没有本地那组: {g.get('subRows')}")
+            if g.get("afterLogoutGw") != 0:
+                fails.append(f"登出后网关模型没清空: {g.get('afterLogoutGw')}")
+            if g.get("afterLogoutIsGw"):
+                fails.append(f"登出后默认模型仍指向网关别名: {g.get('afterLogoutDefault')}")
+        except Exception as e:
+            log(f"（断言 20 解析失败：{e}）")
+
+        # ---- 追加截图：保存到云端窗口 / 登录窗口（留证用，不参与判定） ----
+        # 截图走"先把视口撑到 1680×1000 再截"：`captureBeyondViewport` 在本机
+        # 会静默返回空 data（原来那段就是这么一直什么都没截到的），所以显式改视口尺寸，
+        # 且拿不到数据时**必须报出来**，不能又静默失败。
+        def shot(name: str) -> None:
+            import base64 as _b64
+
+            try:
+                # Page.enable 不能省：没开 Page 域时 captureScreenshot 会"成功"返回空 data
+                # （静默失败 —— 这正是原来那段一直没截到图的原因，见 canvas_probe.py 同款调用）。
+                cdp.call("Page.enable", timeout=20)
+                cdp.call(
+                    "Emulation.setDeviceMetricsOverride",
+                    {"width": 1680, "height": 1000, "deviceScaleFactor": 1, "mobile": False},
+                    timeout=10,
+                )
+                r = cdp.call("Page.captureScreenshot", {"format": "png"}, timeout=30)
+                # `Cdp.call` 返回的已经是 result 对象本身（wait_for 里 msg.get("result")），
+                # 所以是 r["data"] 而不是 r["result"]["data"] —— 后者永远取到空，是原来那句的 bug。
+                data = (r or {}).get("data")
+                if not data:
+                    log(f"（截图 {name} 没拿到数据 —— 不影响结论）")
+                    return
+                SHOTS.mkdir(parents=True, exist_ok=True)
+                (SHOTS / name).write_bytes(_b64.b64decode(data))
+                log(f"截图：{SHOTS / name}")
+            except Exception as e:
+                log(f"（截图 {name} 失败，不影响结论：{e}）")
 
         close_alive = ev(
             "(() => { const b = document.querySelector('#win-close'); "
@@ -649,22 +1038,19 @@ def main() -> int:
             fails.append(f"页面有 {len(errors)} 条 console/异常错误")
 
         # ---- 截图留证 ----
-        SHOTS.mkdir(parents=True, exist_ok=True)
-        shot = SHOTS / "ui-probe.png"
-        import base64
-
-        try:
-            r = cdp.call(
-                "Page.captureScreenshot",
-                {"format": "png", "captureBeyondViewport": True},
-                timeout=15,
-            )
-            data = (r or {}).get("result", {}).get("data")
-            if data:
-                shot.write_bytes(base64.b64decode(data))
-                log(f"截图：{shot}")
-        except Exception as e:
-            log(f"（截图失败，不影响结论：{e}）")
+        # 模型下拉（分组显示）—— 断言 20 结束时已经把它打开着
+        shot("ui-probe-ai-models.png")
+        # 再补两张对话框的（此时已登录 → 保存窗口；登出后 → 登录窗口），再截整窗
+        ev("(async () => { await DGM.cloud.saveDoc(); await new Promise(r => setTimeout(r, 250)); return 1; })()")
+        shot("ui-probe-cloud-save.png")
+        ev("(async () => { DGM.dialogs.close(); await new Promise(r => setTimeout(r, 80)); return 1; })()")
+        ev(
+            "(async () => { await DGM.state.cloudLogout(); DGM.cloud.openLogin();"
+            " await new Promise(r => setTimeout(r, 250)); return 1; })()"
+        )
+        shot("ui-probe-cloud-login.png")
+        ev("(async () => { DGM.dialogs.close(); await new Promise(r => setTimeout(r, 80)); return 1; })()")
+        shot("ui-probe.png")
 
         log("")
         if fails:

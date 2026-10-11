@@ -357,11 +357,14 @@ digraph Pipeline {
     },
   ];
 
+  /** mock 的问题夹具。
+   *
+   *  **只用真实 lint 会产生的结论** —— 这里曾经写着"边标签含 `>=` 未转义"（还标成 error），
+   *  那是假的：16 个用例跑真实 mermaid 全部 parse + render 通过，规则已从 `lint.rs` 删掉。
+   *  示例文档本身都是合法的，所以夹具是空的 —— 空的**就是**合法文档该有的样子；
+   *  要摆"有问题"的形态，请用一份真写坏的文档（真机走的是 `lint.rs`，不经过这里）。 */
   const ISSUES = {
-    d1: [
-      { severity: "warning", line: 25, message: "subgraph「风控」内的节点在 classDef 之前声明，部分渲染器会忽略样式", hint: "把 classDef 提到 subgraph 之前" },
-      { severity: "error", line: 17, message: "边标签含 `>=` 未转义，Mermaid 10.x 会解析成 HTML 起始标记", hint: "写成 &gt;= 或用引号包裹" },
-    ],
+    d1: [],
     d2: [],
     d3: [],
     d4: [],
@@ -375,6 +378,14 @@ digraph Pipeline {
   /** mock 工作区的默认根：从示例文档的路径推出来，好让浏览器里也能看到一棵真树。 */
   const MOCK_WS_ROOT = "E:/OpenCode/diagramon/docs";
 
+  /** mock 的云网关模型别名（形状对齐 app-ipc 的 `GatewayModel`，即 `GET /v1/ai/models`
+   *  的 `data[]`）。两个条目刻意一个支持识图、一个不支持 —— 让"识图对话框标出
+   *  不支持的那条"这条渲染路径在浏览器里也能看到。 */
+  const MOCK_GATEWAY_MODELS = [
+    { id: "glm-5.2", display_name: "GLM-5.2", supports_vision: true, max_output: 8192 },
+    { id: "qwen3-max", display_name: "Qwen3 Max", supports_vision: false, max_output: 4096 },
+  ];
+
   const Mock = {
     _seq: 0,
     _ai: new Map(), // request_id -> {timer, aborted}
@@ -383,17 +394,51 @@ digraph Pipeline {
     settings: null,
     /** mock 工作区（结构对齐 app-ipc 的 WorkspaceInfo） */
     ws: { root: null, name: "", tree: [], truncated: false, file_count: 0, dir_count: 0 },
-    /** mock 云端（结构对齐 app-ipc 的 CloudStatus / CloudDocList） */
+    /** mock 云端（结构对齐 app-ipc 的 CloudStatus / CloudDocList / CloudFolderList）
+     *
+     *  文档都带 `path`（服务端口径：目录靠 path 表达，`""` = 根），
+     *  folders 是那份**目录全集**（含空目录）—— 少了它树建不起来。 */
     _cloud: {
       signed: false,
       account: null,
+      // 云网关可用模型别名（结构对齐 app-ipc 的 GatewayModel）。
+      // **未登录时恒为空** —— 靠这个守住"登出必须清掉模型"这条不变量。
+      models: [],
+      folders: ["flows", "arch", "arch/web", "arch/backend"],
       docs: [
-        { id: "cld-1", name: "登录流程.mmd", path: "flows/", format: "mermaid", size: 1024, updated_at: "2026-10-10T10:00:00Z" },
-        { id: "cld-2", name: "渲染管线.dot", path: "arch/", format: "dot", size: 2048, updated_at: "2026-10-09T18:30:00Z" },
+        { id: "cld-1", name: "登录流程.mmd", path: "flows", format: "mermaid", size: 1024, updated_at: "2026-10-10T10:00:00Z", version: 1 },
+        { id: "cld-2", name: "渲染管线.dot", path: "arch", format: "dot", size: 2048, updated_at: "2026-10-09T18:30:00Z", version: 1 },
+        { id: "cld-3", name: "组件树.excalidraw", path: "arch/web", format: "excalidraw", size: 4096, updated_at: "2026-10-08T09:15:00Z", version: 1 },
+        { id: "cld-4", name: "网关时序.mermaid", path: "arch/backend", format: "mermaid", size: 1536, updated_at: "2026-10-07T21:40:00Z", version: 1 },
       ],
     },
 
+    /** mock 的"这个账号是不是会员"由**登录用的邮箱**决定：`+free` 子地址 = 无 AI 权益。
+     *
+     *  为什么用邮箱而不是一个测试开关：`DGM.ipc` 是个薄包装（`invoke` 转发到 mock），
+     *  从页面里给 mock 塞标志位是塞不进去的；而邮箱本来就是请求的一部分，
+     *  于是"同一个页面里把两条渲染路径都走一遍"变成了换一个邮箱的事。 */
     _seed() {
+      // 评审/探针用：`?mockcloud=signed` 直接把 mock 云端置为"已登录"，
+      // 否则浏览器原型里永远停在未登录态，两个云端视图都看不到真实渲染。
+      // 只影响 mock（真机没有这段），且只认这一个参数值，不做别的隐式行为。
+      try {
+        const q = new URLSearchParams(location.search);
+        if (q.get("mockcloud") === "signed") {
+          this._cloud.signed = true;
+          this._cloud.models = MOCK_GATEWAY_MODELS.map((m) => ({ ...m }));
+          this._cloud.account = {
+            email: "westsource@126.com", display_name: "道荣", role: "user", plan_name: "会员",
+            used_bytes: 13631488, quota_bytes: 104857600,
+            ai: {
+              enabled: true, credit_monthly_micros: 20000000, credit_used_micros: 3200000,
+              period_start: "2026-10-01T00:00:00+00:00", period_end: "2026-11-01T00:00:00+00:00",
+            },
+          };
+        }
+      } catch (e) {
+        /* 无 location / 参数非法：忽略 */
+      }
       this.docs = [
         { id: "d1", path: "E:/OpenCode/diagramon/docs/flows/登录流程.mmd", name: "登录流程.mmd", format: "mermaid", body: MERMAID_SRC, dirty: true, view_mode: "split", caret_line: 9, caret_col: 12, layout: null },
         { id: "d2", path: "E:/OpenCode/diagramon/docs/arch/渲染管线.dot", name: "渲染管线.dot", format: "dot", body: DOT_SRC, dirty: false, view_mode: "split", caret_line: 6, caret_col: 4, layout: "dot" },
@@ -413,11 +458,14 @@ digraph Pipeline {
         ...((() => { try { return JSON.parse(sessionStorage.getItem("dgm-mock-settings") || "null") || {}; } catch (e) { return {}; } })()),
         editor: { font_size: 13, debounce_ms: 350, lint: true, per_doc_view: true, default_view: "split", autosave: true, autosave_ms: 5000, restrict_to_workspace: false },
         ai: {
+          // 全是**本地 BYOK**。曾经这里放过一条名叫「diagram-fast（云网关）」的假条目，
+          // base_url 指着 {服务}/v1/ai —— 那是云网关没接线时用 BYOK 冒充的写法，
+          // 现在网关是真通道了，留着只会让人以为"网关模型要自己填 key"。
           models: [
-            { id: "gw-fast", name: "diagram-fast（云网关）", provider: "custom", base_url: "https://api.diagramon.app/v1/ai", model: "diagram-fast", max_tokens: 4096, temperature: 0.4, has_key: true, key_hint: "gw-…7f2a" },
             { id: "byok-1", name: "BYOK · gpt-4o", provider: "openai", base_url: "https://api.openai.com/v1", model: "gpt-4o", max_tokens: 8192, temperature: 0.7, has_key: false, key_hint: "" },
+            { id: "byok-2", name: "BYOK · 本地 Ollama", provider: "ollama", base_url: "http://localhost:11434", model: "qwen3:8b", max_tokens: 4096, temperature: 0.3, has_key: true, key_hint: "" },
           ],
-          default_model: "gw-fast",
+          default_model: "byok-1",
           vision_notice_accepted: false,
           render_retry: true,
           context_from_doc: true,
@@ -782,16 +830,40 @@ digraph Pipeline {
           if (!(this.settings.cloud || {}).base_url) throw new Error("云网关未配置：先在 设置 → 云端 里填服务地址");
           const { email } = args;
           if (!email || !args.password) throw new Error("邮箱和密码都要填");
+          // 默认当**会员**（这样"登录后就有可用模型"这条主路径在浏览器里立刻能看到）；
+          // 要摆"没权益"那一态就用 `+free` 子地址，例如 `someone+free@example.com`。
+          const member = !/\+free(\+|@)/i.test(String(email));
           this._cloud.signed = true;
           this._cloud.account = {
-            email, display_name: email.split("@")[0], role: "user", plan_name: "Free",
+            email, display_name: email.split("@")[0], role: "user",
+            plan_name: member ? "会员" : "Free",
             used_bytes: 20480, quota_bytes: 104857600,
+            // 免费套餐服务端也会给 ai 块（enabled=false）—— 那是"确实没开通"，
+            // 与"服务端没给这个字段"（ai=null → 显示未知）是两回事
+            ai: member
+              ? {
+                  enabled: true, credit_monthly_micros: 20000000, credit_used_micros: 3200000,
+                  period_start: "2026-10-01T00:00:00+00:00", period_end: "2026-11-01T00:00:00+00:00",
+                }
+              : {
+                  enabled: false, credit_monthly_micros: 0, credit_used_micros: 0,
+                  period_start: "2026-10-01T00:00:00+00:00", period_end: "2026-11-01T00:00:00+00:00",
+                },
           };
+          // 模型别名**跟权益走**：免费账号服务端回的就是 `data: []`（200，不是 403）
+          this._cloud.models = member ? MOCK_GATEWAY_MODELS.map((m) => ({ ...m })) : [];
           return this._cloud.account;
         }
         case "cloud_logout":
           this._cloud.signed = false;
+          // 登出必须把模型别名一起清掉（真机是"前端清空 + 服务端不再认这个令牌"）
+          this._cloud.models = [];
           return true;
+        case "ai_gateway_models": {
+          if (!this._cloud.signed) throw new Error("尚未登录云网关");
+          // 无 AI 权益 → `data: []` + 200（不是 403）：mock 同口径，别把"没有"做成"报错"
+          return { items: this._cloud.models.map((m) => ({ ...m })) };
+        }
         case "cloud_docs_list":
           if (!this._cloud.signed) throw new Error("尚未登录云网关");
           return {
@@ -800,6 +872,39 @@ digraph Pipeline {
             used_bytes: this._cloud.docs.reduce((n, d) => n + d.size, 0),
             quota_bytes: 104857600,
           };
+        /* 目录全集：服务端是"显式目录 ∪ 文档路径隐含的目录"，**空目录也要在**
+           （上面 arch/backend 是真的有文档，另加一个空目录好把"空"这条渲染路径跑出来）。 */
+        case "cloud_folders": {
+          if (!this._cloud.signed) throw new Error("尚未登录云网关");
+          const all = new Set(this._cloud.folders);
+          for (const d of this._cloud.docs) {
+            const segs = String(d.path || "").split("/").filter(Boolean);
+            let acc = "";
+            for (const s of segs) {
+              acc = acc ? acc + "/" + s : s;
+              all.add(acc);
+            }
+          }
+          const items = [...all].sort().map((path) => {
+            const segs = path.split("/");
+            const direct = this._cloud.docs.filter((d) => (d.path || "") === path).length;
+            const hasChildren = [...all].some((p) => p !== path && p.startsWith(path + "/"));
+            return {
+              path, name: segs[segs.length - 1], depth: segs.length - 1,
+              document_count: direct, has_children: hasChildren,
+              is_explicit: this._cloud.folders.includes(path),
+            };
+          });
+          return { items };
+        }
+        case "cloud_folder_create": {
+          if (!this._cloud.signed) throw new Error("尚未登录云网关");
+          const path = String(args.path || "").trim().replace(/^\/+|\/+$/g, "");
+          if (!path) throw new Error("云网关 422：目录名不能为空");
+          if (this._cloud.folders.includes(path)) throw new Error("云网关 409：同名目录已存在（name_taken）");
+          this._cloud.folders.push(path);
+          return { path, name: path.split("/").pop(), depth: path.split("/").length - 1, document_count: 0, has_children: false, is_explicit: true };
+        }
         case "cloud_doc_save": {
           if (!this._cloud.signed) throw new Error("尚未登录云网关");
           // 乐观锁与真实服务端同口径：version=0 = 仅当不存在时创建；
@@ -812,7 +917,7 @@ digraph Pipeline {
           }
           const nextVer = (ex ? ex.version : 0) + 1;
           const doc = {
-            id, name: args.name, path: "", format: args.format,
+            id, name: args.name, path: args.path == null ? "" : String(args.path), format: args.format,
             size: String(args.body || "").length, updated_at: new Date().toISOString(),
             version: nextVer,
           };
@@ -943,12 +1048,36 @@ digraph Pipeline {
 
     _aiChat(req) {
       const request_id = req.request_id || this._newId("req");
-      const modelId = req.model_id || this.settings.ai.default_model || (this.settings.ai.models[0] && this.settings.ai.models[0].id) || "auto";
-      const model = this.settings.ai.models.find((m) => m.id === modelId);
-      const modelName = model ? model.name : "auto";
+      const modelId =
+        req.model_id ||
+        this.settings.ai.default_model ||
+        (this._cloud.signed && this._cloud.models[0] ? "gw:" + this._cloud.models[0].id : "") ||
+        (this.settings.ai.models[0] && this.settings.ai.models[0].id) ||
+        "auto";
+      // 网关与本地两处都要找：网关那条是"当前登录令牌 + 服务端别名"，
+      // 本地这条才是 settings.ai.models 里的配置。
+      const gwAlias = modelId.startsWith("gw:") ? modelId.slice(3) : "";
+      const gwModel = gwAlias ? this._cloud.models.find((m) => m.id === gwAlias) : null;
+      const localModel = this.settings.ai.models.find((m) => m.id === modelId);
       const text = this._aiText(req);
       const job = { aborted: false, timer: 0, text: "" };
       this._ai.set(request_id, job);
+
+      // 网关别名只在**登录着**的时候能用（真机是 401）—— mock 也如实失败，
+      // 否则"登出后还能拿网关模型跑"会被浏览器原型掩盖过去。
+      if (gwAlias && !gwModel) {
+        setTimeout(() => {
+          this._ai.delete(request_id);
+          emitLocal("ai://failed", {
+            request_id,
+            message: this._cloud.signed
+              ? `云端没有这个模型别名：${gwAlias}（服务端未返回）`
+              : "登录已失效或已登出，云网关模型不可用",
+          });
+        }, 60);
+        return true;
+      }
+      const modelName = gwModel ? gwModel.display_name : localModel ? localModel.name : "auto";
 
       // 按片段流式吐出（每 45ms 一段），最后 done
       const chunks = chunkText(text);

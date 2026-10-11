@@ -1,0 +1,210 @@
+/* ============================================================================
+ * Diagramon dev3.0 —— 「账户 / 云端文档 / 保存到云端」原型增量样式
+ *
+ * 只放 proto.css 里还没有的类（账户卡片 / 云端目录树 / 选择树 / 登录窗口 /
+ * 面包屑 / 配额条 / 原型控制条），颜色一律走 proto.css 的 CSS 变量。
+ *
+ * ★ 实施时把本文件内容并入 client2/ui/app.css（沿用同样的类名与变量），然后删除。
+ * ========================================================================== */
+
+/* ---- 1. 侧栏通用小件 ---------------------------------------------------- */
+.side-sub { font-size: var(--fs-xs); color: var(--muted); padding: 2px 8px 8px; line-height: 1.6; }
+.side-sub b { color: var(--ink-2); font-weight: 500; }
+
+/* ---- 2. 账户卡片 -------------------------------------------------------- */
+.acct-card {
+  display: flex; align-items: center; gap: 10px;
+  margin: 4px 4px 10px; padding: 11px 11px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.acct-card .avatar {
+  width: 38px; height: 38px; flex: 0 0 auto;
+  display: grid; place-items: center;
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-radius: 50%;
+}
+.acct-card .avatar .ico { width: 19px; height: 19px; }
+.acct-card .who { min-width: 0; }
+.acct-card .who b {
+  display: block; font-size: var(--fs-md); font-weight: 600; color: var(--ink);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.acct-card .who small {
+  display: block; margin-top: 1px; font-size: var(--fs-xs); color: var(--muted);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+/* 只读信息行：左标签右值，值右对齐 */
+.acct-rows { margin: 0 4px; border-top: 1px solid var(--border); }
+.acct-row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 7px 8px; font-size: var(--fs-sm);
+  border-bottom: 1px solid var(--border);
+}
+.acct-row .k { color: var(--muted); flex: 0 0 auto; }
+.acct-row .v { margin-left: auto; color: var(--ink-2); text-align: right; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.acct-row .v .tag { margin-left: 6px; }
+
+/* 额度块 */
+.acct-quota { margin: 10px 4px 2px; padding: 10px 11px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); }
+.acct-quota h5 {
+  display: flex; align-items: center; gap: 6px;
+  font-size: var(--fs-xs); font-weight: 600; color: var(--muted);
+  text-transform: uppercase; letter-spacing: .5px; margin-bottom: 8px;
+}
+.acct-quota h5 .sp { flex: 1; }
+.acct-quota h5 .pct { font: 600 var(--fs-sm) var(--font-mono); color: var(--ink-2); text-transform: none; letter-spacing: 0; }
+.acct-quota progress { width: 100%; height: 7px; }
+.acct-quota .line { display: flex; align-items: baseline; gap: 8px; margin-top: 6px; font-size: var(--fs-xs); color: var(--muted); }
+.acct-quota .line .used { font: 600 var(--fs-sm) var(--font-mono); color: var(--ink-2); }
+.acct-quota .line .sp { flex: 1; }
+
+.acct-note { margin: 12px 6px 0; font-size: var(--fs-xs); color: var(--faint); line-height: 1.7; }
+
+/* AI 权益徽标三态：已开通（绿）/ 未开通（灰）/ 未知（"—"，服务端没给这个字段）。
+   未知不能借用"未开通"的样式 —— 那是在说谎。 */
+.acct-badge { display: inline-flex; align-items: center; gap: 4px; padding: 1px 8px; border-radius: 999px; font-size: var(--fs-xs); font-weight: 500; }
+.acct-ai-on { color: var(--ok); background: var(--ok-soft); }
+.acct-ai-off { color: var(--muted); background: var(--surface-3); }
+.acct-unknown { color: var(--faint); }
+.acct-unverified { display: flex; align-items: center; gap: 6px; margin: 10px 4px 0; padding: 8px 10px; font-size: var(--fs-xs); color: var(--warn); background: var(--warn-soft); border: 1px solid color-mix(in srgb, var(--warn) 28%, transparent); border-radius: var(--radius-sm); line-height: 1.6; }
+
+/* ---- 3. 云端文档（侧栏视图：单栏统一树） -------------------------------- */
+.ct-toolbar { position: sticky; top: 0; z-index: 2; padding: 4px 4px 6px; background: var(--surface-2); }
+.ct-top { display: flex; align-items: center; gap: 6px; }
+.ct-filter { flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px; padding: 0 7px; height: 26px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); }
+.ct-filter:focus-within { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
+.ct-filter .ico { color: var(--faint); flex: 0 0 auto; }
+.ct-filter input { flex: 1; min-width: 0; border: 0; background: none; outline: none; font-size: var(--fs-sm); color: var(--ink); }
+.ct-iconacts { display: flex; gap: 2px; flex: 0 0 auto; }
+
+.ct-tree { padding-bottom: 4px; }
+.ct-row {
+  display: flex; align-items: center; gap: 7px;
+  width: 100%;
+  padding: 4px 8px 4px calc(6px + var(--depth, 0) * 14px);
+  font-size: var(--fs-sm); color: var(--ink-2);
+  border-radius: var(--radius-sm); text-align: left;
+}
+.ct-row:hover { background: var(--surface-3); color: var(--ink); }
+.ct-row.on { background: var(--accent-soft); color: var(--accent); }
+.ct-row .caret { width: 13px; height: 13px; flex: 0 0 auto; color: var(--faint); transition: transform .14s; }
+.ct-row .caret.hidden { visibility: hidden; }
+.ct-row.closed .caret { transform: rotate(-90deg); }
+.ct-row .fld { color: var(--accent); flex: 0 0 auto; }
+.ct-row.empty .fld { color: var(--faint); }
+.ct-row .nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ct-row.empty .nm { color: var(--faint); }
+.ct-row .cnt { font-size: var(--fs-xs); color: var(--faint); flex: 0 0 auto; }
+.ct-row .cnt.zero { color: var(--faint); opacity: .75; }
+.ct-row mark { background: color-mix(in srgb, var(--accent) 30%, transparent); color: var(--ink); border-radius: 2px; }
+.ct-row .sz { font: var(--fs-xs) var(--font-mono); color: var(--faint); flex: 0 0 auto; }
+
+/* 注：云端文档视图**不显示存储用量**（额度归「账户」视图），故无配额条样式。 */
+
+/* ---- 4. 面包屑 ---------------------------------------------------------- */
+.crumb { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; margin: 2px 4px 8px; font-size: var(--fs-xs); color: var(--muted); }
+.crumb a { color: var(--accent); cursor: pointer; }
+.crumb a:hover { text-decoration: underline; }
+.crumb .sep { color: var(--faint); }
+.crumb .cur { color: var(--ink-2); font-weight: 500; }
+
+/* ---- 5. 保存到云端：目录选择树（单选） ---------------------------------- */
+.pk-tree {
+  margin-top: 4px; padding: 6px;
+  max-height: 300px; overflow: auto;
+  background: var(--surface-inset);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.pk-row {
+  display: flex; align-items: center; gap: 8px;
+  padding: 5px 8px 5px calc(6px + var(--depth, 0) * 14px);
+  font-size: var(--fs-sm); color: var(--ink-2);
+  border-radius: var(--radius-sm); cursor: pointer;
+}
+.pk-row:hover { background: var(--surface-3); }
+.pk-row.on { background: var(--accent-soft); color: var(--accent); }
+.pk-row .fld { color: var(--accent); flex: 0 0 auto; }
+.pk-row.on .fld { color: var(--accent); }
+.pk-row .nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pk-row .cnt { font-size: var(--fs-xs); color: var(--faint); flex: 0 0 auto; }
+.pk-row .rad {
+  width: 13px; height: 13px; flex: 0 0 auto; border-radius: 50%;
+  border: 1.5px solid var(--border-strong); background: var(--surface);
+}
+.pk-row.on .rad { border-color: var(--accent); box-shadow: inset 0 0 0 3px var(--accent); }
+.pk-row.empty .fld { color: var(--faint); }
+.pk-row.empty .nm { color: var(--faint); }
+
+.newfolder { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
+.newfolder input {
+  flex: 1; min-width: 0; height: 28px; padding: 0 9px;
+  font-size: var(--fs-sm); color: var(--ink);
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm);
+}
+.newfolder input:focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); outline: none; }
+
+/* ---- 6. 登录窗口（只做登录；注册走官网，见 cloud-proto.js 注释） --------- */
+.login-win { width: 400px; }
+.login-msg {
+  min-height: 17px; margin-top: 2px;
+  font-size: var(--fs-xs); line-height: 1.5;
+}
+.login-msg.err { color: var(--err); }
+.login-msg.ok { color: var(--ok); }
+/* 注册地址回显：只读输入框（可选中、可 Ctrl+C）+ 一键复制。
+   不能用纯文本 —— 用户要的是"能拷走"，光看得到没用。 */
+.login-url { margin-top: 6px; padding: 9px 10px; background: var(--surface-inset); border: 1px solid var(--border); border-radius: var(--radius-sm); }
+.login-url > label { display: block; font-size: var(--fs-xs); color: var(--muted); margin-bottom: 6px; }
+.login-url-row { display: flex; align-items: center; gap: 6px; }
+.login-url-row input {
+  flex: 1; min-width: 0; height: 26px; padding: 0 8px;
+  font: var(--fs-xs) var(--font-mono); color: var(--ink-2);
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm);
+  cursor: text; user-select: text; -webkit-user-select: text;
+}
+.login-url-row input:focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); outline: none; }
+.login-url-row .btn { flex: 0 0 auto; white-space: nowrap; }
+.link-btn { color: var(--accent); font-size: var(--fs-sm); cursor: pointer; }
+.link-btn:hover { text-decoration: underline; }
+
+/* ---- 7. 原型控制条（★ 纯评审脚手架 —— 绝不进产品界面，实施时整段删除） ----
+ * 只为了在评审时一键切换「已登录 / 未登录」「已配置 / 未配置」并打开两个窗口。
+ * 刻意用虚线边框 + 「原型」徽标，和产品界面里的任何东西都不像同一类，
+ * 免得被当成真实控件。?nocontrol=1 或点右上角 × 可以整条收起。 */
+.ct-proto {
+  position: fixed; left: 50%; bottom: calc(var(--statusbar-h) + 10px);
+  transform: translateX(-50%); z-index: 160;
+  /* width:max-content 不能省：只给 left:50% 时，可用宽度会被算成"视口右半边"，
+     内容一多就折行（徽标 + 两组开关就超了）。 */
+  width: max-content; max-width: calc(100vw - 24px);
+  display: flex; align-items: center; gap: 10px;
+  padding: 6px 8px 6px 12px;
+  font-size: var(--fs-xs); color: var(--muted);
+  background: repeating-linear-gradient(135deg, var(--surface), var(--surface) 8px, var(--surface-2) 8px, var(--surface-2) 16px);
+  border: 1px dashed var(--border-strong);
+  border-radius: 999px; box-shadow: var(--sh-2);
+}
+body.no-ctl .ct-proto { display: none; }
+.ct-proto > * { white-space: nowrap; flex: 0 0 auto; }
+.ct-proto .badge {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 2px 8px; border-radius: 999px;
+  font-weight: 600; letter-spacing: .4px;
+  color: var(--warn);
+  background: var(--warn-soft);
+  border: 1px dashed color-mix(in srgb, var(--warn) 45%, transparent);
+}
+.ct-proto .lbl { color: var(--faint); }
+.ct-proto .seg button { padding: 2px 9px; }
+.ct-proto .vline { width: 1px; height: 18px; background: var(--border); }
+.ct-proto .close {
+  width: 20px; height: 20px; flex: 0 0 auto;
+  display: grid; place-items: center;
+  color: var(--muted); border-radius: 50%;
+}
+.ct-proto .close:hover { background: var(--surface-3); color: var(--ink); }

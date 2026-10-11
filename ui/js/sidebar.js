@@ -25,6 +25,22 @@ window.DGM = window.DGM || {};
   /* 折叠状态与搜索词都留在模块里：重渲染时用它们恢复现场。 */
   const collapsed = new Set();
   let searchQuery = "";
+  /* 「云端文档」的筛选词与「资源管理器」的搜索词互不影响，各存各的 */
+  let cloudQuery = "";
+
+  /* 重渲染后把焦点还回同一个输入框（并把光标放到末尾）——
+     搜索框与云端筛选框都要，否则每敲一个字就丢焦点。 */
+  function renderKeepFocus(id) {
+    render();
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.focus();
+    try {
+      el.setSelectionRange(el.value.length, el.value.length);
+    } catch (e) {
+      /* 某些类型不支持 setSelectionRange，忽略 */
+    }
+  }
 
   /* ------------------------------------------------------------------ 打开文档 */
 
@@ -530,20 +546,58 @@ window.DGM = window.DGM || {};
     return box;
   }
 
-  /* ------------------------------------------------------------------ 云端（真实数据） */
+  /* ------------------------------------------------------------------ 云端（真实数据）
+   *
+   * 拆成**两个互不相干的视图**（以前是一个 viewCloud 把账户头 + 内联登录表单 + 扁平文档列表
+   * 挤在一起，且活动栏的「云端文档」与底部的「账户」指向同一个视图）：
+   *   - viewAccount    只读账户信息；未登录时给一个「登录」按钮（活动栏点它才直接弹窗）
+   *   - viewCloudDocs  只做"查找 / 打开"，用目录树
+   * 两者都只读 `state.cloud.status` —— **全客户端唯一的一份登录状态**，
+   * 所以在一处登录成功，另一处不需要、也不会再问一遍（`cloud:changed` 一起重渲染）。
+   */
 
-  /** 云端视图。三态如实呈现：未配置 / 未登录 / 已登录，一个都不伪造。 */
-  function viewCloud() {
+  /** 账户卡片：头像 + 昵称 + 邮箱；未登录时是「未登录」占位。 */
+  function acctCard(a) {
+    const box = h("div", "acct-card");
+    const avatar = h("span", "avatar", icon("user"));
+    const who = h("span", "who");
+    if (a) {
+      who.innerHTML = `<b>${esc(a.display_name || a.email || t("side.cloud.signedIn"))}</b><small>${esc(a.email || "")}</small>`;
+    } else {
+      who.innerHTML = `<b>${esc(t("side.cloud.notSignedIn"))}</b><small>${esc(t("acct.needLoginShort"))}</small>`;
+    }
+    box.append(avatar, who);
+    return box;
+  }
+
+  /** 一条只读信息行（左标签右值）。 */
+  function acctRow(label, valueHtml) {
+    const r = h("div", "acct-row");
+    r.innerHTML = `<span class="k">${esc(label)}</span><span class="v">${valueHtml}</span>`;
+    return r;
+  }
+
+  /** 配额块：进度条 + 两个原始数（已用 / 总量）+ 百分比，可追加说明行。
+   *  `fmt` 决定单位（字节 / 信用点），所以存储与 AI 额度共用同一套外观。 */
+  function acctQuota(title, used, total, fmt, extraHtml, ic) {
+    const pct = total > 0 ? Math.min(100, Math.max(0, Math.round((used / total) * 100))) : 0;
+    const box = h("div", "acct-quota");
+    box.title = `${fmt(used)} / ${fmt(total)}（${pct}%）`;
+    box.innerHTML =
+      `<h5>${icon(ic || "db", "ico-sm")}<span>${esc(title)}</span><span class="sp"></span><span class="pct">${pct}%</span></h5>` +
+      `<progress max="100" value="${pct}"></progress>` +
+      `<div class="line"><b>${esc(fmt(used))}</b><span>/ ${esc(fmt(total))}</span></div>` +
+      (extraHtml || "");
+    return box;
+  }
+
+  /** 账户视图（**只读**）。未登录 → 一个「登录」按钮；未配置网关 → 去配置。 */
+  function viewAccount() {
     const box = h("div");
     const cloud = state.cloud;
     const configured = !!((state.settings.cloud || {}).base_url || "").trim();
 
     if (!configured) {
-      const me = h("div", "cloud-me");
-      me.innerHTML =
-        `<span class="avatar">${icon("user", "ico-sm")}</span>` +
-        `<span class="who"><b>${esc(t("side.cloud.notSignedIn"))}</b><small>${esc(t("set.cloud.account"))}</small></span>`;
-      box.appendChild(me);
       box.appendChild(tip(`<b>${esc(t("side.cloud.noBaseUrl"))}</b><br>${esc(t("side.cloud.noBaseUrlDesc"))}`));
       const acts = h("div", "side-acts");
       acts.innerHTML = `<button class="btn sm" data-a="cfg">${icon("settings")}${esc(t("side.cloud.configure"))}</button>`;
@@ -552,136 +606,225 @@ window.DGM = window.DGM || {};
       return box;
     }
 
-    // ── 账户头 ──
-    const me = h("div", "cloud-me");
-    if (cloud.status.signed_in && cloud.status.account) {
-      const a = cloud.status.account;
-      me.innerHTML =
-        `<span class="avatar">${icon("user", "ico-sm")}</span>` +
-        `<span class="who"><b>${esc(a.email || t("side.cloud.signedIn"))}</b>` +
-        `<small>${esc(a.plan_name || "")}${a.quota_bytes ? ` · ${fmtBytes(a.used_bytes)} / ${fmtBytes(a.quota_bytes)}` : ""}</small></span>`;
-    } else {
-      me.innerHTML =
-        `<span class="avatar">${icon("user", "ico-sm")}</span>` +
-        `<span class="who"><b>${esc(t("side.cloud.notSignedIn"))}</b><small>${esc(t("side.cloud.accountSub"))}</small></span>`;
-    }
-    box.appendChild(me);
+    const a = cloud.status.signed_in ? cloud.status.account : null;
+    box.appendChild(acctCard(a));
 
-    // ── 未登录：内联登录表单 ──
-    if (!cloud.status.signed_in) {
-      const form = h("div", "cloud-login");
-      form.innerHTML =
-        `<label><span>${esc(t("side.cloud.email"))}</span><input id="cloud-email" type="text" spellcheck="false" autocomplete="off"></label>` +
-        `<label><span>${esc(t("side.cloud.password"))}</span><input id="cloud-pass" type="password" autocomplete="off"></label>` +
-        `<div class="cloud-login-acts">` +
-        `<button class="btn sm primary" id="cloud-go">${icon("cloud")}${esc(t("side.cloud.signIn"))}</button>` +
-        `<span class="hint" id="cloud-err">${esc(cloud.lastError || "")}</span></div>`;
-      const go = () => {
-        const email = form.querySelector("#cloud-email").value.trim();
-        const pass = form.querySelector("#cloud-pass").value;
-        const err = form.querySelector("#cloud-err");
-        if (!email || !pass) {
-          err.textContent = t("side.cloud.needBoth");
-          return;
-        }
-        err.textContent = t("side.cloud.signingIn");
-        state
-          .cloudLogin(email, pass)
-          .then(() => DGM.toast({ icon: "cloud", title: t("side.cloud.signedIn"), sub: email }))
-          .catch((e) => (err.textContent = String((e && e.message) || e)));
-      };
-      form.querySelector("#cloud-go").addEventListener("click", go);
-      form.querySelector("#cloud-pass").addEventListener("keydown", (e) => {
-        if (e.key === "Enter") go();
-      });
-      box.appendChild(form);
+    if (!a) {
+      const acts = h("div", "side-acts");
+      acts.innerHTML = `<button class="btn sm primary" data-a="login">${icon("cloud")}${esc(t("acct.login"))}</button>`;
+      acts.addEventListener("click", () => DGM.cloud.openLogin());
+      box.appendChild(acts);
+      box.appendChild(tip(esc(t("acct.needLogin"))));
       return box;
     }
 
-    // ── 已登录：文档列表 + 动作 ──
+    // AI 权益：**null 是"服务端没给"，不是"没开通"** —— 两者要分开显示，
+    // 否则老后端会被显示成"未开通"（在说谎）。
+    const ai = a.ai || null;
+
+    const rows = h("div", "acct-rows");
+    rows.appendChild(acctRow(t("acct.rows.plan"), esc(a.plan_name || "—")));
+    rows.appendChild(acctRow(t("acct.rows.role"), esc(a.role === "admin" ? t("acct.roles.admin") : t("acct.roles.user"))));
+    rows.appendChild(acctRow(
+      t("acct.rows.ai"),
+      ai == null
+        ? `<span class="acct-unknown">—</span>`
+        : `<span class="acct-badge ${ai.enabled ? "acct-ai-on" : "acct-ai-off"}">${esc(ai.enabled ? t("acct.ai.on") : t("acct.ai.off"))}</span>`,
+    ));
+    box.appendChild(rows);
+
+    box.appendChild(acctQuota(t("acct.storage"), a.used_bytes || 0, a.quota_bytes || 0, DGM.cloud.fmtBytes));
+
+    if (ai && ai.enabled) {
+      const monthly = ai.credit_monthly_micros || 0;
+      const used = ai.credit_used_micros || 0;
+      const fmt = DGM.cloud.fmtCredits;
+      // 剩余是**算出来的**（服务端给总额 + 已用）：充值加在总额上，所以这个减法任何时候都成立
+      const extra =
+        `<div class="line"><span>${esc(t("acct.ai.remaining", { n: fmt(monthly - used) }))}</span></div>` +
+        (DGM.cloud.fmtDate(ai.period_end)
+          ? `<div class="line"><span>${esc(t("acct.ai.period", { d: DGM.cloud.fmtDate(ai.period_end) }))}</span></div>`
+          : "");
+      box.appendChild(acctQuota(t("acct.aiUsage"), used, monthly, fmt, extra, "sparkles"));
+    }
+
     const acts = h("div", "side-acts");
     acts.innerHTML =
-      `<button class="btn sm" data-a="save">${icon("save")}${esc(t("side.cloud.saveUp"))}</button>` +
-      `<button class="btn sm ghost" data-a="refresh">${icon("refresh")}${esc(t("side.ws.refresh"))}</button>` +
+      `<button class="btn sm" data-a="refresh">${icon("refresh")}${esc(t("acct.refresh"))}</button>` +
       `<button class="btn sm ghost" data-a="out">${icon("close")}${esc(t("side.cloud.signOut"))}</button>`;
     acts.addEventListener("click", async (e) => {
       const b = e.target.closest("button");
       if (!b) return;
       try {
-        if (b.dataset.a === "save") {
-          const d = state.activeDoc();
-          if (!d) return void DGM.toast({ icon: "info", title: t("status.noDoc"), sub: "", warn: true });
-          const saved = await state.cloudSaveActive();
-          DGM.toast({ icon: "cloud", title: t("side.cloud.saved"), sub: saved.name });
-        } else if (b.dataset.a === "refresh") {
-          await state.cloudDocs();
+        if (b.dataset.a === "refresh") {
+          await state.cloudRefresh();
+          DGM.toast({ icon: "refresh", title: t("acct.refreshed"), sub: "" });
         } else if (b.dataset.a === "out") {
           await state.cloudLogout();
+          DGM.toast({ icon: "close", title: t("acct.signedOut"), sub: t("acct.signedOutSub") });
         }
       } catch (err) {
-        DGM.toast({ icon: "alert", title: t("status.wsFailed"), sub: String((err && err.message) || err), warn: true });
+        DGM.toast({ icon: "alert", title: t("side.cloud.error"), sub: String((err && err.message) || err), warn: true });
       }
     });
     box.appendChild(acts);
-
-    if (cloud.lastError) box.appendChild(tip(`${esc(t("side.cloud.error"))}: <code>${esc(cloud.lastError)}</code>`));
-
-    const sec = h("div", "side-section");
-    const docs = cloud.docs;
-    const n = docs && docs.items ? docs.items.length : 0;
-    const hd = h("h4", "", `${icon("chevD", "ico-sm chev")}${icon("cloud", "ico-sm")}${esc(t("side.cloud.docs"))}<span class="meta">${n}</span>`);
-    const list = h("div", "side-list");
-    if (cloud.loading) {
-      list.appendChild(tip(esc(t("common.loading"))));
-    } else if (!docs) {
-      list.appendChild(tip(esc(t("side.cloud.docsEmpty"))));
-    } else if (!n) {
-      list.appendChild(tip(esc(t("side.cloud.docsEmpty"))));
-    } else {
-      docs.items.forEach((doc) => {
-        const row = h("button", "tree-row indent-1");
-        row.append(fmtDot(doc.format), h("span", "nm", esc(doc.name)));
-        const x = h("button", "x-row", icon("trash", "ico-sm"));
-        x.title = t("side.ws.delete");
-        x.addEventListener("click", async (e) => {
-          e.stopPropagation();
-          const yes = await DGM.dialogs.confirm({
-            title: t("common.delete"),
-            ok: t("common.delete"),
-            danger: true,
-            body: esc(t("side.cloud.deleteConfirm", { name: doc.name })),
-          });
-          if (yes) state.cloudDeleteDoc(doc.id).catch((err) => DGM.status(String((err && err.message) || err), "err"));
-        });
-        row.appendChild(x);
-        row.title = `${doc.path || "/"} · ${fmtBytes(doc.size)}`;
-        row.addEventListener("click", () =>
-          state.cloudOpenDoc(doc.id).catch((err) => DGM.status(String((err && err.message) || err), "err")),
-        );
-        list.appendChild(row);
-      });
-    }
-    hd.addEventListener("click", () => sec.classList.toggle("collapsed"));
-    sec.append(hd, list);
-    box.appendChild(sec);
-
-    if (docs && docs.quota_bytes) {
-      const bar = h("div", "cloud-quota");
-      bar.title = `${fmtBytes(docs.used_bytes)} / ${fmtBytes(docs.quota_bytes)}`;
-      bar.innerHTML =
-        `<progress max="100" value="${Math.min(100, Math.round((docs.used_bytes / docs.quota_bytes) * 100))}"></progress>` +
-        `<span class="hint">${esc(fmtBytes(docs.used_bytes))} / ${esc(fmtBytes(docs.quota_bytes))}</span>`;
-      box.appendChild(bar);
-    }
+    box.appendChild(h("div", "acct-note", esc(t("acct.readonly"))));
     return box;
   }
 
-  /** 字节数的人话形式。0 就是 0，不猜。 */
-  function fmtBytes(n) {
-    n = Number(n) || 0;
-    if (n < 1024) return `${n} B`;
-    if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
-    return `${(n / 1024 / 1024).toFixed(1)} MB`;
+  /** 一个目录节点下需要铺的行：先子目录（可展开），再本层的文档。
+   *  `collapsedSet` 与模块顶部的 `collapsed` 同一个（键前缀 `cf:` 避开资源管理器的键）；
+   *  **默认都是展开的** —— 云端目录树通常很浅，全部折叠反而每层都要点一次。 */
+  function cloudChildren(host, node, depth, q, collapsedSet) {
+    for (const c of node.children) {
+      if (!DGM.cloud.subtreeMatches(c, q)) continue;
+      const isOpen = !!q || !collapsedSet.has("cf:" + c.path);
+      const empty = c.total === 0;
+      const row = h("button", "ct-row" + (isOpen ? "" : " closed") + (empty ? " empty" : ""));
+      row.style.setProperty("--depth", depth);
+      row.innerHTML =
+        `${icon("chevD", "ico-sm caret")}${icon(isOpen ? "folderOpen" : "folder", "ico-sm fld")}` +
+        `<span class="nm">${DGM.cloud.mark(c.name, q)}</span>` +
+        `<span class="cnt${empty ? " zero" : ""}">${empty ? esc(t("cloud.tree.empty")) : esc(t("cloud.tree.docsN", { n: c.total }))}</span>`;
+      row.title = c.path;
+      row.addEventListener("click", () => {
+        if (collapsedSet.has("cf:" + c.path)) collapsedSet.delete("cf:" + c.path);
+        else collapsedSet.add("cf:" + c.path);
+        render();
+      });
+      host.appendChild(row);
+      if (isOpen) cloudChildren(host, c, depth + 1, q, collapsedSet);
+    }
+    for (const d of node.docs) {
+      if (q && !String(d.name).toLowerCase().includes(q)) continue;
+      const row = h("button", "ct-row");
+      row.style.setProperty("--depth", depth);
+      row.innerHTML = `<span class="caret hidden"></span>${DGM.cloud.fmtDot(d.format)}<span class="nm">${DGM.cloud.mark(d.name, q)}</span><span class="sz">${esc(DGM.cloud.fmtBytes(d.size))}</span>`;
+      row.title = `${d.path || "/"} · ${DGM.cloud.fmtBytes(d.size)}`;
+      row.addEventListener("click", () =>
+        state.cloudOpenDoc(d.id).catch((err) => DGM.status(String((err && err.message) || err), "err")),
+      );
+      host.appendChild(row);
+    }
+  }
+
+  /** 云端文档视图：**只做查找与打开**。树找、点一下开；管理动作（改名/移动/删除）不在这里。 */
+  function viewCloudDocs() {
+    const box = h("div");
+    const cloud = state.cloud;
+    const configured = !!((state.settings.cloud || {}).base_url || "").trim();
+
+    if (!configured) {
+      box.appendChild(tip(`<b>${esc(t("side.cloud.noBaseUrl"))}</b><br>${esc(t("side.cloud.noBaseUrlDesc"))}`));
+      const acts = h("div", "side-acts");
+      acts.innerHTML = `<button class="btn sm" data-a="cfg">${icon("settings")}${esc(t("side.cloud.configure"))}</button>`;
+      acts.addEventListener("click", () => DGM.dialogs.settings("cloud"));
+      box.appendChild(acts);
+      return box;
+    }
+
+    // 未登录：给提示 + 登录按钮（**这里不自动弹窗** —— 只有活动栏的「账户」按需求直接弹）
+    if (!cloud.status.signed_in) {
+      box.appendChild(tip(esc(t("cloud.tree.needLogin"))));
+      const acts = h("div", "side-acts");
+      acts.innerHTML = `<button class="btn sm primary" data-a="login">${icon("cloud")}${esc(t("acct.login"))}</button>`;
+      acts.addEventListener("click", () => DGM.cloud.openLogin());
+      box.appendChild(acts);
+      return box;
+    }
+
+    // ── 工具栏：筛选 + 三个图标钮（236px 侧栏放不下三个带字按钮） ──
+    const bar = h("div", "ct-toolbar ct-top");
+    const filter = h("div", "ct-filter");
+    filter.innerHTML = `${icon("search", "ico-sm")}<input id="ct-q" type="text" placeholder="${esc(t("cloud.tree.filter"))}" value="${esc(cloudQuery)}" spellcheck="false">`;
+    const input = $("#ct-q", filter);
+    input.addEventListener("input", () => {
+      cloudQuery = input.value;
+      renderKeepFocus("ct-q");
+    });
+    bar.appendChild(filter);
+
+    const acts = h("div", "ct-iconacts");
+    acts.innerHTML =
+      `<button class="icon-btn" data-a="refresh" title="${esc(t("cloud.tree.refresh"))}">${icon("refresh", "ico-sm")}</button>` +
+      `<button class="icon-btn" data-a="mkdir" title="${esc(t("cloud.tree.newFolder"))}">${icon("plus", "ico-sm")}</button>` +
+      `<button class="icon-btn" data-a="save" title="${esc(t("cloud.tree.save"))}">${icon("save", "ico-sm")}</button>`;
+    acts.addEventListener("click", async (e) => {
+      const b = e.target.closest("button");
+      if (!b) return;
+      try {
+        if (b.dataset.a === "refresh") await refreshCloud();
+        else if (b.dataset.a === "save") await DGM.cloud.saveDoc();
+        else if (b.dataset.a === "mkdir") await newCloudFolder();
+      } catch (err) {
+        DGM.toast({ icon: "alert", title: t("side.cloud.error"), sub: String((err && err.message) || err), warn: true });
+      }
+    });
+    box.appendChild(bar);
+
+    if (cloud.lastError) box.appendChild(tip(`${esc(t("side.cloud.error"))}: <code>${esc(cloud.lastError)}</code>`));
+
+    if (cloud.loading && !cloud.docs && !cloud.folders) {
+      box.appendChild(tip(esc(t("common.loading"))));
+      return box;
+    }
+
+    const q = cloudQuery.trim().toLowerCase();
+    const tree = DGM.cloud.treeOf(cloud.folders, cloud.docs);
+    const host = h("div", "ct-tree");
+    cloudChildren(host, tree.root, 0, q, collapsed);
+    if (!host.childElementCount) {
+      box.appendChild(tip(esc(t("cloud.tree.none"))));
+    } else {
+      box.appendChild(host);
+    }
+
+    // 汇总：有筛选就说命中，没有就说全量
+    let folders = 0;
+    let docs = 0;
+    const walk = (n) => {
+      for (const c of n.children) {
+        if (!DGM.cloud.subtreeMatches(c, q)) continue;
+        folders++;
+        walk(c);
+      }
+      for (const d of n.docs) if (!q || String(d.name).toLowerCase().includes(q)) docs++;
+    };
+    walk(tree.root);
+    box.appendChild(
+      h("div", "side-sub", q
+        ? esc(t("cloud.tree.summaryFilter", { q: cloudQuery, n: docs, m: folders }))
+        : esc(t("cloud.tree.summary", { n: docs, m: folders }))),
+    );
+
+    // 这里**不放存储用量**：额度是"账户"的事，侧栏的账户视图已经有一条（同一份
+    // 服务端数据）。同一个数字在相邻两个视图里各显示一遍，只会让人怀疑哪个是真的。
+    return box;
+  }
+
+  /** 重新拉目录全集 + 文档列表（两个数据面都要，树才完整）。 */
+  async function refreshCloud() {
+    await Promise.all([state.cloudDocs(), state.cloudFolders()]);
+  }
+
+  /** 新建一个（可为空的）目录 —— 名字只收一段，层级由"当前选中的目录"表达。 */
+  async function newCloudFolder() {
+    const name = await DGM.dialogs.input({
+      title: t("cloud.tree.newFolder"),
+      icon: "plus",
+      label: t("cloud.tree.newFolderPrompt"),
+      placeholder: "架构",
+      hint: t("cloud.tree.newFolderHint"),
+    });
+    if (!name) return;
+    const path = DGM.cloud.normPath(name);
+    if (!path) return DGM.toast({ icon: "alert", title: t("cloud.tree.folderNameRequired"), sub: "", warn: true });
+    try {
+      await state.cloudFolderCreate(path);
+      DGM.toast({ icon: "plus", title: t("cloud.tree.folderCreated"), sub: path });
+    } catch (err) {
+      DGM.toast({ icon: "alert", title: t("cloud.tree.folderCreateFailed"), sub: String((err && err.message) || err), warn: true });
+    }
   }
 
   /* ------------------------------------------------------------------ 大纲 */
@@ -731,7 +874,14 @@ window.DGM = window.DGM || {};
 
   /* ------------------------------------------------------------------ 渲染 */
 
-  const VIEWS = { explorer: viewExplorer, search: viewSearch, convert: viewConvert, cloud: viewCloud, outline: viewOutline };
+  const VIEWS = {
+    explorer: viewExplorer,
+    search: viewSearch,
+    convert: viewConvert,
+    cloud: viewCloudDocs,
+    account: viewAccount,
+    outline: viewOutline,
+  };
 
   function render() {
     const view = state.panels().sidebar_view || "explorer";
@@ -793,8 +943,11 @@ window.DGM = window.DGM || {};
     const v = state.panels().sidebar_view || "explorer";
     if (v === "explorer") render();
   });
+  /* 云状态一变，**两个**云端视图都要重渲染 —— 登录状态是全客户端唯一的一份
+     （在「账户」里登录成功后，「云端文档」这边不该还停在"请登录"）。 */
   DGM.bus.on("cloud:changed", () => {
-    if ((state.panels().sidebar_view || "explorer") === "cloud") render();
+    const v = state.panels().sidebar_view || "explorer";
+    if (v === "cloud" || v === "account") render();
   });
 
   DGM.sidebar = { render, focusSearch, openDocAt, openFolderFlow, newFileFlow };

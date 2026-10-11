@@ -13,6 +13,10 @@ window.DGM = window.DGM || {};
   const ipc = DGM.ipc;
   const t = (k, v) => DGM.i18n.t(k, v);
 
+  /** 云网关模型在 `ai.default_model` 里的 id 前缀，与 Rust 的 `GATEWAY_MODEL_PREFIX` 同值。
+   *  两边靠它把"这次对话走网关还是走本地 BYOK"分流（见 `commands.rs::resolve_target`）。 */
+  const GW_PREFIX = "gw:";
+
   /* ------------------------------------------------------------------ 事件总线 */
 
   const handlers = new Map();
@@ -66,10 +70,24 @@ window.DGM = window.DGM || {};
       done: null,
     },
 
-    /* 云网关。账户与额度都是服务端给的；未登录就是未登录，不伪造（P6 原则） */
+    /* 云网关。账户与额度都是服务端给的；未登录就是未登录，不伪造（P6 原则）。
+     *
+     * **全客户端唯一的一份登录状态**：「账户」与「云端文档」只是它的两个视图，
+     * 不各自另存副本 —— 否则"在两处登录、只有一处生效"这类 bug 会反复出现。
+     * 令牌不在前端（在凭据库），所以"已登录"是事实陈述，不是页面能伪造的状态。 */
     cloud: {
       status: { signed_in: false, base_url: "", account: null },
       docs: null, // CloudDocList | null
+      folders: null, // CloudFolderList | null
+      loading: false,
+      lastError: "",
+    },
+
+    /* 云网关的**可用模型别名**。这是**服务端事实**（按账号权益过滤后的结果），不是本地设置，
+     * 所以登出必须整体清掉 —— 留着上一次账号的别名，用户点下去必然 401。
+     * 与 `cloud` 分两块：云文档是"我的文件"，模型别名是"我能用哪些模型"，生命周期一样但用途无关。 */
+    aiGateway: {
+      models: [], // GatewayModel[]
       loading: false,
       lastError: "",
     },
@@ -126,15 +144,38 @@ window.DGM = window.DGM || {};
     ai() {
       return (state.settings && state.settings.ai) || { models: [], default_model: "" };
     },
+    /** 云网关可用模型别名（未登录时恒为空 —— 服务端不给匿名账号别名）。 */
+    gatewayModels() {
+      return state.cloud.status.signed_in ? state.aiGateway.models || [] : [];
+    },
+    /** `ai.default_model` 里的网关标记，与 Rust 的 `GATEWAY_MODEL_PREFIX` 同值。 */
+    isGatewayModel(id) {
+      return String(id || "").startsWith(GW_PREFIX);
+    },
+    /** **合并后**的可选模型：网关在前、本地 BYOK 在后，各自带 `group` 标记。
+     *
+     *  两组形状刻意保持一致（id/name/group/has_key），这样两个选择器只需一次 map ——
+     *  分组只决定"要不要画那条小标题"，不该让两处的取数逻辑分叉。 */
+    modelChoices() {
+      const gw = state.gatewayModels().map((m) => ({
+        id: GW_PREFIX + m.id,
+        name: m.display_name || m.id,
+        group: "gateway",
+        has_key: true, // 凭据由客户端自己带（当前 access token），不存在"没填密钥"
+        // 识图能力只有网关这一组能确知（服务端按别名给）；本地那组是 null = 不知道。
+        // **null 与 false 必须分开**：本地模型画个"不支持识图"是我们在替用户下结论。
+        vision: !!m.supports_vision,
+      }));
+      const local = (state.ai().models || []).map((m) => ({ ...m, group: "local", vision: null }));
+      return gw.concat(local);
+    },
     hasModels() {
-      const m = state.ai().models || [];
-      return m.length > 0;
+      return state.modelChoices().length > 0;
     },
     currentModel() {
-      const ai = state.ai();
-      const models = ai.models || [];
-      if (!models.length) return null;
-      return models.find((m) => m.id === ai.default_model) || models[0];
+      const all = state.modelChoices();
+      if (!all.length) return null;
+      return all.find((m) => m.id === state.ai().default_model) || all[0];
     },
   };
   DGM.state = state;
@@ -528,7 +569,13 @@ window.DGM = window.DGM || {};
     }
     state.cloud.loading = false;
     emit("cloud:changed");
-    if (state.cloud.status.signed_in) await cloudDocs();
+    if (state.cloud.status.signed_in) {
+      await Promise.all([cloudDocs(), cloudFolders()]);
+    }
+    // 恢复已有会话时也把模型别名取回来 —— 否则重开应用后 AI 面板会说"没有模型"，
+    // 直到用户重新登录一次（那正是这次要修的观感问题）。
+    // 但这种场合**只补"空/悬空"的默认**，不覆盖用户上次挑的模型（见 autoPickGatewayModel）。
+    await refreshGatewayModels("ifMissing");
     return state.cloud.status;
   }
 
@@ -536,7 +583,9 @@ window.DGM = window.DGM || {};
     const account = await ipc.invoke("cloud_login", { email, password });
     state.cloud.status = { signed_in: true, base_url: (state.settings.cloud || {}).base_url || "", account };
     emit("cloud:changed");
-    await cloudDocs();
+    await Promise.all([cloudDocs(), cloudFolders()]);
+    // 登录这个动作明确要求：落到第一个网关模型为默认（用户拍板）。
+    await refreshGatewayModels("always");
     return account;
   }
 
@@ -544,7 +593,67 @@ window.DGM = window.DGM || {};
     await ipc.invoke("cloud_logout");
     state.cloud.status = { signed_in: false, base_url: (state.settings.cloud || {}).base_url || "", account: null };
     state.cloud.docs = null;
+    state.cloud.folders = null;
+    state.aiGateway.models = [];
+    state.aiGateway.lastError = "";
+    // 默认模型若指着网关别名，登出后它就不存在了：留着会让状态栏一直显示一个
+    // 用户再也选不到的名字，所以清掉，交给 currentModel() 回落到可用的本地模型。
+    if (state.isGatewayModel(state.ai().default_model)) {
+      await patchSettings({ ai: { default_model: "" } });
+    }
     emit("cloud:changed");
+  }
+
+  /** 拉云网关**可用模型别名**（`GET /v1/ai/models`）。
+   *
+   *  失败时**清空列表而不是留着旧的**：这份数据是"当前账号能用什么"，
+   *  留旧的等于让用户对着一个已经被服务端拿掉的别名点半天。
+   *  空列表是正常结果（无 AI 权益时服务端就是 `data: []` + 200），不是错误。
+   *
+   *  `autoPick` 见 `autoPickGatewayModel`：登录用 `"always"`，启动/回连用 `"ifMissing"`。
+   */
+  async function refreshGatewayModels(autoPick) {
+    if (!state.cloud.status.signed_in) {
+      state.aiGateway.models = [];
+      state.aiGateway.lastError = "";
+      emit("cloud:changed");
+      return [];
+    }
+    state.aiGateway.loading = true;
+    emit("cloud:changed");
+    try {
+      const res = await ipc.invoke("ai_gateway_models");
+      state.aiGateway.models = (res && res.items) || [];
+      state.aiGateway.lastError = "";
+    } catch (e) {
+      state.aiGateway.models = [];
+      state.aiGateway.lastError = String((e && e.message) || e);
+    }
+    state.aiGateway.loading = false;
+    emit("cloud:changed");
+    await autoPickGatewayModel(autoPick);
+    return state.aiGateway.models;
+  }
+
+  /** 把默认模型落到**第一个网关模型**上 —— 否则刚登录的用户打开 AI 面板仍然看到
+   *  "还没有设置 AI 模型"，还得自己点一次才算能用。
+   *
+   *  `mode="always"`：登录这个动作要求如此（用户拍板）。
+   *  `mode="ifMissing"`：只在默认**空或悬空**（指向已不存在的模型）时补一个。
+   *    启动/回连属于这一类 —— 每次开应用都把用户上次挑的模型拽回第一个，是更烦人的 bug。
+   *
+   *  列表为空（没权益 / 拉取失败）就什么都不做，绝不硬塞一个不能用的 id。 */
+  async function autoPickGatewayModel(mode) {
+    const gw = state.gatewayModels();
+    if (!gw.length) return;
+    const first = GW_PREFIX + gw[0].id;
+    const cur = state.ai().default_model || "";
+    if (cur === first) return;
+    if (mode !== "always") {
+      const live = state.modelChoices().some((m) => m.id === cur);
+      if (cur && live) return;
+    }
+    await patchSettings({ ai: { default_model: first } });
   }
 
   async function cloudDocs() {
@@ -562,27 +671,55 @@ window.DGM = window.DGM || {};
     return state.cloud.docs;
   }
 
+  /** 云目录全集（建树用）。与 cloudDocs 一起构成"云端文档"视图的两个数据面。 */
+  async function cloudFolders() {
+    if (!state.cloud.status.signed_in) return null;
+    state.cloud.loading = true;
+    emit("cloud:changed");
+    try {
+      state.cloud.folders = await ipc.invoke("cloud_folders");
+      state.cloud.lastError = "";
+    } catch (e) {
+      state.cloud.lastError = String((e && e.message) || e);
+    }
+    state.cloud.loading = false;
+    emit("cloud:changed");
+    return state.cloud.folders;
+  }
+
+  /** 新建目录（可为空）。成功后重新拉目录全集与文档列表 —— 树要跟着长。 */
+  async function cloudFolderCreate(path) {
+    const created = await ipc.invoke("cloud_folder_create", { path });
+    await Promise.all([cloudFolders(), cloudDocs()]);
+    return created;
+  }
+
   /** 把当前文档存到云端。
    *
    *  乐观锁三件套都在文档上记着：`cloudId`（服务端认的 id）、
    *  `cloudVersion`（上次存/取的版本号）。新建传 version=0（If-Match: 0 = 仅当不存在时创建）；
    *  更新必须带版本号 —— 服务端 If-Match 省略 = 仅当不存在时创建，会直接 409（联调实测）。
    *  存成功后把新版本号记回去，下次保存才是"更新"。
+   *
+   *  `path` / `name` 由「保存到云端」窗口给（不传 = 用文档自己的名字、落到根目录）——
+   *  保存与改名一次请求搞定（服务端 PUT 的 name/path 就是入口），不必再多一次 PATCH。
    */
-  async function cloudSaveActive() {
+  async function cloudSaveActive(path, name) {
     const d = state.activeDoc();
     if (!d) return null;
     const saved = await ipc.invoke("cloud_doc_save", {
       id: d.cloudId || "",
       version: d.cloudVersion || 0,
-      name: d.name,
+      name: name || d.name,
+      path: path == null ? "" : path,
       format: d.format,
       body: d.body,
     });
     d.cloudId = saved.id;
     d.cloudVersion = saved.version;
+    if (name) d.name = name;
     emit("session:changed");
-    await cloudDocs();
+    await Promise.all([cloudDocs(), cloudFolders()]);
     return saved;
   }
 
@@ -958,9 +1095,12 @@ window.DGM = window.DGM || {};
     cloudLogin,
     cloudLogout,
     cloudDocs,
+    cloudFolders,
+    cloudFolderCreate,
     cloudSaveActive,
     cloudOpenDoc,
     cloudDeleteDoc,
+    refreshGatewayModels,
   });
 
   // 系统主题变化时（未显式锁定）跟随

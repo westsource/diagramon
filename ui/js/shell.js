@@ -191,6 +191,13 @@ window.DGM = window.DGM || {};
 
   /* ------------------------------------------------------------------ pop 菜单 */
 
+  /** 弹出物（菜单 / 下拉）。
+   *
+   *  **调用方的锚点必须 `e.stopPropagation()`**：文档级有"点外面就把弹出物关掉"的监听，
+   *  而锚点自己那次点击也在文档路径上 —— 不停传播的话，同一次点击里
+   *  "刚开就被关"，表现是**点了没反应**（`#ai-model` 与 `#btn-export` 都踩过）。
+   *  `#menubar` 的项早就这么做了，这里把它写成约定。
+   */
   function showPop(items, pos, onPick, kind, container) {
     const p = $(container || "#pop");
     if (!p) return;
@@ -282,7 +289,15 @@ window.DGM = window.DGM || {};
     const panels = state.panels();
     const activeId = state.active;
     const recent = (state.settings && state.settings.recent) || [];
-    const models = state.ai().models || [];
+    // 模型子菜单：网关 + 本地合并后分组（形状与 AI 面板下拉一致）
+    const modelChildren = DGM.ai && DGM.ai.modelItems
+      ? DGM.ai.modelItems((m) => ({
+          label: m.name,
+          icon: "robot",
+          act: "model:" + m.id,
+          kbd: m.has_key ? "" : t("set.ai.keyMissing"),
+        }))
+      : [];
     const isText = state.isTextDoc(state.activeDoc());
 
     const recentItems = recent.slice(0, 6).map((r) => {
@@ -310,7 +325,7 @@ window.DGM = window.DGM || {};
           { label: t("mi.newFileHere"), icon: "plus", act: "cmd:file.newFileHere", disabled: !state.workspace.root },
           { label: t("mi.openRecent"), icon: "clock", kbd: "Ctrl+R", children: recentItems },
           { sep: true },
-          { label: t("mi.cloudSave"), icon: "cloud", act: "tip:side.cloud.gwOff", disabled: true },
+          { label: t("mi.cloudSave"), icon: "cloud", act: "cmd:file.cloudSave" },
           { label: t("mi.cloudDocs"), icon: "cloud", act: "cmd:file.cloud" },
           { sep: true },
           { label: t("mi.save"), kbd: "Ctrl+S", icon: "save", act: "cmd:file.save" },
@@ -378,8 +393,10 @@ window.DGM = window.DGM || {};
           { sep: true },
           {
             label: t("mi.aiModel"), icon: "robot",
-            children: models.length
-              ? models.map((m) => ({ label: m.name, icon: "robot", act: "model:" + m.id, kbd: m.has_key ? "" : t("set.ai.keyMissing") }))
+            // 分组规则与 AI 面板的下拉**共用** DGM.ai.modelItems（见那边注释：
+            // 网关与本地两组的凭据来源不同，混排会让人以为网关模型也要填 key）。
+            children: modelChildren.length
+              ? modelChildren
               : [{ label: t("ai.noModels.title"), icon: "alert", act: "cmd:view.settings.ai" }],
           },
           { label: t("mi.aiHistory"), icon: "history", act: "cmd:ai.history" },
@@ -410,7 +427,9 @@ window.DGM = window.DGM || {};
     const activeDoc = state.activeDoc();
     return items.map((it) => {
       if (it.sep) return { sep: true };
-      const out = { label: it.label, icon: it.icon, kbd: it.kbd, disabled: it.disabled, children: it.children, act: it.act };
+      // `label2` 是**分组小标题**（不可点）：menuItems 要原样透传，
+      // 否则模型子菜单里那两个组名会被当成普通按钮画出来。
+      const out = { label: it.label, icon: it.icon, kbd: it.kbd, disabled: it.disabled, children: it.children, act: it.act, label2: it.label2 };
       if (it.check) {
         const which = {
           "cmd:view.sidebar": panels.sidebar,
@@ -428,8 +447,7 @@ window.DGM = window.DGM || {};
       }
       if (String(it.act || "").startsWith("model:")) {
         out.check = true;
-        const ai = state.ai();
-        out.on = ai.default_model === it.act.slice(6);
+        out.on = state.ai().default_model === it.act.slice(6);
       }
       return out;
     });
@@ -523,7 +541,9 @@ window.DGM = window.DGM || {};
 
   async function setModel(id) {
     await state.patchSettings({ ai: { default_model: id } });
-    const m = (state.ai().models || []).find((x) => x.id === id);
+    // 在**合并后**的列表里找名字：网关别名不在 settings.ai.models 里，
+    // 只查本地那份会让"切到网关模型"静默无提示。
+    const m = state.modelChoices().find((x) => x.id === id);
     if (m) toast({ icon: "robot", title: t("ai.model.switch"), sub: m.name, ai: true });
   }
 
@@ -637,7 +657,8 @@ window.DGM = window.DGM || {};
       b.innerHTML = icon(a.icon);
       b.title = `${t(a.label)}  ${a.kbd}`;
       b.addEventListener("click", () => {
-        if (p.sidebar_view === a.id) togglePanel("sidebar");
+        // 同上：现读，别拿 render 时的快照去判"再点一次就收起"
+        if (state.panels().sidebar_view === a.id) togglePanel("sidebar");
         else setSidebarView(a.id);
       });
       bar.appendChild(b);
@@ -651,14 +672,27 @@ window.DGM = window.DGM || {};
     bar.appendChild(ai);
 
     bar.appendChild(h("div", "act-spacer"));
-    // 账户与云端：直达侧栏云端视图（原菜单「账户」已移到这里 —— 账户头/登录/
-    // 文档列表都在 viewCloud，菜单里那份只是重复入口）
-    const acct = h("button", "act" + (p.sidebar_view === "cloud" && p.sidebar ? " on" : ""));
+    // 账户：**独立视图**（只读账户信息），不再与「云端文档」共用同一个 cloud 视图。
+    // title 也从「账户与云端」改成了「账户」——那块设置页仍叫「账户与云端」。
+    // 未登录时点它**直接弹登录窗口**（用户明确要求的交互）；登录成功后落到账户视图 ——
+    // 登录只是中途一站，不能把用户晾在他没点的地方。
+    //
+    // 判定一律**现读 state**，不要用 render 时的快照：活动栏不会因为登录/登出而重渲染
+    // （`cloud:changed` 原本只喂侧栏），拿快照的按钮会卡在"未登录"那一支上 ——
+    // 登录完再点它只弹一句「已登录」，怎么点都切不过去，
+    // 直到别的原因（换个侧栏面板等）触发一次整屏重渲染才"又好了"。
+    const acct = h("button", "act" + (p.sidebar_view === "account" && p.sidebar ? " on" : ""));
     acct.innerHTML = icon("user");
-    acct.title = t("set.tab.cloud");
+    acct.title = t("act.account");
     acct.addEventListener("click", () => {
-      if (p.sidebar_view === "cloud") togglePanel("sidebar");
-      else setSidebarView("cloud");
+      const cur = state.panels();
+      const signed = !!state.cloud.status.signed_in;
+      const configured = !!((state.settings.cloud || {}).base_url || "").trim();
+      if (configured && !signed) {
+        return void DGM.cloud.openLogin({ onSuccess: () => setSidebarView("account") });
+      }
+      if (cur.sidebar_view === "account" && cur.sidebar) togglePanel("sidebar");
+      else setSidebarView("account");
     });
     bar.appendChild(acct);
     const keys = h("button", "act");
@@ -1134,6 +1168,10 @@ window.DGM = window.DGM || {};
       );
     });
 
+    // 活动栏也**显示**云状态（账户钮的高亮、以及"未登录→弹窗"那一支），
+    // 登录 / 登出要跟着刷新。少了这条，活动栏会一直停在登录前的样子。
+    DGM.bus.on("cloud:changed", renderActivity);
+
     // 全局点击 / 悬浮收起
     document.addEventListener("click", (e) => {
       const inPop = e.target.closest("#pop") || e.target.closest("#pop-sub");
@@ -1182,6 +1220,12 @@ window.DGM = window.DGM || {};
     cmd({ id: "file.saveAs", group: "file", icon: "save", kbd: "Ctrl+Shift+S", run: () => saveActive(true), avail: () => (state.activeDoc() ? true : { why: t("status.noDoc") }) });
     cmd({ id: "file.recent", group: "file", icon: "clock", kbd: "Ctrl+R", run: () => DGM.dialogs.history() });
     cmd({ id: "file.cloud", group: "file", icon: "cloud", run: () => setSidebarView("cloud") });
+    cmd({
+      id: "file.cloudSave", group: "file", icon: "cloud",
+      run: () => DGM.cloud.saveDoc(),
+      avail: () => (state.activeDoc() ? true : { why: t("status.noDoc") }),
+    });
+    cmd({ id: "view.account", group: "view", icon: "user", run: () => setSidebarView("account") });
     // 工作区（第 4 步）：树/搜索/外部跟随都要先有一个根目录
     cmd({ id: "file.openFolder", group: "file", icon: "folderOpen", run: () => DGM.sidebar && DGM.sidebar.openFolderFlow && DGM.sidebar.openFolderFlow() });
     cmd({

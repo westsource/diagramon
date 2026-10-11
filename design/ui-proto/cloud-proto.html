@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Diagramon dev3.0 — 账户 / 云端文档 原型</title>
+<link rel="stylesheet" href="./proto.css">
+<link rel="stylesheet" href="./cloud-proto.css">
+</head>
+<body class="no-ai">
+
+<div class="workbench" id="workbench">
+
+  <!-- ══ 标题栏 ══════════════════════════════════════════════════════ -->
+  <header class="titlebar" data-tauri-drag-region>
+    <div class="brand">
+      <span class="logo"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-logo"></use></svg></span>
+      <span class="brand-name">Diagramon</span>
+      <span class="brand-ver">dev3.0</span>
+    </div>
+
+    <nav class="titlebar-menu" id="menubar"><!-- JS 渲染 --></nav>
+
+    <div class="titlebar-center">
+      <div class="doc-title">
+        <span class="dot" style="background:var(--fmt-drawio)"></span>
+        <b>系统架构.drawio</b><span class="path">· 云端</span>
+      </div>
+    </div>
+
+    <div class="titlebar-actions">
+      <button class="icon-btn" id="btn-theme" title="切换明暗主题"><svg class="ico"><use href="#i-moon"></use></svg></button>
+      <div class="win-btns">
+        <button class="win-btn" title="最小化"><svg class="ico ico-sm"><use href="#i-minimize"></use></svg></button>
+        <button class="win-btn" title="最大化"><svg class="ico ico-sm"><use href="#i-maximize"></use></svg></button>
+        <button class="win-btn close" title="关闭"><svg class="ico ico-sm"><use href="#i-close"></use></svg></button>
+      </div>
+    </div>
+  </header>
+
+  <!-- ══ 主体：活动栏 / 侧栏 / 编辑区 ════════════════════════════════ -->
+  <div class="body-row">
+
+    <nav class="activitybar" id="activitybar"><!-- JS 渲染 --></nav>
+
+    <aside class="sidebar" id="sidebar">
+      <div class="side-head">
+        <span id="side-title">账户</span>
+        <span class="sp"></span>
+        <button class="icon-btn" id="side-more" title="更多操作"><svg class="ico ico-sm"><use href="#i-more"></use></svg></button>
+        <button class="icon-btn" id="side-close" title="隐藏侧栏  Ctrl+B"><svg class="ico ico-sm"><use href="#i-close"></use></svg></button>
+      </div>
+      <div class="side-view" id="side-view"><!-- JS 渲染 --></div>
+    </aside>
+
+    <main class="editor-col" id="editor-col">
+      <div class="tabbar">
+        <div class="tabs">
+          <div class="tab on"><span class="dot" style="background:var(--fmt-drawio)"></span><span class="nm">系统架构.drawio</span></div>
+        </div>
+        <button class="tab-add" title="新建图表"><svg class="ico ico-sm"><use href="#i-plus"></use></svg></button>
+      </div>
+
+      <div class="welcome">
+        <div class="welcome-inner">
+          <h2>账户 / 云端文档 原型</h2>
+          <p class="sub">本次只改「账户」「云端文档」「保存到云端」「登录」四处；编辑器与 AI 面板见主原型 app.html。</p>
+          <div class="ai-hero">
+            <span class="ico-wrap"><svg class="ico"><use href="#i-info"></use></svg></span>
+            <div>
+              <b>用底部控制条切换状态</b>
+              <span>未登录 → 点活动栏底部的「账户」会直接弹登录窗口；文件 → 保存到云端… 会弹目录树选择窗口。</span>
+            </div>
+          </div>
+          <div class="cols">
+            <div>
+              <h4>本次新增 / 改动</h4>
+              <div class="lnk"><svg class="ico ico-sm"><use href="#i-user"></use></svg>侧栏「账户」——只读账户信息</div>
+              <div class="lnk"><svg class="ico ico-sm"><use href="#i-cloud"></use></svg>侧栏「云端文档」——目录树查找 / 打开</div>
+              <div class="lnk"><svg class="ico ico-sm"><use href="#i-key"></use></svg>独立的登录窗口（注册走官网）</div>
+              <div class="lnk"><svg class="ico ico-sm"><use href="#i-save"></use></svg>保存到云端——树形选目录窗口</div>
+              <div class="lnk"><svg class="ico ico-sm"><use href="#i-globe"></use></svg>统一会话：一处登录，处处生效</div>
+            </div>
+            <div>
+              <h4>参照来源</h4>
+              <div class="lnk"><svg class="ico ico-sm"><use href="#i-file"></use></svg>旧客户端 LoginDialog</div>
+              <div class="lnk"><svg class="ico ico-sm"><use href="#i-file"></use></svg>旧客户端 CloudPathPickerDialog</div>
+              <div class="lnk"><svg class="ico ico-sm"><use href="#i-file"></use></svg>服务端 /account/files 云端文件树</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <!-- ══ 状态栏 ══════════════════════════════════════════════════════ -->
+  <footer class="statusbar">
+    <span>就绪</span><span class="sp" style="flex:1"></span>
+    <span>账户 / 云端文档 / 保存到云端 · 原型</span>
+  </footer>
+</div>
+
+<!-- ══ 弹层 ═════════════════════════════════════════════════════════ -->
+<div class="overlay center" id="overlay-dialog" hidden>
+  <div class="dialog" id="dialog" role="dialog"><!-- JS 渲染 --></div>
+</div>
+
+<div class="toasts" id="toasts"></div>
+
+<!-- 原型控制条（实施时删除） -->
+<div class="ct-proto" id="proto-ctl"><!-- JS 渲染 --></div>
+
+<script src="./proto-icons.js"></script>
+<script src="./cloud-proto.js"></script>
+</body>
+</html>

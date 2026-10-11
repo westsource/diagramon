@@ -1736,17 +1736,9 @@ body.no-mock .mock-badge { display: none; }
 /* 云端未登录态的头像（用图标而非文字） */
 .cloud-me .avatar { display: inline-flex; align-items: center; justify-content: center; }
 
-/* 云端登录表单（第 6 步）：内联在侧栏里，不做弹窗 —— 登录是高频小动作 */
-.cloud-login { display: flex; flex-direction: column; gap: 8px; padding: 10px 4px 0; }
-.cloud-login label { display: flex; flex-direction: column; gap: 3px; font-size: var(--fs-xs); color: var(--muted); }
-.cloud-login input {
-  width: 100%; padding: 6px 8px; border-radius: 6px;
-  border: 1px solid var(--line, color-mix(in srgb, var(--ink) 14%, transparent));
-  background: var(--surface-2, transparent); color: var(--ink); font: inherit; font-size: var(--fs-sm);
-}
-.cloud-login input:focus { outline: 1px solid var(--accent); }
-.cloud-login-acts { display: flex; align-items: center; gap: 8px; }
-.cloud-login-acts .hint { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--err, #b0554a); }
+/* 注：原「云端登录表单内联在侧栏」的 .cloud-login / .cloud-login-acts 与
+   .cloud-quota 已随第 6 步改版删除 —— 登录搬进了独立的登录窗口（§20.4），
+   配额条换成了 §20.1 的 .acct-quota（且只在「账户」视图出现一次）。 */
 
 /* 预览大文档护栏：提示 + "仍要渲染"，决定权在用户 */
 .preview-note.pv-guard {
@@ -1758,11 +1750,6 @@ body.no-mock .mock-badge { display: none; }
 }
 .preview-note.pv-guard small { color: var(--muted); }
 .preview-note.pv-guard .mini-btn { flex: 0 0 auto; }
-
-/* 云端配额条：用 <progress>，数字如实来自服务端 */
-.cloud-quota { display: flex; align-items: center; gap: 8px; padding: 10px 4px 0; }
-.cloud-quota progress { flex: 1; min-width: 0; height: 6px; }
-.cloud-quota .hint { flex: 0 0 auto; font-size: var(--fs-xs); color: var(--faint); }
 
 /* ============================================================================
  * §19.10 工作区（第 4 步）：真实目录树 / 冲突横幅
@@ -1920,3 +1907,140 @@ html[data-theme="dark"] .canvas-stage[data-engine="dot"] svg ellipse { stroke: v
 .canvas-host[hidden] { display: none; }
 .canvas-host .canvas-frame { width: 100%; height: 100%; border: 0; display: block; background: var(--canvas-bg); }
 .canvas-viewport.is-canvas-host { display: block; overflow: hidden; background-image: none; }
+
+/* ---- 20. 账户 / 云端文档 / 保存到云端 / 登录（云网关这套界面） -------------
+ * 从 design/ui-proto/cloud-proto.css 并入；类名与变量逐字照抄，改名只改了
+ * .login-url → 同名、.link-btn → 同名（原型里就是这套）。
+ * 结构：
+ *   20.1 账户视图（只读卡片 + 只读行 + 配额块）
+ *   20.2 云端文档树（筛选栏 + 目录/文档行 + 配额脚）
+ *   20.3 保存到云端的目录选择树 + 新建子目录行
+ *   20.4 登录窗口（含"注册地址可复制"输入框）
+ * 注意：**不是**侧栏全局样式，全部挂在 .side-view 内部或对话框里，互不干扰。
+ * ------------------------------------------------------------------------- */
+
+/* 20.1 账户 ---------------------------------------------------------------- */
+.acct-card {
+  display: flex; align-items: center; gap: 10px;
+  margin: 4px 4px 10px; padding: 11px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.acct-card .avatar {
+  width: 38px; height: 38px; flex: 0 0 auto;
+  display: grid; place-items: center;
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-radius: 50%;
+}
+.acct-card .avatar .ico { width: 19px; height: 19px; }
+.acct-card .who { min-width: 0; }
+.acct-card .who b { display: block; font-size: var(--fs-md); font-weight: 600; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.acct-card .who small { display: block; margin-top: 1px; font-size: var(--fs-xs); color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.acct-rows { margin: 0 4px; border-top: 1px solid var(--border); }
+.acct-row { display: flex; align-items: center; gap: 10px; padding: 7px 8px; font-size: var(--fs-sm); border-bottom: 1px solid var(--border); }
+.acct-row .k { color: var(--muted); flex: 0 0 auto; }
+.acct-row .v { margin-left: auto; color: var(--ink-2); text-align: right; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.acct-quota { margin: 10px 4px 2px; padding: 10px 11px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); }
+.acct-quota h5 { display: flex; align-items: center; gap: 6px; font-size: var(--fs-xs); font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; margin-bottom: 8px; }
+.acct-quota h5 .ico { color: var(--muted); }
+.acct-quota h5 .sp { flex: 1; }
+.acct-quota h5 .pct { font: 600 var(--fs-sm) var(--font-mono); color: var(--ink-2); text-transform: none; letter-spacing: 0; }
+.acct-quota progress { width: 100%; height: 7px; }
+.acct-quota .line { display: flex; align-items: baseline; gap: 8px; margin-top: 6px; font-size: var(--fs-xs); color: var(--muted); }
+.acct-quota .line b { font: 600 var(--fs-sm) var(--font-mono); color: var(--ink-2); }
+
+.acct-note { margin: 12px 6px 0; font-size: var(--fs-xs); color: var(--faint); line-height: 1.7; }
+
+/* 20.1b 账户 · AI 权益 ----------------------------------------------------- */
+/* 徽标三态：已开通（绿）/ 未开通（灰）/ 未知（"服务端没给这个字段"）。
+   未知**不能**借用"未开通"的样式 —— 那是在说谎。 */
+.acct-badge { display: inline-flex; align-items: center; gap: 4px; padding: 1px 8px; border-radius: 999px; font-size: var(--fs-xs); font-weight: 500; }
+.acct-ai-on { color: var(--ok); background: var(--ok-soft); }
+.acct-ai-off { color: var(--muted); background: var(--surface-3); }
+.acct-unknown { color: var(--faint); }
+
+/* 20.2 云端文档树 ---------------------------------------------------------- */
+.ct-toolbar { position: sticky; top: 0; z-index: 2; padding: 4px 4px 6px; background: var(--surface-2); }
+.ct-top { display: flex; align-items: center; gap: 6px; }
+.ct-filter { flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px; padding: 0 7px; height: 26px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); }
+.ct-filter:focus-within { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
+.ct-filter .ico { color: var(--faint); flex: 0 0 auto; }
+.ct-filter input { flex: 1; min-width: 0; border: 0; background: none; outline: none; font-size: var(--fs-sm); color: var(--ink); }
+.ct-iconacts { display: flex; gap: 2px; flex: 0 0 auto; }
+
+.ct-tree { padding-bottom: 4px; }
+.ct-row {
+  display: flex; align-items: center; gap: 7px;
+  width: 100%;
+  padding: 4px 8px 4px calc(6px + var(--depth, 0) * 14px);
+  font-size: var(--fs-sm); color: var(--ink-2);
+  border-radius: var(--radius-sm); text-align: left;
+}
+.ct-row:hover { background: var(--surface-3); color: var(--ink); }
+.ct-row.on { background: var(--accent-soft); color: var(--accent); }
+.ct-row .caret { width: 13px; height: 13px; flex: 0 0 auto; color: var(--faint); transition: transform .14s; }
+.ct-row .caret.hidden { visibility: hidden; }
+.ct-row.closed .caret { transform: rotate(-90deg); }
+.ct-row .fld { color: var(--accent); flex: 0 0 auto; }
+.ct-row.empty .fld { color: var(--faint); }
+.ct-row .nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ct-row.empty .nm { color: var(--faint); }
+.ct-row .cnt { font-size: var(--fs-xs); color: var(--faint); flex: 0 0 auto; }
+.ct-row .cnt.zero { opacity: .75; }
+.ct-row mark { background: color-mix(in srgb, var(--accent) 30%, transparent); color: var(--ink); border-radius: 2px; }
+.ct-row .sz { font: var(--fs-xs) var(--font-mono); color: var(--faint); flex: 0 0 auto; }
+
+/* 注：云端文档视图**不显示存储用量** —— 额度归「账户」视图（同一份服务端数据），
+   相邻两个视图各显示一遍只会让人怀疑哪个是真的。原 .ct-foot 配额条已删除。 */
+
+/* 20.3 保存到云端的目录选择树 --------------------------------------------- */
+.pk-tree { margin-top: 4px; padding: 6px; max-height: 300px; overflow: auto; background: var(--surface-inset); border: 1px solid var(--border); border-radius: var(--radius); }
+.pk-row {
+  display: flex; align-items: center; gap: 8px;
+  padding: 5px 8px 5px calc(6px + var(--depth, 0) * 14px);
+  font-size: var(--fs-sm); color: var(--ink-2);
+  border-radius: var(--radius-sm); cursor: pointer;
+}
+.pk-row:hover { background: var(--surface-3); }
+.pk-row.on { background: var(--accent-soft); color: var(--accent); }
+.pk-row .fld { color: var(--accent); flex: 0 0 auto; }
+.pk-row .nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pk-row .cnt { font-size: var(--fs-xs); color: var(--faint); flex: 0 0 auto; }
+/* 原生 radio 换成圆点：外面是环，选中时内圈填充（与原型一致） */
+.pk-row input[type="radio"] {
+  appearance: none; -webkit-appearance: none;
+  width: 13px; height: 13px; flex: 0 0 auto; margin: 0;
+  border: 1.5px solid var(--border-strong); border-radius: 50%;
+  background: var(--surface);
+}
+.pk-row.on input[type="radio"] { border-color: var(--accent); box-shadow: inset 0 0 0 3px var(--accent); }
+.pk-row.empty .fld, .pk-row.empty .nm { color: var(--faint); }
+
+.newfolder { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
+.newfolder input { flex: 1; min-width: 0; height: 28px; padding: 0 9px; font-size: var(--fs-sm); color: var(--ink); background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); }
+.newfolder input:focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); outline: none; }
+
+.field-hint { margin: -4px 0 10px; font-size: var(--fs-xs); color: var(--faint); line-height: 1.6; }
+.lurl-label { display: block; font-size: var(--fs-xs); color: var(--muted); margin-bottom: 6px; }
+
+/* 20.4 登录窗口 ------------------------------------------------------------ */
+.login-msg { min-height: 17px; margin-top: 2px; font-size: var(--fs-xs); line-height: 1.5; }
+.login-msg.err { color: var(--err); }
+.login-msg.ok { color: var(--ok); }
+/* 注册地址回显：只读输入框（可选中、可 Ctrl+C）+ 一键复制。
+   不能用纯文本 —— 用户要的是"能拷走"，光看得到没用。 */
+.login-url { margin-top: 6px; padding: 9px 10px; background: var(--surface-inset); border: 1px solid var(--border); border-radius: var(--radius-sm); }
+.login-url-row, .lurl-row { display: flex; align-items: center; gap: 6px; }
+.login-url-row input, .lurl-row input {
+  flex: 1; min-width: 0; height: 26px; padding: 0 8px;
+  font: var(--fs-xs) var(--font-mono); color: var(--ink-2);
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm);
+  cursor: text; user-select: text; -webkit-user-select: text;
+}
+.login-url-row input:focus, .lurl-row input:focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); outline: none; }
+.link-btn { color: var(--accent); font-size: var(--fs-sm); cursor: pointer; background: none; border: 0; padding: 0; }
+.link-btn:hover { text-decoration: underline; }

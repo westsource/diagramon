@@ -2,7 +2,9 @@
  *
  * - 请求走 ai_chat，接受结果走事件 ai://delta / ai://done / ai://failed；
  *   mock 后端在同一条事件通道上假流式，界面无需区分。
- * - 模型来自 settings.ai.models（唯一真源）；没有模型时给明确引导，不假装能用。
+ * - 模型来自两处合并（`state.modelChoices()`）：登录云网关后的**服务端别名**，
+ *   以及「AI 设置」里的本地 BYOK 模型。两处分开分组显示，没有可用模型时给明确引导，
+ *   不假装能用。
  * - 识图：图片先压到 ≤1568px 再转 dataURL，只在内存里，不落盘。
  * - 「改图」把当前文档正文作为 context；「对话」可选把当前图作为上下文。
  */
@@ -142,15 +144,26 @@ window.DGM = window.DGM || {};
     return box;
   }
 
+  /** 「一个可用的模型都没有」时的引导。
+   *
+   *  **必须分登录/未登录两种说法**：它决定了用户下一步该做什么。原来只有一句
+   *  "这个版本不内置任何默认模型"，在云网关接好之后就成了半句假话 —— 已登录用户
+   *  照着它去「AI 设置」填 base URL，而其实他只需要重新登录/开通权益。
+   */
   function noModelsNode() {
+    const signedIn = state.cloud.status.signed_in;
     const box = h("div", "ai-empty");
     box.innerHTML =
-      `<div><div class="hero">${icon("key", "ico-lg")}</div>` +
+      `<div><div class="hero">${icon(signedIn ? "key" : "cloud", "ico-lg")}</div>` +
       `<h3>${esc(t("ai.noModels.title"))}</h3>` +
-      `<p>${esc(t("ai.noModels.desc"))}</p>` +
-      `<div class="acts"><button class="btn ai block" data-a="go">${icon("settings")}${esc(t("ai.noModels.cta"))}</button></div></div>`;
+      `<p>${esc(signedIn ? t("ai.noModels.descSignedIn") : t("ai.noModels.descSignedOut"))}</p>` +
+      `<div class="acts"><button class="btn ai block" data-a="${signedIn ? "go" : "login"}">` +
+      `${icon(signedIn ? "settings" : "cloud")}${esc(signedIn ? t("ai.noModels.cta") : t("ai.noModels.ctaLogin"))}</button></div></div>`;
     box.addEventListener("click", (e) => {
-      if (e.target.closest("button")) DGM.dialogs.settings("ai");
+      const b = e.target.closest("button");
+      if (!b) return;
+      if (b.dataset.a === "login") return DGM.cloud.openLogin();
+      DGM.dialogs.settings("ai");
     });
     return box;
   }
@@ -535,23 +548,48 @@ window.DGM = window.DGM || {};
 
   /* ------------------------------------------------------------------ 模型下拉 */
 
+  /** 合并模型 → **分组菜单项**（两个选择器共用同一套分组规则）。
+   *
+   *  为什么分组而不是混一列：两组的"凭据从哪来"完全不同 —— 网关用的是当前登录令牌
+   *  （用户没填过任何东西），本地那组是用户自己填的密钥。混着排会让人以为
+   *  网关模型也要去 AI 设置里填个 key。
+   *
+   *  每项的动作字段由调用方给（面板下拉用 `id`、菜单栏用 `act`），所以传一个 `toItem`。
+   *  `DGM.pop.show` 已经支持 `label2` 作分组小标题（不可点），这里直接用它。
+   */
+  function groupModelItems(toItem) {
+    const all = state.modelChoices();
+    const groups = [
+      ["gateway", t("ai.group.gateway")],
+      ["local", t("ai.group.local")],
+    ];
+    const out = [];
+    for (const [key, title] of groups) {
+      const list = all.filter((m) => (m.group === "gateway" ? "gateway" : "local") === key);
+      if (!list.length) continue;
+      out.push({ label2: title });
+      list.forEach((m) => out.push(toItem(m)));
+    }
+    return out;
+  }
+
   function popModels(anchor) {
-    const ai = state.ai();
-    const models = ai.models || [];
+    const all = state.modelChoices();
     const a = anchor || $("#ai-model");
     const r = a ? a.getBoundingClientRect() : { left: innerWidth - 320, bottom: 60 };
-    if (!models.length) {
+    if (!all.length) {
       DGM.pop.show([{ label: t("ai.model.settings"), icon: "settings", act: "settings" }], { x: r.left, y: r.bottom + 4 }, () => {
         DGM.pop.hide();
         DGM.dialogs.settings("ai");
       });
       return;
     }
-    const items = models.map((m) => ({
+    const cur = state.ai().default_model;
+    const items = groupModelItems((m) => ({
       label: m.name + (m.has_key ? "" : `  (${t("ai.model.none")})`),
       icon: "robot",
       check: true,
-      on: m.id === ai.default_model,
+      on: m.id === cur,
       id: m.id,
     }));
     items.push({ sep: true }, { label: t("ai.model.settings"), icon: "settings", act: "settings" });
@@ -641,7 +679,13 @@ window.DGM = window.DGM || {};
       });
     }
     const model = $("#ai-model");
-    if (model) model.addEventListener("click", (e) => popModels(e.currentTarget));
+    // stopPropagation 不能省：见 shell.js::showPop 的约定 ——
+    // 否则文档级"点外面就关"会在同一次点击里把它刚弹出的下拉关掉（点了没反应）。
+    if (model)
+      model.addEventListener("click", (e) => {
+        e.stopPropagation();
+        popModels(e.currentTarget);
+      });
     const hist = $("#ai-history");
     if (hist) hist.addEventListener("click", () => DGM.dialogs.history());
     const clr = $("#ai-clear");
@@ -677,6 +721,7 @@ window.DGM = window.DGM || {};
     applyLast,
     revertLast,
     popModels,
+    modelItems: groupModelItems,
     pickImage,
     compressImage,
   };

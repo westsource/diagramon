@@ -310,7 +310,17 @@ window.DGM = window.DGM || {};
       .map((f) => `<option value="${f.id}" ${f.id === fmtId ? "selected" : ""} ${f.ai ? "" : "disabled"}>${esc(f.name)}${f.ai ? "" : " " + esc(t("dlg.vision.canvasDisabled"))}</option>`)
       .join("");
     const modelOpts = state.hasModels()
-      ? state.ai().models.map((m) => `<option value="${m.id}" ${m.id === (state.currentModel() || {}).id ? "selected" : ""}>${esc(m.name)}${m.has_key ? "" : " · " + esc(t("ai.model.none"))}</option>`).join("")
+      ? state
+          .modelChoices()
+          .map((m) => {
+            // 网关那组知道谁不支持识图（服务端按别名给），顺手标出来 ——
+            // 否则用户会挑一个明确不支持图片的模型，然后在提交时才吃一个报错。
+            // 本地那组是 null（不知道），就什么都不说。
+            const noVision = m.vision === false ? ` · ${esc(t("dlg.vision.noVision"))}` : "";
+            const noKey = m.has_key ? "" : " · " + esc(t("ai.model.none"));
+            return `<option value="${m.id}" ${m.id === (state.currentModel() || {}).id ? "selected" : ""}>${esc(m.name)}${noVision}${noKey}</option>`;
+          })
+          .join("")
       : `<option value="">${esc(t("ai.model.none"))}</option>`;
 
     openDialog(
@@ -438,6 +448,15 @@ window.DGM = window.DGM || {};
   function pAI() {
     const ai = state.ai();
     const models = ai.models || [];
+    // 「本地一个模型都没有」时那句提示要**跟着云状态走**：云网关接好之后，
+    // "本版本只能用 BYOK" 就成了假话（会把已登录用户当成没登录）。
+    const gwN = state.gatewayModels().length;
+    const gwTip = state.cloud.status.signed_in
+      ? gwN
+        ? t("set.ai.gatewayOn", { n: gwN })
+        : t("set.ai.gatewayNoEntitlement")
+      : t("set.ai.gatewaySignedOut");
+    const gwTipWarn = !state.cloud.status.signed_in || gwN === 0;
     const rows = models.length
       ? models
           .map(
@@ -460,9 +479,19 @@ window.DGM = window.DGM || {};
       </div>`,
           )
           .join("")
-      : `<div class="callout warn">${icon("key")}<span>${esc(t("set.ai.gatewayOff"))}<br>${esc(t("set.ai.noModels"))}</span></div>`;
+      : `<div class="callout${gwTipWarn ? " warn" : ""}">${icon("key")}<span>${esc(gwTip)}<br>${esc(t("set.ai.noModelsLocal"))}</span></div>`;
 
-    const defaultOpts = models.map((m) => `<option value="${esc(m.id)}" ${m.id === ai.default_model ? "selected" : ""}>${esc(m.name)}</option>`).join("");
+    // 「默认模型」要**把网关别名也列出来**：它可能正指向某个别名，
+    // 只列本地那份会让这个 select 空着选不中 —— 而这一页是按表单值回写的，
+    // 一旦保存就会把用户的默认静默改成列表里的第一个本地模型。
+    const choices = state.modelChoices();
+    const groupOpts = (g, label) => {
+      const list = choices.filter((m) => m.group === g);
+      return list.length
+        ? `<optgroup label="${esc(label)}">${list.map((m) => `<option value="${esc(m.id)}" ${m.id === ai.default_model ? "selected" : ""}>${esc(m.name)}</option>`).join("")}</optgroup>`
+        : "";
+    };
+    const defaultOpts = groupOpts("gateway", t("ai.group.gateway")) + groupOpts("local", t("ai.group.local"));
     return `
       <div class="field"><label>${esc(t("set.ai.models"))}</label>
         <div class="model-list" id="model-list">${rows}</div>
