@@ -85,23 +85,6 @@ fn mermaid(body: &str) -> Vec<Issue> {
                 _ => {}
             }
         }
-
-        // 标签里的裸 < / > ：mermaid 10+ 会当 HTML 解析，实测会直接渲染报错。
-        // 方括号节点与花括号判定节点都要查 —— 实测踩过 `M{连续失败 >= 5?}` 这一种。
-        let label_ranges = [('[', ']'), ('{', '}')];
-        for (open, close) in label_ranges {
-            let Some(start) = text.find(open) else { continue };
-            let Some(len) = text[start..].find(close) else { continue };
-            let label = &text[start..start + len];
-            if label.contains('<') || label.contains('>') {
-                out.push(warn(
-                    line,
-                    "标签里有裸的 < 或 >，Mermaid 10+ 会当成 HTML 标签解析",
-                    "写成 &lt; / &gt;，或用引号把标签包起来",
-                ));
-                break; // 同一行报一次就够
-            }
-        }
     }
 
     for line in bracket_stack {
@@ -290,10 +273,32 @@ mod tests {
         assert!(has_error(&v, "括号没有闭合"), "{v:?}");
     }
 
+    /// **曾经报过假警的一条规则已删除**（2026-10-11 用户实测反馈）。
+    ///
+    /// 旧版对标签里的裸 `<` / `>` 一律告警，理由是"mermaid 10+ 会当 HTML 解析、渲染报错"。
+    /// 拿本仓库实际打包的 `ui/vendor/mermaid.min.js`（`securityLevel: "strict"`，与应用一致）
+    /// 逐个实测：`B{x>=5}`、`A[x >= 5]`、`A[a<br/>b]`、`A[<b>粗</b>]`、`A[abc</def>]`、`A[x -> y]`
+    /// **全部 parse + render 通过**。一条都复现不出来 ⇒ 规则删掉，留这条测试挡着别再回来。
     #[test]
-    fn mermaid_warns_on_raw_angle_brackets_inside_label() {
-        let v = issues(FormatId::Mermaid, "flowchart TD\n    M{连续失败 >= 5?}\n");
-        assert!(has_warn(&v, "裸的 < 或 >"), "{v:?}");
+    fn mermaid_accepts_raw_angle_brackets_in_labels() {
+        for src in [
+            "flowchart TD\n    M{连续失败 >= 5?}\n",
+            "flowchart TD\n    A[x >= 5]\n",
+            "flowchart TD\n    A[abc</def>]\n",
+            "flowchart TD\n    A[第一行<br/>第二行]\n",
+        ] {
+            let v = issues(FormatId::Mermaid, src);
+            assert!(v.is_empty(), "不该再对尖括号报警：{src:?} → {v:?}");
+        }
+    }
+
+    /// 用户实测片段（2026-10-11 反馈）：`>=` 在判定节点里 + subgraph 里未声明的 L/M。
+    /// 钉成基线：这段**一条问题都不该有**（括号成对、subgraph 闭合、`>=` 合法）。
+    #[test]
+    fn mermaid_baseline_for_the_reported_snippet() {
+        let src = "flowchart TD\nA([开始]) --> B{连续失败 >= 5?}\nB -- 是 --> C([结束])\nsubgraph 风控\nL --> M\nend\n";
+        let v = issues(FormatId::Mermaid, src);
+        assert!(v.is_empty(), "这段是合法 mermaid，不该报问题：{v:?}");
     }
 
     #[test]

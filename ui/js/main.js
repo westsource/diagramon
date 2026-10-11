@@ -412,10 +412,20 @@ window.DGM = window.DGM || {};
       const issues0 = await invoke("doc_issues", { id: doc.id });
       ok("正常源码不报问题", issues0.length === 0, JSON.stringify(issues0));
 
-      const bad = clean.replace("B{判断}", "B{连续失败 >= 5?}");
-      await invoke("doc_set_body", { id: doc.id, body: bad });
+      // 曾经有条假警规则：把标签里的裸 `<` / `>` 一律当问题报。
+      // 用仓库里实际打包的 mermaid（与应用同 config）逐个实测后确认**复现不出来**，
+      // 规则已删（2026-10-11 用户反馈）。这里反过来钉两件事：
+      //   ① 合法源码（含 `>=`）必须零问题；② 真错误照样报 error。
+      const withGe = clean.replace("B{判断}", "B{连续失败 >= 5?}");
+      await invoke("doc_set_body", { id: doc.id, body: withGe });
       const issues1 = await invoke("doc_issues", { id: doc.id });
-      ok("裸 >= 被判为警告", issues1.some((i) => i.severity === "warning"), JSON.stringify(issues1.map((i) => i.line)));
+      ok("标签里的 >= 不再被误报", issues1.length === 0, JSON.stringify(issues1));
+
+      await invoke("doc_set_body", { id: doc.id, body: clean.replace("C([结束])", "C([结束]") });
+      const issues2 = await invoke("doc_issues", { id: doc.id });
+      ok("括号不配对照样报 error", issues2.some((i) => i.severity === "error"), JSON.stringify(issues2));
+
+      await invoke("doc_set_body", { id: doc.id, body: withGe }); // 还原后面断言要用的正文
 
       const outline = await invoke("doc_outline", { id: doc.id });
       ok("大纲三组齐备", outline.length === 3, outline.map((g) => g.title).join("/"));
