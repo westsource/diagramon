@@ -40,6 +40,8 @@ window.DGM = window.DGM || {};
     split: $("#split"),
     splitter: $("#splitter"),
     panelResizer: $("#panel-resizer"),
+    sidebarGutter: $("#sidebar-gutter"),
+    aiGutter: $("#ai-gutter"),
     bottomPanel: $("#bottom-panel"),
     bodyRow: $("#body-row"),
     toasts: $("#toasts"),
@@ -987,6 +989,48 @@ window.DGM = window.DGM || {};
       const hgt = parseInt(document.documentElement.style.getPropertyValue("--panel-h"), 10);
       if (hgt) state.patchSettings({ panels: { panel_h: hgt } });
     });
+
+    // 侧栏 / AI 面板宽度（竖向把手）。夹取范围给的是"日常可用"边界：
+    // 侧栏 180–440（再宽就抢编辑区），AI 260–640（对话列表太窄没法读）。
+    // 松手才落盘 —— 拖动过程只改 CSS 变量，不打扰设置持久化。
+    let wdrag = null; // "side" | "ai" | null
+    const clampW = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+    el.sidebarGutter.addEventListener("mousedown", (e) => {
+      wdrag = "side";
+      document.body.classList.add("resizing");
+      e.preventDefault();
+    });
+    el.aiGutter.addEventListener("mousedown", (e) => {
+      wdrag = "ai";
+      document.body.classList.add("resizing");
+      e.preventDefault();
+    });
+    window.addEventListener("mousemove", (e) => {
+      if (!wdrag) return;
+      if (wdrag === "side") {
+        const left = el.activitybar.getBoundingClientRect().right;
+        const w = clampW(e.clientX - left, 180, 440);
+        document.documentElement.style.setProperty("--sidebar-w", w + "px");
+      } else {
+        const right = el.bodyRow.getBoundingClientRect().right;
+        const w = clampW(right - e.clientX, 260, 640);
+        document.documentElement.style.setProperty("--ai-w", w + "px");
+      }
+    });
+    window.addEventListener("mouseup", () => {
+      if (!wdrag) return;
+      const which = wdrag;
+      wdrag = null;
+      document.body.classList.remove("resizing");
+      const root = document.documentElement.style;
+      if (which === "side") {
+        const w = parseInt(root.getPropertyValue("--sidebar-w"), 10);
+        if (w) state.patchSettings({ panels: { sidebar_w: w } });
+      } else {
+        const w = parseInt(root.getPropertyValue("--ai-w"), 10);
+        if (w) state.patchSettings({ panels: { ai_w: w } });
+      }
+    });
   }
 
   /* ------------------------------------------------------------------ 全局快捷键 */
@@ -1081,6 +1125,11 @@ window.DGM = window.DGM || {};
     );
 
     document.addEventListener("keydown", onKey);
+
+    // 拖拽系统：源码/预览分隔条、底部面板高度、侧栏与 AI 面板宽度。
+    // **曾因从未调用而整体失效**（定义在、调用不在，语法检查/自检都发现不了）——
+    // ui_probe 的真实鼠标序列断言就是为这类"接线缺失"准备的。
+    setupDrag();
 
     // 标签条 / 视图模式切换器（tabs.js）
     if (DGM.tabs && DGM.tabs.bind) DGM.tabs.bind();

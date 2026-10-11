@@ -112,6 +112,10 @@ def main() -> int:
         cdp = CDP(ws_url, timeout=30)
         cdp.send("Runtime.enable")
         cdp.send("Page.enable")
+        cdp.send(
+            "Emulation.setDeviceMetricsOverride",
+            {"width": 1440, "height": 900, "deviceScaleFactor": 1, "mobile": False},
+        )
 
         # 收错误（按需 pump 几秒；事件会被 CDP 类攒进 _events，最后用 seen() 取）
         def drain(sec: float) -> None:
@@ -258,6 +262,92 @@ def main() -> int:
             "    spText: sp ? sp.textContent : '' }); })()"
         )
         log(f"viewmodes 按钮构成: {diag}")
+
+        # ---- 断言 6：侧栏 / AI 面板宽度拖拽（CDP 派发真实鼠标序列）----
+        def drag_gutter(gid: str, dx: float, dy: float) -> None:
+            ev("document.activeElement && document.activeElement.blur && document.activeElement.blur()")
+            hit = ev(
+                f"(() => {{ const g = document.querySelector('#{gid}'); const r = g.getBoundingClientRect();"
+                f"const x = r.left + r.width / 2, y = r.top + r.height / 2;"
+                f"const el = document.elementFromPoint(x, y);"
+                f"return (el ? (el.id || el.className) : 'none') + '|' + Math.round(x) + ',' + Math.round(y); }})()"
+            )
+            pos = ev(
+                f"(() => {{ const g = document.querySelector('#{gid}'); "
+                f"const r = g.getBoundingClientRect();"
+                f"return JSON.stringify([r.left + r.width / 2, r.top + r.height / 2]); }})()"
+            )
+            x, y = json.loads(pos)
+            log(f"    drag {gid}: hit={hit}")
+            cdp.call("Input.dispatchMouseEvent", {"type": "mousePressed", "x": x, "y": y, "button": "left", "clickCount": 1}, timeout=15)
+            cdp.call("Input.dispatchMouseEvent", {"type": "mouseMoved", "x": x + dx, "y": y + dy, "button": "left"}, timeout=15)
+            cdp.call("Input.dispatchMouseEvent", {"type": "mouseReleased", "x": x + dx, "y": y + dy, "button": "left", "clickCount": 1}, timeout=15)
+
+        # 拖拽前收掉一切浮层（前面断言可能留着打开的菜单/对话框挡住 mousedown）
+        for t in ("keyDown", "keyUp"):
+            cdp.call(
+                "Input.dispatchKeyEvent",
+                {"type": t, "key": "Escape", "code": "Escape", "windowsVirtualKeyCode": 27},
+                timeout=15,
+            )
+        drain(0.2)
+
+        side0 = ev("document.querySelector('#sidebar').getBoundingClientRect().width")
+        ai0 = ev("document.querySelector('#ai-pane').getBoundingClientRect().width")
+        drag_gutter("sidebar-gutter", 100, 0)
+        drain(0.3)
+        side1 = ev("document.querySelector('#sidebar').getBoundingClientRect().width")
+        drag_gutter("ai-gutter", -80, 0)
+        drain(0.3)
+        ai1 = ev("document.querySelector('#ai-pane').getBoundingClientRect().width")
+        # 松手后应已落盘到 settings
+        saved = ev("JSON.stringify({sw: DGM.state.settings.panels.sidebar_w, aw: DGM.state.settings.panels.ai_w})")
+        log(f"侧栏宽 {side0}→{side1} | AI 宽 {ai0}→{ai1} | 已存 {saved}")
+        if not (isinstance(side1, (int, float)) and side1 > side0 + 90):
+            fails.append(f"侧栏拖宽未生效：{side0}→{side1}")
+        if not (isinstance(ai1, (int, float)) and ai1 > ai0 + 70):
+            fails.append(f"AI 面板拖宽未生效：{ai0}→{ai1}")
+
+        # 夹取：往死里拖，宽度必须停在边界
+        drag_gutter("sidebar-gutter", -600, 0)
+        drain(0.3)
+        side_min = ev("document.querySelector('#sidebar').getBoundingClientRect().width")
+        drag_gutter("ai-gutter", 900, 0)
+        drain(0.3)
+        ai_min = ev("document.querySelector('#ai-pane').getBoundingClientRect().width")
+        log(f"夹取：侧栏→{side_min}（应 180）| AI→{ai_min}（应 260）")
+        if side_min != 180:
+            fails.append(f"侧栏最小宽度应 180，实际 {side_min}")
+        if ai_min != 260:
+            fails.append(f"AI 面板最小宽度应 260，实际 {ai_min}")
+
+        # ---- 断言 7：源码/预览分隔条拖拽 + 比例落盘 ----
+        sp0 = ev("parseFloat(document.querySelector('#split').style.getPropertyValue('--split-src'))")
+        drag_gutter("splitter", 120, 0)
+        drain(0.3)
+        sp1 = ev("parseFloat(document.querySelector('#split').style.getPropertyValue('--split-src'))")
+        saved_split = ev("DGM.state.settings.panels.split_src")
+        log(f"分隔条比例 {sp0}→{sp1}（拖 +120px）| 落盘 split_src={saved_split}")
+        if not (isinstance(sp1, (int, float)) and sp1 > sp0 + 5):
+            fails.append(f"分隔条拖拽未生效：{sp0}→{sp1}")
+
+        # ---- 判别实验：合成事件 vs CDP 输入 ----
+        synth = ev(
+            "(async () => {"
+            "  const sp = document.querySelector('#splitter');"
+            "  const r = sp.getBoundingClientRect();"
+            "  const cx = r.left + r.width / 2, cy = r.top + r.height / 2;"
+            "  const at = document.elementFromPoint(cx, cy);"
+            "  const mk = (t) => sp.dispatchEvent(new MouseEvent(t, {bubbles: true, cancelable: true, clientX: cx, clientY: cy}));"
+            "  mk('mousedown');"
+            "  window.dispatchEvent(new MouseEvent('mousemove', {bubbles: true, clientX: cx + 100, clientY: cy}));"
+            "  window.dispatchEvent(new MouseEvent('mouseup', {bubbles: true}));"
+            "  await new Promise(r2 => setTimeout(r2, 200));"
+            "  return JSON.stringify({hit: at ? at.id || at.className : 'none',"
+            "    after: document.querySelector('#split').style.getPropertyValue('--split-src')});"
+            "})()"
+        )
+        log(f"合成事件判别: {synth}")
 
         close_alive = ev(
             "(() => { const b = document.querySelector('#win-close'); "

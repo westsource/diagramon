@@ -188,10 +188,13 @@ h1, h2, h3, h4, p { margin: 0; }
 
 .body-row {
   display: grid;
-  grid-template-columns: var(--activitybar-w) var(--sidebar-w) minmax(0, 1fr) var(--ai-w);
+  /* 3/5 列是竖向拖拽把手（侧栏宽 / AI 面板宽）；把手隐藏时靠显式占位兜住列号 */
+  grid-template-columns: var(--activitybar-w) var(--sidebar-w) 5px minmax(0, 1fr) 5px var(--ai-w);
   min-height: 0;
   transition: grid-template-columns .16s ease;
 }
+/* 拖拽中不能带过渡，否则把手追不上鼠标 */
+body.resizing .body-row { transition: none; }
 body.no-activitybar { --activitybar-w: 0px; }
 body.no-sidebar { --sidebar-w: 0px; }
 body.no-ai { --ai-w: 0px; }
@@ -203,8 +206,12 @@ body.no-ai .ai-pane { display: none; }
    （窄窗媒体查询隐藏侧栏时同样靠这条兜住。） */
 .body-row > .activitybar { grid-column: 1; }
 .body-row > .sidebar { grid-column: 2; }
-.body-row > .editor-col { grid-column: 3; }
-.body-row > .ai-pane { grid-column: 4; }
+.body-row > .v-gutter#sidebar-gutter { grid-column: 3; }
+.body-row > .editor-col { grid-column: 4; }
+.body-row > .v-gutter#ai-gutter { grid-column: 5; }
+.body-row > .ai-pane { grid-column: 6; }
+body.no-sidebar #sidebar-gutter,
+body.no-ai #ai-gutter { display: none; }
 
 /* ---- 4. 标题栏（自绘，Tauri 下 data-tauri-drag-region） -------------- */
 .titlebar {
@@ -510,6 +517,11 @@ body.no-ai .ai-pane { display: none; }
   background: var(--surface);
 }
 .mini-btn:hover { color: var(--accent); border-color: var(--accent-line); background: var(--accent-soft); }
+
+/* 竖向拖拽把手（侧栏宽 / AI 面板宽）：本体 5px，命中区向两侧各加宽 3px */
+.v-gutter { position: relative; cursor: col-resize; background: transparent; z-index: 2; }
+.v-gutter::after { content: ""; position: absolute; inset: 0 -3px; }
+.v-gutter:hover, .v-gutter.drag { background: var(--accent); }
 
 .splitter { position: relative; cursor: col-resize; background: var(--border); }
 .splitter::after { content: ""; position: absolute; inset: 0 -3px; }
