@@ -599,9 +599,9 @@ body.no-ai #ai-gutter { display: none; }
 
 .canvas-tools {
   position: absolute; right: 12px; bottom: 12px;
-  display: flex; flex-direction: column; gap: 6px;
+  display: flex; align-items: center; gap: 6px;
 }
-.canvas-tools .row { display: flex; gap: 6px; justify-content: flex-end; }
+.canvas-tools .row { display: flex; align-items: center; gap: 6px; }
 .fab {
   display: inline-flex; align-items: center; gap: 6px;
   height: 30px; padding: 0 11px;
@@ -616,9 +616,10 @@ body.no-ai #ai-gutter { display: none; }
 .fab.sq { width: 30px; padding: 0; justify-content: center; }
 
 .zoom-pill {
-  position: absolute; left: 12px; bottom: 12px;
+  /* 随 canvas-tools 同行（右下），不再绝对定位压在画布上 —— 画布内容不被遮挡 */
+  position: static;
   display: flex; align-items: center; gap: 2px;
-  height: 28px; padding: 0 4px;
+  height: 30px; padding: 0 4px;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius);

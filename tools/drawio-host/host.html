@@ -25,7 +25,7 @@
   队列同时被消费与转发是刻意的：宿主只要能执行脚本（已验证可用）就能工作，
   不依赖 WebView 包装层是否暴露消息事件。
 -->
-<iframe id="dl" src="./index.html?embed=1&proto=json&spin=1&noExitBtn=1&libraries=1&ui=min&noSaveBtn=1&saveAndExit=0"></iframe>
+<iframe id="dl" src="./index.html?embed=1&proto=json&spin=1&noExitBtn=1&libraries=1&ui=min&noSaveBtn=1&saveAndExit=0&nav=0"></iframe>
 <script>
   // 离线守卫不在这里：drawio 跑在 iframe 里，宿主页的补丁管不到它的 realm。
   // 守卫由 tools/fetch-drawio.ps1 注入到 drawio 自己的 index.html（tools/offline-guard/offline-guard.js）。
@@ -90,6 +90,9 @@
   });
 
   // ==========================================================================
+  // 顶栏工具条（含 zoom 下拉区）由 URL 的 **nav=0** 关掉 —— 本应用有自己的缩放
+  // 控件与快捷键，画布内不再需要第二份；底部状态条的「100%」输入则参数关不掉，
+  // 靠下面注入的 ZOOM_HIDE_CSS。
   // 藏掉 drawio 自己的缩放输入框（底部状态条右侧的「100%」输入，类名 geZoomInput）。
   //
   // 本应用的缩放语义只有一处（状态栏的百分数），画布内再摆一个读数就是两个数字互相打架；
