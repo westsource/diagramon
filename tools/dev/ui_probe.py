@@ -419,6 +419,44 @@ def main() -> int:
         elif d.get("open") is False:
             fails.append("悬停带子菜单的行后子菜单没展开")
 
+        # ---- 断言 9：菜单「文件→新建→子菜单」直达创建 —— 不弹对话框、文档 +1 ----
+        # 开菜单做幂等处理：tb-item 是点击切换，上一场残留的打开状态会让这一下
+        # 变成"关闭" —— 点到菜单里真的有行为止。
+        for _ in range(3):
+            cdp.call("Input.dispatchMouseEvent", {"type": "mousePressed", "x": mx, "y": my, "button": "left", "clickCount": 1}, timeout=15)
+            cdp.call("Input.dispatchMouseEvent", {"type": "mouseReleased", "x": mx, "y": my, "button": "left", "clickCount": 1}, timeout=15)
+            drain(0.25)
+            if ev("!!document.querySelector('#pop .pop-row')"):
+                break
+        # 真实鼠标移到「新建」行上（触发 mouseenter 展开子菜单），再点子菜单第一项
+        hover = ev("(() => { const row = [...document.querySelectorAll('#pop .pop-row')].find(b => b.querySelector('.arrow-sub'));"
+                   "if (!row) return null; const r = row.getBoundingClientRect();"
+                   "return JSON.stringify([r.left + r.width / 2, r.top + r.height / 2]); })()")
+        if hover:
+            hx, hy = json.loads(hover)
+            cdp.call("Input.dispatchMouseEvent", {"type": "mouseMoved", "x": hx, "y": hy}, timeout=15)
+            drain(0.25)
+            first_sub = ev("(() => { const b = document.querySelector('#pop-sub .pop-row');"
+                           "if (!b) return null; const r = b.getBoundingClientRect();"
+                           "return JSON.stringify([r.left + r.width / 2, r.top + r.height / 2, b.textContent.trim()]); })()")
+            if first_sub:
+                fx, fy, flabel = json.loads(first_sub)
+                n0 = ev("DGM.state.docs.length")
+                cdp.call("Input.dispatchMouseEvent", {"type": "mousePressed", "x": fx, "y": fy, "button": "left", "clickCount": 1}, timeout=15)
+                cdp.call("Input.dispatchMouseEvent", {"type": "mouseReleased", "x": fx, "y": fy, "button": "left", "clickCount": 1}, timeout=15)
+                drain(0.5)
+                n1 = ev("DGM.state.docs.length")
+                dlg_hidden = ev("document.querySelector('#overlay-dialog').hidden")
+                log(f"菜单直达创建（点「{flabel}」）: 文档 {n0}→{n1} | 对话框未弹: {dlg_hidden}")
+                if n1 != n0 + 1:
+                    fails.append(f"菜单新建未直达创建：文档 {n0}→{n1}")
+                if not dlg_hidden:
+                    fails.append("菜单新建仍弹出了新建对话框（重复未消除）")
+            else:
+                fails.append("子菜单没有可点的行")
+        else:
+            fails.append("菜单里没有带子菜单的「新建」行")
+
         close_alive = ev(
             "(() => { const b = document.querySelector('#win-close'); "
             "if (!b) return 'no-btn'; "
