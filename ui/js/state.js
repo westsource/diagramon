@@ -148,6 +148,12 @@ window.DGM = window.DGM || {};
     state.formatList.forEach((f) => (state.formats[f.id] = f));
 
     state.settings = await ipc.invoke("settings_get");
+    // 一次性迁移：旧默认 split_src=46 归一成新默认 33。**只能在载入时做** ——
+    // 放进 applyLayoutVars 会把用户真拖到 46% 的值也抹掉（探针实测）。
+    if (state.settings && state.settings.panels && state.settings.panels.split_src === 46) {
+      state.settings.panels.split_src = 33;
+      ipc.invoke("settings_patch", { patch: { panels: { split_src: 33 } } }).catch(() => {});
+    }
     const session = await ipc.invoke("session_get");
     state.docs = (session && session.docs) || [];
     state.active = session ? session.active : null;

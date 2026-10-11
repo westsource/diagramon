@@ -558,10 +558,9 @@ window.DGM = window.DGM || {};
     if (p.ai_w) root.style.setProperty("--ai-w", p.ai_w + "px");
     if (p.panel_h) root.style.setProperty("--panel-h", p.panel_h + "px");
     // 源码窗格宽度：默认 1/3，硬边界 1/4–1/2。
-    // 46 是旧默认值 —— 没手动拖过分隔条的用户存的也是 46，这里归一成新默认 33。
-    let split = p.split_src || 33;
-    if (split === 46) split = 33;
-    split = Math.max(25, Math.min(50, split));
+    // **旧默认 46 的归一化不在这里做** —— renderChrome 每次都跑本函数，
+    // 用户真拖到 46% 会被立即抹回 33（探针实测）。迁移在 state.load() 一次性完成。
+    const split = Math.max(25, Math.min(50, p.split_src || 33));
     el.split.style.setProperty("--split-src", split + "%");
     document.body.classList.toggle("no-sidebar", !p.sidebar);
     document.body.classList.toggle("no-ai", !p.ai);
@@ -1344,6 +1343,10 @@ window.DGM = window.DGM || {};
 
   function renderChrome() {
     applySplitMode();
+    // 布局类/变量（no-sidebar、no-ai、宽度）必须在每次重渲染时刷新 ——
+    // togglePanel 只写设置，真正把 body 类换掉的是这里。
+    // 曾因从不调用，侧栏/AI 面板的关闭按钮"点了没反应"（又一处接线缺失）。
+    applyLayoutVars();
     renderDocTitle();
     renderMenubar();
     renderActivity();

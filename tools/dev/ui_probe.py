@@ -206,8 +206,10 @@ def main() -> int:
                 fails.append(f"超过 50 应夹到 50，实际 {r.get('over50')}")
             if not str(r.get("under25", "")).startswith("25"):
                 fails.append(f"低于 25 应夹到 25，实际 {r.get('under25')}")
-            if not str(r.get("legacy46", "")).startswith("33"):
-                fails.append(f"旧默认 46 应归一成 33，实际 {r.get('legacy46')}")
+            # 46 的归一化只在 state.load() 做一次；applyLayoutVars 里不能归一，
+            # 否则用户真拖到 46% 会被抹掉 —— 这里断言"46 原样保留"
+            if not str(r.get("legacy46", "")).startswith("46"):
+                fails.append(f"applyLayoutVars 不应改写 46，实际 {r.get('legacy46')}")
         except Exception as e:
             log(f"（比例断言解析失败：{e}）")
 
@@ -501,6 +503,39 @@ def main() -> int:
         log(f"Ctrl+Tab 切换: {str(act_before)[:8]}… → {str(act_after)[:8]}…（期望 {str(expect_next)[:8]}…）")
         if act_after != expect_next:
             fails.append("Ctrl+Tab 未按标签顺序循环切换")
+
+        # ---- 断言 11：侧栏 / AI 面板关闭按钮（togglePanel → body 类）----
+        r1 = ev(
+            "(async () => {"
+            "  document.querySelector('#side-close').click();"
+            "  await new Promise(r => setTimeout(r, 300));"
+            "  const off = document.body.classList.contains('no-sidebar');"
+            "  document.body.classList.remove('no-sidebar');"  # 复位以便 AI 断言独立观察
+            "  return off ? 'closed' : 'not-closed';"
+            "})()"
+        )
+        log(f"侧栏关闭: {r1}")
+        if r1 != "closed":
+            fails.append("侧栏关闭按钮未生效（no-sidebar 类没挂上）")
+        r2 = ev(
+            "(async () => {"
+            "  document.querySelector('#ai-close').click();"
+            "  await new Promise(r => setTimeout(r, 300));"
+            "  const off = document.body.classList.contains('no-ai');"
+            "  return off ? 'closed' : 'not-closed';"
+            "})()"
+        )
+        log(f"AI 面板关闭: {r2}")
+        if r2 != "closed":
+            fails.append("AI 面板关闭按钮未生效（no-ai 类没挂上）")
+        # 复位：把两个面板开回来
+        ev(
+            "(async () => {"
+            "  await DGM.state.patchSettings({ panels: { sidebar: true, ai: true } });"
+            "  DGM.shell.render();"
+            "})()"
+        )
+        drain(0.2)
 
         close_alive = ev(
             "(() => { const b = document.querySelector('#win-close'); "
