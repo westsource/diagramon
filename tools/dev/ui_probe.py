@@ -349,6 +349,76 @@ def main() -> int:
         )
         log(f"合成事件判别: {synth}")
 
+        # ---- 断言 8：二级菜单 —— 从父行内部一路移到子菜单必须全程存活 ----
+        cdp.call("Input.dispatchKeyEvent", {"type": "keyDown", "key": "Escape", "code": "Escape", "windowsVirtualKeyCode": 27}, timeout=15)
+        cdp.call("Input.dispatchKeyEvent", {"type": "keyUp", "key": "Escape", "code": "Escape", "windowsVirtualKeyCode": 27}, timeout=15)
+        drain(0.2)
+        mpos = ev("(() => { const b = document.querySelector('#menubar .tb-item'); const r = b.getBoundingClientRect();"
+                  "return JSON.stringify([r.left + r.width / 2, r.top + r.height / 2]); })()")
+        mx, my = json.loads(mpos)
+        cdp.call("Input.dispatchMouseEvent", {"type": "mousePressed", "x": mx, "y": my, "button": "left", "clickCount": 1}, timeout=15)
+        cdp.call("Input.dispatchMouseEvent", {"type": "mouseReleased", "x": mx, "y": my, "button": "left", "clickCount": 1}, timeout=15)
+        drain(0.3)
+        sub = ev(
+            "(async () => {"
+            "  const row = [...document.querySelectorAll('#pop .pop-row')].find(b => b.querySelector('.arrow-sub'));"
+            "  if (!row) return 'no-subrow';"
+            "  const r = row.getBoundingClientRect();"
+            "  row.dispatchEvent(new MouseEvent('mouseenter', {bubbles: false}));"
+            "  await new Promise(r2 => setTimeout(r2, 150));"
+            "  const p = document.querySelector('#pop-sub');"
+            "  return JSON.stringify({open: !p.hidden, rows: p.querySelectorAll('.pop-row').length,"
+            "    rowL: Math.round(r.left), rowR: Math.round(r.right), rowY: Math.round(r.top + r.height / 2),"
+            "    subRect: p.hidden ? null : (() => { const s = p.getBoundingClientRect();"
+            "      return [Math.round(s.left), Math.round(s.top), Math.round(s.width), Math.round(s.height)]; })()});"
+            "})()"
+        )
+        log(f"二级菜单展开: {sub}")
+        try:
+            d = json.loads(sub)
+        except Exception:
+            d = {}
+        if isinstance(d, dict) and d.get("open") and d.get("subRect"):
+            sx, sy, sw, sh = d["subRect"]
+            tx, ty = sx + sw / 2, sy + sh / 2
+            # 起点在父行**内部**：真机父/子菜单之间有缝，移动必然跨出 #pop ——
+            # 宽限期（220ms）必须在跨越后保住子菜单。移动全程快速连发，不做中途
+            # 检查（每步一次 CDP 往返太慢，会把 220ms 宽限拖爆，制造假失败）。
+            x0, y0 = float(d["rowL"]) + 10, float(d["rowY"])
+            for i in range(1, 15):
+                px = x0 + (tx - x0) * i / 14
+                py = y0 + (ty - y0) * i / 14
+                cdp.call("Input.dispatchMouseEvent", {"type": "mouseMoved", "x": px, "y": py}, timeout=15)
+            alive = ev("!document.querySelector('#pop-sub').hidden")
+            log(f"移动到子菜单后存活: {alive}")
+            if not alive:
+                fails.append("从父菜单移向子菜单途中子菜单消失（宽限期未生效）")
+
+            # 悬停其它行：子菜单**保持**打开（本项目取向：不做行级互斥，避免斜向
+            # 移动扫过其它行时误杀 —— 原生菜单用三角形判定，这里用宽限期替代）
+            other = ev(
+                "(async () => {"
+                "  const row = [...document.querySelectorAll('#pop .pop-row')].find(b => !b.querySelector('.arrow-sub'));"
+                "  if (!row) return 'none';"
+                "  row.dispatchEvent(new MouseEvent('mouseenter', {bubbles: false}));"
+                "  await new Promise(r2 => setTimeout(r2, 100));"
+                "  return document.querySelector('#pop-sub').hidden ? 'closed' : 'still-open';"
+                "})()"
+            )
+            log(f"悬停其它行: {other}（取向：保持打开）")
+            if other != "still-open":
+                fails.append(f"悬停其它行后子菜单被误收: {other}")
+
+            # 移到菜单外的空地，宽限到期（220ms）后应收
+            cdp.call("Input.dispatchMouseEvent", {"type": "mouseMoved", "x": 720, "y": 880}, timeout=15)
+            drain(0.5)
+            gone = ev("document.querySelector('#pop-sub').hidden")
+            log(f"离开菜单 500ms 后收起: {gone}")
+            if not gone:
+                fails.append("离开菜单家族后子菜单未按时收起")
+        elif d.get("open") is False:
+            fails.append("悬停带子菜单的行后子菜单没展开")
+
         close_alive = ev(
             "(() => { const b = document.querySelector('#win-close'); "
             "if (!b) return 'no-btn'; "

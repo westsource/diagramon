@@ -246,8 +246,28 @@ window.DGM = window.DGM || {};
     }, "menu");
   }
 
+  /** 子菜单宽限期：真机上父菜单与子菜单之间有缝（字体度量与原型不同），
+   *  从父菜单移向子菜单必然先"离开 #pop"—— 若立即 hideSub，子菜单在半路就被杀
+   *  （真机踩过：二级菜单根本点不了）。正确做法是原生菜单的宽限：离开家族后
+   *  等 220ms，期间指针进了任何菜单就取消；走投无路才算真的离开。 */
+  let subGraceTimer = null;
+  function scheduleSubHide() {
+    clearTimeout(subGraceTimer);
+    subGraceTimer = setTimeout(() => {
+      subGraceTimer = null;
+      hideSub();
+    }, 220);
+  }
+  function cancelSubHide() {
+    if (subGraceTimer) {
+      clearTimeout(subGraceTimer);
+      subGraceTimer = null;
+    }
+  }
+
   function hideSub() {
-    const p = el.popSub;
+    cancelSubHide(); // 任何显式关闭（含"换一个子菜单"）都必须撤销在途的宽限定时器，
+    const p = el.popSub; // 否则 220ms 后它会误杀刚打开的新子菜单
     if (p) {
       p.hidden = true;
       p.innerHTML = "";
@@ -1116,13 +1136,20 @@ window.DGM = window.DGM || {};
       if (!inPop) hidePop();
       if (!e.target.closest("#menubar")) closeMenu();
     });
+    // 指针离开菜单 → 排定宽限关闭（见 scheduleSubHide）；去向他处菜单家族则不动。
     document.addEventListener(
       "mouseleave",
       (e) => {
-        if (e.target.id === "pop" || e.target.id === "pop-sub") hideSub();
+        if (e.target.id !== "pop" && e.target.id !== "pop-sub") return;
+        const to = e.relatedTarget;
+        if (to && ((to.id === "pop" || to.id === "pop-sub") || (to.closest && to.closest("#pop, #pop-sub")))) return;
+        scheduleSubHide();
       },
       true,
     );
+    // 进了任何菜单 → 取消在途的宽限
+    el.pop.addEventListener("mouseenter", cancelSubHide);
+    el.popSub.addEventListener("mouseenter", cancelSubHide);
 
     document.addEventListener("keydown", onKey);
 
