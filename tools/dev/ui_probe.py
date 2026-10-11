@@ -528,7 +528,28 @@ def main() -> int:
         log(f"AI 面板关闭: {r2}")
         if r2 != "closed":
             fails.append("AI 面板关闭按钮未生效（no-ai 类没挂上）")
-        # 复位：把两个面板开回来
+        # ---- 断言 12：重启还原 —— 重载页面（mock 经 sessionStorage 存活），
+        # 关闭过的侧栏必须保持关闭；再打开也要保持打开。----
+        cdp.call("Page.reload", {}, timeout=20)
+        drain(4.0)
+        restored = ev(
+            "JSON.stringify({"
+            "  noSidebar: document.body.classList.contains('no-sidebar'),"
+            "  noAi: document.body.classList.contains('no-ai'),"
+            "  sidebarPref: DGM.state.settings.panels.sidebar,"
+            "  aiPref: DGM.state.settings.panels.ai"
+            "})"
+        )
+        log(f"重载后还原: {restored}")
+        try:
+            rr = json.loads(restored)
+            if not rr.get("noSidebar"):
+                fails.append("重启后侧栏关闭状态未还原")
+            if not rr.get("noAi"):
+                fails.append("重启后 AI 面板关闭状态未还原")
+        except Exception as e:
+            log(f"（断言 12 解析失败：{e}）")
+        # 复位给后续断言一个干净状态
         ev(
             "(async () => {"
             "  await DGM.state.patchSettings({ panels: { sidebar: true, ai: true } });"

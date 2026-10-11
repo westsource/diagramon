@@ -410,6 +410,7 @@ digraph Pipeline {
         accent: "pine",
         locale: "zh-CN",
         panels: { activitybar: true, sidebar: true, sidebar_view: "explorer", ai: true, bottom: true, bottom_tab: "problems", sidebar_w: 236, ai_w: 344, panel_h: 168, split_src: 33 },
+        ...((() => { try { return JSON.parse(sessionStorage.getItem("dgm-mock-settings") || "null") || {}; } catch (e) { return {}; } })()),
         editor: { font_size: 13, debounce_ms: 350, lint: true, per_doc_view: true, default_view: "split", autosave: true, autosave_ms: 5000, restrict_to_workspace: false },
         ai: {
           models: [
@@ -565,6 +566,11 @@ digraph Pipeline {
 
         case "settings_patch": {
           deepMerge(this.settings, args.patch || args);
+          // mock 也持久化：sessionStorage 跨页面重载存活 —— 浏览器原型因此能
+          // 验证"关闭面板 → 重启（重载）→ 状态还原"的完整链路（探针断言 12）。
+          try {
+            sessionStorage.setItem("dgm-mock-settings", JSON.stringify(this.settings));
+          } catch (e) { /* 隐私模式等场景写不进就算了 */ }
           return this._clone(this.settings);
         }
 
