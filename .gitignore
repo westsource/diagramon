@@ -396,3 +396,6 @@ ui/.shots/
 
 # 随包资产根（由 tools/fetch-assets.mjs 汇出，98MB 不入库）
 /assets/
+
+# 本地验证产物与临时备份（与 service/var 同口径：不入库）
+/var/
