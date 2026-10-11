@@ -388,17 +388,6 @@ window.DGM = window.DGM || {};
         ],
       },
       {
-        id: "account",
-        label: t("menu.account"),
-        items: [
-          { label: t("side.cloud.notSignedIn"), disabled: true, icon: "user" },
-          { label: t("side.cloud.gwOff"), disabled: true, icon: "cloud" },
-          { sep: true },
-          { label: t("mi.billing"), icon: "bolt", act: "cmd:view.settings.cloud" },
-          { label: t("mi.cloudDocs"), icon: "cloud", act: "cmd:file.cloud" },
-        ],
-      },
-      {
         id: "help",
         label: t("menu.help"),
         items: [
@@ -662,6 +651,16 @@ window.DGM = window.DGM || {};
     bar.appendChild(ai);
 
     bar.appendChild(h("div", "act-spacer"));
+    // 账户与云端：直达侧栏云端视图（原菜单「账户」已移到这里 —— 账户头/登录/
+    // 文档列表都在 viewCloud，菜单里那份只是重复入口）
+    const acct = h("button", "act" + (p.sidebar_view === "cloud" && p.sidebar ? " on" : ""));
+    acct.innerHTML = icon("user");
+    acct.title = t("set.tab.cloud");
+    acct.addEventListener("click", () => {
+      if (p.sidebar_view === "cloud") togglePanel("sidebar");
+      else setSidebarView("cloud");
+    });
+    bar.appendChild(acct);
     const keys = h("button", "act");
     keys.innerHTML = icon("keyboard");
     keys.title = t("mi.shortcuts") + "  Ctrl+K Ctrl+S";

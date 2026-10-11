@@ -588,6 +588,32 @@ def main() -> int:
         except Exception as e:
             log(f"（断言 13 解析失败：{e}）")
 
+        # ---- 断言 14：账户信息在侧栏不在菜单 ----
+        acct_check = ev(
+            "(async () => {"
+            "  const labels = [...document.querySelectorAll('#menubar .tb-item')].map(b => b.textContent.trim());"
+            "  const inMenu = labels.some(x => x.includes('账户'));"
+            "  const act = [...document.querySelectorAll('#activitybar .act')].find(b => b.title.includes('账户与云端'));"
+            "  if (!act) return JSON.stringify({inMenu, act: 'no-btn'});"
+            "  act.click();"
+            "  await new Promise(r => setTimeout(r, 250));"
+            "  const view = DGM.state.settings.panels.sidebar_view;"
+            "  const sidebarOn = DGM.state.settings.panels.sidebar;"
+            "  return JSON.stringify({inMenu, view, sidebarOn});"
+            "})()"
+        )
+        log(f"账户入口: {acct_check}")
+        try:
+            ac = json.loads(acct_check)
+            if ac.get("inMenu"):
+                fails.append("菜单里仍有「账户」顶级项")
+            if ac.get("act") == "no-btn":
+                fails.append("活动栏没有账户按钮")
+            elif ac.get("view") != "cloud" or not ac.get("sidebarOn"):
+                fails.append(f"账户按钮未切到云端视图: {acct_check}")
+        except Exception as e:
+            log(f"（断言 14 解析失败：{e}）")
+
         close_alive = ev(
             "(() => { const b = document.querySelector('#win-close'); "
             "if (!b) return 'no-btn'; "
