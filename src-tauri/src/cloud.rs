@@ -17,13 +17,24 @@
 //!   `POST /ai/chat/completions` → OpenAI 兼容 SSE（网关在客户端眼里就是**一个 OpenAI 兼容
 //!                        provider**，所以能直接复用 `crates/ai` 的整条流式路径）
 //!
+//! **令牌续期**：access token 是短命 JWT（服务端默认 30 分钟）。带鉴权的请求收到 401
+//! 时用 refresh token 静默换新再重试一次（`authed_send`）；`access_token()` 本身也会在
+//! 令牌过期时先续期（覆盖不经过 authed_send 的 AI 网关路径）。服务端口径：
+//!   `POST /auth/refresh`（RefreshIn{refreshToken, deviceId}）→ AuthOut，与登录同包络；
+//!   **refresh 是轮换制**——每次刷新都吊销旧 refresh token，且重用已吊销的令牌会
+//!   吊销整个 family（所有设备登出）⇒ 刷新必须把**新 refreshToken 写回**，
+//!   且必须串行（全局锁，见 refresh_tokens）。
+//!
 //! 全部 `async` + 返回有意义的值（见 commands.rs 的返回值约定）。
 
 use std::sync::Arc;
 
 use serde_json::{json, Value};
 
-use app_core::cloudmap::{account_of, doc_of, folder_of, gateway_model_of, str_of, u64_of};
+use app_core::cloudmap::{
+    account_of, doc_of, folder_of, gateway_model_of, jwt_exp_seconds, str_of, u64_of,
+    unix_now_seconds,
+};
 use app_ipc::{
     CloudAccount, CloudDoc, CloudDocBody, CloudDocList, CloudFolder, CloudFolderList, CloudStatus,
     FormatId, GatewayModelList,
@@ -73,11 +84,152 @@ async fn resolve_api_base(state: &AppState) -> R<String> {
 }
 
 async fn access_token(state: &AppState) -> R<String> {
-    state
+    let token = state
         .creds
         .get(CLOUD_ACCESS_KEY)
         .map_err(|e| e.to_string())?
-        .ok_or_else(|| "尚未登录云网关".into())
+        .ok_or_else(|| "尚未登录云网关".to_string())?;
+    // access token 是短命 JWT（默认 30 分钟）。**过期就先续期**——
+    // 云网关 AI 那条路不经过 authed_send，全靠这里把"拿令牌"做成"保证拿到能用的令牌"。
+    // 续不了不在这里报错：把旧令牌交出去，调用方收到 401 后走各自的处理
+    // （authed_send 会再试一次续期，AI 对话则如实报 401）。
+    if let Some(exp) = jwt_exp_seconds(&token) {
+        if exp <= unix_now_seconds() {
+            let _ = refresh_tokens(state).await;
+            return state
+                .creds
+                .get(CLOUD_ACCESS_KEY)
+                .map_err(|e| e.to_string())?
+                .ok_or_else(|| "尚未登录云网关".to_string());
+        }
+    }
+    Ok(token)
+}
+
+
+/**
+ * 用 refresh token 换一对新令牌（`POST /auth/refresh`），返回新 access token。
+ *
+ * 服务端有两条**必须遵守**的口径（见 `service/app/services/auth.py::refresh`）：
+ *   - **轮换**：每次刷新都把旧 refresh token 置为已吊销（`revoked_at`），新令牌挂回
+ *     同一 family —— 所以**必须把返回的新 refreshToken 存回去**，否则下一次刷新
+ *     就在用已吊销的令牌，服务端按"重用"处理 → **吊销整个 family**，
+ *     用户在所有设备上被登出。
+ *   - **重用检测**：因此并发刷新是危险的（后到的请求会撞上刚被吊销的旧令牌）。
+ *     用全局锁串行化，且**拿到锁之后再读一次**凭据库 —— 它可能已被别的线程轮换。
+ *
+ * 还有一条：refresh **绑定设备**（`deviceId` 与登录时不一致 → DEVICE_MISMATCH），
+ * 所以这里带的是登录时持久化的 `cloud.device_id`。
+ */
+async fn refresh_tokens(state: &AppState) -> R<String> {
+    // 跨 .await 持有 ⇒ 必须用 tokio 的异步锁（std MutexGuard 不是 Send，
+    // 而 tauri 的 async command 要求 future 是 Send —— 编译器会直接拦下）。
+    static REFRESH_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+    let _guard = REFRESH_LOCK.lock().await;
+
+    let refresh = state
+        .creds
+        .get(CLOUD_REFRESH_KEY)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "登录已过期，请重新登录".to_string())?;
+    let device_id = state.settings().cloud.device_id.trim().to_string();
+    if device_id.is_empty() {
+        return Err("登录已过期，请重新登录".into());
+    }
+    let body = json!({ "refreshToken": refresh, "deviceId": device_id });
+    // 续期请求**自己发**，不经过 call_json/authed_send —— 这不是偷懒：
+    // call_json → authed_send → access_token → refresh_tokens 会构成 async 递归环
+    // （E0733），而且"续期调用绝不能再触发续期"本来就该是**结构性**的不变量，
+    // 不是靠 auth=false 参数在运行时小心维持的。
+    let base = resolve_api_base(state).await?;
+    let url = format!("{base}/auth/refresh");
+    let resp = state
+        .http
+        .request(reqwest::Method::POST, &url)
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("连不上云网关（{url}）：{e}"))?;
+    let status = resp.status();
+    let text = resp.text().await.unwrap_or_default();
+    if !status.is_success() {
+        let detail = serde_json::from_str::<Value>(&text)
+            .ok()
+            .and_then(|v| {
+                v.get("message")
+                    .or_else(|| v.get("detail"))
+                    .and_then(|m| m.as_str().map(|s| s.to_string()))
+            })
+            .unwrap_or_else(|| text.chars().take(200).collect());
+        return Err(format!("云网关 {status}：{detail}"));
+    }
+    let v = serde_json::from_str::<Value>(&text)
+        .map_err(|e| format!("云网关响应不是合法 JSON：{e}"))?;
+
+    let tokens = v.get("tokens").cloned().unwrap_or(Value::Null);
+    let access = str_of(&tokens, &["accessToken"]);
+    let new_refresh = str_of(&tokens, &["refreshToken"]);
+    if access.is_empty() {
+        return Err("云网关没有返回新令牌".into());
+    }
+    state.creds.set(CLOUD_ACCESS_KEY, &access).map_err(|e| e.to_string())?;
+    // 新 refresh token **必须**写回（见上面的轮换口径）
+    if !new_refresh.is_empty() {
+        state.creds.set(CLOUD_REFRESH_KEY, &new_refresh).map_err(|e| e.to_string())?;
+    }
+    Ok(access)
+}
+
+/**
+ * 发一次**带鉴权**的请求；收到 401 时用 refresh token 静默续期，再试一次。
+ *
+ * 返回原始的 (status, body) —— **错误语义由调用方解释**：call_json 管 JSON
+ * 错误体，cloud_doc_save 要把 409 响应里的 contentHash/updatedAt 原样透传给
+ * 前端（那是"云端已被别的设备改过"的冲突现场），所以这里不做任何包装。
+ *
+ * 续期失败（没有 refresh token / 服务端拒绝）就把一句用户能懂的话交出去，
+ * 不再重试 —— 服务端已经明确说了"这个会话续不下去"。
+ */
+async fn authed_send(
+    state: &AppState,
+    method: reqwest::Method,
+    url: &str,
+    body: Option<&Value>,
+    extra_headers: &[(&str, String)],
+) -> R<(reqwest::StatusCode, String)> {
+    let mut token = Some(access_token(state).await?);
+    let mut refreshed = false;
+    loop {
+        let mut req = state.http.request(method.clone(), url);
+        if let Some(t) = &token {
+            req = req.header(ACCESS_KEY_HEADER, format!("Bearer {t}"));
+        }
+        for (k, v) in extra_headers {
+            req = req.header(*k, v);
+        }
+        if let Some(b) = body {
+            req = req.json(b);
+        }
+        let resp = req
+            .send()
+            .await
+            .map_err(|e| format!("连不上云网关（{url}）：{e}"))?;
+        let status = resp.status();
+        let text = resp.text().await.unwrap_or_default();
+        // 401 = access token 过期/被吊销。只重试一次：续期成功就用新令牌重发；
+        // 续不下去说明 refresh token 也死了，重试只会得到同样的 401。
+        if status.as_u16() == 401 && !refreshed {
+            refreshed = true;
+            match refresh_tokens(state).await {
+                Ok(t) => {
+                    token = Some(t);
+                    continue;
+                }
+                Err(_) => return Err("登录已过期，请重新登录（活动栏「账户」）".into()),
+            }
+        }
+        return Ok((status, text));
+    }
 }
 
 /// 一个 HTTP 调用的统一出口：状态码 / 网络 / 协议错误都变成**能看懂的一句话**。
@@ -90,20 +242,21 @@ async fn call_json(
 ) -> R<Value> {
     let base = resolve_api_base(state).await?;
     let url = format!("{base}{path}");
-    let mut req = state.http.request(method, &url);
-    if auth {
-        let token = access_token(state).await?;
-        req = req.header(ACCESS_KEY_HEADER, format!("Bearer {token}"));
-    }
-    if let Some(b) = body {
-        req = req.json(&b);
-    }
-    let resp = req
-        .send()
-        .await
-        .map_err(|e| format!("连不上云网关（{url}）：{e}"))?;
-    let status = resp.status();
-    let text = resp.text().await.unwrap_or_default();
+    let (status, text) = if auth {
+        // 带鉴权的走 authed_send：401 会先静默续期一次
+        authed_send(state, method, &url, body.as_ref(), &[]).await?
+    } else {
+        // 不带鉴权的（登录 / 续期 / 登出）原样发 —— 续期调用绝不能再走续期路径
+        let mut req = state.http.request(method, &url);
+        if let Some(b) = &body {
+            req = req.json(b);
+        }
+        let resp = req
+            .send()
+            .await
+            .map_err(|e| format!("连不上云网关（{url}）：{e}"))?;
+        (resp.status(), resp.text().await.unwrap_or_default())
+    };
     if !status.is_success() {
         // 服务端的错误体带 code/message；取不到就把状态码原样交出来
         let detail = serde_json::from_str::<Value>(&text)
@@ -310,18 +463,17 @@ pub async fn cloud_doc_save(
     });
     let base = resolve_api_base(state.inner()).await?;
     let url = format!("{base}/documents/{doc_id}");
-    let token = access_token(state.inner()).await?;
-    let resp = state
-        .http
-        .request(reqwest::Method::PUT, &url)
-        .header(ACCESS_KEY_HEADER, format!("Bearer {token}"))
-        .header("If-Match", version.to_string())
-        .json(&payload)
-        .send()
-        .await
-        .map_err(|e| format!("连不上云网关（{url}）：{e}"))?;
-    let status = resp.status();
-    let text = resp.text().await.unwrap_or_default();
+    // 走 authed_send：401 会先静默续期再重试。**错误格式保持原样** ——
+    // 409 的响应体带 contentHash/updatedAt，前端靠它提示"云端已被别的设备改过"，
+    // 所以这里不能用 call_json（它会把错误体归约成一句 message）。
+    let (status, text) = authed_send(
+        state.inner(),
+        reqwest::Method::PUT,
+        &url,
+        Some(&payload),
+        &[("If-Match", version.to_string())],
+    )
+    .await?;
     if !status.is_success() {
         return Err(format!("云网关 {status}：{}", text.chars().take(300).collect::<String>()));
     }
@@ -417,3 +569,4 @@ pub async fn gateway_resolved(state: &AppState, alias: &str) -> R<ai::Resolved> 
         temperature: None,
     })
 }
+

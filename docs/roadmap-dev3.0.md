@@ -393,6 +393,33 @@ usage / 失败帧）一行都不用改，只有"参数从哪来"是新的：
 `ui_probe.py` **20 条断言全绿**（新增 20：未登录无网关模型 / 登录后拿到别名且默认被自动选中 /
 **两处**选择器都有分组小标题 / 登出清空）。
 
+### 第 6 步补充③ · 令牌静默续期（2026-10-11）
+
+**缺口**：refresh token 存了（DPAPI 凭据库），但只在登出时用来吊销会话——服务端的
+`/auth/refresh` 一直都在，客户端没接。结果是 access token（默认 30 分钟）一过期，
+界面就如实显示"掉线"，用户得重新登录，哪怕 refresh token 还有 30 天有效期。
+
+**做法**（`src-tauri/src/cloud.rs`）：
+- `authed_send()`：带鉴权的请求收到 **401 → 用 refresh token 静默换新 → 重试一次**。
+  续期失败就把"登录已过期，请重新登录"交出去——服务端已明确说了这个会话续不下去。
+- `access_token()`：令牌**过期（读 JWT 的 exp，不验签——只决定要不要提前续，授权仍在服务端）
+  就先续**。这一步覆盖不经过 authed_send 的 AI 网关对话路径。
+- **两条服务端口径必须遵守**（`service/app/services/auth.py::refresh`）：
+  ① **轮换**——每次刷新都吊销旧 refresh token，所以新 refresh token 必须写回凭据库，
+  否则下一次刷新就在用已吊销的令牌；② **重用检测**——用已吊销的令牌会吊销整个 family
+  （所有设备登出）⇒ 刷新用全局锁串行化，且**拿到锁之后再读一次**凭据库
+  （可能已被别的线程轮换）。另有设备绑定：`deviceId` 与登录时不一致直接 DEVICE_MISMATCH。
+- `cloud_doc_save` 迁到 `authed_send`（带 `If-Match`）。**409 的错误格式保持原样**——
+  响应体里的 contentHash/updatedAt 要透传给前端提示"云端已被别的设备改过"，
+  所以不走会把错误体归约成一句 message 的 `call_json`。
+
+**效果**：登录态在 refresh 有效期（服务端默认 30 天）内自续；重启、access 过期都不再要求
+重新登录。登出仍会吊销整个会话族并删本地令牌，语义不变。
+
+**验证**：`cargo test` **163 项全绿**（新增 2 项：JWT exp 解析含带 padding 的 base64、过期比较口径——
+按"装配层 `test = false`，纯函数下沉 app-core"的规矩放在 `cloudmap`）。
+真机端到端（起 service 后故意让 access 过期再操作）待用户前台确认。
+
 
 
 ---

@@ -162,6 +162,26 @@ pub fn gateway_model_of(v: &serde_json::Value) -> GatewayModel {
     }
 }
 
+/// JWT payload 里的 `exp`（Unix 秒）。
+///
+/// **不验签** —— 客户端只拿它决定"要不要提前续期"，授权仍由服务端做。
+/// 解析不出来（不是 JWT / 没有 exp）返回 None，调用方当"未知"处理。
+/// （放这里而不是 src-tauri：装配层 `test = false`，纯函数一律下沉到 app-core 测。）
+pub fn jwt_exp_seconds(token: &str) -> Option<i64> {
+    use base64::Engine as _;
+    let payload = token.split('.').nth(1)?.trim_end_matches('=');
+    let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(payload).ok()?;
+    let v: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
+    v.get("exp").and_then(|x| x.as_i64())
+}
+
+pub fn unix_now_seconds() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -323,6 +343,37 @@ mod tests {
         assert_eq!(f.document_count, 0);
         assert!(!f.has_children);
         assert!(!f.is_explicit);
+    }
+
+    /// exp 解析不验签：客户端只拿它决定"要不要提前续期"。
+    /// 必须容忍带 padding 的 base64（有些签发库会补 =），解析不出就 None。
+    #[test]
+    fn jwt_exp_is_read_without_verification() {
+        use base64::Engine as _;
+        let enc = |v: serde_json::Value| {
+            base64::engine::general_purpose::URL_SAFE_NO_PAD
+                .encode(serde_json::to_vec(&v).unwrap())
+        };
+        let t = format!("h.{}.s", enc(json!({ "sub": "u", "exp": 1_800_000_000_i64 })));
+        assert_eq!(jwt_exp_seconds(&t), Some(1_800_000_000));
+
+        let padded = format!(
+            "h.{}.s",
+            base64::engine::general_purpose::URL_SAFE
+                .encode(serde_json::to_vec(&json!({ "exp": 42_i64 })).unwrap())
+        );
+        assert_eq!(jwt_exp_seconds(&padded), Some(42));
+
+        // 不是 JWT / 没有 exp：None（调用方当"未知"，不据此续期）
+        assert_eq!(jwt_exp_seconds("not-a-jwt"), None);
+        assert_eq!(jwt_exp_seconds(&format!("h.{}.s", enc(json!({ "sub": "u" })))), None);
+    }
+
+    /// 过期判断的口径：exp 与当前秒数**直接比较**（JWT 的 exp 就是 Unix 秒）。
+    #[test]
+    fn expiry_compare_uses_unix_seconds() {
+        let exp = unix_now_seconds() + 60;
+        assert!(exp > unix_now_seconds(), "未来 60 秒不应判为过期");
     }
 }
 
