@@ -18,10 +18,40 @@
     "targets": "all",
     "createUpdaterArtifacts": true,
     "fileAssociations": [
-      { "ext": ["mmd", "mermaid"], "name": "Diagramon Mermaid", "description": "Mermaid 图表（Diagramon）", "role": "Editor" },
-      { "ext": ["dot", "gv"], "name": "Diagramon Graphviz DOT", "description": "Graphviz DOT 图表（Diagramon）", "role": "Editor" },
-      { "ext": ["drawio"], "name": "Diagramon drawio", "description": "drawio 图表（Diagramon）", "role": "Editor" },
-      { "ext": ["excalidraw"], "name": "Diagramon Excalidraw", "description": "Excalidraw 场景（Diagramon）", "role": "Editor" }
+      {
+        "ext": [
+          "mmd",
+          "mermaid"
+        ],
+        "name": "Diagramon Mermaid",
+        "description": "Mermaid 图表（Diagramon）",
+        "role": "Editor"
+      },
+      {
+        "ext": [
+          "dot",
+          "gv"
+        ],
+        "name": "Diagramon Graphviz DOT",
+        "description": "Graphviz DOT 图表（Diagramon）",
+        "role": "Editor"
+      },
+      {
+        "ext": [
+          "drawio"
+        ],
+        "name": "Diagramon drawio",
+        "description": "drawio 图表（Diagramon）",
+        "role": "Editor"
+      },
+      {
+        "ext": [
+          "excalidraw"
+        ],
+        "name": "Diagramon Excalidraw",
+        "description": "Excalidraw 场景（Diagramon）",
+        "role": "Editor"
+      }
     ],
     "icon": [
       "icons/icon.ico",
@@ -33,9 +63,9 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEU2NDQ3OUFBRTE1NjMzOTkKUldTWk0xYmhxbmxFNWtpS1ZqQ21BQU55MXdtTUxReW52b3BOTWFrTzRJSHhBVTM2UWgvWENUZlIK",
       "endpoints": [
-        "https://updates.diagramon.app/{{target}}/{{arch}}/{{current_version}}"
+        "https://diagramon.agentctxsync.com/{{target}}/{{arch}}/{{current_version}}"
       ]
     }
   }

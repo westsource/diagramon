@@ -335,11 +335,15 @@ fn build_main_window(app: &mut tauri::App, paths: &AppPaths) -> Result<(), Box<d
     let mut builder = WebviewWindowBuilder::new(app, "main", webview_url())
         // 页面加载事件：真机排查"白窗口"时，第一件要知道的就是页面有没有起来
         .on_page_load(|_window, payload| {
+            // 页面加载日志只在 debug 构建里有；release 下 payload 没人用，
+            // 用 drop 压掉"未使用变量"警告（release 编译曾因此刷警告）。
             #[cfg(debug_assertions)]
             match payload.event() {
                 tauri::webview::PageLoadEvent::Started => eprintln!("diagramon|page|start {}", payload.url()),
                 tauri::webview::PageLoadEvent::Finished => eprintln!("diagramon|page|finish {}", payload.url()),
             }
+            #[cfg(not(debug_assertions))]
+            drop(payload);
         })
         .title("Diagramon")
         .inner_size(1440.0, 900.0)
