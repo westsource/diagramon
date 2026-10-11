@@ -51,3 +51,10 @@ strip = true
 # 需要单步调试变量时临时改成 `debug = true`。
 [profile.dev]
 debug = "line-tables-only"
+
+# schemars 0.8.22 的 preserve_order feature 声明 indexmap 1.x，代码却写成
+# indexmap 2 的两参数 IndexMap —— 上游 bug；tauri 2.12 链启用该 feature，
+# 一编译就 E0107（清空 target 后必炸）。本补丁把 preserve_order 绑到
+# indexmap 2（版本与语义都不变），上游修复后可整段删除。
+[patch.crates-io]
+schemars = { path = "third-party/schemars-0.8.22-order-fix" }

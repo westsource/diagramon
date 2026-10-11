@@ -47,6 +47,8 @@ arboard = "3.6.1"
 image = { version = "0.25.10", default-features = false, features = ["png"] }
 windows-sys = { version = "0.61.2", features = ["Win32_UI_WindowsAndMessaging", "Win32_Foundation"] }
 uuid = { version = "1.28.0", features = ["v4"] }
+# 令牌续期的跨 .await 锁：std MutexGuard 不是 Send，异步任务里必须用 tokio 的
+tokio = { version = "1", default-features = false, features = ["sync"] }
 tauri-plugin-process = "2.4.0"
 tauri-plugin-updater = { version = "2.13.3", default-features = false, features = ["native-tls"] }
 
