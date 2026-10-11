@@ -422,7 +422,7 @@ digraph Pipeline {
           render_retry: true,
           context_from_doc: true,
         },
-        cloud: { base_url: "https://api.diagramon.app/v1", device_id: "" },
+        cloud: { base_url: "https://www.diagramon.com", device_id: "" },
         recent: [
           { path: "E:/OpenCode/diagramon/docs/flows/登录流程.mmd", name: "登录流程.mmd", format: "mermaid", opened_at: 0 },
           { path: "E:/OpenCode/diagramon/docs/arch/渲染管线.dot", name: "渲染管线.dot", format: "dot", opened_at: 0 },

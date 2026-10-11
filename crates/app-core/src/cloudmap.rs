@@ -8,6 +8,36 @@
 //!
 //! 字段口径的权威来源：`service/app/schemas/__init__.py`（CamelModel 生成 camelCase）。
 
+/// 把用户填的"服务地址"归一化成 **API 根**（自动补 `/v1`）。
+///
+/// 服务端所有路由都挂在 `/v1` 前缀下（`app.include_router(.., prefix="/v1")`），
+/// 但让用户填 `https://host/v1` 太反直觉 —— 填根地址即可，这里统一补；
+/// 已带 `/v1` 的不重复（有人从旧配置/文档复制而来）。
+pub fn normalize_root(input: &str) -> String {
+    input.trim().trim_end_matches('/').to_string()
+}
+
+/// 探测候选：官方部署的 API 挂在 `/v1` 下，放第一个；反代直接暴露根路径的
+/// 部署放第二个。用户填的地址已带 `/v1` 时不重复。
+pub fn api_base_candidates(root: &str) -> Vec<String> {
+    let root = normalize_root(root);
+    if root.is_empty() {
+        return Vec::new();
+    }
+    if root.ends_with("/v1") {
+        return vec![root];
+    }
+    vec![format!("{root}/v1"), root]
+}
+
+/// 首选候选（= 自动探测的第一站）。探测逻辑在 src-tauri/src/cloud.rs。
+pub fn normalize_api_base(input: &str) -> String {
+    api_base_candidates(input)
+        .into_iter()
+        .next()
+        .unwrap_or_default()
+}
+
 use app_ipc::{CloudAccount, CloudDoc};
 
 /// 取第一个存在的字符串字段。都不存在 = 空串（**不是**报错 —— 列表项字段可选）。
@@ -139,5 +169,55 @@ mod tests {
         let a = account_of(&json!({"user": null, "membership": null}));
         assert_eq!(a.email, "");
         assert_eq!(a.quota_bytes, 0);
+    }
+}
+
+#[cfg(test)]
+mod normalize_tests {
+    use super::normalize_api_base;
+
+    #[test]
+    fn bare_host_gets_v1() {
+        assert_eq!(normalize_api_base("https://www.diagramon.com"), "https://www.diagramon.com/v1");
+    }
+
+    #[test]
+    fn trailing_slash_and_spaces_trimmed() {
+        assert_eq!(normalize_api_base("  https://x.com/  "), "https://x.com/v1");
+    }
+
+    #[test]
+    fn existing_v1_not_duplicated() {
+        assert_eq!(normalize_api_base("https://x.com/v1"), "https://x.com/v1");
+        assert_eq!(normalize_api_base("https://x.com/v1/"), "https://x.com/v1");
+    }
+
+    #[test]
+    fn empty_stays_empty() {
+        assert_eq!(normalize_api_base("   "), "");
+    }
+}
+
+#[cfg(test)]
+mod candidates_tests {
+    use super::api_base_candidates;
+
+    #[test]
+    fn v1_first_root_second() {
+        assert_eq!(
+            api_base_candidates("https://x.com"),
+            vec!["https://x.com/v1", "https://x.com"]
+        );
+    }
+
+    #[test]
+    fn dedup_when_v1_given() {
+        assert_eq!(api_base_candidates("https://x.com/v1"), vec!["https://x.com/v1"]);
+        assert_eq!(api_base_candidates("https://x.com/v1/"), vec!["https://x.com/v1"]);
+    }
+
+    #[test]
+    fn empty_root_no_candidates() {
+        assert!(api_base_candidates("   ").is_empty());
     }
 }

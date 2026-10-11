@@ -269,15 +269,20 @@ pub struct RecentEntry {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct CloudPrefs {
-    /// 如 `https://api.diagramon.app/v1`
+    /// 用户填的**服务根地址**（如 `https://www.diagramon.com`）；留空 = 云端关闭
     pub base_url: String,
+    /// 自动探测出的 API 根（如 `https://www.diagramon.com/v1`）：探测一次缓存一次，
+    /// 用户改 base_url 后因前缀不匹配会自动重新探测
+    #[serde(default)]
+    pub api_base: String,
     /// 本机设备标识（首登生成一次；服务端用它识别会话）
     pub device_id: String,
 }
 
 impl Default for CloudPrefs {
     fn default() -> Self {
-        Self { base_url: String::new(), device_id: String::new() }
+        // 默认指向官方服务（用户可在设置里改；留空 = 云端整体关闭）
+        Self { base_url: "https://www.diagramon.com".into(), api_base: String::new(), device_id: String::new() }
     }
 }
 

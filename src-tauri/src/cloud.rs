@@ -27,12 +27,40 @@ type R<T> = Result<T, String>;
 
 const ACCESS_KEY_HEADER: &str = "Authorization";
 
-fn base_url(state: &AppState) -> R<String> {
-    let url = state.settings().cloud.base_url.trim().trim_end_matches('/').to_string();
-    if url.is_empty() {
+/// 解析当前应使用的 **API 根**。
+///
+/// 自动探测（用户要求）：缓存命中（`cloud.api_base` 且仍以当前配置的根开头）直接用；
+/// 否则按候选顺序探测 `GET {候选}/config`（公开端点，非 404 = API 在这个前缀下），
+/// 命中后持久化到设置，之后不再探测。用户改了 `base_url` 会因前缀不匹配自动重探。
+async fn resolve_api_base(state: &AppState) -> R<String> {
+    let root = app_core::cloudmap::normalize_root(&state.settings().cloud.base_url);
+    if root.is_empty() {
         return Err("云网关未配置：先在 设置 → 云端 里填服务地址".into());
     }
-    Ok(url)
+    let cached = state.settings().cloud.api_base.clone();
+    if !cached.is_empty() && cached.starts_with(&root) {
+        return Ok(cached);
+    }
+    for cand in app_core::cloudmap::api_base_candidates(&root) {
+        let url = format!("{cand}/config");
+        let hit = state
+            .http
+            .get(&url)
+            .send()
+            .await
+            .map(|r| r.status().as_u16() != 404)
+            .unwrap_or(false);
+        if hit {
+            let mut s = state.settings().clone();
+            s.cloud.api_base = cand.clone();
+            state.persist_settings(&s).map_err(|e| e.to_string())?;
+            *state.settings() = s;
+            return Ok(cand);
+        }
+    }
+    Err(format!(
+        "在 {root} 下没找到 Diagramon API（探测过 /v1 与根路径）——请确认服务地址是否正确"
+    ))
 }
 
 async fn access_token(state: &AppState) -> R<String> {
@@ -51,7 +79,7 @@ async fn call_json(
     body: Option<Value>,
     auth: bool,
 ) -> R<Value> {
-    let base = base_url(state)?;
+    let base = resolve_api_base(state).await?;
     let url = format!("{base}{path}");
     let mut req = state.http.request(method, &url);
     if auth {
@@ -171,7 +199,7 @@ pub async fn cloud_logout(state: State<'_, Arc<AppState>>) -> R<bool> {
 /// 云端状态。登录着就去 `/auth/me` 拿一份新的账户快照（顺手校验令牌还有效）。
 #[tauri::command]
 pub async fn cloud_status(state: State<'_, Arc<AppState>>) -> R<CloudStatus> {
-    let base = base_url(state.inner())?;
+    let base = resolve_api_base(state.inner()).await?;
     let signed_in = state
         .creds
         .get(CLOUD_ACCESS_KEY)
@@ -238,7 +266,7 @@ pub async fn cloud_doc_save(
         "content": body,
         "size": body.len(),
     });
-    let base = base_url(state.inner())?;
+    let base = resolve_api_base(state.inner()).await?;
     let url = format!("{base}/documents/{doc_id}");
     let token = access_token(state.inner()).await?;
     let resp = state
