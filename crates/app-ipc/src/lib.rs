@@ -559,6 +559,23 @@ pub struct VisionRect {
 
 /* ---------------- 云网关 ---------------- */
 
+/// 套餐里的 AI 权益快照（服务端 `membership.ai`）。额度是**整数微信用点**（1e-6）。
+///
+/// 服务端刻意给"总额度 + 已用"而不是"剩余" —— 充值是加在总额度上的，所以
+/// `月度 - 已用` 得到的剩余**在任何时候都成立**（充值不会让"已用"变成负数）。
+/// 周期字段给出来是为了让界面能说"周期至 X 重置"，而不是自己猜下月 1 日。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct CloudAiCredit {
+    pub enabled: bool,
+    pub credit_monthly_micros: i64,
+    pub credit_used_micros: i64,
+    /// 本周期起（ISO 串，原样透传，客户端不做算术）
+    pub period_start: String,
+    /// 本周期止（ISO 串）
+    pub period_end: String,
+}
+
 /// 登录后的账户快照。**令牌永不回前端**（存凭据库，同 AI 密钥）。
 ///
 /// 存储额度三个数都是**服务端给的**，本地不推算、不伪造 —— 未登录就显示未登录。
@@ -570,6 +587,10 @@ pub struct CloudAccount {
     pub plan_name: String,
     pub used_bytes: u64,
     pub quota_bytes: u64,
+    /// 套餐里的 AI 权益。**旧服务端不带这个字段时为 `None`** —— 界面要能区分
+    /// "不知道"和"确实没开通"，所以是 Option 而不是 `enabled: false`。
+    #[serde(default)]
+    pub ai: Option<CloudAiCredit>,
 }
 
 /// 云端状态。`base_url` 为空 = 用户还没配网关地址。
@@ -579,6 +600,34 @@ pub struct CloudStatus {
     pub signed_in: bool,
     pub base_url: String,
     pub account: Option<CloudAccount>,
+}
+
+/// 前端 id 前缀：`gw:<别名>` = **云网关模型**，其余 = 本地 BYOK 模型。
+///
+/// 为什么用前缀而不是加一个 `kind` 字段：模型 id 是**一个**用户偏好（`ai.default_model`），
+/// 加字段就得在每个"当前模型是谁"的地方同时比对两个值，而分流点其实只有一个
+/// （Rust 侧 `resolve_target`）。前缀把所有下游都变成"看 id 前缀"一件事。
+pub const GATEWAY_MODEL_PREFIX: &str = "gw:";
+
+/// 云网关的一个**可用模型别名**（`GET /v1/ai/models` 的一项）。
+///
+/// 这是服务端按账号权益过滤后的结果 —— **无 AI 权益就是空列表**（服务端 200 + `data: []`，
+/// 不是 403），所以"空"只说明"当前账号没有可用别名"，不说明"服务挂了"。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct GatewayModel {
+    /// 别名（也是请求体里 `model` 的取值）
+    pub id: String,
+    pub display_name: String,
+    pub supports_vision: bool,
+    /// 该候选的输出上限（服务端还会按所选候选与档位再钳一次）
+    pub max_output: u32,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct GatewayModelList {
+    pub items: Vec<GatewayModel>,
 }
 
 /// 云文档列表项。
@@ -603,6 +652,34 @@ pub struct CloudDocList {
     pub has_more: bool,
     pub used_bytes: u64,
     pub quota_bytes: u64,
+}
+
+/// 云端目录节点（`GET /v1/folders` 的一项，**平铺**返回、按 path 排序、不含根）。
+///
+/// 服务端口径（`FolderOut`）：`document_count` 是**该目录直属**文档数，
+/// `has_children` 表明还有下级 —— 两者缺一不可：只有 `document_count` 会把
+/// "有子目录但自己没文档" 的目录显示成空目录。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct CloudFolder {
+    /// 库内相对路径（`""` = 根；根由客户端补，服务端不返回）
+    pub path: String,
+    /// 末段名（不含父路径）
+    pub name: String,
+    /// 段数 - 1，顶层为 0（仅作渲染缩进参考）
+    pub depth: i64,
+    /// 直属文档数
+    pub document_count: u64,
+    /// 是否还有子目录
+    pub has_children: bool,
+    /// 是显式建的目录（vs 由文档路径隐含出来的）
+    pub is_explicit: bool,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct CloudFolderList {
+    pub items: Vec<CloudFolder>,
 }
 
 /// 取回一份云文档：前端据此开新标签页。
@@ -685,7 +762,11 @@ pub mod commands {
     pub const CLOUD_LOGOUT: &str = "cloud_logout";
     pub const CLOUD_STATUS: &str = "cloud_status";
     pub const CLOUD_DOCS_LIST: &str = "cloud_docs_list";
+    pub const CLOUD_FOLDERS: &str = "cloud_folders";
+    pub const CLOUD_FOLDER_CREATE: &str = "cloud_folder_create";
     pub const CLOUD_DOC_SAVE: &str = "cloud_doc_save";
     pub const CLOUD_DOC_OPEN: &str = "cloud_doc_open";
     pub const CLOUD_DOC_DELETE: &str = "cloud_doc_delete";
+    /// 云网关**可用模型别名**（登录后才有；无 AI 权益时为空列表）
+    pub const AI_GATEWAY_MODELS: &str = "ai_gateway_models";
 }

@@ -223,9 +223,12 @@ pub fn run() {
             cloud::cloud_logout,
             cloud::cloud_status,
             cloud::cloud_docs_list,
+            cloud::cloud_folders,
+            cloud::cloud_folder_create,
             cloud::cloud_doc_save,
             cloud::cloud_doc_open,
             cloud::cloud_doc_delete,
+            cloud::ai_gateway_models,
         ])
         .run(tauri::generate_context!())
         .expect("Diagramon 启动失败");

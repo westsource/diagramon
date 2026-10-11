@@ -14,8 +14,13 @@ pub struct Resolved {
     pub base_url: String,
     pub model: String,
     pub api_key: Option<String>,
-    pub max_tokens: u32,
-    pub temperature: f32,
+    /// `None` = **不发送**这个键，交给上游/服务端自己的默认值。
+    ///
+    /// 云网关必须用 `None`：服务端按"所选候选 × 档位"钳 `max_tokens`
+    /// （`min(max(requested, MIN_OUTPUT_TOKENS), ceiling)`），客户端填一个数反而会把
+    /// 用户档位允许的长回答截短 —— 它知道 ceiling，我们不知道。
+    pub max_tokens: Option<u32>,
+    pub temperature: Option<f32>,
 }
 
 impl Resolved {
@@ -78,24 +83,38 @@ pub fn normalize_base_url(raw: &str) -> String {
 }
 
 /// 构造请求体（单独抽出来是为了能在没有网络的情况下测）。
+///
+/// `max_tokens` / `temperature` 为 `None` 时**不放这两个键**（不是放 0）——
+/// "没说"与"说了 0"在服务端是两件事：前者用服务端默认，后者会被钳到最小值。
 pub fn build_body(r: &Resolved, messages: &[Value], stream: bool) -> Value {
     if r.is_ollama() {
+        let mut options = serde_json::Map::new();
+        if let Some(t) = r.temperature {
+            options.insert("temperature".into(), json!(t));
+        }
+        if let Some(n) = r.max_tokens {
+            options.insert("num_predict".into(), json!(n));
+        }
         json!({
             "model": r.model,
             "messages": messages,
             "stream": stream,
-            "options": { "temperature": r.temperature, "num_predict": r.max_tokens }
+            "options": Value::Object(options),
         })
     } else {
-        json!({
-            "model": r.model,
-            "messages": messages,
-            "stream": stream,
-            "max_tokens": r.max_tokens,
-            "temperature": r.temperature,
-            // 让最后一帧带回 usage：用量面板要用它，否则只能自己数 token
-            "stream_options": { "include_usage": true }
-        })
+        let mut body = serde_json::Map::new();
+        body.insert("model".into(), json!(r.model));
+        body.insert("messages".into(), json!(messages));
+        body.insert("stream".into(), json!(stream));
+        if let Some(n) = r.max_tokens {
+            body.insert("max_tokens".into(), json!(n));
+        }
+        if let Some(t) = r.temperature {
+            body.insert("temperature".into(), json!(t));
+        }
+        // 让最后一帧带回 usage：用量面板要用它，否则只能自己数 token
+        body.insert("stream_options".into(), json!({ "include_usage": true }));
+        Value::Object(body)
     }
 }
 
@@ -248,8 +267,8 @@ mod tests {
             base_url: "https://api.openai.com/v1".into(),
             model: "gpt-4o".into(),
             api_key: Some("sk-x".into()),
-            max_tokens: 4096,
-            temperature: 0.7,
+            max_tokens: Some(4096),
+            temperature: Some(0.7),
         }
     }
 
@@ -287,6 +306,27 @@ mod tests {
         assert!(body.get("options").is_some(), "Ollama 用 options，不是顶层 max_tokens");
         assert_eq!(body["options"]["num_predict"], 4096);
         assert!(body.get("stream_options").is_none());
+    }
+
+    /// 云网关那条路：`max_tokens`/`temperature` 为 `None` 时**键都不出现**。
+    /// 放 0 或放客户端自己猜的值都会改变服务端的钳制结果（见 `Resolved.max_tokens` 注释）。
+    #[test]
+    fn none_knobs_are_omitted_entirely_not_zeroed() {
+        let r = Resolved { max_tokens: None, temperature: None, ..openai() };
+        let body = build_body(&r, &[json!({"role":"user","content":"hi"})], true);
+        assert!(body.get("max_tokens").is_none(), "不该出现 max_tokens: {body}");
+        assert!(body.get("temperature").is_none(), "不该出现 temperature: {body}");
+        // 该带的还得带
+        assert_eq!(body["model"], "gpt-4o");
+        assert_eq!(body["stream"], true);
+        assert_eq!(body["stream_options"]["include_usage"], true);
+    }
+
+    #[test]
+    fn ollama_options_omit_missing_knobs_too() {
+        let r = Resolved { provider: "ollama".into(), max_tokens: None, temperature: None, ..openai() };
+        let body = build_body(&r, &[], true);
+        assert_eq!(body["options"], json!({}), "options 里不该出现 temperature/num_predict");
     }
 
     #[test]

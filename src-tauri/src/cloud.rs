@@ -10,6 +10,12 @@
 //!   `PUT  /documents/{id}`（**新建与更新同一入口**，`If-Match: 0` = 仅当不存在时创建）
 //!   `GET  /documents/{id}` → 内联 content
 //!   `DELETE /documents/{id}`
+//!   `GET  /folders`    → `FolderListOut{items}`（平铺、不含根）
+//!   `POST /folders`    → `FolderOut`（新建**可为空**的目录）
+//!   `GET  /ai/models`  → `AiModelListOut{data:[{id, displayName, supportsVision, maxOutput}]}`
+//!                        （**按账号权益过滤**；没权益就是 `data: []` + 200，不是 403）
+//!   `POST /ai/chat/completions` → OpenAI 兼容 SSE（网关在客户端眼里就是**一个 OpenAI 兼容
+//!                        provider**，所以能直接复用 `crates/ai` 的整条流式路径）
 //!
 //! 全部 `async` + 返回有意义的值（见 commands.rs 的返回值约定）。
 
@@ -17,8 +23,11 @@ use std::sync::Arc;
 
 use serde_json::{json, Value};
 
-use app_core::cloudmap::{account_of, doc_of, str_of, u64_of};
-use app_ipc::{CloudAccount, CloudDoc, CloudDocBody, CloudDocList, CloudStatus, FormatId};
+use app_core::cloudmap::{account_of, doc_of, folder_of, gateway_model_of, str_of, u64_of};
+use app_ipc::{
+    CloudAccount, CloudDoc, CloudDocBody, CloudDocList, CloudFolder, CloudFolderList, CloudStatus,
+    FormatId, GatewayModelList,
+};
 use tauri::State;
 
 use crate::state::{AppState, CLOUD_ACCESS_KEY, CLOUD_REFRESH_KEY};
@@ -237,12 +246,43 @@ pub async fn cloud_docs_list(state: State<'_, Arc<AppState>>) -> R<CloudDocList>
     })
 }
 
+/// 云端目录全集（`GET /v1/folders`）—— 平铺返回，**不含根**（根由前端补）。
+///
+/// 为什么必须有它：`cloud_docs_list` 只在文档项里带 `path`，**空目录根本不会出现**，
+/// 树就建不起来（缺一层、空目录看不见）。服务端的 folders 路由是"显式目录 ∪ 文档路径隐含的目录"，
+/// 正是建树需要的那份全集。
+#[tauri::command]
+pub async fn cloud_folders(state: State<'_, Arc<AppState>>) -> R<CloudFolderList> {
+    let v = call_json(state.inner(), reqwest::Method::GET, "/folders", None, true).await?;
+    let mut items = Vec::new();
+    if let Some(arr) = v.get("items").and_then(|x| x.as_array()) {
+        for it in arr {
+            items.push(folder_of(it));
+        }
+    }
+    Ok(CloudFolderList { items })
+}
+
+/// 新建目录（**可以是空的**）。路径已存在（显式或文档隐含）→ 服务端 409 `name_taken`。
+///
+/// 错误原样透传（`call_json` 已把服务端 message 摘出来）—— 客户端不复刻服务端的路径规则。
+#[tauri::command]
+pub async fn cloud_folder_create(state: State<'_, Arc<AppState>>, path: String) -> R<CloudFolder> {
+    let body = json!({ "path": path.trim() });
+    let v = call_json(state.inner(), reqwest::Method::POST, "/folders", Some(body), true).await?;
+    // 新建时目标目录必然为空（建之前它不在目录全集里），服务端也这么回；仍以响应为准
+    Ok(folder_of(&v))
+}
+
 /// 存一份文档到云端（新建与更新同一入口；`id` 为空 = 由本机生成新 id）。
 ///
 /// `version` 是**乐观锁**：新建传 0（`If-Match: 0` = 仅当不存在时创建）；
 /// 更新必须带上次存/取时拿到的版本号 —— 服务端 `If-Match` **省略 = 仅当不存在时创建**，
 /// 省略会直接 409（联调实测踩过）。409 的响应体带 `contentHash/updatedAt`，
 /// 原样透传给前端，让用户知道"云端已被别的设备改过"。
+///
+/// `path` 是目标目录（`""` = 根）：服务端口径是 **null/省略 = 原地不动**，
+/// 所以这里始终显式给值 —— 前端"保存到云端"选了哪个目录就落到哪个目录。
 ///
 /// 返回服务端分配的 id 与新版本号，前端要记下来供下次保存用。
 #[tauri::command]
@@ -251,6 +291,7 @@ pub async fn cloud_doc_save(
     id: String,
     version: u64,
     name: String,
+    path: String,
     format: String,
     body: String,
 ) -> R<CloudDoc> {
@@ -265,6 +306,7 @@ pub async fn cloud_doc_save(
         "payloadKind": "text",
         "content": body,
         "size": body.len(),
+        "path": path.trim(),
     });
     let base = resolve_api_base(state.inner()).await?;
     let url = format!("{base}/documents/{doc_id}");
@@ -330,4 +372,48 @@ pub async fn cloud_doc_delete(state: State<'_, Arc<AppState>>, id: String) -> R<
     )
     .await?;
     Ok(true)
+}
+
+/* --------------------------------------------------------------- 云网关 AI */
+
+/// 云网关的**可用模型别名**（`GET /v1/ai/models`）。
+///
+/// 登录后才有；无 AI 权益时服务端回 `200 + data: []`（**不是 403**），
+/// 所以空列表是**正常结果**，前端要按"当前账号没有可用别名"呈现，而不是报错。
+#[tauri::command]
+pub async fn ai_gateway_models(state: State<'_, Arc<AppState>>) -> R<GatewayModelList> {
+    let v = call_json(state.inner(), reqwest::Method::GET, "/ai/models", None, true).await?;
+    let mut items = Vec::new();
+    if let Some(arr) = v.get("data").and_then(|x| x.as_array()) {
+        for it in arr {
+            items.push(gateway_model_of(it));
+        }
+    }
+    Ok(GatewayModelList { items })
+}
+
+/// 把网关**别名**解析成一次对话所需的 `Resolved`。
+///
+/// 这里每个参数都是**推导**出来的，用户没填过任何一项：
+///   - `base_url` = `{api_base}/ai`；`endpoint()` 再补 `/chat/completions`，
+///     与服务端权威路径 `/v1/ai/chat/completions` 对上（客户端填到 `…/v1/ai` 就够）；
+///   - `api_key` = **当前 access token，现取现用**：短命 JWT（默认 30 分钟）、
+///     不落进设置、不进前端（同 BYOK 密钥的规矩）；
+///   - `max_tokens` / `temperature` 一律 `None`：服务端按"所选候选 × 档位"自己钳，
+///     客户端填数只会把档位允许的长回答截短（见 `ai::Resolved` 的注释）。
+pub async fn gateway_resolved(state: &AppState, alias: &str) -> R<ai::Resolved> {
+    let alias = alias.trim();
+    if alias.is_empty() {
+        return Err("云网关模型别名为空".into());
+    }
+    let base = resolve_api_base(state).await?;
+    let token = access_token(state).await?;
+    Ok(ai::Resolved {
+        provider: "openai".into(),
+        base_url: format!("{base}/ai"),
+        model: alias.to_string(),
+        api_key: Some(token),
+        max_tokens: None,
+        temperature: None,
+    })
 }

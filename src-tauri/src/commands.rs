@@ -336,6 +336,39 @@ fn resolve_model(state: &AppState, model_id: &str) -> R<AiModel> {
         .ok_or_else(|| format!("模型不存在：{model_id}（先在「AI 设置」里新增一个）"))
 }
 
+/// 解析这次对话用哪个模型。**两条来源互不混用**，靠 id 前缀分流：
+///   - `gw:<别名>` → 云网关（密钥 = 当前 access token，base_url 由服务地址推导）；
+///   - 其它 → 本地 BYOK（`settings.ai.models`，密钥在凭据库）。
+///
+/// 分流**只有这一处**：下游（`build_body` / SSE 解析 / 取消 / usage）对两条来源完全一样，
+/// 因为网关在客户端眼里就是一个 OpenAI 兼容 provider。
+///
+/// 网关那条**不在本地兜底取密钥**：没登录就直说没登录，不要拿一段过期字符串去撞 401。
+async fn resolve_target(state: &AppState, model_id: &str) -> R<ai::Resolved> {
+    if let Some(alias) = model_id.strip_prefix(app_ipc::GATEWAY_MODEL_PREFIX) {
+        return crate::cloud::gateway_resolved(state, alias).await;
+    }
+
+    let model = resolve_model(state, model_id)?;
+    let api_key = if model.provider == "ollama" {
+        None
+    } else {
+        state
+            .creds
+            .get(&credential_key(&model.id))
+            .map_err(|e| e.to_string())?
+    };
+    Ok(ai::Resolved {
+        provider: model.provider.clone(),
+        base_url: model.base_url.clone(),
+        model: model.model.clone(),
+        api_key,
+        // BYOK 这两个值是用户自己配的，必须原样下发（网关那条相反：交给服务端钳）
+        max_tokens: Some(model.max_tokens),
+        temperature: Some(model.temperature),
+    })
+}
+
 /// 发起一次流式对话：立刻返回，内容经 `ai://delta` / `ai://done` / `ai://failed` 推进来。
 #[tauri::command]
 pub async fn ai_chat(
@@ -344,24 +377,7 @@ pub async fn ai_chat(
     req: AiChatRequest,
 ) -> R<bool> {
     let st = state.inner().clone();
-    let model = resolve_model(&st, &req.model_id)?;
-
-    let api_key = if model.provider == "ollama" {
-        None
-    } else {
-        st.creds
-            .get(&credential_key(&model.id))
-            .map_err(|e| e.to_string())?
-    };
-
-    let resolved = ai::Resolved {
-        provider: model.provider.clone(),
-        base_url: model.base_url.clone(),
-        model: model.model.clone(),
-        api_key,
-        max_tokens: model.max_tokens,
-        temperature: model.temperature,
-    };
+    let resolved = resolve_target(&st, &req.model_id).await?;
 
     let messages = ai::build_messages(
         req.format,
