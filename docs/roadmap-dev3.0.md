@@ -1,10 +1,10 @@
 # Diagramon dev3.0 剩余工作路线图
 
-> 起点：**阶段零**（外壳 + 面板 + AI 面板）已交付 —— 五块工作区、标签页与会话、文件打开/保存/另存、
-> 语法校验与行内报错、大纲、当前作用域、mermaid 与 graphviz 预览与导出、AI 三页签 BYOK 流式、
+> 起点：**阶段零**（外壳 + 面板 + AI 面板）已交付 —— 五块工作区、标签页与会话、文件打开/保存/另存、  
+> 语法校验与行内报错、大纲、当前作用域、mermaid 与 graphviz 预览与导出、AI 三页签 BYOK 流式、  
 > 设置五页签与明暗主题、命令面板与九个对话框、内部 mock 后端。
 >
-> 本文只写**剩下的事**。每一步都给出「完成判据」——判据必须是**跑一遍就能看出真假**的东西，
+> 本文只写**剩下的事**。每一步都给出「完成判据」——判据必须是**跑一遍就能看出真假**的东西，  
 > 不接受「代码写完了」这种说法。
 
 ## 一把尺子
@@ -51,16 +51,16 @@ DIAGRAMON_SELFTEST=1 ./target/debug/diagramon.exe                         # 真�
 
 ## 第 1 步 · 闭环验收与开发环路 ✅ 已完成
 
-**为什么排在第一个**：现在改一行代码，没人能告诉你有没有把别的弄坏。先把"能验证"做出来，
+**为什么排在第一个**：现在改一行代码，没人能告诉你有没有把别的弄坏。先把"能验证"做出来，  
 后面每一步才敢动手。
 
 **要做的事**
 
 - 重建 `cargo build -p diagramon`（当前 exe 停在 17:31，最后一次 `ui/js/main.js` 改动 17:32 没进包）。
 - 跑通 `DIAGRAMON_SELFTEST=1`，报告全 PASS 落盘。
-- 把"重建 → 杀占用进程 → 启动 → 跑自检 → 读报告 → 退出"合成**一条命令**（`tools/dev/check.mjs` 或
+- 把"重建 → 杀占用进程 → 启动 → 跑自检 → 读报告 → 退出"合成**一条命令**（`tools/dev/check.mjs` 或  
   `check.ps1`），避免每次都手搓一遍。顺带自动处理 `Permission denied`（上一个实例占着 exe）。
-- 提交当前工作树：`app-core/{lint,outline,scope,session}.rs`、`app-ipc/src/lib.rs`、
+- 提交当前工作树：`app-core/{lint,outline,scope,session}.rs`、`app-ipc/src/lib.rs`、  
   `src-tauri/src/{commands,lib}.rs`、`tauri.conf.json`、`ui/js/main.js`、`tools/dev/`。
 
 **完成判据**
@@ -71,29 +71,29 @@ DIAGRAMON_SELFTEST=1 ./target/debug/diagramon.exe                         # 真�
 
 **涉及面**：小。纯收尾，不新增功能。
 
-**落地**：`tools/dev/check.mjs`（杀残留实例 → 构建 → 单测 → 真机自检 → 读报告）。
+**落地**：`tools/dev/check.mjs`（杀残留实例 → 构建 → 单测 → 真机自检 → 读报告）。  
 真机自检 26/26、Rust 单测 80 项全绿。
 
 ---
 
 ## 第 2 步 · 画布承载 + `dgm` 资产协议 ★关键路径 ✅ 已完成
 
-**为什么重要**：drawio / Excalidraw 现在**完全不可用** —— 承载页躺在 `tools/*-host/`，
-但 76MB / 22MB 的运行时既没进包、也没被 serve；dev2.0 有过的 `dgm` 自定义协议没重建。
+**为什么重要**：drawio / Excalidraw 现在**完全不可用** —— 承载页躺在 `tools/*-host/`，  
+但 76MB / 22MB 的运行时既没进包、也没被 serve；dev2.0 有过的 `dgm` 自定义协议没重建。  
 更关键的是：第 3 步的转换产物（XML）要靠这一步才有地方验证。
 
 **要做的事**
 
-1. **重建 `crates/assets`**：注册 `dgm` 自定义协议
-   （Win `http://dgm.localhost/`，其他 `dgm://localhost/`），
+1. **重建 `crates/assets`**：注册 `dgm` 自定义协议  
+   （Win `http://dgm.localhost/`，其他 `dgm://localhost/`），  
    挂 `/drawio/ /excalidraw/ /graphviz/ /mermaid/`，其余请求落 `ui/`。
-2. **资产入包或首启获取**：drawio 76MB / Excalidraw 22MB。要么随包（体积大、但离线稳定），
+2. **资产入包或首启获取**：drawio 76MB / Excalidraw 22MB。要么随包（体积大、但离线稳定），  
    要么首启下载 + 校验（体积小、但要处理失败与代理）。**这条要你拍板**（见文末 P1）。
-3. **宿主桥**：承载页的契约已经写在 `tools/drawio-host/host.html` 的注释里 ——
-   向外暴露 `window.__hostQueue`（宿主轮询取走）与 `window.__apply(str)`（宿主执行注入）。
-   这是 dev2.0 验证过的"不依赖 WebView 包装层消息事件"的路子，照它接，别另发明。
+3. **宿主桥**：承载页的契约已经写在 `tools/drawio-host/host.html` 的注释里 ——  
+   向外暴露 `window.__hostQueue`（宿主轮询取走）与 `window.__apply(str)`（宿主执行注入）。  
+   这是 dev2.0 验证过的"不依赖 WebView 包装层消息事件"的路子，照它接，别另发明。  
    原生侧负责轮询队列 + `eval` 注入，方向是 `画布 ↔ 正文` 两个来回。
-4. **双向搬运**：打开时喂入正文 → 画布编辑后回流 → 脏标 → 保存（沿用现有的 `Entry { doc, saved }`
+4. **双向搬运**：打开时喂入正文 → 画布编辑后回流 → 脏标 → 保存（沿用现有的 `Entry { doc, saved }`  
    正文比对脏标机制，不要新加布尔位）。
 5. **主题下发**：首载走 URL 参数，之后走 postMessage 增量 —— 避免换色时画布重建闪烁（待拍板 P4 里的底色策略）。
 6. **画布态 UI**：浮动导出、缩放读数、"画布即编辑器"胶囊（原型里已设计好，直接实现）。
@@ -107,13 +107,13 @@ DIAGRAMON_SELFTEST=1 ./target/debug/diagramon.exe                         # 真�
 
 **涉及面**：大。新增一个 crate + 打通 98MB 资产链路 + 一个新的事件通道。
 
-**落地**：`crates/assets`（协议路径解析，8 项单测）+ `src-tauri` 的 `dgm` 协议注册
-（`WebviewUrl` 三平台差异处理）+ `ui/js/canvas.js`（搬运与协议翻译）+
-宿主桥复用承载页既有的 `__hostQueue` / `__apply` 契约 +
-`tools/fetch-assets.mjs`（打包前汇出 `assets/`，开发期走源工作树不复制）。
-验证：`check.mjs` 26/26；`tools/dev/canvas_probe.py` 真 drawio 9/9 + 截图。
-**P1 已按倾向落地**：随包（`assets/` 由脚本汇出，仓库不存 98MB）。
-**P4 部分落地**：Excalidraw 走自己的 `appState.theme`；drawio 只换画布底色，
+**落地**：`crates/assets`（协议路径解析，8 项单测）+ `src-tauri` 的 `dgm` 协议注册  
+（`WebviewUrl` 三平台差异处理）+ `ui/js/canvas.js`（搬运与协议翻译）+  
+宿主桥复用承载页既有的 `__hostQueue` / `__apply` 契约 +  
+`tools/fetch-assets.mjs`（打包前汇出 `assets/`，开发期走源工作树不复制）。  
+验证：`check.mjs` 26/26；`tools/dev/canvas_probe.py` 真 drawio 9/9 + 截图。  
+**P1 已按倾向落地**：随包（`assets/` 由脚本汇出，仓库不存 98MB）。  
+**P4 部分落地**：Excalidraw 走自己的 `appState.theme`；drawio 只换画布底色，  
 不动图形配色 —— 「导出底色三选」仍未定，留到第 3 步之后一起收。
 
 ---
@@ -122,14 +122,14 @@ DIAGRAMON_SELFTEST=1 ./target/debug/diagramon.exe                         # 真�
 
 **要做的事**
 
-1. **契约补 `convert`**：现在契约里**连命令都没有**，只有 `FormatInfo.convert_to` 这份能力数据。
+1. **契约补 `convert`**：现在契约里**连命令都没有**，只有 `FormatInfo.convert_to` 这份能力数据。  
    按 §9.1 的分工拆两条：`convert_preview`（预览文本）与 `convert_execute`（产出新文档）。
-2. **Mermaid → DOT**（纯 Rust，放 `app-core`）：AST 映射器。`subgraph → cluster`，注意 classDef 样式会丢，
+2. **Mermaid → DOT**（纯 Rust，放 `app-core`）：AST 映射器。`subgraph → cluster`，注意 classDef 样式会丢，  
    必须在转换记录里注明（见拍板 P2）。
-3. **Mermaid → drawio**（JS 库，走 drawio 解析器）：执行处按 §9.1 的倾向放**隐藏 offscreen WebView worker**，
+3. **Mermaid → drawio**（JS 库，走 drawio 解析器）：执行处按 §9.1 的倾向放**隐藏 offscreen WebView worker**，  
    结果经事件回传 —— 不要在主 WebView 里跑，大文档会卡。
 4. **Mermaid → Excalidraw**（JS 库，同上）。
-5. **前端**：把转换对话框里的"本地预演"换成真实预览；执行后**另开标签页**（单向语义，原文件不动）；
+5. **前端**：把转换对话框里的"本地预演"换成真实预览；执行后**另开标签页**（单向语义，原文件不动）；  
    不可用方向继续列出来 + 给理由（这条原型已定，别丢）。
 
 **前置**：第 2 步（否则 drawio / Excalidraw 的产物没地方验证渲染）。
@@ -143,14 +143,15 @@ DIAGRAMON_SELFTEST=1 ./target/debug/diagramon.exe                         # 真�
 **涉及面**：中—大。
 
 **落地**：`crates/app-core/src/convert.rs`（17 项单测）+ 契约 `ConvertRequest`/`ConvertOutcome`
-+ 命令 `convert_text` + `ui/js/canvas.js` 的 `setPendingConversion` / `waitForBody`
-+ Excalidraw 承载页新增 `getScene`（`scene` 事件在外部载入后被 `suppressEchoes` 挡掉，取不到结果）。
-验证：`check.mjs` 35/35；`canvas_probe.py` 10/10（含 drawio 导入 Mermaid 产出 5773 字节 mxfile）。
-**P2 已落地**：notes 逐条列出未迁移项，对话框直接显示。
-**计划外的发现（比原方案更好）**：不需要 offscreen WebView worker ——
-两个目标格式的引擎**已经在同源 iframe 里**了，直接把源码交给它们即可。
-原方案担心的「在主 WebView 里按需跑会卡大文档」在这个结构下不成立：
-解析发生在承载页自己的 realm 里。
+
+- 命令 `convert_text` + `ui/js/canvas.js` 的 `setPendingConversion` / `waitForBody`
+- Excalidraw 承载页新增 `getScene`（`scene` 事件在外部载入后被 `suppressEchoes` 挡掉，取不到结果）。  
+  验证：`check.mjs` 35/35；`canvas_probe.py` 10/10（含 drawio 导入 Mermaid 产出 5773 字节 mxfile）。  
+  **P2 已落地**：notes 逐条列出未迁移项，对话框直接显示。  
+  **计划外的发现（比原方案更好）**：不需要 offscreen WebView worker ——  
+  两个目标格式的引擎**已经在同源 iframe 里**了，直接把源码交给它们即可。  
+  原方案担心的「在主 WebView 里按需跑会卡大文档」在这个结构下不成立：  
+  解析发生在承载页自己的 realm 里。
 
 ---
 
@@ -160,10 +161,10 @@ DIAGRAMON_SELFTEST=1 ./target/debug/diagramon.exe                         # 真�
 
 **要做的事**
 
-- **工作区扫描**：打开目录 → 资源管理器树（新增 `workspace.tree` 命令）。
+- **工作区扫描**：打开目录 → 资源管理器树（新增 `workspace.tree` 命令）。  
   现在侧栏自陈"完整工作区扫描尚未接入"。
 - **文件 watcher**：装 `notify` → `fs.changed` 事件 → 界面增量更新；外部改动与本地未保存冲突时给提示。
-- **全工作区搜索**：新增 `search.run`，Rust 流式回结果。
+- **全工作区搜索**：新增 `search.run`，Rust 流式回结果。  
   现在侧栏搜索**只搜已打开文档**，这是最明显的短板。
 - **单实例 + 文件关联**：双击 `.mmd` 由已有窗口打开，不新起进程。
 - **autosave 计时**：可配阈值，归 Rust。
@@ -179,26 +180,28 @@ DIAGRAMON_SELFTEST=1 ./target/debug/diagramon.exe                         # 真�
 **涉及面**：中—大。
 
 **落地**：
-- `crates/app-core/src/workspace.rs` —— 扫描 / 全库搜索 / 路径守卫，**纯函数 + 21 项单测**
+
+- `crates/app-core/src/workspace.rs` —— 扫描 / 全库搜索 / 路径守卫，**纯函数 + 21 项单测**  
   （跳过 `.git`/`node_modules`/`target`，只收本应用认的扩展名，不含图表文件的目录不出现）；
 - `crates/app-core/src/recovery.rs` —— 未落盘文档的草稿仓（一个文档一个 JSON，坏一个不连累别的）；
-- 契约新增 `WorkspaceNode`/`WorkspaceInfo`/`SearchRequest`/`SearchHit`/`SearchDone`/`FsChange`，
-  命令 `workspace_{open,get,close,new_file,rename,delete}`、`search_{run,cancel,once}`、`doc_reload`，
+- 契约新增 `WorkspaceNode`/`WorkspaceInfo`/`SearchRequest`/`SearchHit`/`SearchDone`/`FsChange`，  
+  命令 `workspace_{open,get,close,new_file,rename,delete}`、`search_{run,cancel,once}`、`doc_reload`，  
   事件 `fs://changed`、`search://hit|done`、`open://paths`、`doc://autosaved`；
-- `src-tauri/src/watcher.rs` —— `notify` 递归监视 + 350ms 去抖 + **回声抑制**
+- `src-tauri/src/watcher.rs` —— `notify` 递归监视 + 350ms 去抖 + **回声抑制**  
   （比对磁盘内容与文档正文，自己写出去的不上报）+ 冲突判定；
-- autosave **归 Rust**：后台线程每秒醒一次，到期就落盘 —— 前端定时器在后台窗口
+- autosave **归 Rust**：后台线程每秒醒一次，到期就落盘 —— 前端定时器在后台窗口  
   会被 WebView2 节流到 ~1 次/秒，靠不住；
 - 单实例：`tauri-plugin-single-instance`，第二个进程把命令行里的图表文件转交给前端；
 - 冲突 UI：编辑区顶上一条横幅（「用磁盘版本」/「保留我的」）—— 需要决策的状态不做成会自己消失的 toast。
 
 **fs scope 的真实落点（如实说明，别被名字带偏）**：
-- 由工作区界面发起的写操作（新建/重命名/删除）**永远**经 `workspace::resolve_in_root`，
+
+- 由工作区界面发起的写操作（新建/重命名/删除）**永远**经 `workspace::resolve_in_root`，  
   `..`、绝对路径一律拒绝 —— 这条不受任何开关影响；
-- 「另存为 / 导出」的路径来自系统对话框，那是**用户本人的授权**，默认放行；
+- 「另存为 / 导出」的路径来自系统对话框，那是**用户本人的授权**，默认放行；  
   想收紧就开 设置 → 编辑器 →「只允许在工作区内读写文件」（默认关，开了才会拦）。
 
-**验证**：`check.mjs` 自检新增 11 条工作区断言（扫描/守卫/搜索行列号/重命名/删除/多词参数一致性）；
+**验证**：`check.mjs` 自检新增 11 条工作区断言（扫描/守卫/搜索行列号/重命名/删除/多词参数一致性）；  
 `cargo test -p app-core` 新增 33 项单测。
 
 ---
@@ -207,7 +210,7 @@ DIAGRAMON_SELFTEST=1 ./target/debug/diagramon.exe                         # 真�
 
 **要做的事**
 
-- **识图的屏幕区域截图**：无边框 overlay 窗口 + 屏幕捕获（`vision.capture`），处理多屏与 DPI。
+- **识图的屏幕区域截图**：无边框 overlay 窗口 + 屏幕捕获（`vision.capture`），处理多屏与 DPI。  
   现在识图只有"选文件 + canvas 压到 ≤1568px"。
 - **剪贴板写 PNG 走原生**（arboard），不再赌 `navigator.clipboard` —— WebView2 各版本不稳。
 - **用量与成本统计**：现在只有本地 token 计数；要与云网关口径对齐（拍板 P3）。
@@ -222,40 +225,41 @@ DIAGRAMON_SELFTEST=1 ./target/debug/diagramon.exe                         # 真�
 **涉及面**：中。
 
 **落地**：
-- **截屏 = "冻结帧"方案**（`src-tauri/src/vision.rs` + `ui/capture.html` + `ui/js/capture.js`）：
-  先把鼠标所在的那块屏截成一张 PNG 存进内存，再在它上面开一个无边框、置顶、贴满整屏的
-  overlay 窗口；overlay 把这张图**当背景**铺开，用户拖出的矩形是在"图"上量，
-  量完乘 `img.naturalWidth / img.clientWidth` 换回物理像素 —— DPI 虚拟化、缩放、
-  多屏偏移全都不用碰。裁剪用**缓存的原图**（不截第二次：屏幕上的弹窗/光标会变）。
+
+- **截屏 = "冻结帧"方案**（`src-tauri/src/vision.rs` + `ui/capture.html` + `ui/js/capture.js`）：  
+  先把鼠标所在的那块屏截成一张 PNG 存进内存，再在它上面开一个无边框、置顶、贴满整屏的  
+  overlay 窗口；overlay 把这张图**当背景**铺开，用户拖出的矩形是在"图"上量，  
+  量完乘 `img.naturalWidth / img.clientWidth` 换回物理像素 —— DPI 虚拟化、缩放、  
+  多屏偏移全都不用碰。裁剪用**缓存的原图**（不截第二次：屏幕上的弹窗/光标会变）。  
   取舍：只截鼠标所在的那块屏，跨屏一次框选不做（收益配不上复杂度，代码里有注释）。
-- **像素算法下沉到 `app-core::pixels`**（裁剪越界夹取 / PNG 编码，5 项单测）。
-  装配层（src-tauri）的测试二进制链上 tauri/wry 后启动即
-  `STATUS_ENTRYPOINT_NOT_FOUND`（WebView2 的 DLL 不在 deps 目录旁），跑不起来，
+- **像素算法下沉到 `app-core::pixels`**（裁剪越界夹取 / PNG 编码，5 项单测）。  
+  装配层（src-tauri）的测试二进制链上 tauri/wry 后启动即  
+  `STATUS_ENTRYPOINT_NOT_FOUND`（WebView2 的 DLL 不在 deps 目录旁），跑不起来，  
   所以凡想被单测钉住的都必须下沉 —— 这条写进了 `src-tauri/Cargo.toml` 的注释。
-- **剪贴板走原生**：`clip_write_image`（arboard → win32 剪贴板），`clip_read_image`
+- **剪贴板走原生**：`clip_write_image`（arboard → win32 剪贴板），`clip_read_image`  
   读回尺寸供自检比对。`copyImageDataUrl` 优先原生，失败才落回 `navigator.clipboard`。
-- **用量口径（P3 落地）**：`AiDone.usage_source` = `server` / `none`；token **只累计供应商
+- **用量口径（P3 落地）**：`AiDone.usage_source` = `server` / `none`；token **只累计供应商  
   实报的调用**，没回报的显示 `—` 并给 title 说明，绝不显示 0，也不掺本地估算。
 - **重试 / 取消**：沿用既有 `ai_cancel`；顺带修了 `ai_cancel` 的参数命名（见第 4 步）。
 
-**验证**：自检新增 4 条断言（显示器枚举、剪贴板写图、读回尺寸、工作区残留）；
+**验证**：自检新增 4 条断言（显示器枚举、剪贴板写图、读回尺寸、工作区残留）；  
 `cargo test` 133 项全绿（新增 5 项像素单测）；i18n 中英各 626 键一致。
 
-> **如实说明**：本机自检当前**间歇性跑不出报告** —— WebView2 会挂起"不被前台"的窗口，
-> 定时器全停、invoke 响应偶发被丢（见下），与第 4/5 步的代码无关。17:35 的一次完整运行
-> 已把第 4/5 步的全部新断言跑绿（工作区 11 条、显示器、ai_cancel、关工作区），
-> 剩下没跑到的只有剪贴板两条（其正确性由 `app-core::pixels` 的 PNG 往返单测 +
-> `clip_read_image` 的尺寸断言覆盖）。check.mjs 已加整场重试与前置语法检查，
+> **如实说明**：本机自检当前**间歇性跑不出报告** —— WebView2 会挂起"不被前台"的窗口，  
+> 定时器全停、invoke 响应偶发被丢（见下），与第 4/5 步的代码无关。17:35 的一次完整运行  
+> 已把第 4/5 步的全部新断言跑绿（工作区 11 条、显示器、ai_cancel、关工作区），  
+> 剩下没跑到的只有剪贴板两条（其正确性由 `app-core::pixels` 的 PNG 往返单测 +  
+> `clip_read_image` 的尺寸断言覆盖）。check.mjs 已加整场重试与前置语法检查，  
 > 在能真正前台运行的机器上可直接复跑。
 
-**额外修掉的一个真 bug（比本步内容更重要）**：`async` 命令返回 `Result<(), String>`
-时，响应会被 WebView2/wry **静默丢弃** —— 前端 `await` 永不结算，无报错、无 pagehide、
-每次卡的位置还不一样。排查花了一下午（`sync + ()` 正常，`async + ()` 必丢）。
-`ai_chat` 正是这个签名，等于 AI 对话在真机上整条链路是坏的。
-规矩写进了 `commands.rs` 头注释：**async 命令一律返回有意义的值**。
-顺带把自检里唯一的定时器等待（`__hostQueue` 20×1s）改成同步断言 ——
-定时器在后台窗口会被整体挂起，等待循环会变成"永远卡在第一格"；
-自检的草稿也改写到临时目录（曾滚到 13 份未命名文档，负载不可控）；
+**额外修掉的一个真 bug（比本步内容更重要）**：`async` 命令返回 `Result<(), String>`  
+时，响应会被 WebView2/wry **静默丢弃** —— 前端 `await` 永不结算，无报错、无 pagehide、  
+每次卡的位置还不一样。排查花了一下午（`sync + ()` 正常，`async + ()` 必丢）。  
+`ai_chat` 正是这个签名，等于 AI 对话在真机上整条链路是坏的。  
+规矩写进了 `commands.rs` 头注释：**async 命令一律返回有意义的值**。  
+顺带把自检里唯一的定时器等待（`__hostQueue` 20×1s）改成同步断言 ——  
+定时器在后台窗口会被整体挂起，等待循环会变成"永远卡在第一格"；  
+自检的草稿也改写到临时目录（曾滚到 13 份未命名文档，负载不可控）；  
 `check.mjs` 前置了 `node --check` 语法检查。
 
 ---
@@ -265,7 +269,7 @@ DIAGRAMON_SELFTEST=1 ./target/debug/diagramon.exe                         # 真�
 **要做的事**
 
 - **服务端**（`service/`，FastAPI）：登录、额度、云文档、AI 网关（与既有 `/v1/ai/*` 口径对齐）。
-- **客户端**：登录态；云端视图接真实数据（现在只有说明文字，**不伪造余额**这点要一直保持）；
+- **客户端**：登录态；云端视图接真实数据（现在只有说明文字，**不伪造余额**这点要一直保持）；  
   "保存到云端"；云文档列表与打开。
 - 契约补 cloud 相关命令。
 
@@ -277,50 +281,36 @@ DIAGRAMON_SELFTEST=1 ./target/debug/diagramon.exe                         # 真�
 **涉及面**：大，且依赖 `service/` 仓库的进度。
 
 **落地**：
-- **服务端不用动**：`service/` 仓库已具备 `POST /v1/auth/login`、`GET/PUT/DELETE /v1/documents`、
+
+- **服务端不用动**：`service/` 仓库已具备 `POST /v1/auth/login`、`GET/PUT/DELETE /v1/documents`、  
   `GET /v1/auth/me` 与 AI 网关 —— 客户端直接对上这些口径（camelCase JSON，见下）。
-- **客户端新增 `src-tauri/src/cloud.rs`**（7 条 async 命令）：
+- **客户端新增 `src-tauri/src/cloud.rs`**（7 条 async 命令）：  
   `cloud_login / cloud_logout / cloud_status / cloud_docs_list / cloud_doc_save / cloud_doc_open / cloud_doc_delete`。
-  - **令牌永不回前端**：access/refresh 存凭据库（Windows 上 DPAPI），前端只拿账户快照与文档列表
+  - **令牌永不回前端**：access/refresh 存凭据库（Windows 上 DPAPI），前端只拿账户快照与文档列表  
     —— "已登录"是一个事实陈述，不是页面可伪造的状态；
   - **设备标识**首登生成一次并持久化（服务端用它识别会话）；
-  - `PUT /documents/{id}` **新建与更新同一入口**（`If-Match: 0` = 仅当不存在时创建），
+  - `PUT /documents/{id}` **新建与更新同一入口**（`If-Match: 0` = 仅当不存在时创建），  
     客户端因此要记住每个文档的 `cloudId`，否则"保存到云端"会一直建新份；
-  - `cloud_status` 登录着就去 `/auth/me` 校验一遍 —— 令牌过期/换密码时如实报"掉线了"，
+  - `cloud_status` 登录着就去 `/auth/me` 校验一遍 —— 令牌过期/换密码时如实报"掉线了"，  
     不假装还登录着；
   - 全部命令 **async + 返回有意义的值**（第 5 步发现的 `async + Ok(())` 丢响应坑）。
-- **契约**：`CloudAccount / CloudStatus / CloudDoc / CloudDocList / CloudDocBody`，
+- **契约**：`CloudAccount / CloudStatus / CloudDoc / CloudDocList / CloudDocBody`，  
   事件 `cloud://changed`；设置新增 `cloud.{base_url, device_id}`。
-- **前端云端视图三态如实呈现**：未配置（"去配置"按钮）/ 未登录（内联邮箱密码表单）/
-  已登录（账户 + 额度条 + 文档列表 + 存 / 开 / 删）。配额条用 `<progress>`，数字全部来自服务端。
+- **前端云端视图三态如实呈现**：未配置（"去配置"按钮）/ 未登录（内联邮箱密码表单）/  
+  已登录（账户 + 额度条 + 文档列表 + 存 / 开 / 删）。配额条用 `<progress>`，数字全部来自服务端。  
   **base_url 留空 = 云端整体关闭**，一切照旧离线工作 —— 离线优先是产品底色。
 - mock 后端同步实现（浏览器原型里能走通登录 → 列表 → 存 → 开 → 删）。
 
-**验证**：`cargo test` 137 项全绿（含 `app-core::cloudmap` 5 项契约映射单测）；
-i18n 中英各 643 键一致。
-
-**端到端联调（本机起 service 实测）**：SQLite/PG 本地起 `uvicorn app.main:app`，
-按 `cloud.rs` 的确切口径走完 ① 登录 → ② /auth/me → ③ 新建(If-Match:0) →
-④ 更新(If-Match=上一版) → ⑤ 过期版本保存 → ⑥ 列表 → ⑦ 取回 → ⑧ 删除 → ⑨ 退出。
-**抓到并修掉两个真 bug**：
-1. `cloud_doc_save` 的更新路径不带 If-Match —— 服务端 `If-Match` **省略 = 仅当不存在时创建**，
-   必 409。改成标准乐观锁：文档记 `cloudVersion`（存/取返回的版本号），保存原样带回；
-   409 `version_conflict` 原样透传，不静默覆盖。
-2. `cloud_logout` 没带 `refreshToken` —— 服务端靠它吊销会话族，不带就是幂等空操作
-   （实测 logout 后 access token 仍活到过期）。补上后实测 refresh 返回 `token_revoked`。
-
-另确认两条服务端约束（客户端透传服务端文案即可）：
-- 同名文档 → 409 `name_taken`（"云端已有同名文档，请改名"）；
-- free 套餐 → 403 `membership_required`（"当前计划不含云端存储"）。
-
-映射函数（`AuthOut`/列表项/PUT 响应 → 契约类型）下沉到 **`app-core::cloudmap`**，
-单测用**真实服务端响应的原样 JSON 片段**做夹具 —— pydantic 字段名一漂移，`cargo test` 立刻红。
+**验证**：`cargo test` 133 项全绿；i18n 中英各 643 键一致。  
+端到端（连真实服务端）需要跑起来的 `service/`，本机未做 —— 客户端到服务端的字段口径  
+以 `app/schemas/__init__.py` 的 pydantic 模型为准逐字段对齐（camelCase）。
 
 ---
 
 ## 第 7 步 · 发布 ✅ 已完成（代码侧；签名与更新源是发布方手续）
 
 **要做的事**
+
 
 - **updater 插件 + 更新源**；把"检查更新"从本地 toast 换成真实检查。
 - **三平台打包**：`bundle.active = true`；Windows（msi/nsis）、macOS（dmg）、Linux（AppImage/deb）。
@@ -336,21 +326,23 @@ i18n 中英各 643 键一致。
 **涉及面**：中，但大量外部账号与证书手续。
 
 **落地**：
-- `bundle.active = true`、`targets: "all"`、`createUpdaterArtifacts: true`，
+
+- `bundle.active = true`、`targets: "all"`、`createUpdaterArtifacts: true`，  
   并补齐 `category / shortDescription / longDescription`（打包元数据一次给全）。
-- **updater 插件接入**（`tauri-plugin-updater` + `tauri-plugin-process`），
-  更新源模板 `https://updates.diagramon.app/{{target}}/{{arch}}/{{current_version}}`；
-  能力位加 `updater:default` 与 `process:allow-restart`。
-  **注意**：updater 默认走 rustls→`ring`，在 **windows-gnu** 工具链上 `ar` 编不过
+- **updater 插件接入**（`tauri-plugin-updater` + `tauri-plugin-process`），  
+  更新源模板 `https://updates.diagramon.app/{{target}}/{{arch}}/{{current_version}}`；  
+  能力位加 `updater:default` 与 `process:allow-restart`。  
+  **注意**：updater 默认走 rustls→`ring`，在 **windows-gnu** 工具链上 `ar` 编不过  
   （binutils 的老坑）—— 改用 `--no-default-features --features native-tls`，与 reqwest 同一套 TLS。
-- **"检查更新"从本地 toast 换成真实检查**（shell.js `checkUpdate`）：
-  已最新 / 有新版（确认 → 下载 → 自动重启）/ 出错，三种结果都如实呈现；
+- **"检查更新"从本地 toast 换成真实检查**（shell.js `checkUpdate`）：  
+  已最新 / 有新版（确认 → 下载 → 自动重启）/ 出错，三种结果都如实呈现；  
   updater 抛错绝不装作"已最新"。便携版/浏览器原型没有更新器，也如实说。
 - **文件关联**已在第 4 步写进 `bundle.fileAssociations`（6 个扩展名）。
 
 **发布方仍需办理的手续（代码之外，本机做不了）**：
-1. 生成签名密钥对：`cargo tauri signer generate`，私钥进 `TAURI_SIGNING_PRIVATE_KEY` 环境变量，
-   **公钥填进 `tauri.conf.json` 的 `plugins.updater.pubkey`**（现在是空串 —— 填之前
+
+1. 生成签名密钥对：`cargo tauri signer generate`，私钥进 `TAURI_SIGNING_PRIVATE_KEY` 环境变量，  
+   **公钥填进 `tauri.conf.json` 的 `plugins.updater.pubkey`**（现在是空串 —— 填之前  
    updater 会报错，界面会如实显示"更新失败"，不会装作没更新）；
 2. 更新源域名 `updates.diagramon.app` 落地（静态 JSON + 各平台产物）；
 3. Windows 代码签名证书 / macOS 开发者账号与 notarize。
@@ -361,16 +353,16 @@ i18n 中英各 643 键一致。
 
 **要做的事**
 
-- **语法校验换真 AST**（未做）：现在是手写扫描器（括号/引号/标签配对 + JSON 解析），
-  只能报"能确证"的问题。换成真 Mermaid / DOT 解析器后，能报真实行列与语义问题。
+- **语法校验换真 AST**（未做）：现在是手写扫描器（括号/引号/标签配对 + JSON 解析），  
+  只能报"能确证"的问题。换成真 Mermaid / DOT 解析器后，能报真实行列与语义问题。  
   这是剩余项里最大的一块，需要引入/绑定上游解析器，单独立项做。
-- **画布型大纲**（未做）：现在写着"由图形引擎解析，接线在下一步"（依赖第 2 步的画布实例，
+- **画布型大纲**（未做）：现在写着"由图形引擎解析，接线在下一步"（依赖第 2 步的画布实例，  
   drawio 侧要经 `getScene`/mxfile 反解，Excalidraw 侧要遍历 elements）。
-- **大文档性能**（部分 ✅）：渲染防抖已有、护栏已加；**虚拟滚动与 WASM 实例复用**未做
+- **大文档性能**（部分 ✅）：渲染防抖已有、护栏已加；**虚拟滚动与 WASM 实例复用**未做  
   —— 万行图即使点了"仍要渲染"也仍会卡，护栏只是把"不知道会卡"变成"知道且可选"。
 - **i18n 收口 ✅**：中英各 643 键完全一致（每步新增词条两侧同步加，用脚本比对键集）。
-- **大文档护栏 ✅**：`app-core::guard`（4 项单测）—— 行数/字节超阈值时预览**先问一句**
-  （"仍要渲染"放行），不默默把 WASM 引擎拖死。阈值经 `app_info.limits` 下发，
+- **大文档护栏 ✅**：`app-core::guard`（4 项单测）—— 行数/字节超阈值时预览**先问一句**  
+  （"仍要渲染"放行），不默默把 WASM 引擎拖死。阈值经 `app_info.limits` 下发，  
   数字只存一份（app-core），前端不藏第二份。
 - **无障碍与键盘全通路**：所有交互可键盘到达。
 
@@ -386,13 +378,13 @@ i18n 中英各 643 键一致。
 
 ## 需要你拍板
 
-| # | 问题 | 影响 | 我的倾向 |
-|---|---|---|---|
-| P1 | drawio/Excalidraw 运行时（98MB）随包还是首启下载？ | 第 2 步的实现方式与安装包体积 | **随包**。离线优先是这个产品的底色，且本机代理环境下载不可靠 |
-| P2 | Mermaid→DOT 时 `subgraph → cluster` 会丢 classDef 样式 | 第 3 步 | 转换记录里**注明"样式未迁移"**，不静默丢 |
-| P3 | AI 用量口径（本地 token 计数 vs 网关信用点） | 第 5 / 6 步 | 两者都留，但**标明来源**，别混成一个数 |
-| P4 | 暗色下画布底色 | 第 2 步 | 承载页注入 `--canvas-bg`，导出仍按用户选择（透明/白/跟随） |
-| P5 | 先做哪条：关键路径（2→3）还是先补工作区（4）？ | 整体排序 | 若近期要做真实使用，**先 4**（搜索/树是天天用的）；若目标是"四格式都能编辑"，**先 2→3** |
+| #  | 问题                                                | 影响               | 我的倾向                                                 |
+| -- | ------------------------------------------------- | ---------------- | ---------------------------------------------------- |
+| P1 | drawio/Excalidraw 运行时（98MB）随包还是首启下载？              | 第 2 步的实现方式与安装包体积 | **随包**。离线优先是这个产品的底色，且本机代理环境下载不可靠                     |
+| P2 | Mermaid→DOT 时 `subgraph → cluster` 会丢 classDef 样式 | 第 3 步            | 转换记录里**注明"样式未迁移"**，不静默丢                              |
+| P3 | AI 用量口径（本地 token 计数 vs 网关信用点）                     | 第 5 / 6 步        | 两者都留，但**标明来源**，别混成一个数                                |
+| P4 | 暗色下画布底色                                           | 第 2 步            | 承载页注入 `--canvas-bg`，导出仍按用户选择（透明/白/跟随）                |
+| P5 | 先做哪条：关键路径（2→3）还是先补工作区（4）？                         | 整体排序             | 若近期要做真实使用，**先 4**（搜索/树是天天用的）；若目标是"四格式都能编辑"，**先 2→3** |
 
 ## 可并行性
 

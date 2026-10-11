@@ -59,7 +59,11 @@
     ],
     "category": "DeveloperTool",
     "shortDescription": "AI 优先的多格式图表编辑器",
-    "longDescription": "Diagramon：本地优先的多格式图表编辑器。Mermaid / Graphviz DOT / drawio / Excalidraw 共用一套工作区，AI 是第一公民。"
+    "longDescription": "Diagramon：本地优先的多格式图表编辑器。Mermaid / Graphviz DOT / drawio / Excalidraw 共用一套工作区，AI 是第一公民。",
+    "resources": {
+      "../ui/": "ui/",
+      "../assets/": "assets/"
+    }
   },
   "plugins": {
     "updater": {
