@@ -558,6 +558,36 @@ def main() -> int:
         )
         drain(0.2)
 
+        # ---- 断言 13：设置窗口左右布局（页签列在左、内容在右）----
+        cdp.call("Input.dispatchKeyEvent", {"type": "keyDown", "key": "Escape", "code": "Escape", "windowsVirtualKeyCode": 27}, timeout=15)
+        cdp.call("Input.dispatchKeyEvent", {"type": "keyUp", "key": "Escape", "code": "Escape", "windowsVirtualKeyCode": 27}, timeout=15)
+        drain(0.2)
+        settings_layout = ev(
+            "(async () => {"
+            "  DGM.dialogs.settings('appearance');"
+            "  await new Promise(r => setTimeout(r, 200));"
+            "  const body = document.querySelector('.dialog-body.has-tabs');"
+            "  const tabs = document.querySelector('.dlg-tabs');"
+            "  const pane = document.querySelector('.dlg-pane');"
+            "  if (!body || !tabs || !pane) return 'missing';"
+            "  const cs = getComputedStyle(body);"
+            "  const t = tabs.getBoundingClientRect(), pn = pane.getBoundingClientRect();"
+            "  const out = { display: cs.display, cols: cs.gridTemplateColumns.split(' ').length,"
+            "    tabsLeftOfPane: t.right <= pn.left + 1,"
+            "    sameRow: Math.abs(t.top - pn.top) < 4,"
+            "    tabW: Math.round(t.width) };"
+            "  DGM.dialogs.close();"
+            "  return JSON.stringify(out);"
+            "})()"
+        )
+        log(f"设置窗口布局: {settings_layout}")
+        try:
+            sl = json.loads(settings_layout)
+            if not isinstance(sl, dict) or sl.get("display") != "grid" or not sl.get("tabsLeftOfPane") or not sl.get("sameRow"):
+                fails.append(f"设置窗口未左右布局: {settings_layout}")
+        except Exception as e:
+            log(f"（断言 13 解析失败：{e}）")
+
         close_alive = ev(
             "(() => { const b = document.querySelector('#win-close'); "
             "if (!b) return 'no-btn'; "
