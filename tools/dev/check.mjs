@@ -4,7 +4,15 @@
  *
  *   node tools/dev/check.mjs            全量：单测 + 真机自检
  *   node tools/dev/check.mjs --skip-test  只跑真机自检（省时间）
- *   node tools/dev/check.mjs --test-only  只跑单测
+ *   node tools/dev/check.mjs --test-only  只跑单测（不跑真机自检）
+ *
+ * 环境变量：
+ *   DGM_PYTHON             ui_probe 用的解释器（默认自动找 `python` / `py -3` / `python3`，
+ *                          且**必须能 `import websocket`**；找不到就跳过那一步）
+ *   DGM_SELFTEST_ATTEMPTS  真机自检整场重试次数（默认 6）
+ *   DGM_SELFTEST_TIMEOUT   单场等报告的超时毫秒数（默认 90000）
+ *
+ * 整场输出会留一份到 `ui/.shots/check.log` —— 终端被关掉/滚走了也还能查。
  *
  * 为什么需要它 —— 这条链路上有三个反复踩的坑，每次手搓都会再踩一遍：
  *   1. 上一个实例还开着 ⇒ 链接失败报 `Permission denied`，看起来像代码错了；
@@ -16,7 +24,7 @@
  */
 
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -38,11 +46,36 @@ const C = {  // 只在 TTY 上上色，避免日志里出现乱码
   dim: (s) => (process.stdout.isTTY ? `\x1b[2m${s}\x1b[0m` : s),
   red: (s) => (process.stdout.isTTY ? `\x1b[31m${s}\x1b[0m` : s),
   green: (s) => (process.stdout.isTTY ? `\x1b[32m${s}\x1b[0m` : s),
+  yellow: (s) => (process.stdout.isTTY ? `\x1b[33m${s}\x1b[0m` : s),
   bold: (s) => (process.stdout.isTTY ? `\x1b[1m${s}\x1b[0m` : s),
 };
 void C.on;
 
-const log = (s = "") => process.stdout.write(`${s}\n`);
+/**
+ * 把整场输出留一份到磁盘。
+ *
+ * 教训（2026-10-11 实测）：脚本在第 4 步的**错误分支**里调用了一个不存在的颜色助手
+ * （`C.yellow`），于是 `TypeError` 直接把整场带走 —— 终端上只有一行栈、退出码 2，
+ * 而磁盘上**一点痕迹都没有**（旧报告还在，看起来像"跑过了、50/50 全绿"）。
+ * 有这份日志，"跑完到底跑到哪一步"就是可查的，不必靠回忆终端。
+ */
+const LOG_FILE = join(SHOTS, "check.log");
+/** 被跳过的步骤（最后要如实列出来 —— "跳过"混在"全绿"里看，等于报了个假绿）。 */
+const skipped = [];
+let logBuf = "";
+process.on("exit", () => {
+  try {
+    mkdirSync(SHOTS, { recursive: true });
+    writeFileSync(LOG_FILE, logBuf, "utf8");
+  } catch {
+    /* 日志写不进去不影响结论 */
+  }
+});
+
+const log = (s = "") => {
+  logBuf += `${s}\n`;
+  process.stdout.write(`${s}\n`);
+};
 const step = (s) => log(`\n${C.bold("▸ " + s)}`);
 
 /** 跑一条命令并继承 stdio；返回退出码。 */
@@ -60,8 +93,35 @@ function killStale() {
   }
 }
 
-/** 等文件出现，并连续两次读到相同大小（说明写完了）。 */
-async function waitForReport(timeoutMs) {
+/**
+ * 找一个**真能跑**的 Python 解释器（返回 argv 数组，找不到返回 null）。
+ *
+ * 为什么不能直接 `python`：Windows PowerShell 里 `python` 常被微软商店的占位程序截胡 ——
+ * 命令"存在"，但只会打印 `Python was not found` 并以非 0 退出（实测 9009）。
+ * 所以候选要**真的试跑一次 import**，而不是看命令在不在。
+ *
+ * 试的是 `import websocket` 而不是 `-c pass`：ui_probe 要的就是这个包，
+ * 能起解释器但缺包等于白起 —— 那一步会以更难懂的姿态倒下。
+ */
+function findPython() {
+  const cands = [];
+  if (process.env.DGM_PYTHON) cands.push([process.env.DGM_PYTHON]);
+  if (process.platform === "win32") {
+    cands.push(["python"], ["py", "-3"], ["python3"]);
+  } else {
+    cands.push(["python3"], ["python"]);
+  }
+  for (const c of cands) {
+    const r = spawnSync(c[0], [...c.slice(1), "-c", "import websocket"], {
+      stdio: "ignore",
+      shell: process.platform === "win32",
+    });
+    if (r.status === 0) return c;
+  }
+  return null;
+}
+
+/** 等文件出现，并连续两次读到相同大小（说明写完了）。 */async function waitForReport(timeoutMs) {
   const deadline = Date.now() + timeoutMs;
   let lastSize = -1;
   while (Date.now() < deadline) {
@@ -102,8 +162,33 @@ function dumpDiagnostics() {
   }
 }
 
+/**
+ * 构建。
+ *
+ * **失败要重试一次，而且第二次先 `cargo clean -p`**：本机（rustc 1.99.0 · x86_64-pc-windows-gnu）
+ * 偶发 ICE —— `rustc_metadata\src\rmeta\encoder.rs` panic、退出码 101、`query stack during panic`
+ * 是空的，同一份**没改过**的代码重跑就过（2026-10-11 实测：同一次会话里前面成功、中间失败、
+ * 之后又成功）。不重试的话，验收脚本会被一个与代码无关的抖动拦住，
+ * 而人看到"构建失败 —— 先修编译错误"只会掉头去查源码，白掉一段时间。
+ */
+function build() {
+  const argv = ["build", "-p", "diagramon", "--message-format", "short"];
+  if (run("cargo", argv) === 0) return true;
+  log(C.yellow("  构建失败，第二次先清掉该 crate 的增量产物再试（本机偶发 rustc ICE，通常与代码无关）"));
+  run("cargo", ["clean", "-p", "diagramon"]);
+  if (run("cargo", argv) === 0) {
+    log(C.yellow("  重试成功 —— 刚才那次是编译器抖动，不是代码问题"));
+    skipped.push("第一次构建（rustc ICE，重试后通过）");
+    return true;
+  }
+  return false;
+}
+
 async function main() {
-  if (!testOnly) {
+  // 无条件杀残留：**任何**模式都会走到"构建"那一步，而实例开着就会让链接失败。
+  // （原来只在非 --test-only 时杀，于是 `--test-only` 若碰上实例开着会报
+  // Permission denied —— 看起来像代码错了。）
+  {
     step("杀掉残留实例（否则构建会卡在 Permission denied）");
     killStale();
     // 等久一点：被杀的实例还会带一串 msedgewebview2 子进程，它们松手前
@@ -165,27 +250,37 @@ async function main() {
 
   step("UI 交互冒烟（浏览器原型：启动异常 / 菜单可点 / 分屏比例 / 标签挤压）");
   {
-    const py = process.env.DGM_PYTHON || "python";
-    const r = spawnSync(py, ["tools/dev/ui_probe.py"], {
-      cwd: ROOT,
-      stdio: "inherit",
-      shell: process.platform === "win32",
-      timeout: 180_000,
-    });
-    if (r.status === 1) {
-      // 断言失败：UI 真的死了，拦下整场验收
-      log(C.red("UI 交互冒烟失败（见上方输出）"));
-      process.exit(2);
-    }
-    if (r.status !== 0) {
-      // 探针环境起不来（缺 websocket-client / 没有浏览器）：不拦验收，但要吭声
-      log(C.yellow("  （ui_probe 环境不可用，跳过 —— 需要 python + websocket-client + 本机 Chrome）"));
+    const py = findPython();
+    if (!py) {
+      // 环境缺件**不是**代码的问题：不拦验收，但把"装什么、怎么指路"说清楚 ——
+      // 原来这里只写"环境不可用"，用户看到等于没说。
+      log(C.yellow("  （跳过 ui_probe：没找到带 websocket-client 的 Python）"));
+      log(C.yellow("    试过：python / py -3 / python3。装依赖：<解释器> -m pip install websocket-client"));
+      log(C.yellow("    或显式指定：DGM_PYTHON=<python.exe 的路径> node tools/dev/check.mjs"));
+      skipped.push("UI 交互冒烟（ui_probe）");
+    } else {
+      const r = spawnSync(py[0], [...py.slice(1), "tools/dev/ui_probe.py"], {
+        cwd: ROOT,
+        stdio: "inherit",
+        shell: process.platform === "win32",
+        timeout: 180_000,
+      });
+      if (r.status === 1) {
+        // 断言失败：UI 真的死了，拦下整场验收
+        log(C.red("UI 交互冒烟失败（见上方输出）"));
+        process.exit(2);
+      }
+      if (r.status !== 0) {
+        log(C.yellow(`  （ui_probe 起不来，退出码 ${r.status}，跳过 —— 上面的输出是现场）`));
+        skipped.push("UI 交互冒烟（ui_probe 起不来）");
+      }
     }
   }
 
   step("构建 diagramon");
-  if (run("cargo", ["build", "-p", "diagramon", "--message-format", "short"]) !== 0) {
-    log(C.red("构建失败 —— 先修编译错误"));
+  if (!build()) {
+    log(C.red("构建失败 —— 两次都不行。日志里若有 `rustc' panicked at … rmeta\\encoder.rs`，"));
+    log(C.red("那是编译器 ICE（与代码无关）：先 `cargo clean -p diagramon` 或 `cargo build` 手动重跑一次。"));
     process.exit(2);
   }
   if (!existsSync(EXE)) {
@@ -193,16 +288,22 @@ async function main() {
     process.exit(2);
   }
 
-  if (!testOnly) {
+  // 默认跑单测；`--skip-test` 才跳过。
+  // **`--test-only` 不等于"跳过单测"** —— 它的语义是"只跑单测、不跑真机自检"。
+  // 原来这里写成 `if (!testOnly)`，于是 `--test-only` 一条单测都没跑却打印
+  // "✓ 单测通过"（2026-10-11 修）：最坏的 bug 是**报了个假绿**。
+  if (!skipTest) {
     step("Rust 纯逻辑单测");
     const testArgs = ["test", "-p", "app-ipc", "-p", "app-core", "-p", "assets", "-p", "platform", "-p", "platform-windows", "-p", "ai", "--message-format", "short"];
     if (run("cargo", testArgs) !== 0) {
       log(C.red("单测失败"));
       process.exit(1);
     }
+  } else {
+    skipped.push("Rust 单测（--skip-test）");
   }
   if (testOnly) {
-    log(C.green("\n✓ 单测通过"));
+    log(C.green(skipTest ? "\n✓ 完成（--test-only 与 --skip-test 同时给了，两边都跳过）" : "\n✓ 单测通过（--test-only：未跑真机自检）"));
     process.exit(0);
   }
 
@@ -248,7 +349,6 @@ async function main() {
     app.kill();
     appOut = out;
     try {
-      const { writeFileSync } = await import("node:fs");
       writeFileSync(APP_LOG, out, "utf8");
     } catch {
       /* 日志写不进去不影响结论 */
@@ -259,6 +359,7 @@ async function main() {
 
   if (!report) {
     log(C.red(`自检报告没产出（${ATTEMPTS} 次尝试均超时）`));
+    if (skipped.length) log(C.yellow(`  ⚠ 另有步骤被跳过：${skipped.join(" · ")}`));
     dumpDiagnostics();
     process.exit(2);
   }
@@ -270,6 +371,9 @@ async function main() {
   log("");
   const ok = report.pass === report.total;
   log(`${C.bold(`${report.pass}/${report.total}`)} ${ok ? C.green("✓ 全绿") : C.red("✗ 有失败")}`);
+  if (skipped.length) {
+    log(C.yellow(`  ⚠ 有步骤被跳过（不等于验过）：${skipped.join(" · ")}`));
+  }
   if (!ok) {
     log(C.dim(`  失败项：${report.failed.join(" · ")}`));
     if (appOut) log(C.dim("  应用日志尾部：\n" + appOut.trim().split("\n").slice(-15).join("\n").replace(/^/gm, "    ")));
