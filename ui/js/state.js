@@ -206,7 +206,6 @@ window.DGM = window.DGM || {};
         if (DGM.editor && DGM.editor.loadActive) DGM.editor.loadActive();
         if (DGM.preview && DGM.preview.schedule) DGM.preview.schedule();
         refreshDerived(state.active);
-        emit("open:paths", paths);
       });
     });
   }

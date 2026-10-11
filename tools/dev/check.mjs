@@ -136,6 +136,33 @@ async function main() {
   // 模块求值即抛 → DGM.dialogs 整个没赋值 → 所有对话框（含退出确认）在真机上全灭，
   // 而语法检查、Rust 单测、甚至真机自检（不点对话框）全都是绿的。
   // ui_probe.py 用浏览器原型（mock 后端）抓启动异常 + 程序化点击菜单。
+  step("i18n 引用完整性（t() 用到的键必须在 ZH/EN 都存在；动态前缀在白名单）");
+  {
+    const i18n = readFileSync(join(ROOT, "ui", "js", "i18n.js"), "utf8");
+    const keysOf = (n) => {
+      const i = i18n.indexOf("const " + n + " = {");
+      const j = i18n.indexOf("\n  };", i);
+      const body = i18n.slice(i, j);
+      return new Set([...body.matchAll(/^\s*"([^"]+)":/gm)].map((m) => m[1]));
+    };
+    const ZH = keysOf("ZH"), EN = keysOf("EN");
+    const used = new Set();
+    for (const f of readdirSync(join(ROOT, "ui", "js")).filter((f) => f.endsWith(".js"))) {
+      const code = readFileSync(join(ROOT, "ui", "js", f), "utf8");
+      if (f === "i18n.js") continue;
+      for (const m of code.matchAll(/\bt\(\s*"([^"]+)"/g)) used.add(m[1]);
+    }
+    // 动态拼接前缀（t("side." + view) 等）按前缀放行 —— 前缀下的键由单测/探针覆盖
+    const dynamic = [...used].filter((k) => k.endsWith("."));
+    const statics = [...used].filter((k) => !k.endsWith("."));
+    const miss = statics.filter((k) => !ZH.has(k) || !EN.has(k));
+    if (miss.length) {
+      log(C.red("i18n 缺键（运行时会显示裸键名）：\n" + miss.join("\n")));
+      process.exit(2);
+    }
+    log(C.dim(`  静态键 ${statics.length} 个全覆盖；动态前缀 ${dynamic.length} 个（${dynamic.join(", ")}）`));
+  }
+
   step("UI 交互冒烟（浏览器原型：启动异常 / 菜单可点 / 分屏比例 / 标签挤压）");
   {
     const py = process.env.DGM_PYTHON || "python";
