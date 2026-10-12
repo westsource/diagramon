@@ -450,6 +450,11 @@ function releaseBody() {
     .replaceAll("{{zip_size_mb}}", existsSync(portableZip()) ? mb(portableZip()) : "?");
   if (!body.includes("# 中文") || !body.includes("# English")) die("正文双语段缺失");
   if (!body.includes(setupUrl)) die("正文里没有安装包下载链接（模板里要写 {{setup_url}}）");
+  // 便携包链接同样必须**可点**：Gitee 不传附件，正文没链接等于拿不到便携版
+  // （2026-10-12 就漏过一次：两个 zip 只在正文外当附件躺着）。
+  if (opts.portable && !body.includes(zipUrl)) {
+    die(`正文里没有便携包下载链接（模板里要写 {{zip_url}}）—— Gitee 不传附件，没链接就拿不到 ${basename(portableZip())}`);
+  }
   return body;
 }
 
