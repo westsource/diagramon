@@ -265,6 +265,13 @@ window.DGM = window.DGM || {};
     if (state.cloudRefresh) {
       state.cloudRefresh().catch((e) => note("cloud-refresh-failed " + String((e && e.message) || e)));
     }
+
+    // 检查更新：后台跑一次。**安静模式** —— 出错与"已最新"都不打扰，只有真发现新版才在
+    // 状态栏亮出可点的「有新版本 x.y.z」（见 shell.js::checkUpdate）。延迟 2s 让首帧先落地。
+    note("update:autocheck");
+    if (DGM.shell && DGM.shell.autoCheckUpdate) {
+      setTimeout(() => DGM.shell.autoCheckUpdate(), 2000);
+    }
     note("boot:done");
   }
 

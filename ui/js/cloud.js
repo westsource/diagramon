@@ -334,18 +334,49 @@ window.DGM = window.DGM || {};
   }
 
   /**
+   * 用系统默认浏览器打开外链（`tauri-plugin-opener`；能力位里的 `opener:default`
+   * 已放行 `https` / `http` / `mailto` / `tel`）。
+   *
+   * 返回 true/false —— **不假装成功**：打不开就如实返回 false，由调用方把地址回显出来
+   * 让人手工访问。浏览器原型（mock）里没有 opener，退回 `window.open`（被拦也算失败）。
+   */
+  async function openExternal(url) {
+    const T = window.__TAURI__;
+    const op = T && T.opener;
+    if (op && typeof op.openUrl === "function") {
+      try {
+        await op.openUrl(url);
+        return true;
+      } catch (e) {
+        console.warn("[opener] openUrl 失败：", e);
+        return false;
+      }
+    }
+    try {
+      return !!window.open(url, "_blank", "noopener");
+    } catch (e) {
+      return false;
+    }
+  }
+
+  /**
    * 「没有账号？去官网注册」→ 系统浏览器打开官网注册页。
    *
    * 注册**不在客户端做**：邮箱激活、重发、条款/隐私文案都在网页端，客户端再实现一份
    * 就是第三个要同步的地方。地址**由配置的服务端根地址推导**，不硬编码域名。
-   * 打不开浏览器时把地址回显成**可复制的只读输入框** —— 静默失败等于按了没反应。
+   * 无论打开成功与否都先把地址回显成**可复制的只读输入框** —— 静默失败等于按了没反应。
    */
-  function openRegister() {
+  async function openRegister() {
     const url = registerUrl();
     if (!url) return loginMsg("err", t("dlg.login.noBaseUrl"));
-    DGM.toast({ icon: "globe", title: t("dlg.login.opened"), sub: url });
     fillRegisterUrl(url);
-    loginMsg("ok", t("dlg.login.openFailed"));
+    const ok = await openExternal(url);
+    if (ok) {
+      DGM.toast({ icon: "globe", title: t("dlg.login.opened"), sub: url });
+      loginMsg("ok", t("dlg.login.opened"));
+    } else {
+      loginMsg("err", t("dlg.login.openFailed"));
+    }
   }
 
   function fillRegisterUrl(url) {
@@ -521,6 +552,8 @@ window.DGM = window.DGM || {};
     fmtDot,
     normPath,
     registerUrl,
+    /** 用系统浏览器打开外链（失败返回 false，不假装成功）。也供其它模块复用。 */
+    openExternal,
     ensureTree,
   };
 })();

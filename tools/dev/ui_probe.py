@@ -1003,6 +1003,30 @@ def main() -> int:
             except Exception as e:
                 log(f"（截图 {name} 失败，不影响结论：{e}）")
 
+        # 关于对话框：软件介绍必须真的渲染出来。
+        # 历史 bug 形态：介绍被写成"仅非 mock 模式显示"，于是原型与自检环境里永远看不到它；
+        # 同时确认 mock 警告是**另起一条**（warn 样式），而不是把介绍顶掉。
+        lang0 = ev("(DGM.i18n && DGM.i18n.lang) || 'zh-CN'")
+        ev("(async () => { DGM.i18n.setLang('zh-CN'); DGM.i18n.apply(); DGM.dialogs.about(); "
+           "await new Promise(r => setTimeout(r, 200)); return 1; })()")
+        about = ev(
+            "(() => { const d = document.querySelector('#dialog'); if (!d) return null; "
+            "const cs = [...d.querySelectorAll('.callout')]; "
+            "return JSON.stringify({ hasDesc: d.textContent.indexOf('本地优先的图表编辑器') >= 0, "
+            "mockWarn: cs.some(c => c.classList.contains('warn') && c.textContent.indexOf('mock') >= 0) }); })()"
+        )
+        log(f"关于对话框（介绍 + mock 警告）: {about}")
+        try:
+            a = json.loads(about or "{}")
+            if not a.get("hasDesc"):
+                fails.append("关于对话框里没有软件介绍（dlg.about.desc 没渲染出来）")
+            if not a.get("mockWarn"):
+                fails.append("关于对话框在 mock 模式下没有另起一条 mock 警告")
+        except Exception as e:
+            fails.append(f"关于对话框断言解析失败：{e} / {about}")
+        ev("(async () => { DGM.dialogs.close(); await new Promise(r => setTimeout(r, 80)); return 1; })()")
+        ev(f"DGM.i18n.setLang({json.dumps(lang0)}); DGM.i18n.apply(); 1")
+
         close_alive = ev(
             "(() => { const b = document.querySelector('#win-close'); "
             "if (!b) return 'no-btn'; "

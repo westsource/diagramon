@@ -726,7 +726,8 @@ window.DGM = window.DGM || {};
     const body = `
       <div class="about-top"><span class="hero">${icon("logo", "ico-lg")}</span>
         <div><b>Diagramon</b><small>${esc(t("dlg.about.version"))} ${esc(info.version)} · ${esc(info.platform)}</small></div></div>
-      <div class="callout">${icon("info")}<span>${t(DGM.ipc.isMock ? "dlg.about.mock" : "dlg.about.real")}</span></div>
+      <div class="callout">${icon("info")}<span>${t("dlg.about.desc")}</span></div>
+      ${DGM.ipc.isMock ? `<div class="callout warn">${icon("alert")}<span>${t("dlg.about.mock")}</span></div>` : ""}
       <table class="about-table">
         <tr><th>${esc(t("dlg.about.editor"))}</th><td>CodeMirror 6</td></tr>
         <tr><th>${esc(t("dlg.about.render"))}</th><td>Mermaid (page) · Graphviz WASM (page)</td></tr>

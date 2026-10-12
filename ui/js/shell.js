@@ -733,6 +733,15 @@ window.DGM = window.DGM || {};
     );
     parts.push(`<button class="st" data-a="ai" title="${esc(t("status.aiTip"))}">${icon("sparkles", "ico-sm")}${esc(aiModel ? aiModel.name : t("ai.model.none"))}</button>`);
     parts.push(`<span class="st ro" title="${esc(t("status.usageTip"))}">${icon("bolt", "ico-sm")}${esc(t("status.calls", { n: state.usage.calls }))}</span>`);
+    // 有新版本：启动时后台查到才出现（见 checkUpdate 的 quiet 模式），点它直接进下载安装
+    if (pendingUpdate) {
+      parts.push(
+        `<button class="st accent" data-a="update" title="${esc(t("update.statusTip"))}">` +
+          icon("download", "ico-sm") +
+          esc(t("update.available", { version: pendingUpdate.version })) +
+          `</button>`,
+      );
+    }
     parts.push(`<span class="st-spacer"></span>`);
     parts.push(`<span class="st ${ui.status.kind === "err" ? "err" : ui.status.kind === "warn" ? "warn" : ui.status.kind === "ok" ? "accent" : ""}" id="status-msg">${esc(statusText)}</span>`);
     parts.push(`<span class="st-spacer"></span>`);
@@ -761,6 +770,7 @@ window.DGM = window.DGM || {};
         if (!panels.bottom) togglePanel("bottom", { bottom_tab: "problems" });
         else state.patchSettings({ panels: { bottom_tab: "problems" } });
       } else if (a === "ai") togglePanel("ai");
+      else if (a === "update") installUpdate();
       else if (a === "zoom") DGM.preview.resetZoom();
       else if (a === "layout") popLayouts(b);
     };
@@ -1329,42 +1339,81 @@ window.DGM = window.DGM || {};
     };
   }
 
-  /* ------------------------------------------------------------------ 更新器（第 7 步） */
+  /* ------------------------------------------------------------------ 更新器 */
+
+  /** 后台自动检查发现的可用更新；非空时状态栏出现「有新版本」按钮，点它即下载安装。 */
+  let pendingUpdate = null;
 
   /**
    * 检查更新。走 tauri-plugin-updater（更新源与公钥在 tauri.conf.json）。
    *
-   * 三种结果都如实呈现：已是最新 / 有新版（确认后下载并重启）/ 出错。
-   * 公钥没配或更新源不可达时 updater 会抛错 —— 那是发布方的问题，不要装作"已最新"。
+   * **手动**（帮助 → 检查更新）与**自动**（启动后后台一次）共用这一条路径，区别只在安静与否：
+   *   手动 = 三种结果都如实呈现（已最新 / 有新版 / 出错），绝不装作"已最新"；
+   *   自动 = 安静：出错与"已最新"都不打扰（网络抖动不该在每次启动时弹错），
+   *          只有真发现新版才在状态栏亮出可点的按钮 + 状态栏提示一行。
    */
-  async function checkUpdate() {
+  async function checkUpdate({ quiet = false } = {}) {
     const T = window.__TAURI__;
     const up = T && T.updater;
     if (!up || typeof up.check !== "function") {
-      toast({ icon: "info", title: t("mi.checkUpdate"), sub: t("update.unavailable"), warn: true });
+      if (!quiet) toast({ icon: "info", title: t("mi.checkUpdate"), sub: t("update.unavailable"), warn: true });
       return;
     }
-    status(t("update.checking"), "");
+    if (!quiet) status(t("update.checking"), "");
+    let update = null;
     try {
-      const update = await up.check();
-      if (!update) {
-        status(t("update.upToDate"), "ok");
-        toast({ icon: "check", title: t("update.upToDate"), sub: "" });
+      update = await up.check();
+    } catch (e) {
+      // 自动检查失败保持安静；手动必须报出来 —— 那是发布方/网络的问题，不是"已最新"
+      if (quiet) {
+        console.warn("[update] 自动检查失败：", e);
         return;
       }
-      const yes = await DGM.dialogs.confirm({
-        title: t("update.available", { version: update.version }),
-        body: esc((update.body || "").slice(0, 600)),
-        ok: t("update.install"),
-      });
-      if (!yes) return;
+      status(t("update.failed"), "err");
+      toast({ icon: "alert", title: t("update.failed"), sub: String((e && e.message) || e), warn: true });
+      return;
+    }
+    if (!update) {
+      pendingUpdate = null;
+      renderStatus();
+      if (!quiet) {
+        status(t("update.upToDate"), "ok");
+        toast({ icon: "check", title: t("update.upToDate"), sub: "" });
+      }
+      return;
+    }
+    pendingUpdate = update;
+    renderStatus(); // 状态栏亮出「有新版本 x.y.z」
+    if (quiet) status(t("update.available", { version: update.version }), "warn");
+    else toast({ icon: "download", title: t("update.available", { version: update.version }), sub: t("update.statusTip") });
+  }
+
+  /** 状态栏那个「有新版本」按钮：有候选项就直接装，没有（理论上不会）就先查一次。 */
+  function installUpdate() {
+    if (!pendingUpdate) return checkUpdate();
+    return doInstall();
+  }
+
+  /** 确认 → 下载 → 安装 → 重启。手动与状态栏两条入口共用。 */
+  async function doInstall() {
+    const update = pendingUpdate;
+    if (!update) return;
+    const yes = await DGM.dialogs.confirm({
+      title: t("update.available", { version: update.version }),
+      body: esc((update.body || "").slice(0, 600)),
+      ok: t("update.install"),
+    });
+    if (!yes) return;
+    try {
       status(t("update.downloading"), "");
       await update.downloadAndInstall((ev) => {
         if (ev.event === "Started") status(t("update.downloading"), "");
         else if (ev.event === "Finished") status(t("update.restarting"), "ok");
       });
-      // 装完自动重启（tauri-plugin-process）；杀不掉就提示用户手动开
-      const proc = T.process;
+      // 装完自动重启（tauri-plugin-process）。注意：Windows 上插件在启动安装器后**自己就会
+      // exit(0)**（真正把应用拉起来的是 NSIS 的 /R），所以这一句通常走不到 —— 留着给其它平台与兜底。
+      const T = window.__TAURI__;
+      const proc = T && T.process;
       if (proc && typeof proc.relaunch === "function") await proc.relaunch();
       else toast({ icon: "refresh", title: t("update.installed"), sub: t("update.restartManual") });
     } catch (e) {
@@ -1424,6 +1473,10 @@ window.DGM = window.DGM || {};
     renderActivity,
     renderStatus,
     renderFsBanner,
+    /** 启动后由 main.js 调一次：安静模式的检查更新（失败/已最新都不打扰）。 */
+    autoCheckUpdate: () => checkUpdate({ quiet: true }),
+    /** 手动检查（帮助菜单 / 命令面板）。 */
+    checkUpdate,
     applyLayoutVars,
     applyMockBadge,
     bind,
