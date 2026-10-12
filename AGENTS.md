@@ -46,10 +46,11 @@ node tools/release.mjs --help
 
 命令一律用 `.exe` 直调、**不要 `shell:true`**（Windows 上 node 在 shell 模式下把参数 join 成串丢给 cmd.exe、不加引号，`-c "…"` 这类参数会被切碎）；需要命令行里的多行/含反引号的文本（比如提交信息）**写进文件**再 `-F`。令牌按 **host** 从 `~/.git-credentials` 取（该文件行序会被 git 自己重排，不能靠行序），任何要打印的 URL 先脱敏（Gitee 把令牌放在 query 里）。
 
-### 两个只在实战里才会遇到的坑（脚本已挡住，别绕）
+### 三个只在实战里才会遇到的坑（脚本已挡住，别绕）
 
 - **`prepack` 会删掉真机自检报告**（那玩意就在 `ui/.shots/` 里）⇒ **每次发版前都要重新跑一次 `check.mjs`**；preflight 的"报告比源码新"门禁本质上就是这么用的。
 - **已发布的 tag 不要随手前移**。发新版时 `tag`/`push` 会 force 前移 `v<版本>`，这**必须显式 `--move-tag`**；而**只改文档/README 的重发版**压根不该跑这两步（tag 留在发布提交上，主线照常前进）。脚本在 tag 已存在且不指向当前 `main` 时会拒绝，`push` 也会自动跳过 tag 推送。
+- **脚本对分支用普通 `push`（不 force）**。所以如果你 **amend 了已经推过的提交**，再推会被拒（`non-fast-forward`）—— 这是有意的提醒，不是脚本坏了。收拾办法：手工 `git push --force-with-lease=<远端当前 sha> <remote> <branch>`；更省事的是**别在推送之后 amend**。
 
 ## 2. 验收：一条命令 `node tools/dev/check.mjs`
 
