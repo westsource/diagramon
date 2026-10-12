@@ -87,14 +87,24 @@ if (!/^\d+\.\d+\.\d+$/.test(VERSION)) die(`版本号要形如 3.0.1（收到 "${
 
 // ── 子进程 ────────────────────────────────────────────────────────────────
 let capSeq = 0;
-/** 同步捕获输出。走临时文件而不是 pipe —— 本机沙箱下 spawnSync+pipe 会 EBUSY。 */
+/**
+ * 同步捕获输出。走临时文件而不是 pipe —— 本机沙箱下 spawnSync+pipe 会 EBUSY。
+ *
+ * ⚠️ **stdout 与 stderr 必须分开写**（各一个 fd）。合并写会出人命：`git rev-list -n1 v9.9.9`
+ * 在 tag 不存在时往 stderr 打 `fatal: …`，合并后 `out` 里就有内容，于是"这个 tag 不存在"
+ * 被判成"已存在于 fatal:" —— 2026-10-12 实测撞到，直接导致**任何新版本都打不出 tag**。
+ */
 function capture(cmd, args, { cwd = ROOT, env = {} } = {}) {
-  const tmp = join(TMP_DIR, `cap-${++capSeq}.txt`);
-  const fd = openSync(tmp, "w");
-  const r = spawnSync(cmd, args, { cwd, env: { ...process.env, ...env }, stdio: ["ignore", fd, fd], windowsHide: true });
-  closeSync(fd);
-  const out = existsSync(tmp) ? readFileSync(tmp, "utf8") : "";
-  return { code: r.status, out };
+  const n = ++capSeq;
+  const outTmp = join(TMP_DIR, `cap-${n}.out`);
+  const errTmp = join(TMP_DIR, `cap-${n}.err`);
+  const outFd = openSync(outTmp, "w");
+  const errFd = openSync(errTmp, "w");
+  const r = spawnSync(cmd, args, { cwd, env: { ...process.env, ...env }, stdio: ["ignore", outFd, errFd], windowsHide: true });
+  closeSync(outFd);
+  closeSync(errFd);
+  const read = (p) => (existsSync(p) ? readFileSync(p, "utf8") : "");
+  return { code: r.status, out: read(outTmp), err: read(errTmp) };
 }
 /** 跑一条命令并把输出实时透到屏幕与日志（构建这类长任务用）。此处**不使用 shell**。 */
 function runLive(cmd, args, { cwd = ROOT, env = {}, label = "" } = {}) {
@@ -115,10 +125,18 @@ function must(code, what) { if (code !== 0) die(`${what} 失败（退出码 ${co
 
 function git(args, o = {}) {
   const r = capture("git", args, o);
-  if (r.code !== 0) die(`git ${args.join(" ")} 失败：${r.out.trim().split("\n").slice(-3).join(" | ")}`);
+  if (r.code !== 0) {
+    const detail = (r.out + r.err).trim().split("\n").slice(-3).join(" | ");
+    die(`git ${args.join(" ")} 失败：${detail}`);
+  }
   return r.out.trim();
 }
 function gitOpt(args, o = {}) { return capture("git", args, o); }
+/** tag 是否存在（存在则返回它指向的 sha，否则返回空串）。**必须看退出码** —— 见 capture 的注释。 */
+function tagSha0(tag) {
+  const r = gitOpt(["rev-list", "-n1", tag]);
+  return r.code === 0 ? r.out.trim() : "";
+}
 function gitEnv(remote) {
   const base = { GIT_TERMINAL_PROMPT: "0" };
   const cfg = ["-c", "credential.helper=store"];
@@ -255,10 +273,10 @@ async function preflight() {
   }
 
   // 6. tag 现状
-  const ex = gitOpt(["rev-list", "-n1", TAG]);
-  if (ex.code === 0 && ex.out.trim()) {
-    const mainSha = git(["rev-parse", opts.branch]);
-    warn(`${TAG} 已存在（${ex.out.trim().slice(0, 7)}）${ex.out.trim() === mainSha ? "，正好指向当前 " + opts.branch : "，与当前 " + opts.branch + " 不同 —— 真要前移得加 --move-tag（只改文档就别跑 tag/push）"}`);
+  const ex = tagSha0(TAG);
+  const mainSha0 = git(["rev-parse", opts.branch]);
+  if (ex) {
+    warn(`${TAG} 已存在（${ex.slice(0, 7)}）${ex === mainSha0 ? "，正好指向当前 " + opts.branch : "，与当前 " + opts.branch + " 不同 —— 真要前移得加 --move-tag（只改文档就别跑 tag/push）"}`);
   } else log(`✓ ${TAG} 尚不存在`);
 
   // 7. 资产挂载点（prepack 会再校验，这里先给个早退）
@@ -337,7 +355,7 @@ async function manifest() {
 
 async function tag() {
   step("tag · 前移到发版提交");
-  const ex = gitOpt(["rev-list", "-n1", TAG]).out.trim();
+  const ex = tagSha0(TAG);
   const mainSha = git(["rev-parse", opts.branch]);
   // 闸门：tag 已存在且不指向当前 main ⇒ 很可能已经发布过了。force 前移会把"已发布的 tag"挪走，
   // 必须显式 --move-tag。只改文档的重发版不要跑这一步（tag 应留在发布提交上）。
@@ -393,7 +411,7 @@ async function branches() {
 async function push() {
   step("push · 双远端（GitHub main + Gitee master）");
   const mainSha = opts.dryRun ? "" : git(["rev-parse", opts.branch]);
-  const tagSha = opts.dryRun ? "" : gitOpt(["rev-list", "-n1", TAG]).out.trim();
+  const tagSha = opts.dryRun ? "" : tagSha0(TAG);
   // 没在本场打过 tag 时，只有 tag 本来就指着当前 main 才推它 —— 否则会把已发布的 tag 挪走
   const withTag = opts.dryRun || opts.tagMoved || (tagSha && tagSha === mainSha);
   if (!withTag && !opts.dryRun) {
