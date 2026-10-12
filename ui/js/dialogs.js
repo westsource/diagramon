@@ -929,6 +929,103 @@ window.DGM = window.DGM || {};
     });
   }
 
+  /* ================================================================== 更新 */
+
+  /**
+   * 更新窗口：在**同一个窗口**里走完「看更新说明 → 下载 → 安装」，中途不关窗。
+   *
+   *   ask     ：版本 + 更新说明 + [取消] [下载并安装]
+   *   prog    ：进度条 + 「正在下载 42%」+ 关窗不中断的说明 + [关闭]
+   *   stalled ：卡住时多给一个 [用浏览器手动下载]
+   *
+   * 它是**更新流程唯一的界面**：菜单「检查更新」查到新版、以及点状态栏那一项，都走到这里。
+   * 调用方（shell.js 的更新器）用返回的控制器推进：
+   *
+   *   const d = DGM.dialogs.updateDialog({ version, notes, startPhase, onInstall, onManual, onClose });
+   *   d.setProgress({ text, pct, hint });   // 下载中反复调（内部 150ms 限流，免得每块都重排）
+   *   d.stalled({ mb });  d.finish();  d.fail(msg);
+   */
+  function updateDialog(opts) {
+    const o = opts || {};
+    const version = String(o.version || "?");
+    const notes = String(o.notes || "").slice(0, 600);
+    let phase = o.startPhase === "prog" ? "prog" : "ask";
+    let closed = false;
+
+    function render() {
+      if (closed) return;
+      const isAsk = phase === "ask";
+      const body = isAsk
+        ? `<div class="callout">${icon("info")}<span>${esc(notes || t("update.available", { version }))}</span></div>`
+        : `<div class="upd-prog">
+             <p class="upd-text" id="upd-text">${esc(t("update.downloading"))}</p>
+             <progress id="upd-bar" max="100" value="0"></progress>
+             <p class="upd-hint" id="upd-hint">${esc(t("update.closeKeepsDownloading"))}</p>
+           </div>`;
+      const footHtml = isAsk
+        ? `<button class="btn ghost" data-act="later">${esc(t("common.cancel"))}</button>` +
+          `<button class="btn primary" data-act="go">${esc(t("update.install"))}</button>`
+        : (phase === "stalled" ? `<button class="btn" data-act="manual">${esc(t("update.manualBtn"))}</button>` : "") +
+          `<button class="btn ghost" data-act="hide">${esc(t("common.close"))}</button>`;
+      openDialog(head(isAsk ? t("update.available", { version }) : t("update.downloading"), "download") +
+        `<div class="dialog-body">${body}</div>` + foot("", footHtml), false);
+      wire((act) => {
+        if (act === "go") { phase = "prog"; render(); if (o.onInstall) o.onInstall(); return; }
+        if (act === "manual") { if (o.onManual) o.onManual(); return; }
+        closeDialog();
+      });
+    }
+    function closeDialog() {
+      if (closed) return;
+      closed = true;
+      close();
+      if (o.onClose) o.onClose();
+    }
+    render();
+
+    return {
+      isOpen: () => !closed,
+      phase: () => phase,
+      /**
+       * 就地更新进度（调用方负责限流 —— shell.js 那边有带 trailing-edge 的节流，
+       * 所以这里**不再自己丢帧**：这里再丢一次就会把最终值吃掉）。
+       */
+      setProgress(p) {
+        if (closed || phase === "ask") return;
+        const el = $("#upd-text");
+        if (el && p && p.text != null) el.textContent = p.text;
+        const bar = $("#upd-bar");
+        if (bar && p && p.pct != null) bar.value = Math.max(0, Math.min(100, p.pct));
+        const hint = $("#upd-hint");
+        if (hint && p && p.hint != null) hint.textContent = p.hint;
+      },
+      /** 卡住：换说明 + 把「用浏览器手动下载」按钮加出来（需要重画尾部按钮）。 */
+      stalled(p) {
+        if (closed) return;
+        phase = "stalled";
+        render();
+        this.setProgress(p);
+      },
+      finish() {
+        if (closed || phase === "ask") return;
+        const el = $("#upd-text");
+        if (el) el.textContent = t("update.restarting");
+        const bar = $("#upd-bar");
+        if (bar) bar.value = 100;
+        const hint = $("#upd-hint");
+        if (hint) hint.textContent = t("update.willClose");
+      },
+      fail(msg) {
+        if (closed || phase === "ask") return;
+        const el = $("#upd-text");
+        if (el) el.textContent = t("update.failed") + (msg ? "：" + msg : "");
+        const hint = $("#upd-hint");
+        if (hint) hint.textContent = "";
+      },
+      close: closeDialog,
+    };
+  }
+
   /* ================================================================== DOT 布局 */
 
   function layout() {
@@ -955,6 +1052,7 @@ window.DGM = window.DGM || {};
     settings,
     input,
     confirm,
+    updateDialog,
     keys,
     guide,
     about,

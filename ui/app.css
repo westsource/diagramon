@@ -2044,3 +2044,9 @@ html[data-theme="dark"] .canvas-stage[data-engine="dot"] svg ellipse { stroke: v
 .login-url-row input:focus, .lurl-row input:focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); outline: none; }
 .link-btn { color: var(--accent); font-size: var(--fs-sm); cursor: pointer; background: none; border: 0; padding: 0; }
 .link-btn:hover { text-decoration: underline; }
+
+/* ── 更新窗口：下载进度就地更新（dialogs.js::updateDialog）── */
+.upd-prog { margin-top: 2px; }
+.upd-text { margin: 0 0 8px; font-size: var(--fs-md); color: var(--ink); }
+.upd-prog progress { width: 100%; height: 8px; accent-color: var(--accent); }
+.upd-hint { margin: 8px 0 0; font-size: var(--fs-xs); color: var(--muted); line-height: 1.5; }

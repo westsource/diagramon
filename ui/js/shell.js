@@ -733,12 +733,15 @@ window.DGM = window.DGM || {};
     );
     parts.push(`<button class="st" data-a="ai" title="${esc(t("status.aiTip"))}">${icon("sparkles", "ico-sm")}${esc(aiModel ? aiModel.name : t("ai.model.none"))}</button>`);
     parts.push(`<span class="st ro" title="${esc(t("status.usageTip"))}">${icon("bolt", "ico-sm")}${esc(t("status.calls", { n: state.usage.calls }))}</span>`);
-    // 有新版本：启动时后台查到才出现（见 checkUpdate 的 quiet 模式），点它直接进下载安装
-    if (pendingUpdate) {
+    // 有新版本 / 正在下载 / 下载卡住：都体现在这一颗按钮上，点它**打开更新窗口**
+    // （说明、进度、手动下载都在那个窗口里 —— 状态栏只负责"回到窗口"）。
+    if (pendingUpdate || updateState !== "idle") {
+      const cls = updateState === "stalled" ? "st warn" : "st accent";
+      const ico = updateState === "stalled" ? "alert" : updateState === "finished" ? "check" : "download";
       parts.push(
-        `<button class="st accent" data-a="update" title="${esc(t("update.statusTip"))}">` +
-          icon("download", "ico-sm") +
-          esc(t("update.available", { version: pendingUpdate.version })) +
+        `<button class="${cls}" data-a="update" title="${esc(updateItemTip())}">` +
+          icon(ico, "ico-sm") +
+          esc(updateLabelText()) +
           `</button>`,
       );
     }
@@ -770,7 +773,8 @@ window.DGM = window.DGM || {};
         if (!panels.bottom) togglePanel("bottom", { bottom_tab: "problems" });
         else state.patchSettings({ panels: { bottom_tab: "problems" } });
       } else if (a === "ai") togglePanel("ai");
-      else if (a === "update") installUpdate();
+      // 状态栏那一项只做一件事：打开更新窗口（说明 / 进度 / 手动下载都在那个窗口里）
+      else if (a === "update") openUpdateDialog();
       else if (a === "zoom") DGM.preview.resetZoom();
       else if (a === "layout") popLayouts(b);
     };
@@ -1341,16 +1345,110 @@ window.DGM = window.DGM || {};
 
   /* ------------------------------------------------------------------ 更新器 */
 
-  /** 后台自动检查发现的可用更新；非空时状态栏出现「有新版本」按钮，点它即下载安装。 */
+  /** 后台自动检查发现的可用更新；非空时状态栏出现入口，点它打开更新窗口。 */
   let pendingUpdate = null;
+  /** 当前打开的更新窗口控制器（null = 没开）。**更新流程唯一的界面**。 */
+  let updateDlg = null;
+  /** 下载进度 `{got, total}`（字节）。状态栏那一项与更新窗口都读它，不许各写一套。 */
+  let updateProgress = null;
+  /** idle | downloading | stalled | finished */
+  let updateState = "idle";
+  let updateBusy = false;
+  let updateWatchdog = null;
+  let updateLastEvent = 0;
+  let updateLastPct = -1;
+  let updateLastRender = 0;
+  /**
+   * 超过这么久没有新数据就认为卡住了。**插件本身没有下载超时**（config 里没有 timeout 字段），
+   * 而且 `Started` 只在**第一个数据块到达后**才发 —— 连接卡在建立阶段时连 Started 都没有，
+   * 不自己检测就是"永远静默地卡着"（2026-10-12 用户实测报的就是"点了没反应"）。
+   */
+  const UPDATE_STALL_MS = 20000;
+
+  function updateMb(bytes) { return ((bytes || 0) / 1048576).toFixed(1); }
+
+  /** 进度文案（状态栏那一项与更新窗口共用同一份文字）。 */
+  function updateLabelText() {
+    if (updateState === "stalled") return t("update.stalledLabel", { mb: updateMb(updateProgress && updateProgress.got) });
+    if (updateState === "idle") return pendingUpdate ? t("update.available", { version: pendingUpdate.version }) : "";
+    const got = updateProgress ? updateProgress.got : 0;
+    const total = updateProgress ? updateProgress.total : 0;
+    if (total > 0) return t("update.downloadingPct", { pct: Math.min(100, Math.floor((got / total) * 100)) });
+    return t("update.downloadingMb", { mb: updateMb(got) });
+  }
+
+  function updatePct() {
+    if (updateState === "finished") return 100;
+    const total = updateProgress ? updateProgress.total : 0;
+    if (!total) return null;
+    return Math.min(100, Math.floor((updateProgress.got / total) * 100));
+  }
+
+  /** 状态栏那一项的提示语：它只负责"回到更新窗口"，动作本身不再分叉。 */
+  function updateItemTip() {
+    if (updateState === "downloading" || updateState === "finished") return t("update.busyTip");
+    if (updateState === "stalled") return t("update.manualBtn");
+    return t("update.statusTip");
+  }
+
+  /**
+   * Progress 事件是**逐块**来的（52MB 可能上千次）：重渲染要限流。
+   *
+   * ⚠️ 限流**必须补最后一帧**（trailing edge）：只做 leading-edge 会把最终值丢掉 ——
+   * 实测就是进度条停在 0% 而状态栏已经是 25%（写完测试才发现的）。
+   */
+  let updatePaintTimer = null;
+
+  function paintUpdate() {
+    updateLastRender = Date.now();
+    const label = updateLabelText();
+    const pct = updatePct();
+    const hint = updateState === "stalled" ? t("update.stalledHint", { mb: updateMb(updateProgress && updateProgress.got) }) : null;
+    if (updateDlg && updateDlg.isOpen()) updateDlg.setProgress({ text: label, pct, hint });
+    renderStatus();
+  }
+
+  /** 只刷状态栏那一项，**不碰更新窗口** —— 窗口有自己的终态（正在重启 / 更新失败）要留住。 */
+  function paintStatusItem() {
+    updateLastRender = Date.now();
+    renderStatus();
+  }
+
+  function syncUpdateUI(force) {
+    if (force) {
+      if (updatePaintTimer) { clearTimeout(updatePaintTimer); updatePaintTimer = null; }
+      return paintUpdate();
+    }
+    if (Date.now() - updateLastRender >= 150) return paintUpdate();
+    if (!updatePaintTimer) updatePaintTimer = setTimeout(() => { updatePaintTimer = null; paintUpdate(); }, 160);
+  }
+
+  function stopUpdateWatchdog() {
+    if (updateWatchdog) { clearInterval(updateWatchdog); updateWatchdog = null; }
+  }
+
+  function startUpdateWatchdog() {
+    stopUpdateWatchdog();
+    updateLastEvent = Date.now();
+    updateWatchdog = setInterval(() => {
+      if (updateState !== "downloading") return;
+      if (Date.now() - updateLastEvent < UPDATE_STALL_MS) return;
+      updateState = "stalled";
+      const mb = updateMb(updateProgress && updateProgress.got);
+      DGM.note(`update:stalled got=${mb}MB total=${updateProgress ? updateProgress.total : "?"}`);
+      if (updateDlg && updateDlg.isOpen()) updateDlg.stalled({ text: updateLabelText(), pct: updatePct(), hint: t("update.stalledHint", { mb }) });
+      paintStatusItem();
+    }, 5000);
+  }
 
   /**
    * 检查更新。走 tauri-plugin-updater（更新源与公钥在 tauri.conf.json）。
    *
-   * **手动**（帮助 → 检查更新）与**自动**（启动后后台一次）共用这一条路径，区别只在安静与否：
+   * **手动**（帮助 → 检查更新）与**自动**（启动后后台一次）共用这一条路径：
    *   手动 = 三种结果都如实呈现（已最新 / 有新版 / 出错），绝不装作"已最新"；
+   *          查到新版**直接打开更新窗口**（说明 + 下载按钮都在里面）。
    *   自动 = 安静：出错与"已最新"都不打扰（网络抖动不该在每次启动时弹错），
-   *          只有真发现新版才在状态栏亮出可点的按钮 + 状态栏提示一行。
+   *          只有真发现新版才把状态栏那一项点亮。
    */
   async function checkUpdate({ quiet = false } = {}) {
     const T = window.__TAURI__;
@@ -1383,42 +1481,119 @@ window.DGM = window.DGM || {};
       return;
     }
     pendingUpdate = update;
-    renderStatus(); // 状态栏亮出「有新版本 x.y.z」
-    if (quiet) status(t("update.available", { version: update.version }), "warn");
-    else toast({ icon: "download", title: t("update.available", { version: update.version }), sub: t("update.statusTip") });
+    status(t("update.available", { version: update.version }), "warn");
+    if (quiet) renderStatus();
+    else openUpdateDialog();
   }
 
-  /** 状态栏那个「有新版本」按钮：有候选项就直接装，没有（理论上不会）就先查一次。 */
-  function installUpdate() {
+  /**
+   * 打开更新窗口 —— **更新流程唯一的入口**：菜单查到新版走它、点状态栏那一项也走它。
+   * 下载进行中再点，就把窗口开回进度那一屏（用户关过窗口也能回来）。
+   */
+  function openUpdateDialog() {
     if (!pendingUpdate) return checkUpdate();
-    return doInstall();
+    if (updateDlg && updateDlg.isOpen()) return;
+    const running = updateState !== "idle";
+    updateDlg = DGM.dialogs.updateDialog({
+      version: pendingUpdate.version,
+      notes: pendingUpdate.body,
+      startPhase: running ? "prog" : "ask",
+      onInstall: () => beginUpdateDownload(),
+      onManual: () => openUpdatePage(),
+      // 关窗**不清状态**：下载继续，状态栏那一项仍在报进度，点它还能回来
+      onClose: () => { updateDlg = null; },
+    });
+    if (running) syncUpdateUI(true);
   }
 
-  /** 确认 → 下载 → 安装 → 重启。手动与状态栏两条入口共用。 */
-  async function doInstall() {
+  /** 卡住时的逃生口：用系统浏览器直接下安装包（`rawJson` 里就有本平台的 url）。 */
+  function openUpdatePage() {
+    const rj = pendingUpdate && pendingUpdate.rawJson;
+    const p = rj && rj.platforms && (rj.platforms["windows-x86_64"] || rj.platforms.windows);
+    const url = (p && p.url) || "";
+    DGM.note(`update:manual-open url=${url || "(rawJson 里没找到 url)"}`);
+    if (!url) {
+      toast({ icon: "alert", title: t("update.manualBtn"), sub: t("update.stalledTitle"), warn: true });
+      return;
+    }
+    if (DGM.cloud && DGM.cloud.openExternal) DGM.cloud.openExternal(url);
+    else toast({ icon: "info", title: t("update.manualBtn"), sub: url });
+  }
+
+  /**
+   * 真的开始下载并安装。由**更新窗口**里的「下载并安装」调用（不再有独立的确认框：
+   * 说明与按钮就在同一个窗口里，点完就地变成进度）。
+   */
+  async function beginUpdateDownload() {
     const update = pendingUpdate;
-    if (!update) return;
-    const yes = await DGM.dialogs.confirm({
-      title: t("update.available", { version: update.version }),
-      body: esc((update.body || "").slice(0, 600)),
-      ok: t("update.install"),
-    });
-    if (!yes) return;
+    if (!update || updateBusy) return;
+    updateBusy = true;
+    updateState = "downloading";
+    updateProgress = { got: 0, total: 0 };
+    updateLastPct = -1;
+    status(t("update.downloading"), "");
+    DGM.note(`update:install-start version=${update.version}`);
+    startUpdateWatchdog();
+    syncUpdateUI(true);
+
     try {
-      status(t("update.downloading"), "");
       await update.downloadAndInstall((ev) => {
-        if (ev.event === "Started") status(t("update.downloading"), "");
-        else if (ev.event === "Finished") status(t("update.restarting"), "ok");
+        // 复位之后飘进来的迟到事件一律忽略（写过测试才发现：不加这句会在 null 上取属性）
+        if (updateState === "idle") return;
+        updateLastEvent = Date.now();
+        if (updateState === "stalled") updateState = "downloading"; // 又动了，撤掉"卡住"
+        if (ev.event === "Started") {
+          updateProgress = { got: 0, total: (ev.data && ev.data.contentLength) || 0 };
+          DGM.note(`update:started total=${updateProgress.total || "?"}`);
+          status(t("update.downloading"), "");
+          syncUpdateUI(true);
+          return;
+        }
+        if (ev.event === "Progress") {
+          updateProgress.got += (ev.data && ev.data.chunkLength) || 0;
+          const total = updateProgress.total;
+          if (total > 0) {
+            const pct = Math.floor((updateProgress.got / total) * 100);
+            if (pct >= updateLastPct + 10) { updateLastPct = pct - (pct % 10); DGM.note(`update:progress ${pct}%`); }
+          }
+          status(updateLabelText(), "");
+          syncUpdateUI(false);
+          return;
+        }
+        if (ev.event === "Finished") {
+          updateState = "finished";
+          stopUpdateWatchdog();
+          // Finished 之后不会再有 Progress，把 got 补到 total，否则进度停在上一个整块上
+          if (updateProgress) updateProgress.got = updateProgress.total || updateProgress.got;
+          DGM.note("update:finished");
+          status(t("update.restarting"), "ok");
+          if (updateDlg && updateDlg.isOpen()) updateDlg.finish();
+          paintStatusItem();
+        }
       });
-      // 装完自动重启（tauri-plugin-process）。注意：Windows 上插件在启动安装器后**自己就会
-      // exit(0)**（真正把应用拉起来的是 NSIS 的 /R），所以这一句通常走不到 —— 留着给其它平台与兜底。
+      // 装完自动重启（tauri-plugin-process）。注意：Windows 上插件**启动安装器后自己就 exit(0)**
+      // （updater.rs:979），真正把应用拉起来的是 NSIS 的 /R —— 这一段通常走不到，留给其它平台与兜底。
       const T = window.__TAURI__;
       const proc = T && T.process;
       if (proc && typeof proc.relaunch === "function") await proc.relaunch();
       else toast({ icon: "refresh", title: t("update.installed"), sub: t("update.restartManual") });
+      // 能走到这儿说明**没有** exit(0)（非 Windows，或安装器没起来）⇒ 复位状态，
+      // 别让界面永远卡在"下载中"、连重试都点不动。
+      stopUpdateWatchdog();
+      updateState = "idle";
+      updateProgress = null;
+      updateBusy = false;
+      paintStatusItem(); // 窗口保持 finish() 写下的"正在重启"，别刷回"有新版本"
     } catch (e) {
+      stopUpdateWatchdog();
+      updateState = "idle";
+      updateProgress = null;
+      updateBusy = false;
+      DGM.note("update:failed " + String((e && e.message) || e));
       status(t("update.failed"), "err");
+      if (updateDlg && updateDlg.isOpen()) updateDlg.fail(String((e && e.message) || e));
       toast({ icon: "alert", title: t("update.failed"), sub: String((e && e.message) || e), warn: true });
+      paintStatusItem(); // 同上：窗口留"更新失败"，状态栏回到"有新版本"（可重试）
     }
   }
 
