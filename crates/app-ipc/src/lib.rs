@@ -172,7 +172,9 @@ impl Default for PanelPrefs {
     fn default() -> Self {
         Self {
             activitybar: true,
-            sidebar: true,
+            // 侧栏**默认收起**：这是画布为主的编辑器，第一次打开先给足画布；
+            // 需要资源管理器时点左侧活动栏的图标或 Ctrl+B。活动栏保留 —— 它是重新打开的入口。
+            sidebar: false,
             sidebar_view: "explorer".into(),
             ai: true,
             bottom: true,

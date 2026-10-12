@@ -446,7 +446,10 @@ window.DGM = window.DGM || {};
   }
 
   function pAI() {
-    const ai = state.ai();
+    // 渲染必须读**草稿**：add/remove 改的是 draftAi，而这一页按表单值回写。
+    // 曾经由 state.ai() 渲染 ⇒ 点「Add model」后行数不变、草稿里的新模型根本不显示，
+    // 用户看到的就是"点了没反应"（2026-10-12 实测确认）。
+    const ai = draftAi || state.ai();
     const models = ai.models || [];
     // 「本地一个模型都没有」时那句提示要**跟着云状态走**：云网关接好之后，
     // "本版本只能用 BYOK" 就成了假话（会把已登录用户当成没登录）。
@@ -484,7 +487,11 @@ window.DGM = window.DGM || {};
     // 「默认模型」要**把网关别名也列出来**：它可能正指向某个别名，
     // 只列本地那份会让这个 select 空着选不中 —— 而这一页是按表单值回写的，
     // 一旦保存就会把用户的默认静默改成列表里的第一个本地模型。
-    const choices = state.modelChoices();
+    // 本地那组用**草稿**：刚加还没保存的模型也得能选，否则同样会被静默改掉。
+    const choices = state
+      .modelChoices()
+      .filter((m) => m.group !== "local")
+      .concat((ai.models || []).map((m) => ({ ...m, group: "local", vision: null })));
     const groupOpts = (g, label) => {
       const list = choices.filter((m) => m.group === g);
       return list.length
@@ -534,9 +541,17 @@ window.DGM = window.DGM || {};
 
   const PANES = { appearance: pAppearance, editor: pEditor, ai: pAI, convert: pConvert, cloud: pCloud };
 
+  /** 打开设置窗口（新会话）：AI 页签的草稿以**当前设置**为准。
+   *  add/remove model 走的是 renderSettings() 原地重画 —— 千万别从这里进，
+   *  否则这一行会把刚加/删的草稿吞掉（Add model 曾因此完全无效：点了没反应）。 */
   function settings(tab) {
     const cur = tab || "appearance";
     draftAi = JSON.parse(JSON.stringify(state.ai()));
+    renderSettings(cur);
+  }
+
+  /** 用现有 draftAi 重画设置窗口（add/remove 改完草稿后调它，草稿不丢）。 */
+  function renderSettings(cur) {
     openDialog(
       head(t("dlg.settings.title"), "settings") +
         `<div class="dialog-body has-tabs">
@@ -631,8 +646,7 @@ window.DGM = window.DGM || {};
     draftAi.models = draftAi.models || [];
     draftAi.models.push({ id, name: t("common.new") + " " + (draftAi.models.length + 1), provider: "openai", base_url: "", model: "", max_tokens: 4096, temperature: 0.2, has_key: false, key_hint: "" });
     if (!draftAi.default_model) draftAi.default_model = id;
-    close();
-    settings("ai");
+    renderSettings("ai"); // 原地重画：draftAi 带着新模型，绝不能走 settings()（会重置草稿）
     // 重新渲染后滚动到新条目
     setTimeout(() => {
       const list = $("#model-list");
@@ -644,8 +658,7 @@ window.DGM = window.DGM || {};
     if (!draftAi) draftAi = JSON.parse(JSON.stringify(state.ai()));
     draftAi.models = (draftAi.models || []).filter((m) => m.id !== id);
     if (draftAi.default_model === id) draftAi.default_model = (draftAi.models[0] || {}).id || "";
-    close();
-    settings("ai");
+    renderSettings("ai"); // 同上
   }
 
   /** 收集 AI 页签里手改的字段 + 需要写凭据库的密钥，然后一次性落盘。 */

@@ -50,11 +50,13 @@ WIDTH, HEIGHT = 1440, 900
 # 每张 = (文件名, URL 查询串, 截图前的 JS, 额外等待秒)
 # 查询串走的是 main.js::applyUrlState 认的那几个参数（theme/doc/mode/sidebar/…）。
 PLAN: list[tuple[str, str, str, float]] = [
-    ("01-main-light.png", "doc=0&theme=light&noai=1", "", 2.0),
-    ("02-ai-vision.png", "doc=0&theme=light", "DGM.ai.focus('vision');", 2.0),
-    ("03-drawio-canvas.png", "doc=2&theme=light", "", 12.0),
-    ("04-excalidraw-canvas.png", "doc=3&theme=light", "", 14.0),
-    ("05-dark-preview.png", "doc=0&theme=dark&mode=preview", "", 3.0),
+    # 01–05 显式带 sidebar=explorer：这几张的取景就是「带资源管理器」的工作台，
+    # 不跟默认布局走 —— 侧栏默认收起（2026-10-12）后不加这个参数截图会悄悄变样。
+    ("01-main-light.png", "doc=0&theme=light&noai=1&sidebar=explorer", "", 2.0),
+    ("02-ai-vision.png", "doc=0&theme=light&sidebar=explorer", "DGM.ai.focus('vision');", 2.0),
+    ("03-drawio-canvas.png", "doc=2&theme=light&sidebar=explorer", "", 12.0),
+    ("04-excalidraw-canvas.png", "doc=3&theme=light&sidebar=explorer", "", 14.0),
+    ("05-dark-preview.png", "doc=0&theme=dark&mode=preview&sidebar=explorer", "", 3.0),
     ("06-cloud-docs.png", "mockcloud=signed&sidebar=cloud&theme=light&noai=1", "", 2.0),
     ("07-cloud-account.png", "mockcloud=signed&sidebar=account&theme=light&noai=1", "", 2.0),
 ]

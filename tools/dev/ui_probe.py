@@ -152,6 +152,38 @@ def main() -> int:
         body_rows = ev("getComputedStyle(document.body).cursor")
         log(f"菜单项: {menus} | 标签: {tabs} | 视图模式按钮: {vms} | cursor: {body_rows}")
 
+        # ---- 断言 1b：默认布局 —— 侧栏必须**默认收起**（2026-10-12 拍板：画布优先），
+        # 活动栏保留（它是重新打开侧栏的入口）。此断言必须在任何 patchSettings 之前跑。
+        fresh = ev(
+            "JSON.stringify({"
+            "  noSidebar: document.body.classList.contains('no-sidebar'),"
+            "  sideW: document.querySelector('#sidebar').getBoundingClientRect().width,"
+            "  actW: document.querySelector('#activitybar').getBoundingClientRect().width,"
+            "  pref: DGM.state.settings.panels.sidebar"
+            "})"
+        )
+        log(f"默认布局: {fresh}")
+        try:
+            ff = json.loads(fresh or "{}")
+            if not ff.get("noSidebar"):
+                fails.append("侧栏应默认收起（body 缺 no-sidebar 类）")
+            if ff.get("sideW") not in (0, 0.0):
+                fails.append(f"侧栏默认宽度应为 0，实际 {ff.get('sideW')}")
+            if not (isinstance(ff.get("actW"), (int, float)) and ff.get("actW") > 0):
+                fails.append(f"活动栏应保留（重新打开侧栏的入口），实际宽 {ff.get('actW')}")
+            if ff.get("pref") is not False:
+                fails.append(f"panels.sidebar 默认应为 false，实际 {ff.get('pref')}")
+        except Exception as e:
+            log(f"（断言 1b 解析失败：{e}）")
+        # 后面的断言要在「侧栏打开」的状态下跑 —— 显式打开，别依赖默认值
+        ev(
+            "(async () => {"
+            "  await DGM.state.patchSettings({ panels: { sidebar: true } });"
+            "  DGM.shell.render();"
+            "})()"
+        )
+        drain(0.3)
+
         # ---- 断言 2：遮罩是否挡住了全窗（透明但可命中的元素）----
         hit = ev(
             "(() => { const b = document.querySelector('#menubar'); "
@@ -1026,6 +1058,41 @@ def main() -> int:
             fails.append(f"关于对话框断言解析失败：{e} / {about}")
         ev("(async () => { DGM.dialogs.close(); await new Promise(r => setTimeout(r, 80)); return 1; })()")
         ev(f"DGM.i18n.setLang({json.dumps(lang0)}); DGM.i18n.apply(); 1")
+
+        # 自定义模型：Add/Remove 必须真的改变行数并落到 settings。
+        # 历史 bug 形态：pAI 用 state 渲染而草稿写在 draftAi 里，add/remove 改完草稿重画
+        # 又被 settings() 重置 —— 「Add model 点了没反应」，坏了很多版没人发现。
+        model_check = ev(
+            "(async () => {"
+            "  const rows = () => document.querySelectorAll('#model-list .model-row').length;"
+            "  const st = () => (DGM.state.settings.ai.models || []).length;"
+            "  DGM.dialogs.settings('ai');"
+            "  await new Promise(r => setTimeout(r, 150));"
+            "  const n0 = rows(), s0 = st();"
+            "  [...document.querySelectorAll('[data-act]')].find(b => b.dataset.act === 'add').click();"
+            "  await new Promise(r => setTimeout(r, 150));"
+            "  const n1 = rows();"
+            "  [...document.querySelectorAll('[data-act^=\"del:\"]')].pop().click();"
+            "  await new Promise(r => setTimeout(r, 150));"
+            "  const n2 = rows();"
+            "  [...document.querySelectorAll('[data-act]')].find(b => b.dataset.act === 'save').click();"
+            "  await new Promise(r => setTimeout(r, 200));"
+            "  const s1 = st();"
+            "  DGM.dialogs.close();"
+            "  return JSON.stringify({ n0, n1, n2, s0, s1 });"
+            "})()"
+        )
+        log(f"自定义模型 Add/Remove: {model_check}")
+        try:
+            mc = json.loads(model_check or "{}")
+            if mc.get("n1") != mc.get("n0", -99) + 1:
+                fails.append(f"点 Add model 后行数没 +1：{mc.get('n0')}→{mc.get('n1')}（草稿渲染断了）")
+            if mc.get("n2") != mc.get("n0"):
+                fails.append(f"删掉刚加的模型后行数没回到原值：{mc.get('n2')}")
+            if mc.get("s1") != mc.get("s0"):
+                fails.append(f"保存后 settings 里模型数变了（应只加又删）：{mc.get('s0')}→{mc.get('s1')}")
+        except Exception as e:
+            fails.append(f"自定义模型断言解析失败：{e} / {model_check}")
 
         close_alive = ev(
             "(() => { const b = document.querySelector('#win-close'); "

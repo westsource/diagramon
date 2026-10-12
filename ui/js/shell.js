@@ -852,8 +852,9 @@ window.DGM = window.DGM || {};
 
   function BGM_RESET() {
     const defView = state.isTextDoc(state.activeDoc()) ? "split" : "preview";
+    // 「恢复默认布局」要跟 PanelPrefs::default() 一致 —— 侧栏现在默认收起（画布优先）
     state.patchSettings({
-      panels: { activitybar: true, sidebar: true, ai: true, bottom: true, sidebar_view: "explorer" },
+      panels: { activitybar: true, sidebar: false, ai: true, bottom: true, sidebar_view: "explorer" },
     });
     const d = state.activeDoc();
     if (d && state.isTextDoc(d)) state.setViewMode(d.id, defView);

@@ -454,8 +454,7 @@ digraph Pipeline {
         density: "normal",
         accent: "pine",
         locale: "zh-CN",
-        panels: { activitybar: true, sidebar: true, sidebar_view: "explorer", ai: true, bottom: true, bottom_tab: "problems", sidebar_w: 236, ai_w: 344, panel_h: 168, split_src: 33 },
-        ...((() => { try { return JSON.parse(sessionStorage.getItem("dgm-mock-settings") || "null") || {}; } catch (e) { return {}; } })()),
+        panels: { activitybar: true, sidebar: false, sidebar_view: "explorer", ai: true, bottom: true, bottom_tab: "problems", sidebar_w: 236, ai_w: 344, panel_h: 168, split_src: 33 },
         editor: { font_size: 13, debounce_ms: 350, lint: true, per_doc_view: true, default_view: "split", autosave: true, autosave_ms: 5000, restrict_to_workspace: false },
         ai: {
           // 全是**本地 BYOK**。曾经这里放过一条名叫「diagram-fast（云网关）」的假条目，
@@ -478,6 +477,10 @@ digraph Pipeline {
           { path: "E:/OpenCode/diagramon/docs/arch/服务拓扑.drawio", name: "服务拓扑.drawio", format: "drawio", opened_at: 0 },
           { path: "E:/OpenCode/diagramon/scratch/白板草图.excalidraw", name: "白板草图.excalidraw", format: "excalidraw", opened_at: 0 },
         ],
+        // 存档**必须最后展开**：它是对真机 settings.json 的模拟 —— 用户改过的任何一段
+        // （含 ai/editor/cloud/recent）都要赢过这里的预设。曾经展开在 panels 之后，
+        // 结果 ai/editor/cloud/recent 四段永远被预设盖掉，「改了 → 重载 → 丢了」。
+        ...((() => { try { return JSON.parse(sessionStorage.getItem("dgm-mock-settings") || "null") || {}; } catch (e) { return {}; } })()),
       };
     },
 
