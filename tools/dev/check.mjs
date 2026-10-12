@@ -102,6 +102,16 @@ function killStale() {
  *
  * 试的是 `import websocket` 而不是 `-c pass`：ui_probe 要的就是这个包，
  * 能起解释器但缺包等于白起 —— 那一步会以更难懂的姿态倒下。
+ *
+ * ⚠️ **绝对不要加 `shell: true`**（2026-10-12 实测，这个 bug 让 ui_probe 一直静默跳过）：
+ * Windows 上 `shell: true` 是把 `[命令, ...参数].join(" ")` 整串丢给 cmd.exe，**node 不加引号**。
+ * 于是 `-c "import websocket"` 到了 cmd 那里引号已经没了，cmd 按空格切词 ⇒ python 实际收到
+ * `-c import` 加一个多余参数，报 `SyntaxError: File "<string>", line 1` 并以 1 退出。
+ * 结果**每一个候选都判失败**，包括显式指定的 DGM_PYTHON 绝对路径（那条路径没有空格也一样炸），
+ * 日志只会说"没找到带 websocket-client 的 Python"，把环境问题栽赃给用户 ——
+ * 而那个解释器其实是好的，直接跑 `import websocket` 明明是 0。
+ * `shell` 默认 false 时 node 自己查 PATH 并按 Windows 规则给每个参数加引号，
+ * 顺带还能正确处理带空格的路径（`C:\Program Files\...`）。
  */
 function findPython() {
   const cands = [];
@@ -112,10 +122,7 @@ function findPython() {
     cands.push(["python3"], ["python"]);
   }
   for (const c of cands) {
-    const r = spawnSync(c[0], [...c.slice(1), "-c", "import websocket"], {
-      stdio: "ignore",
-      shell: process.platform === "win32",
-    });
+    const r = spawnSync(c[0], [...c.slice(1), "-c", "import websocket"], { stdio: "ignore" });
     if (r.status === 0) return c;
   }
   return null;
@@ -255,14 +262,16 @@ async function main() {
       // 环境缺件**不是**代码的问题：不拦验收，但把"装什么、怎么指路"说清楚 ——
       // 原来这里只写"环境不可用"，用户看到等于没说。
       log(C.yellow("  （跳过 ui_probe：没找到带 websocket-client 的 Python）"));
-      log(C.yellow("    试过：python / py -3 / python3。装依赖：<解释器> -m pip install websocket-client"));
+      log(C.yellow("    试过：DGM_PYTHON（若已设置）/ python / py -3 / python3，每个都真跑过 `import websocket`"));
+      log(C.yellow("    装依赖：<解释器> -m pip install websocket-client"));
       log(C.yellow("    或显式指定：DGM_PYTHON=<python.exe 的路径> node tools/dev/check.mjs"));
       skipped.push("UI 交互冒烟（ui_probe）");
     } else {
+      // 同样不要 shell: true —— 见 findPython 的注释：node 在 shell 模式下不给参数加引号，
+      // DGM_PYTHON 指到带空格的路径（C:\Program Files\...）时会被切词切坏。
       const r = spawnSync(py[0], [...py.slice(1), "tools/dev/ui_probe.py"], {
         cwd: ROOT,
         stdio: "inherit",
-        shell: process.platform === "win32",
         timeout: 180_000,
       });
       if (r.status === 1) {
