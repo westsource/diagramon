@@ -447,7 +447,9 @@ usage / 失败帧）一行都不用改，只有"参数从哪来"是新的：
 - `bundle.active = true`、`targets: "all"`、`createUpdaterArtifacts: true`，  
   并补齐 `category / shortDescription / longDescription`（打包元数据一次给全）。
 - **updater 插件接入**（`tauri-plugin-updater` + `tauri-plugin-process`），  
-  更新源模板 `https://updates.diagramon.app/{{target}}/{{arch}}/{{current_version}}`；  
+  更新源模板 `https://updates.diagramon.app/{{target}}/{{arch}}/{{current_version}}`；
+  **该域名已作废**——定案是"GitHub Release 作主源，`https://www.diagramon.com` 与
+  `https://diagramon.agentctxsync.com` 两枚备源"，实际配置见 `docs/发布检查单.md`；  
   能力位加 `updater:default` 与 `process:allow-restart`。  
   **注意**：updater 默认走 rustls→`ring`，在 **windows-gnu** 工具链上 `ar` 编不过  
   （binutils 的老坑）—— 改用 `--no-default-features --features native-tls`，与 reqwest 同一套 TLS。
@@ -461,7 +463,8 @@ usage / 失败帧）一行都不用改，只有"参数从哪来"是新的：
 1. 生成签名密钥对：`cargo tauri signer generate`，私钥进 `TAURI_SIGNING_PRIVATE_KEY` 环境变量，  
    **公钥填进 `tauri.conf.json` 的 `plugins.updater.pubkey`**（现在是空串 —— 填之前  
    updater 会报错，界面会如实显示"更新失败"，不会装作没更新）；
-2. 更新源域名 `updates.diagramon.app` 落地（静态 JSON + 各平台产物）；
+2. 更新源域名落地（静态 JSON + 各平台产物）——**`updates.diagramon.app` 已放弃**，
+   现定：官网 `https://www.diagramon.com`（备案中）+ 临时域名 `diagramon.agentctxsync.com`；
 3. Windows 代码签名证书 / macOS 开发者账号与 notarize。
 
 ---
