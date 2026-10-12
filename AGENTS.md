@@ -74,3 +74,22 @@ $env:DGM_PYTHON="C:\Users\rong\.workbuddy\binaries\python\versions\3.13.12\pytho
 - 别把 `ui/vendor/`（CodeMirror6 / mermaid / wasm-graphviz）当成普通源码改；那是随包资产。
 - 别把 98MB 的画布资产提交进仓库（`client/tools/**` 与 `client/Assets/mermaid.min.js`；打包前由 `node tools/fetch-assets.mjs` 汇到 `assets/`）。
 - 改承载页（drawio / Excalidraw 的 `host.html`）**先读它顶部的契约注释块**（`__hostQueue` / `__apply` / `__hostZoom*`），那是 shell 与页面之间唯一的接口真源。
+
+## 4. 什么改动要重打包，什么只要推 git
+
+打包范围**只有两处**（都在 `src-tauri/tauri.conf.json`）：`build.frontendDist = "../ui"`（所以 `ui/` 还会**被嵌进 exe**）与 `bundle.resources = {"../ui/": "ui/", "../assets/": "assets/"}`。**其它目录一律不进包。**
+
+| 改了什么 | 重新编译打包 | 换 Release 产物（发新版） | 只要推 git |
+|---|:--:|:--:|:--:|
+| `crates/**`、`src-tauri/**`、`Cargo.toml` / `Cargo.lock` | ✅ | ✅（否则已装用户拿不到） | |
+| `ui/**` | ✅ | ✅ | |
+| `assets/**`（`fetch-assets.mjs` 汇出的画布资产） | ✅ | ✅ | |
+| `src-tauri/tauri.conf.json`（`endpoints` / `version` / `bundle`） | ✅ | ✅ | |
+| `tools/**`（脚本、探针、打包工具） | | | ✅ |
+| `docs/**`、`AGENTS.md`、`README*`、`screenshots/**` | | | ✅（README 两条分支都要改） |
+
+判断口诀：**改的东西会不会进 exe / `ui/` / `assets/`？会 → 重打包发版；不会 → 推 git 就够。**
+
+一个例外：`latest.json` 的 `notes` 文案已经挂在 Release 上了，改它要**重传那个附件**（不是重编译）。
+还有一条容易漏：**版本号没变时，已装用户不会认为有新版** —— 所以"内容变了但版本没变"的重打包，
+老用户只能靠重新安装拿到（2026-10-12 的 endpoints 统一就是这么个情况）。
