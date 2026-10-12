@@ -548,11 +548,21 @@ async function verify() {
   if (got !== local) die("更新源的 signature 与本地 .sig 不一致 —— 传错文件了");
   log(`✓ version=${pulled.version}，signature 与本地 .sig 逐字节一致`);
 
-  const head = capture("curl", ["-sIL", "--proxy", CFG.ghProxy, "--max-time", "120", pulled.platforms["windows-x86_64"].url]).out;
-  const cl = head.match(/^content-length:\s*(\d+)/im);
+  // 远端安装包的字节数：用 **Range 请求**取总长度 —— 206 的 content-range 里带着文件总大小，
+  // 不必真下 54MB。
+  // ⚠️ 不要用 `curl -I -L` 抓 content-length：跟随重定向时响应头是**逐段**打印的，第一段是
+  // GitHub 那个 302 的 `content-length: 0`，只取第一个匹配就恒为 0（v3.0.1 实测撞到，
+  // 于是"发布成功但自检报 0 字节"）。要取就取**最后一段**。
+  const hdrFile = join(TMP_DIR, `head-${VERSION}.txt`);
+  const bodySink = join(TMP_DIR, `head-${VERSION}.bin`);
+  capture("curl", ["-sL", "-r", "0-0", "-D", hdrFile, "-o", bodySink, "--proxy", CFG.ghProxy, "--max-time", "180", pulled.platforms["windows-x86_64"].url]);
+  const hdrs = existsSync(hdrFile) ? readFileSync(hdrFile, "utf8") : "";
+  const range = hdrs.match(/content-range:\s*bytes\s+\d+-\d+\/(\d+)/i);
+  const cls = [...hdrs.matchAll(/^content-length:\s*(\d+)/gim)].map((m) => Number(m[1]));
+  const remoteSize = range ? Number(range[1]) : cls.length ? cls[cls.length - 1] : null;
   const localSize = statSync(setupExe()).size;
-  if (!cl) warn("拿不到安装包 content-length，跳过字节数核对");
-  else if (Number(cl[1]) !== localSize) die(`远端安装包 ${cl[1]} 字节 ≠ 本地 ${localSize} 字节`);
+  if (remoteSize == null) warn("拿不到远端安装包长度，跳过字节数核对");
+  else if (remoteSize !== localSize) die(`远端安装包 ${remoteSize} 字节 ≠ 本地 ${localSize} 字节`);
   else log(`✓ 远端安装包字节数与本地一致（${localSize}）`);
 
   const rel = curlJson({ url: `https://api.github.com/repos/${CFG.repo}/releases/tags/${TAG}`, token: ghToken(), proxy: CFG.ghProxy });
