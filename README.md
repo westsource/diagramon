@@ -1,176 +1,313 @@
-# Diagramon
+# Diagramon - Multi-format Diagram Editor
 
-多格式图表编辑器（桌面客户端）· **本地优先** · **AI 是第一公民**。
+[中文文档](README.zh-CN.md)
 
-支持 **Mermaid**、**Graphviz DOT**、**drawio**、**Excalidraw** 四种格式；
-AI 既可用自有 Key 直连（BYOK：OpenAI 兼容 / Ollama / 自定义），也预留了云网关入口。
+A **local-first** multi-format diagram editor. **Mermaid** (`.mmd` / `.mermaid`), **Graphviz DOT**
+(`.dot` / `.gv`), **drawio** (`.drawio`) and **Excalidraw** (`.excalidraw`) can all be edited with live
+preview. AI is a first-class citizen: bring your own key (BYOK) or use the membership cloud gateway,
+including **image recognition** (picture → diagram code).
 
-> 这是 **dev3.0**：按 `design/ui-proto/` 的界面原型从零重建（Rust + Tauri 2 + 系统 WebView）。
-> dev2.0 的旧实现（含 C# Avalonia 参照）已从工作树移除，随时可取回：
-> `git tag dev2.0-freeze-2026-10-10`，或仓库外的 `client2-dev2.0-archive-20261010.bundle`。
+**Rendering, syntax checking and format conversion all happen on this machine**: Mermaid and Graphviz
+run on engines bundled in the package (WASM / packaged JS), drawio and Excalidraw run on their own
+runtimes shipped with the app — **no subprocess is ever spawned and no external request is ever made**.
+Code or images reach a model only when you actively use AI, and then only the endpoint you chose
+(BYOK talks straight to your own provider, membership goes through the Diagramon cloud gateway).
 
-## 目录
+Version **3.0.0**
+
+## Screenshots
+
+![Main window](screenshots/01-main-light.png)
+
+![AI image recognition](screenshots/02-ai-vision.png)
+
+![drawio canvas](screenshots/03-drawio-canvas.png)
+
+![Dark theme](screenshots/04-dark-preview.png)
+
+![Cloud documents](screenshots/05-cloud-docs.png)
+
+![Account and AI credits](screenshots/06-cloud-account.png)
+
+## Features
+
+### Editing
+- **Multi-tab** — several formats side by side in one window; when tabs overflow they scroll into
+  view, respond to the wheel for horizontal scrolling and fade at both ends, and `Ctrl+Tab` /
+  `Ctrl+PgUp` / `Ctrl+PgDn` cycle through them
+- **Syntax checking with inline errors** — only problems that can actually be *proven* (unbalanced
+  brackets/quotes/tags, JSON that fails to parse) are reported, never style guesses; the Problems panel
+  aggregates every open document and labels each row with its file name and line/column
+- **Outline and current scope** — nodes and the `subgraph` / `cluster` tree are derived from the body;
+  the status bar shows the enclosing subgraph/cluster next to the caret position (and nowhere else,
+  so no information is duplicated)
+- **Find & replace**, undo/redo, context menu, command palette (`Ctrl+Shift+P` or `F1`)
+- **Large-document guard rail** — past a line/byte threshold the preview asks "render anyway?" instead of
+  silently dragging the engine down (the threshold lives in exactly one place, pushed down from Rust)
+
+### Preview and export
+- **Three text modes** — source / split / preview (`Ctrl+1/2/3`); the source pane can be hidden entirely
+- **One gesture vocabulary for every surface** — wheel to pan, `Shift+wheel` to pan horizontally,
+  `Ctrl+wheel` to zoom anchored at the cursor, drag to pan, double-click to fit; `Ctrl+0` / `Ctrl+=` /
+  `Ctrl+-` are forwarded by the shell to whichever surface is active
+- **Status-bar zoom readout** — shows the zoom of the *active* view only (each canvas's own readout is
+  hidden so two numbers can never disagree on screen)
+- **DOT layout engine picker** — `dot` / `neato` / `fdp` / `sfdp` / `twopi` / `circo`, switched
+  incrementally without reloading the WASM engine
+- **Export** — save an image (PNG, selectable scale) or copy it to the clipboard; DOT goes
+  `SVG → canvas → PNG` with zero subprocesses
+
+### Canvas editing (drawio / Excalidraw)
+- **The canvas *is* the editor** — rather than hiding controls, the UI says so: neither format offers the
+  source/split/preview triple
+- **On disk it stays text** — a `.drawio` file is mxfile XML and a `.excalidraw` file is scene JSON; the
+  canvas is just a view of it, so what lands on disk stays diffable and version-controllable and reuses
+  the same save / save-as / recent-files path
+- **Automatic write-back** — canvas edits (including drawio's own autosave) are written back into the tab
+  body and raise the dirty flag; saving first asks the canvas for its current body so edits inside the
+  autosave debounce window are never lost
+- **Undo history survives** — the carrier page stays alive, so switching tabs never destroys it
+- **Offline by construction** — a pruned drawio runtime and a locally bundled Excalidraw ship inside the
+  installer; zero external requests
+
+### Format conversion (Conversion Center)
+- **Directions** — `Mermaid → DOT` (implemented in pure Rust), `Mermaid → drawio` and
+  `Mermaid → Excalidraw` (handed to each engine's own parser instead of reimplementing one)
+- **One-way semantics** — the product opens in a new tab and the original file's bytes never change
+- **Lossy conversions say so** — the result carries `notes` listing exactly what did not migrate
+  (e.g. `subgraph → cluster` drops styling); the dialog shows them, nothing is dropped silently
+- **Unavailable directions are still listed, with a stated reason**, rather than hidden for you to guess
+
+### Workspace and files
+- **Open a folder** — explorer tree (only extensions this app knows; `.git` / `node_modules` / `target`
+  are skipped)
+- **Whole-workspace search** (`Ctrl+Shift+H`) — streamed from Rust with line/column, click to jump,
+  cancellable
+- **File watching** — external changes are picked up automatically; when they collide with unsaved local
+  edits you get a banner to choose "use disk version / keep mine" (a state that needs a decision is not a
+  toast that disappears on its own)
+- **Single instance + file associations** — double-clicking a diagram file opens it in the running window
+  instead of starting another process
+- **Autosave and crash recovery** — autosave is owned by Rust (a background thread, not a front-end
+  timer); unsaved documents have a draft store where one corrupt file cannot take down the others
+- **Path guarding** — create/rename/delete inside a workspace always go through root validation and
+  reject `..` and absolute paths; "save as / export" uses the system dialog (that is the user's own
+  authorization), and can be tightened with "only read and write inside the workspace"
+
+### AI assistant
+- **Three tabs** — generate (natural language → diagram code for the current format), vision
+  (image → code) and review (ask for changes to the current document)
+- **Two kinds of credentials, kept visually separate** — the cloud gateway (membership; the credential is
+  the current login token, so you fill in nothing) and local BYOK (OpenAI-compatible / Ollama / custom,
+  where you supply the key) are shown as groups, never mixed
+- **Two ways into vision** — pick an image file, or **drag out a region of the screen** (freeze-frame plus
+  a borderless overlay, so multi-monitor and DPI scaling never come into play); the image is compressed to
+  ≤1568px in memory and never written to disk
+- **Usage is labelled with its source** — only tokens the provider actually reports are accumulated;
+  anything unreported shows `—` with an explanation, never `0` and never a local estimate
+- **Auto-fix on render error** — if generated code fails to render locally, the error text goes back to
+  the model for one automatic repair (switchable off in settings)
+- **Cancellable**, and failures are reported as failures
+- **Keys never reach the front end** — they live inside the Rust process only (DPAPI on Windows,
+  encrypted per user); the front end only ever sees `has_key` and a mask
+
+### Cloud (Diagramon Cloud)
+- **Login tokens go into the credential store** — access and refresh live in Windows DPAPI, and the front
+  end only receives an account snapshot and document lists; "signed in" is a statement of fact, not
+  something a page can fake
+- **Silent token refresh** — an expired access token is exchanged for a new one automatically (honouring
+  the server's rotation and reuse-detection rules), so a session renews itself for the lifetime of the
+  refresh token and a restart no longer asks you to sign in again
+- **Account view** (read-only) — email, display name, plan, role, storage usage, plus **AI entitlement and
+  credit balance** (measured in *credits*, deliberately not anchored to any currency)
+- **Cloud documents** — folder tree (empty folders included), filter, open; the **save to cloud** dialog
+  lets you pick a target folder and create a subfolder
+- **Login is a stop on the way, not the destination** — starting from "save to cloud" continues into the
+  save dialog once you are signed in
+- **Registration is not done in the client** — the footer only offers "register on the website", which
+  opens the system browser at the configured service address
+- **An empty base_url switches the cloud off entirely**; everything keeps working offline (offline-first
+  is the product's baseline)
+- **No fake data, ever** — "not configured" means exactly that, "not signed in" means exactly that, and a
+  balance is never invented
+
+### Settings, themes and updates
+- **Light and dark themes** plus several accent colours; switching only changes one attribute on the root,
+  and every colour is read from CSS variables
+- **Panel state is remembered** — sidebar / AI / bottom panel visibility and widths, the source-pane
+  ratio and recent files are all restored on restart
+- **Bilingual UI** — `zh-CN` and `en-US`; both sides carry exactly the same key set (a single missing key
+  fails the whole acceptance run)
+- **Built-in auto-update** — minisign signature verification; "up to date", "new version available"
+  (download → restart) and "error" are three distinct outcomes, and a failed check is never reported as
+  "up to date"
+
+## Tech Stack
+
+- **Language / framework**: Rust (edition 2021) + Tauri 2; the front end has no framework, **no build
+  chain** and no CDN
+- **WebView**: the system webview (WebView2 on Windows)
+- **Editor**: CodeMirror 6 (bundled into `ui/vendor/` and exposed to the shell — no npm dependency at
+  runtime)
+- **Rendering engines**: Mermaid (packaged JS) · Graphviz (WASM) · drawio (pruned runtime shipped in the
+  installer) · Excalidraw (locally bundled)
+- **AI networking**: Rust (reqwest + SSE streaming), credentials in DPAPI
+- **Packaging**: NSIS installer; both the canvas runtimes and the front-end `ui/` are bundled as resources
+  (about 60 MB)
+
+### Why there is a custom `dgm` protocol
+
+The shell and the four carrier pages (drawio / Excalidraw / graphviz / mermaid) **must be same-origin**:
+the canvas ↔ body round trip works by reading and writing `__hostQueue` / `__apply` directly on
+`iframe.contentWindow` (the contract's source of truth is the comment block in
+`tools/drawio-host/host.html`). Cross-origin makes that impossible and forces a fallback to
+"host polling + script injection", which is not reliable on a WebView wrapper layer.
+
+So the whole application is loaded through `dgm`: `http://dgm.localhost/` on Windows and
+`dgm://localhost/` elsewhere. `/drawio/`, `/excalidraw/`, `/graphviz/` and `/mermaid/` are mount points;
+everything else resolves into `ui/`.
+
+### Runtime split (in one line)
+
+**Anything that touches machine state belongs to Rust; anything that touches rendering and interaction
+belongs to the WebView.**
+
+| Rust | WebView |
+|---|---|
+| Window / single instance / file associations / updater | All UI chrome, layout state machine, key dispatch |
+| File I/O (atomic writes), recent files, settings persistence | CodeMirror 6 editor |
+| Syntax checking / outline / scope / conversion (app-core, one source of truth) | mermaid and wasm-graphviz rendering |
+| Workspace-wide search, file watching, autosave timing | drawio / Excalidraw canvas carriers |
+| AI networking (streaming), credentials (DPAPI), cloud gateway | AI streaming display, code cards, apply / revert |
+| Region screenshot (freeze frame), clipboard PNG, export to disk | Export serialization (SVG / canvas → bytes handed to Rust) |
+
+## Requirements
+
+### Running the packaged build
+- Windows 10 / 11 64-bit (WebView2 runtime required; normally pre-installed on Windows 10/11)
+- **No** VC++ redistributable: the release build statically links the CRT
+- The canvas runtimes (about 98 MB) and the front-end `ui/` are inside the installer — nothing extra to
+  download
+
+### Development
+- A Rust toolchain (this machine uses `stable-x86_64-pc-windows-gnu`)
+- Canvas assets are not committed; during development `crates/assets` walks up to find the source tree,
+  but packaging requires exporting them first (see below)
+
+## Development and verification
+
+```bash
+cargo run -p diagramon                 # start the client
+node tools/dev/check.mjs               # the full acceptance run
+node tools/dev/check.mjs --test-only   # Rust unit tests only
+node tools/dev/check.mjs --skip-test   # on-device self-test only (build still runs)
+python tools/dev/canvas_probe.py       # canvas probe: real drawio load → read back → screenshot
+python tools/dev/ui_probe.py           # UI probe: real interaction assertions in the browser prototype
+python tools/dev/readme_shots.py       # regenerate the screenshots in screenshots/
+node tools/fetch-assets.mjs            # export the four mount points into assets/ before packaging
+```
+
+`check.mjs` always runs in the same order: **kill stale instances → build → Rust unit tests → launch the
+client and run the real IPC self-test** (the front end writes `ui/.shots/selftest-report.json` and the
+script reads it back line by line). Exit code 0 means all green, 1 means a failure, 2 means infrastructure
+trouble (build failed / no report produced); the whole run is kept in `ui/.shots/check.log`.
+
+Running the on-device self-test on its own:
+
+```bash
+DIAGRAMON_SELFTEST=1 ./target/debug/diagramon.exe
+DIAGRAMON_SELFTEST_REPORT=<absolute path>    # or point the report somewhere else
+```
+
+> **Two hard rules**, both learned the hard way: the self-test **must not poll the UI with `setTimeout`** —
+> WebView2 throttles timers in background windows to roughly once per second; and **`async` commands must
+> return a meaningful value** — the response of an `async` command returning `Result<(), String>` is
+> silently dropped and the front end's `await` never settles.
+
+**You can also open the UI in a plain browser**: load `ui/index.html` and, when no Tauri runtime is
+detected, it falls back to a built-in **mock backend** (sample documents, fake AI streaming, a fake
+problem list) with a `mock mode` badge in the title bar. That is for design review and screenshots — it
+never degrades silently.
+
+**Packaging** (PowerShell, from the repository root):
+
+```powershell
+node tools/fetch-assets.mjs --verify
+$env:TAURI_SIGNING_PRIVATE_KEY = "<path to private key>"
+$env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD = "<password>"
+npx tauri build --bundles nsis
+```
+
+The three artefacts land in `target/release/bundle/nsis/`: the installer, its `.sig` (update signature)
+and `latest.json` (update manifest). The full procedure and the paperwork still outstanding are in
+[`docs/发布检查单.md`](docs/发布检查单.md).
+
+## Repository layout
 
 ```
 crates/
-  app-ipc/           前后端契约（唯一真源，前端不维护第二份字段清单）
-  app-core/          格式注册表 · 文档与会话 · 语法校验 · 大纲 · 作用域 · 格式转换 · 设置合并
-  assets/            自定义协议 `dgm` 的路径解析（外壳与四个承载页同源的实现）
-  ai/                提示词与供应商（BYOK 流式对话）
-  platform/          平台适配层接口（凭据、路径）+ 非 Windows 的明文兜底
-  platform-windows/  DPAPI 凭据存储（按当前用户加密）
-src-tauri/           Tauri 装配与命令层（窗口、协议注册、命令、事件）
-ui/                  前端外壳（无框架、无构建链、零 CDN）
-  js/                外壳 · 侧栏 · 面板 · 标签 · 编辑器 · 画布承载 · 预览 · AI · 对话框 · 命令面板
-  vendor/            CodeMirror 6 打包 · mermaid · wasm-graphviz（随包，无外部请求）
-assets/              随包资产根（打包前由 tools/fetch-assets.mjs 汇出，不入库）
-design/ui-proto/     界面原型与设计说明（index.html 是设计真源，含截图索引与实施映射）
-tools/               取资产脚本 · drawio / Excalidraw 承载页 · 开发用验收脚本
+  app-ipc/           front-end/back-end contract (single source of truth)
+  app-core/          format registry · documents and sessions · lint · outline · scope · conversion · workspace · settings
+  assets/            path resolution for the dgm protocol (what makes shell and carriers same-origin)
+  ai/                prompts and providers (BYOK streaming chat)
+  platform/          platform adapter interfaces (credentials, paths) + a plaintext fallback off Windows
+  platform-windows/  DPAPI credential store (encrypted per user)
+src-tauri/           Tauri wiring and command layer (windows, protocol registration, commands, events, watcher, capture)
+ui/                  front-end shell (no framework, no build chain, no CDN)
+  js/                shell · sidebar · panels · tabs · editor · canvas carrier · preview · AI · cloud · dialogs
+  vendor/            bundled CodeMirror 6 · mermaid · wasm-graphviz (shipped, no external requests)
+assets/              bundled asset root (exported by tools/fetch-assets.mjs before packaging; not committed)
+design/ui-proto/     UI prototypes and design notes (index.html is the design source of truth)
+docs/                roadmap and release checklist
+tools/               asset fetching · drawio / Excalidraw carrier pages · development acceptance scripts
 ```
 
-### 为什么要走自定义协议 `dgm`
+## Keyboard shortcuts
 
-外壳与四个承载页（drawio / Excalidraw / graphviz / mermaid）**必须同源**：承载页的
-「画布 ↔ 正文」往返靠直接读写 `iframe.contentWindow` 上的 `__hostQueue` / `__apply`
-（见 `ui/js/canvas.js` 与 `tools/drawio-host/host.html` 的契约注释）。跨源就拿不到，
-只能退回宿主轮询 + 脚本注入，那套在 WebView 包装层上不稳。
+| Shortcut | Action |
+|----------|--------|
+| `Ctrl+N` | New (with a format it creates directly, without one it opens the format dialog) |
+| `Ctrl+O` / `Ctrl+S` / `Ctrl+Shift+S` | Open / save / save as |
+| `Ctrl+R` | Recent files |
+| `Ctrl+W` / `Ctrl+Q` | Close current tab / quit |
+| `Ctrl+F` | Find and replace |
+| `Ctrl+Shift+H` | Search the whole workspace |
+| `Ctrl+Shift+P` / `F1` | Command palette |
+| `Ctrl+I` / `Ctrl+Shift+I` | AI chat / AI image recognition |
+| `Ctrl+Shift+C` | Copy the active view as an image |
+| `Ctrl+B` / `Ctrl+J` / `Ctrl+Shift+A` | Sidebar / bottom panel / AI panel |
+| `Ctrl+Shift+F` | Zen mode (full-screen editing) |
+| `Ctrl+1` / `Ctrl+2` / `Ctrl+3` | Source / split / preview |
+| `Ctrl+0` / `Ctrl+=` / `Ctrl+-` | Fit to view / zoom in / zoom out |
+| `Ctrl+T` | Toggle light and dark theme |
+| `Ctrl+Tab` / `Ctrl+PgUp` / `Ctrl+PgDn` | Cycle through tabs |
+| `Alt+1` … `Alt+5` | Sidebar views: explorer / search / convert / cloud documents / outline |
 
-所以整个应用都从 `dgm` 协议加载：Windows 是 `http://dgm.localhost/`，
-其它平台是 `dgm://localhost/`（Linux 用前者页面根本不加载 —— spike 实测）。
-`/drawio/`、`/excalidraw/`、`/graphviz/`、`/mermaid/` 四个前缀是挂载点，
-其余路径落到 `ui/`。
+Inside the editor: `Ctrl+Z` undo, `Ctrl+Y` redo, `Ctrl+X/C/V/A` cut, copy, paste and select all. When the
+preview or a canvas has focus those application-level shortcuts are intercepted by the carrier page and
+handed back to the shell, so they keep working.
 
-## 运行
+## About 3.0
 
-```bash
-cargo run -p diagramon            # 起客户端（Windows 需 WebView2 运行时）
-node tools/dev/check.mjs          # 一条命令验收：单测 + 真机 IPC 自检
-python tools/dev/canvas_probe.py  # 画布链路探针：真 drawio 载入 → 取回 → 截图
-node tools/fetch-assets.mjs       # 打包前把四个挂载点的资产汇到 assets/
-```
+3.0 is a from-scratch implementation built against the UI prototypes in `design/ui-proto/`: Rust + Tauri 2
+plus the system WebView, with a front end that has no framework and no build chain. The development log,
+each step's completion criteria and the dependency graph are in
+[`docs/roadmap-dev3.0.md`](docs/roadmap-dev3.0.md).
 
-`check.mjs` 做四件事，顺序固定：**杀残留实例 → 构建 → Rust 单测 → 启动客户端跑真实 IPC 断言**
-（前端把结果落成 `ui/.shots/selftest-report.json`，脚本读出来逐项打印）。
-全绿退出码 0；有失败 1;基础设施问题（构建失败 / 报告没产出）2。
+## License
 
-顺序里每一步都在防一个踩过的坑：残留实例会让链接报 `Permission denied`（看着像代码错）；
-忘了删旧报告会读到上一次的结果；构建与自检抢同一个 exe。
+Apache-2.0, see [`LICENSE`](LICENSE); third-party components and licences are listed in
+[`NOTICE`](NOTICE).
 
-单独跑自检也可以：
+## Acknowledgments
 
-```bash
-DIAGRAMON_SELFTEST=1 ./target/debug/diagramon.exe   # 报告写到数据目录
-DIAGRAMON_SELFTEST_REPORT=<绝对路径>                 # 或指定位置
-```
+This project uses the following open-source projects:
 
-> 自检为什么由**页面自己**跑一遍、而不是外面用 CDP 断言：本机 WebView2 不认
-> `--remote-debugging-port`（wry 默认传 `--disable-features=…`，宿主一旦显式传参，
-> WebView2 就不再读 `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS`）。
-> 页面自跑不依赖桌面输入注入，反而更稳。`tools/dev/cdp-probe.py` 留给能开调试端口的机器。
->
-> 写自检时有一条硬规矩：**不要用 `setTimeout` 轮询等界面**。
-> WebView2 对后台窗口把定时器节流到约 1 次/秒，`60 × 50ms` 的等待循环实际要跑一分多钟。
-> 直接查 DOM、用 `fetch`（不受节流影响），或走应用自身的 API。
-
-### 画布链路为什么要单独一个探针
-
-`check.mjs` 的自检跑在 WebView2 里，**等不了** drawio 冷启（同上：定时器被节流），
-所以它只断言「承载面挂上了、同源可读、协议供得出资产」这些同步/网络可判定的东西。
-
-`canvas_probe.py` 补上另一半：用普通 HTTP 在本机起一份**与 `crates/assets` 相同的目录布局**，
-再用 CDP 驱动本机 Chrome，让真 drawio 走一遍
-「引擎起来 → 推进一版正文 → 取回 → 换一版再取回」，最后截图。
-
-两个踩过的坑（都写在脚本头部）：`--virtual-time-budget` 遇上持续跑计时器的 SPA 会把虚拟时钟顶死
-（实测挂十分钟不动）；`--screenshot` 在 load 事件就截图，那时 drawio 还是白屏。
-
-**不开客户端也能看界面**：直接用浏览器打开 `ui/index.html`。
-检测不到 Tauri 时会切到内置 **mock 后端**（示例文档、假 AI 流式、假问题列表），
-标题栏会挂一个 `mock 模式` 徽标 —— 用于设计评审与截图，不会静默降级。
-
-## 设计要点
-
-完整说明见 `design/ui-proto/index.html`，这里只列决定架构的几条：
-
-- **五块工作区**（活动栏 / 侧栏 / 编辑区 / AI 右栏 / 底部面板）沿用 VS Code 键位：
-  `Ctrl+B` 侧栏、`Ctrl+J` 面板、`Ctrl+Shift+A` AI、`Ctrl+Shift+P` 命令面板、`Ctrl+1/2/3` 视图三态。
-- **文本型与画布型分开说清**：Mermaid / DOT 支持源码 / 分屏 / 预览三态（源码窗口可整块隐藏）；
-  drawio / Excalidraw 是"画布即编辑器"，UI 上不藏控件而是明说，磁盘上仍是可 diff 的文本。
-- **没有面包屑**：文件路径在标题栏、层级在侧栏；唯一不重复的信息（当前行所在 subgraph/cluster）
-  在状态栏的行列号旁边。
-- **转换单向且理由透明**：Mermaid → drawio / Excalidraw / DOT 另开标签页、原文件不动；
-  不可用方向在转换中心列出来并写明原因，不藏起来让用户猜。
-- **密钥永不进前端**：BYOK 的 Key 只存在 Rust 进程内（Windows 走 DPAPI），
-  前端只拿 `has_key` 与掩码（`sk-…1234`）。
-
-## 运行时分工（Rust 原生 vs WebView）
-
-一句话：**摸"机器状态"的归原生，摸"渲染与交互"的归 WebView**。
-
-| 归 Rust | 归 WebView |
-|---|---|
-| 窗口生命周期、单实例、文件关联、更新器 | 全部界面 chrome、布局状态机、快捷键分发 |
-| 文件读写（原子写）、最近文件、设置持久化 | CodeMirror 6 编辑器 |
-| 语法校验、大纲、当前作用域（app-core，单一真源） | mermaid / wasm-graphviz 渲染 |
-| 全工作区搜索（待接） | drawio / Excalidraw 画布承载 |
-| AI 网络层（reqwest + SSE 流式）、凭据（DPAPI） | AI 流式展示、代码卡、应用/回退 |
-| 剪贴板写图片、导出落盘 | 导出序列化（SVG / canvas → 字节交原生） |
-
-边界：web→原生走 `invoke` 命令（名与载荷以 `crates/app-ipc/src/lib.rs` 为准）；
-原生→web 走事件 `ai://delta` / `ai://done` / `ai://failed`。
-fs 作用域限工作区目录，密钥只允许 Rust 读。
-
-## 当前进度
-
-**已接线（第一步：外壳 + 面板 + AI 面板）**
-外壳与全部面板、标签页与会话、文件打开/保存/另存、语法校验与行内报错、大纲、
-当前作用域、mermaid 与 graphviz 预览与导出、AI 三页签（对话 / 识图 / 改图）流式对话、
-设置五页签与明暗主题、命令面板与对话框、内部 mock 后端。
-
-**验收闭环（第一步）**
-`node tools/dev/check.mjs` 一条命令跑完「单测 + 真机 IPC 自检」。
-真机自检 35/35 全绿：契约版本与四格式注册表、设置局部更新不清空其它字段、
-新建文档与语法校验（正常不报错 / 裸 `>=` 报警告）、大纲三组与中文标签、
-状态栏作用域、画布型拒绝分屏、界面五块工作区与标签页跟随会话、
-画布承载面挂载与同源可读、`dgm` 协议供得出四个挂载点与外壳自身。
-Rust 单测 100 项（app-core 65 / ai 17 / assets 8 / platform 5 / platform-windows 5）。
-
-**画布承载（第二步）**
-drawio / Excalidraw 现在**真的能编辑**：
-- `crates/assets` 恢复 + `dgm` 自定义协议，外壳与四个承载页同源（不再需要脚本注入）；
-- `ui/js/canvas.js` 管「画布 ↔ 正文」：常驻 iframe（切标签不丢撤销历史）、
-  队列搬运、`export` 取正文供落盘前 flush、`hotkey` 转发应用级快捷键、
-  缩放/适应视图接到承载页的 `__hostZoom` / `__hostFit` / `__hostZoomBy`；
-- 主题下发：Excalidraw 走它自己的 `appState.theme`；drawio 只换画布底色（用本站的 `--canvas-bg` 变量），
-  **不动图形配色** —— 那是文档内容，要落盘要可 diff；
-- 画布型标签页落盘前先 `flush()` 取最新正文，不让 drawio 的 1.5s autosave 去抖抢先。
-
-验证：`check.mjs` 26/26；`canvas_probe.py` 9/9（真 drawio 引擎起来、推进去取回来、换一版再取回，
-截图见 `ui/.shots/canvas-drawio.png`）。
-
-**格式转换（第三步）**
-`mermaid → dot` 由 **Rust** 直接算（`crates/app-core/src/convert.rs`）：
-节点四类形状、六种边（含内联/管道标签）、subgraph、classDef/class/style、direction、注释。
-`mermaid → drawio` / `mermaid → Excalidraw` **不重新实现解析器** ——
-交给各自的引擎（drawio 的 `drawio-mermaid`、Excalidraw 的 `mermaid-to-excalidraw`），
-前端把源码经承载页递过去、再把结果取回来写进新标签页。
-
-两个关键设计：
-- **`plan()` 给出结构化的「谁来做」**（`rust` / `drawio` / `excalidraw` / `none`），
-  前端按它分支 —— 不从错误文案里猜引擎，文案一改就崩。
-- **转换有损就要写清**：结果里带 `notes`，逐条列出「哪类信息没迁移」
-  （subgraph→cluster 丢样式、体育场形/非对称形退化、样式只迁移四个键…）。
-  对话框直接把 notes 显示出来，不静默丢。
-
-原先前端那段 best-effort 的 mermaid→dot（正则拼 DOT、subgraph 直接不管、classDef 丢掉）
-已删除 —— 同一件事只留一处实现。
-
-**下一步**
-完整拆分见 [`docs/roadmap-dev3.0.md`](docs/roadmap-dev3.0.md)（含依赖关系、每步的完成判据、待拍板项）。
-摘要：① 闭环验收与开发环路 ✅ → ② drawio / Excalidraw 画布承载 + `dgm` 资产协议 ✅（关键路径）
-→ ③ 格式转换执行 ✅ → ④ 工作区扫描 / 搜索 / watcher → ⑤ AI 补齐（区域截图、原生剪贴板）
-→ ⑥ 云网关 → ⑦ 发布（更新器 / 三平台打包）→ ⑧ 硬化（真 AST / 画布大纲 / 性能 / i18n）。
-
-## 许可
-
-Apache-2.0，见 `LICENSE`；第三方组件与许可见 `NOTICE`。
+- [Tauri](https://tauri.app/) - desktop application framework (Rust + system WebView)
+- [CodeMirror](https://codemirror.net/) - code editor
+- [Mermaid](https://mermaid.js.org/) - Mermaid diagram rendering engine
+- [Graphviz](https://graphviz.org/) / [@hpcc-js/wasm-graphviz](https://github.com/hpcc-systems/wasm-graphviz) - DOT rendering (WASM)
+- [drawio](https://github.com/jgraph/drawio) - the `.drawio` canvas (pruned runtime shipped in the installer, Apache-2.0)
+- [Excalidraw](https://github.com/excalidraw/excalidraw) - the `.excalidraw` hand-drawn canvas (MIT)
+- [OpenAI-compatible API](https://platform.openai.com/docs/api-reference) - the chat protocol used by BYOK and the cloud gateway
+- [Ollama](https://ollama.com/) - local large language models
