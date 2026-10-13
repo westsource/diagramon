@@ -20,11 +20,13 @@ drawio 与 Excalidraw 走随包自带的运行时，**不起任何子进程、�
 
 ![drawio 画布](screenshots/03-drawio-canvas.png)
 
-![深色主题](screenshots/04-dark-preview.png)
+![Excalidraw 画布](screenshots/04-excalidraw-canvas.png)
 
-![云端文档](screenshots/05-cloud-docs.png)
+![深色主题](screenshots/05-dark-preview.png)
 
-![账户与 AI 额度](screenshots/06-cloud-account.png)
+![云端文档](screenshots/06-cloud-docs.png)
+
+![账户与 AI 额度](screenshots/07-cloud-account.png)
 
 ## 功能特性
 

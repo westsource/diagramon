@@ -23,11 +23,13 @@ Version **3.0.0** · Official website <https://www.diagramon.com>
 
 ![drawio canvas](screenshots/03-drawio-canvas.png)
 
-![Dark theme](screenshots/04-dark-preview.png)
+![Excalidraw canvas](screenshots/04-excalidraw-canvas.png)
 
-![Cloud documents](screenshots/05-cloud-docs.png)
+![Dark theme](screenshots/05-dark-preview.png)
 
-![Account and AI credits](screenshots/06-cloud-account.png)
+![Cloud documents](screenshots/06-cloud-docs.png)
+
+![Account and AI credits](screenshots/07-cloud-account.png)
 
 ## Features
 

@@ -221,13 +221,27 @@ pub async fn clip_write_image(base64: String) -> R<bool> {
     let (w, h) = rgba.dimensions();
 
     let mut clip = arboard::Clipboard::new().map_err(|e| format!("剪贴板打不开：{e}"))?;
-    clip.set_image(arboard::ImageData {
+    let data = arboard::ImageData {
         width: w as usize,
         height: h as usize,
         bytes: std::borrow::Cow::Owned(rgba.into_raw()),
-    })
-    .map_err(|e| format!("写剪贴板失败：{e}"))?;
-    Ok(true)
+    };
+    // 剪贴板是全局单例：剪贴板管理器 / 输入法 / 其它常驻工具会**毫秒级**地短暂占住它，
+    // 单次尝试会撞 "held by another party"（2026-10-13 自检两次连败都是它）。
+    // 小步重试 ~1.5s：占用都是瞬时的，重试基本必成；持续打不开再如实报错。
+    let mut last_err = String::new();
+    for attempt in 0..10 {
+        match clip.set_image(data.clone()) {
+            Ok(()) => return Ok(true),
+            Err(e) => {
+                last_err = format!("写剪贴板失败：{e}");
+                if attempt < 9 {
+                    tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+                }
+            }
+        }
+    }
+    Err(last_err)
 }
 
 /// 读回剪贴板里的图（自检用：写进去再读出来，比对尺寸）。
