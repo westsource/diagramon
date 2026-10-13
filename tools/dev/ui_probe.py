@@ -297,6 +297,42 @@ def main() -> int:
         )
         log(f"viewmodes 按钮构成: {diag}")
 
+        # ---- 断言 5b：转换近入口 + 弹出锚点存活（stopPropagation 约定）----
+        # 历史教训：文档级"点外就关"监听会吃掉同一次点击里刚弹出的菜单 ——
+        # side-more / tab-more / btn-layout / 状态栏 layout 曾全部死于这个坑
+        # （2026-10-13 探针实测：handler 触发、菜单填充、随即被关）。
+        # 这里一并守住：修复过的四个锚点 + 新加的两个「转换为」近入口，弹出后必须活着。
+        anchors = ev(
+            "(async () => {"
+            "  const out = {};"
+            "  const probe = async (name, sel) => {"
+            "    const b = document.querySelector(sel);"
+            "    if (!b || b.hidden) { out[name] = 'no-anchor'; return; }"
+            "    b.click();"
+            "    await new Promise(r2 => setTimeout(r2, 0));"
+            "    const p = document.querySelector('#pop');"
+            "    out[name] = (!p.hidden && p.querySelectorAll('.pop-row').length > 0) ? 'alive' : 'dead';"
+            "    document.body.click();"
+            "    await new Promise(r2 => setTimeout(r2, 0));"
+            "  };"
+            "  await probe('tab-convert', '#tab-convert');"
+            "  await probe('status-convert', '#statusbar [data-a=\"convert\"]');"
+            "  await probe('side-more', '#side-more');"
+            "  await probe('tab-more', '#tab-more');"
+            "  await probe('btn-layout', '#btn-layout');"
+            "  await probe('status-layout', '#statusbar [data-a=\"layout\"]');"
+            "  return JSON.stringify(out);"
+            "})()"
+        )
+        log(f"弹出锚点存活: {anchors}")
+        try:
+            av = json.loads(anchors or "{}")
+        except Exception:
+            av = {}
+        for name in ("tab-convert", "status-convert", "side-more", "tab-more", "btn-layout", "status-layout"):
+            if av.get(name) != "alive":
+                fails.append(f"弹出锚点 {name} 点击后菜单没存活（点了没反应复现）")
+
         # ---- 断言 6：侧栏 / AI 面板宽度拖拽（CDP 派发真实鼠标序列）----
         def drag_gutter(gid: str, dx: float, dy: float) -> None:
             ev("document.activeElement && document.activeElement.blur && document.activeElement.blur()")

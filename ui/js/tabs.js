@@ -127,6 +127,9 @@ window.DGM = window.DGM || {};
       const n = $(id);
       if (n) n.hidden = !text;
     }
+    // 「转换为」近入口：没文档就藏（与 viewmodes 同进退）
+    const conv = $("#tab-convert");
+    if (conv) conv.hidden = !d;
   }
 
   /* ------------------------------------------------------------------ 标签菜单 */
@@ -199,9 +202,20 @@ window.DGM = window.DGM || {};
     }
     const add = $("#tab-add");
     if (add) add.addEventListener("click", () => DGM.dialogs.newDoc());
+    // 「转换为」近入口：动线从"画布 → 最左活动栏 → 侧栏卡片"缩短为"画布 → 标签条"。
+    // 锚点必须 stopPropagation（showPop 的约定），否则弹出即被文档级监听关掉。
+    const conv = $("#tab-convert");
+    if (conv) {
+      conv.addEventListener("click", (e) => {
+        e.stopPropagation();
+        if (state.activeDoc()) DGM.shell.popConvertMenu(e.currentTarget);
+      });
+    }
     const more = $("#tab-more");
     if (more) {
       more.addEventListener("click", (e) => {
+        // 同 showPop 的约定：不停传播就是"点了没反应"（2026-10-13 探针实测它一直是死的）
+        e.stopPropagation();
         const r = e.currentTarget.getBoundingClientRect();
         const d = state.activeDoc();
         if (d) openTabMenu(r.left, r.bottom + 4, d);

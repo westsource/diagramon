@@ -761,7 +761,8 @@ window.DGM = window.DGM || {};
     }
     parts.push(`<span class="st ro">${esc(t("status.encoding"))}</span>`);
     if (d && state.isTextDoc(d)) parts.push(`<span class="st ro">${esc(t("status.eol"))}</span>`);
-    parts.push(`<span class="st accent" title="${esc(t("status.formatTip"))}">${esc(d ? state.docFmt(d).name : t("status.noDoc"))}</span>`);
+    // 当前格式 = 「转换为」的近入口之一（另一处在标签条）：点它弹转换菜单。
+    parts.push(`<button class="st accent" data-a="convert" title="${esc(t("status.formatConvertTip"))}">${esc(d ? state.docFmt(d).name : t("status.noDoc"))}</button>`);
 
     bar.innerHTML = parts.join("");
     bar.onclick = (e) => {
@@ -776,7 +777,10 @@ window.DGM = window.DGM || {};
       // 状态栏那一项只做一件事：打开更新窗口（说明 / 进度 / 手动下载都在那个窗口里）
       else if (a === "update") openUpdateDialog();
       else if (a === "zoom") DGM.preview.resetZoom();
-      else if (a === "layout") popLayouts(b);
+      // 弹菜单的两个分支必须 stopPropagation：状态栏本身不用停（别的按钮还要让
+      // 文档级监听关掉别处的弹出物），只停"弹菜单"这一次点击（showPop 的约定）。
+      else if (a === "layout") { e.stopPropagation(); popLayouts(b); }
+      else if (a === "convert") { e.stopPropagation(); popConvertMenu(b); }
     };
   }
 
@@ -800,6 +804,30 @@ window.DGM = window.DGM || {};
         status(t("layout.switched", { name: it.lay }), "ok");
         state.pushOutput("DOT 布局切换 → " + it.lay + "（增量更新，未重载 WASM）", "ok");
       },
+    );
+  }
+
+  /** 「转换为」下拉（标签条按钮与状态栏格式指示器共用）。
+   *  转换是"针对当前文档的动作"，入口就该贴着工作区；侧栏的转换中心保留，
+   *  职责降为全览矩阵（六方向表格 + 不可用理由）——菜单末尾留它的入口。
+   *  锚点必须 stopPropagation（showPop 的约定），调用方负责。 */
+  function popConvertMenu(anchor) {
+    const d = state.activeDoc();
+    if (!d) return;
+    const fmt = state.docFmt(d);
+    const items = (fmt.convert_to || [])
+      .map((to) => ({ label: t("palette.convert", { from: fmt.name, to: state.fmtById(to).name }), icon: "swap", act: "conv:" + to }))
+      .concat([{ sep: true }, { label: t("mi.convertCenter"), icon: "swap", act: "center" }]);
+    const r = anchor.getBoundingClientRect();
+    showPop(
+      items,
+      { x: r.left, y: r.bottom + 4 },
+      (it) => {
+        hidePop();
+        if (it.act === "center") setSidebarView("convert");
+        else DGM.dialogs.convertTo(it.act.slice(5));
+      },
+      "menu",
     );
   }
 
@@ -1138,6 +1166,8 @@ window.DGM = window.DGM || {};
     if (mod && k === "t") { e.preventDefault(); return toggleTheme(); }
     if (mod && k === "r" && !e.shiftKey) { e.preventDefault(); return DGM.dialogs.history(); }
     if (mod && e.shiftKey && k === "c") { e.preventDefault(); return DGM.preview.copyImage(); }
+    // Alt+Shift+C：转换为（弹目标选择对话框；鼠标近入口在标签条与状态栏格式项）
+    if (e.altKey && e.shiftKey && k === "c") { e.preventDefault(); return DGM.dialogs.convertTo(); }
 
     if (e.altKey && ["1", "2", "3", "4", "5"].includes(k)) {
       e.preventDefault();
@@ -1161,7 +1191,10 @@ window.DGM = window.DGM || {};
     // 标题栏
     $("#btn-theme").addEventListener("click", toggleTheme);
     $("#btn-cmd").addEventListener("click", () => DGM.palette.open());
-    $("#btn-layout").addEventListener("click", (e) => popLayoutPicker(e.currentTarget));
+    $("#btn-layout").addEventListener("click", (e) => {
+      e.stopPropagation(); // 同 showPop 的约定（此锚点一直是死的，2026-10-13 修）
+      popLayoutPicker(e.currentTarget);
+    });
     $("#win-min").addEventListener("click", () => ipc.win.minimize());
     $("#win-max").addEventListener("click", () => ipc.win.toggleMaximize());
     $("#win-close").addEventListener("click", () => quit());
@@ -1169,6 +1202,9 @@ window.DGM = window.DGM || {};
     // 侧栏
     $("#side-close").addEventListener("click", () => togglePanel("sidebar"));
     $("#side-more").addEventListener("click", (e) => {
+      // 锚点要 stopPropagation（showPop 的约定）：不停的话同一次点击里
+      // 文档级"点外就关"会把刚弹出的菜单杀掉 —— 2026-10-13 探针实测它一直是死的。
+      e.stopPropagation();
       const r = e.currentTarget.getBoundingClientRect();
       const p = state.panels();
       showPop(
@@ -1662,6 +1698,8 @@ window.DGM = window.DGM || {};
     toggleTheme,
     setSidebarView,
     togglePanel,
+    /** 「转换为」下拉（标签条 #tab-convert 也用它）。锚点调用方自己 stopPropagation。 */
+    popConvertMenu,
     zenMode,
     saveActive,
     openFile,

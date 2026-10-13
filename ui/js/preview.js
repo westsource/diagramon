@@ -399,6 +399,11 @@ window.DGM = window.DGM || {};
     if (ct) ct.hidden = !on;
     const zp = $(".zoom-pill");
     if (zp) zp.hidden = !on;
+    // 复制/导出已在预览顶栏，可见性跟缩放一致：没有可渲染内容就藏起来
+    for (const id of ["#btn-copy-img", "#btn-export"]) {
+      const n = $(id);
+      if (n) n.hidden = !on;
+    }
   }
 
   /* ------------------------------------------------------------------ 位图导出 */
@@ -593,8 +598,7 @@ window.DGM = window.DGM || {};
     if (bf) bf.addEventListener("click", fit);
     const bs = $("#btn-show-source");
     if (bs) bs.addEventListener("click", () => DGM.shell.setMode("source"));
-    const bc = $("#btn-convert");
-    if (bc) bc.addEventListener("click", () => DGM.shell.setSidebarView("convert"));
+    // 「转换」入口已收编到标签条（#tab-convert）与状态栏格式项，顶栏不再放
     const cp = $("#btn-copy-img");
     if (cp) cp.addEventListener("click", copyImage);
     const ex = $("#btn-export");

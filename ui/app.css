@@ -274,6 +274,14 @@ body.no-ai #ai-gutter { display: none; }
 }
 .icon-btn:hover { background: var(--surface-3); color: var(--ink); }
 .icon-btn.on { background: var(--accent-soft); color: var(--accent); }
+/* 标签条的「转换」：带文字的图标钮（覆盖 icon-btn 的定宽居中） */
+.tab-conv {
+  width: auto;
+  display: flex; align-items: center; gap: 5px;
+  padding: 0 8px;
+  font-size: var(--fs-xs);
+  white-space: nowrap;
+}
 .win-btns { display: flex; gap: 2px; margin-left: 4px; }
 .win-btn { width: 30px; height: 24px; display: grid; place-items: center; color: var(--muted); border-radius: var(--radius-sm); }
 .win-btn:hover { background: var(--surface-3); color: var(--ink); }
@@ -602,18 +610,6 @@ body.no-ai #ai-gutter { display: none; }
   display: flex; align-items: center; gap: 6px;
 }
 .canvas-tools .row { display: flex; align-items: center; gap: 6px; }
-.fab {
-  display: inline-flex; align-items: center; gap: 6px;
-  height: 30px; padding: 0 11px;
-  font-size: var(--fs-sm);
-  color: var(--ink-2);
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  box-shadow: var(--sh-2);
-}
-.fab:hover { color: var(--accent); border-color: var(--accent-line); }
-.fab.sq { width: 30px; padding: 0; justify-content: center; }
 
 .zoom-pill {
   /* 随 canvas-tools 同行（右下），不再绝对定位压在画布上 —— 画布内容不被遮挡 */

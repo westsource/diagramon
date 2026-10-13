@@ -61,6 +61,7 @@
         <button class="tab-add" id="tab-add" title="新建图表  Ctrl+N"><svg class="ico ico-sm"><use href="#i-plus"></use></svg></button>
         <div class="tabbar-right">
           <div class="viewmodes" id="viewmodes" role="group" aria-label="视图模式"><!-- JS 渲染 --></div>
+          <button class="icon-btn tab-conv" id="tab-convert" data-i18n-title="mi.convertTo" title="转换为"><svg class="ico ico-sm"><use href="#i-swap"></use></svg><span data-i18n="conv.title">转换</span></button>
           <button class="icon-btn" id="tab-more" title="标签页操作"><svg class="ico ico-sm"><use href="#i-more"></use></svg></button>
         </div>
       </div>
@@ -88,7 +89,8 @@
             <span class="lbl">预览</span>
             <span class="pane-sub" id="preview-sub"></span>
             <span class="sp"></span>
-            <button class="mini-btn" id="btn-convert" title="转换到其他格式"><svg class="ico ico-sm"><use href="#i-swap"></use></svg><span data-i18n="conv.title">转换</span></button>
+            <button class="mini-btn" id="btn-copy-img" data-i18n-title="preview.copyTip" title="复制图片"><svg class="ico ico-sm"><use href="#i-copy"></use></svg></button>
+            <button class="mini-btn" id="btn-export" data-i18n-title="preview.exportTip" title="导出图片"><svg class="ico ico-sm"><use href="#i-download"></use></svg></button>
             <button class="mini-btn" id="btn-fit" title="适应视图  Ctrl+0"><svg class="ico ico-sm"><use href="#i-fit"></use></svg></button>
             <button class="mini-btn" id="btn-show-source" title="显示源码窗口  Ctrl+1"><svg class="ico ico-sm"><use href="#i-code"></use></svg></button>
           </div>
@@ -96,7 +98,7 @@
             <div class="canvas-stage" id="canvas-stage"><!-- JS 渲染 --></div>
             <!-- 画布型格式的承载面（drawio / Excalidraw 的同源 iframe，由 canvas.js 管理） -->
             <div class="canvas-host" id="canvas-host" hidden></div>
-            <!-- 画布浮动工具组：缩放 + 复制/导出同行（右下），不再各自压在画布上 -->
+            <!-- 画布浮动工具组：缩放（居右，右缘与画布右缘 12px 对齐）；复制/导出已上移到顶栏 -->
             <div class="canvas-tools" id="canvas-tools">
               <div class="row">
                 <div class="zoom-pill">
@@ -105,8 +107,6 @@
                   <button id="zoom-in" title="放大  Ctrl+="><svg class="ico ico-sm"><use href="#i-zoomIn"></use></svg></button>
                   <button id="zoom-fit" title="适应视图  Ctrl+0"><svg class="ico ico-sm"><use href="#i-fit"></use></svg></button>
                 </div>
-                <button class="fab" id="btn-copy-img" title="复制为图片到剪贴板"><svg class="ico ico-sm"><use href="#i-copy"></use></svg>复制图片</button>
-                <button class="fab" id="btn-export" title="导出 PNG / SVG"><svg class="ico ico-sm"><use href="#i-download"></use></svg>导出图片</button>
               </div>
             </div>
           </div>
