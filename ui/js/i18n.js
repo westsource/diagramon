@@ -266,6 +266,7 @@ window.DGM = window.DGM || {};
     "dlg.login.copied": "注册地址已复制到剪贴板",
     "dlg.login.copyFailed": "复制失败：请手动选中地址后按 Ctrl+C",
     "dlg.login.noBaseUrl": "还没配置服务端地址，打不开注册页（设置 → 账户与云端）。",
+    "dlg.login.serverSettings": "设置服务端",
     /* ---- 保存到云端窗口（树形选目录） ---- */
     "dlg.cloudSave.title": "保存到云端",
     "dlg.cloudSave.name": "文档名",
@@ -1048,6 +1049,7 @@ window.DGM = window.DGM || {};
     "dlg.login.copied": "Registration URL copied to clipboard",
     "dlg.login.copyFailed": "Copy failed: select the URL manually and press Ctrl+C",
     "dlg.login.noBaseUrl": "No service URL configured yet, so the registration page can't be opened (Settings → Account & cloud).",
+    "dlg.login.serverSettings": "Configure server",
     /* ---- Save to cloud dialog (folder tree picker) ---- */
     "dlg.cloudSave.title": "Save to cloud",
     "dlg.cloudSave.name": "Document name",

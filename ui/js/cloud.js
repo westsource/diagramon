@@ -222,8 +222,14 @@ window.DGM = window.DGM || {};
   }
 
   function openLoginDialog(onSuccess) {
+    // 标题栏不放共享 head()：要塞进一个「设置服务端」齿轮 —— 没配服务端时登录/注册都无从谈起，
+    // 这是登录窗口里唯一的自救入口（点了就跳设置窗口的「账户与云端」页签去填地址）。
+    const headHtml =
+      `<div class="dialog-head">${icon("cloud")}<h2>${esc(t("dlg.login.title"))}</h2><span class="sp"></span>` +
+      `<button class="icon-btn" data-act="server-settings" title="${esc(t("dlg.login.serverSettings"))}">${icon("settings", "ico-sm")}</button>` +
+      `<button class="icon-btn" data-close>${icon("close", "ico-sm")}</button></div>`;
     const html =
-      head(t("dlg.login.title"), "cloud") +
+      headHtml +
       `<div class="dialog-body">
          <label class="field"><span>${esc(t("dlg.login.email"))}</span>
            <input id="lg-email" type="text" spellcheck="false" autocomplete="off" placeholder="${esc(t("dlg.login.emailPlaceholder"))}"></label>
@@ -277,6 +283,20 @@ window.DGM = window.DGM || {};
       if (act === "login") return submit();
       if (act === "register") return openRegister();
       if (act === "copyurl") return copyRegisterUrl();
+      // 「设置服务端」：先关登录窗再开设置窗口的「账户与云端」页签（与视觉识别对话框
+      // 跳 AI 设置同一套路 —— 两个窗口叠着开会被顶掉）。设置里改完地址会自动刷新云状态。
+      if (act === "server-settings") {
+        DGM.dialogs.close();
+        DGM.dialogs.settings("cloud");
+        setTimeout(() => {
+          const el = $("#c-baseurl");
+          if (el) {
+            el.focus();
+            el.select();
+          }
+        }, 0);
+        return;
+      }
       if (act === "resend") {
         // 服务端恒 204：成功只代表"请求已受理"，不代表邮件确实发出去了
         return loginMsg("ok", t("dlg.login.resent"));
