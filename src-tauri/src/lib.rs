@@ -440,6 +440,17 @@ fn debug_browser_args() -> Option<String> {
     // 表现正是"Rust 执行完了、前端 await 永不结算、卡点每次还不一样"。
     // 自检不需要任何外网，直接把代理整个关掉。
     args.push_str(" --no-proxy-server --proxy-bypass-list=<-loopback>;");
+    // 运行时追加开关（如 `DGM_BROWSER_EXTRA_ARGS=--no-sandbox`）：受限会话/作业对象里
+    // WebView2 的浏览器子进程会**启动即崩**（Crashpad 每 launch 一个 ~7MB dmp、窗口纯白），
+    // 自动化验收从这类环境拉起应用时需要它。**仅环境变量显式给出时生效**，
+    // 绝不写进任何默认/发布路径 —— 沙箱只允许被验收环境自己关掉。
+    if let Ok(extra) = std::env::var("DGM_BROWSER_EXTRA_ARGS") {
+        let extra = extra.trim();
+        if !extra.is_empty() {
+            args.push(' ');
+            args.push_str(extra);
+        }
+    }
     Some(args)
 }
 
