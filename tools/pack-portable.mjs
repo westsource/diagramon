@@ -36,7 +36,13 @@ const argOf = (name, fallback) => {
   return i >= 0 && argv[i + 1] ? argv[i + 1] : fallback;
 };
 
-const version = argOf("--version", JSON.parse(readFileSync(join(ROOT, "src-tauri", "tauri.conf.json"), "utf8")).version);
+// 版本真源 = 工作区 Cargo.toml 的 [workspace.package] version（与 release.mjs 同一口径）。
+// 曾从 tauri.conf.json 读 —— 那里的 version 字段已删（单一真源归 Cargo）。
+const cargoVer = readFileSync(join(ROOT, "Cargo.toml"), "utf8").match(/^\s*version\s*=\s*"([^"]+)"/m)?.[1];
+const version = argOf("--version", cargoVer);
+if (!version || !/^\d+\.\d+\.\d+$/.test(version)) {
+  fail(`拿不到合法版本号（Cargo.toml version = ${cargoVer}）`);
+}
 const baseName = `Diagramon-${version}-win-x64`;
 const outDir = resolve(argOf("--out", join(RELEASE, "bundle", "portable")));
 const zipPath = join(outDir, `${baseName}.zip`);

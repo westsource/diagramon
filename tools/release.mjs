@@ -238,10 +238,15 @@ async function preflight() {
   if (!gitClean()) die("工作区不干净（git status 有改动）—— 先提交或收起，发版提交必须能追到源码");
   log(`✓ 分支 ${branch}，工作区干净`);
 
-  // 2. 版本号单一真源
-  const v = conf().version;
-  if (v !== VERSION) die(`tauri.conf.json 的 version 是 ${v}，与要发的 ${VERSION} 不一致。先改它并提交（它是唯一真源，Workspace 继承）。`);
-  log(`✓ 版本号一致：${VERSION}`);
+  // 2. 版本号单一真源 = **工作区 Cargo.toml**（tauri.conf.json 已不存版本 —— 删掉它之后
+  //    Tauri/updater/关于对话框 全部读 CARGO_PKG_VERSION，见 tauri-codegen context.rs:255：
+  //    conf.version 缺省 ⇒ env!("CARGO_PKG_VERSION")）。曾经两处各存一份，
+  //    发版只改 tauri.conf ⇒ 关于窗口永远显示 3.0.0（3.0.1–3.0.3 三个安装包都中招）。
+  const wsVer = readFileSync(join(ROOT, "Cargo.toml"), "utf8").match(/^\s*version\s*=\s*"([^"]+)"/m)?.[1];
+  if (!wsVer) die("Cargo.toml 里找不到 [workspace.package] version —— 版本真源被挪走了？");
+  if (wsVer !== VERSION) die(`Cargo.toml 的 version 是 ${wsVer}，与要发的 ${VERSION} 不一致。先改它并提交（这是唯一真源；tauri.conf.json 不再存版本）。`);
+  if (conf().version) die(`tauri.conf.json 里不应该再有 version 字段（版本真源已归一到 Cargo.toml）。删掉它。`);
+  log(`✓ 版本号一致（Cargo 单一真源）：${VERSION}`);
 
   // 3. 发布说明（双语红线）
   if (!existsSync(notesFile())) die(`缺少发布说明：docs/release-notes/${TAG}.md。从 docs/release-notes/TEMPLATE.md 复制一份写好再发。`);
@@ -587,7 +592,7 @@ function printHelp() {
 
 必读：规则见 AGENTS.md；细节见 docs/发布检查单.md
 发版前要准备好的两样东西（脚本会拒绝，不会替你做）：
-  1) src-tauri/tauri.conf.json 的 version 改成目标版本并提交（版本号唯一真源）
+  1) Cargo.toml（工作区）的 version 改成目标版本并提交，然后 cargo update -w 刷 Cargo.lock（版本号唯一真源；tauri.conf.json 不存版本）
   2) docs/release-notes/v<版本>.md（从 TEMPLATE.md 复制，必须含 "# 中文" 与 "# English"）
 
 选项

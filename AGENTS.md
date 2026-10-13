@@ -27,7 +27,7 @@ node tools/release.mjs --help
 
 **发版前你必须准备好的两样东西**（脚本会拒绝，不会替你写）：
 
-1. `src-tauri/tauri.conf.json` 的 `version` 改成目标版本**并提交**（版本号唯一真源，Workspace 继承它）；
+1. `Cargo.toml`（工作区）的 `version` 改成目标版本**并提交**，然后 `cargo update -w` 刷新 Cargo.lock 一起提交 —— **版本号唯一真源就是它**。`tauri.conf.json` 里**不存版本**（删掉后 Tauri/updater/关于对话框全读 `CARGO_PKG_VERSION`，见 tauri-codegen context.rs:255）。曾经两处各存一份、发版只改 conf ⇒ 3.0.1–3.0.3 的安装包「关于」窗口全显示 3.0.0；
 2. `docs/release-notes/v<版本>.md` —— 从 `docs/release-notes/TEMPLATE.md` 复制，**必须含 `# 中文` 与 `# English` 两段**，且正文里要有 `{{setup_url}}`（Gitee 不传附件，正文必须有能点的链接）。
 
 ### 七条红线（脚本逐条校验，别绕过）
@@ -84,7 +84,7 @@ $env:DGM_PYTHON="C:\Users\rong\.workbuddy\binaries\python\versions\3.13.12\pytho
 | `crates/**`、`src-tauri/**`、`Cargo.toml` / `Cargo.lock` | ✅ | ✅（否则已装用户拿不到） | |
 | `ui/**` | ✅ | ✅ | |
 | `assets/**`（`fetch-assets.mjs` 汇出的画布资产） | ✅ | ✅ | |
-| `src-tauri/tauri.conf.json`（`endpoints` / `version` / `bundle`） | ✅ | ✅ | |
+| `src-tauri/tauri.conf.json`（`endpoints` / `bundle`） | ✅ | ✅ | |
 | `tools/**`（脚本、探针、打包工具） | | | ✅ |
 | `docs/**`、`AGENTS.md`、`README*`、`screenshots/**` | | | ✅（README 两条分支都要改） |
 

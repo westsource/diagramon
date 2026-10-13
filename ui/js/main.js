@@ -134,6 +134,15 @@ window.DGM = window.DGM || {};
   function rerender() {
     updateShellVisibility();
     DGM.shell.render();
+    // 标题栏版本徽标：显示**真实**版本（app_info → CARGO_PKG_VERSION，单一真源在 Cargo.toml）。
+    // 这里曾硬编码「dev3.0」—— 与版本无关，看着像坏了。mock 里没有真版本，徽标直接藏掉。
+    const bv = document.getElementById("brand-ver");
+    if (bv) {
+      const info = state.appInfo;
+      const real = info && info.version && /^\d+\.\d+\.\d+$/.test(info.version) ? info.version : null;
+      bv.textContent = real || "";
+      bv.hidden = !real;
+    }
   }
 
   function subscribe() {
@@ -389,7 +398,9 @@ window.DGM = window.DGM || {};
 
       // ── 契约与命令（纯 IPC） ──
       const info = await invoke("app_info");
-      ok("app_info 版本 3.0.0", info && info.version === "3.0.0", info && info.version);
+      // 版本号**别硬编码** —— 真源在 Cargo.toml（workspace version），它随每次发版变。
+      // 曾经这里写死 "3.0.0"，把「关于窗口永远显示 3.0.0」这个 bug 盖了三个版本。
+      ok("app_info 版本号是合法 semver", !!info && /^\d+\.\d+\.\d+$/.test(info.version || ""), info && info.version);
       ok("注册表四种格式", info && info.formats && info.formats.length === 4, info && info.formats && info.formats.map((f) => f.id).join(","));
       ok(
         "画布型 split_view=false",
