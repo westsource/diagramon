@@ -1302,6 +1302,67 @@ def main() -> int:
         except Exception as e:
             log(f"（断言 22 解析失败：{e}）")
 
+        # ---- 断言 23：预览视口 —— 只有「初始化」与显式「适应视图」才自动适应 ----
+        # 用户反馈（2026-10-14）：改之前每敲一个字/换一次主题都重新适应一次大小与位置，
+        # 用户手动调过的缩放与平移会被抹掉。这里钉三件事：重渲染不动视口、显式适应仍然
+        # 适应、换文档（= 初始化）仍然适应；顺带钉住状态栏那一项仍是「回到 100%」。
+        vp_ready = ev(
+            "(async () => {"
+            "  window.__vpSnap = () => {"
+            "    const st = document.querySelector('#canvas-stage');"
+            "    return st.style.getPropertyValue('--zoom') + '|' + st.style.getPropertyValue('--pan-x');"
+            "  };"
+            "  const d = DGM.state.docs.find(x => x.format === 'mermaid');"
+            "  if (!d) return 'no-doc';"
+            "  await DGM.state.activateDoc(d.id);"
+            "  await DGM.state.setViewMode(d.id, 'split');"
+            "  DGM.shell.render();"
+            "  await new Promise(r => setTimeout(r, 700));"
+            "  return window.__vpSnap();"
+            "})()"
+        )
+        log(f"视口适应（初始化）: {vp_ready}")
+        if vp_ready in (None, "", "no-doc"):
+            fails.append("预览视口断言起不来（没有 mermaid 文档？）")
+        else:
+            fitted = vp_ready
+            zoomed = ev("(() => { DGM.preview.zoomIn(); DGM.preview.zoomIn(); return window.__vpSnap(); })()")
+            if zoomed == fitted:
+                fails.append(f"预览放大没接上：{fitted} → {zoomed}")
+            ev("DGM.preview.schedule()")
+            drain(1.2)
+            after_rerender = ev("window.__vpSnap()")
+            log(f"重渲染后视口: {after_rerender}（手动调过后应保持）")
+            if after_rerender != zoomed:
+                fails.append(f"重渲染把用户调过的缩放/位置改掉了：{zoomed} → {after_rerender}")
+            # 显式「适应视图」：Ctrl+0（真实按键）→ 必须真的按画布大小适应
+            press("0", "Digit0", 48, modifiers=2)
+            drain(0.5)
+            refit = ev("window.__vpSnap()")
+            log(f"Ctrl+0 适应后: {refit}（应回到 {fitted}）")
+            if refit != fitted:
+                fails.append(f"Ctrl+0 没有回到适应值：{fitted} → {refit}")
+            # 状态栏那一项仍是「回到 100%」（与「适应视图」是两回事）
+            ev("document.querySelector('#statusbar [data-a=zoom]').click()")
+            drain(0.5)
+            hundred = ev("window.__vpSnap()")
+            log(f"状态栏回到 100%: {hundred}")
+            if str(hundred).split("|")[0] != "1":
+                fails.append(f"状态栏缩放项没回到 100%：{hundred}")
+            # 换文档 = 一次新的「初始化」：新文档仍要按画布适应
+            fresh = ev(
+                "(async () => {"
+                "  await DGM.state.newDoc(['mermaid']);"
+                "  DGM.editor.loadActive();"
+                "  DGM.preview.schedule();"
+                "  await new Promise(r => setTimeout(r, 900));"
+                "  return window.__vpSnap();"
+                "})()"
+            )
+            log(f"新文档（初始化）: {fresh}")
+            if not fresh or fresh == hundred:
+                fails.append(f"新文档没有重新适应视口：{hundred} → {fresh}")
+
         # 汇总启动期间的 console error / 异常
         for params in cdp.seen("Runtime.exceptionThrown"):
             d = params.get("exceptionDetails", {})

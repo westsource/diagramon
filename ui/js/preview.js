@@ -5,6 +5,8 @@
  * - 画布型（drawio / Excalidraw）：交给 `DGM.canvas`（同源 iframe 承载面），
  *   本模块只切可见面并把工具条/缩放接到承载页的钩子上。
  * - 手势：滚轮平移 / Shift 横向 / Ctrl 以光标为中心缩放 / 拖拽 / 双击适应视图。
+ * - 视口：只有**文档第一次挂上（初始化）**和用户显式「适应视图」才按画布大小适应；
+ *   此后重渲染（敲字 / 换主题 / 切视图模式）与占位态都不再动用户的缩放与位置。
  * - 动态尺寸只经 CSS 自定义属性（--pan-x/--pan-y/--zoom）。
  */
 window.DGM = window.DGM || {};
@@ -31,6 +33,16 @@ window.DGM = window.DGM || {};
     x: 0,
     y: 0,
   };
+
+  /* 视口的三条账（2026-10-14 用户反馈：改之前每敲一个字就跳一次缩放与位置）：
+   * - targetDoc：上一次渲染的目标文档 —— 换了目标才算一次新的「初始化」；
+   * - fittedFor：这一次目标里已经按画布适应过的文档 id（失败不记账，下次重试）；
+   * - mountedDoc：舞台里当前挂着哪份文档的 SVG（占位内容会把它清成 null）。
+   * 自动适应只发生在「初始化」（目标文档第一次真正挂上图）—— 之后的重渲染
+   * （敲字 / 换主题 / 切视图模式）一律保留用户自己调过的缩放与位置。 */
+  let targetDoc = null;
+  let fittedFor = null;
+  let mountedDoc = null;
 
   function nodes() {
     stage = stage || $("#canvas-stage");
@@ -69,6 +81,19 @@ window.DGM = window.DGM || {};
     apply();
   }
 
+  /**
+   * 占位内容（加载中 / 空文档 / 报错 / 大文档护栏）不跟用户的缩放平移跑 ——
+   * 但也**不改**用户的视口：只把 DOM 上的变换临时归零，图解回来时 mountSvg 里的
+   * apply() 原样还原。（归零是必须的：用户在 400% 且平移出去时，报错文字不能跟着跑出屏外。）
+   */
+  function parkTransform() {
+    const { stage } = nodes();
+    if (!stage) return;
+    stage.style.setProperty("--pan-x", "0px");
+    stage.style.setProperty("--pan-y", "0px");
+    stage.style.setProperty("--zoom", "1");
+  }
+
   function contentSize() {
     const { stage } = nodes();
     const el = stage && stage.firstElementChild;
@@ -82,24 +107,39 @@ window.DGM = window.DGM || {};
     return w && h ? { w, h } : null;
   }
 
+  /**
+   * 按画布大小适应内容，并把视口居中。
+   *
+   * 返回**是否真的适应了**（视口还没尺寸、内容还没挂上时是 false）—— 调用方
+   * （mountSvg）据此决定要不要把这份文档记成「已初始化」，好在下次重渲染时重试。
+   */
   function fit() {
     // 画布型：缩放归承载页管（它暴露 __hostFit，用的是 drawio 自己的 Fit Page）
     if (canvasMode) {
       DGM.canvas.hostFit(lastFormat);
-      return;
+      markFitted();
+      return true;
     }
     const { viewport } = nodes();
-    if (!viewport) return;
+    if (!viewport) return false;
     const size = contentSize();
-    if (!size) return;
+    if (!size) return false;
     const rect = viewport.getBoundingClientRect();
-    if (!rect.width || !rect.height) return;
+    if (!rect.width || !rect.height) return false;
     const pad = 36;
     const s = clamp(Math.min((rect.width - pad) / size.w, (rect.height - pad) / size.h), MIN_SCALE, MAX_SCALE);
     view.scale = s;
     view.x = (rect.width - size.w * s) / 2;
     view.y = (rect.height - size.h * s) / 2;
     apply();
+    markFitted();
+    return true;
+  }
+
+  /** 视口「初始化」记账：这一次适应之后，本份文档的重渲染不再自动动缩放与位置。 */
+  function markFitted() {
+    const d = state.activeDoc();
+    if (d) fittedFor = d.id;
   }
 
   function zoomBy(factor, origin) {
@@ -144,6 +184,10 @@ window.DGM = window.DGM || {};
     stage.hidden = false;
     setPannable(false);
     resetView();
+    // 没有文档了：下一份文档重新「初始化」（重开同一份文件也该重新适应一次）
+    targetDoc = null;
+    fittedFor = null;
+    mountedDoc = null;
     if (viewport) viewport.classList.remove("grabbing");
   }
 
@@ -152,8 +196,9 @@ window.DGM = window.DGM || {};
     if (!stage) return;
     stage.innerHTML = "";
     stage.appendChild(node);
+    mountedDoc = null;
     setPannable(false);
-    resetView();
+    parkTransform(); // 占位内容落在视口正中；用户视口在 view 里原样留着
   }
 
   function note(text) {
@@ -247,6 +292,13 @@ window.DGM = window.DGM || {};
     const fmt = state.docFmt(d);
     lastFormat = d.format;
 
+    // 换了目标文档 = 一次新的「初始化」：视口记账作废，这一次挂上图时要重新按画布适应。
+    // 同一份文档的重渲染（敲字 / 换主题 / 切视图模式）不走这里 —— 视口保持用户调过的样子。
+    if (targetDoc !== d.id) {
+      targetDoc = d.id;
+      fittedFor = null;
+    }
+
     if (state.isCanvasDoc(d)) {
       renderCanvas(d, fmt);
       return;
@@ -287,8 +339,12 @@ window.DGM = window.DGM || {};
     }
 
     const mine = ++renderToken;
-    showLoading();
-    toolsVisible(false);
+    // 同一份文档的重渲染（敲字、换主题、切视图模式）**不清舞台**：清一次就闪一次
+    // 加载占位，等于把用户的缩放与位置抹掉。只有这份文档还没挂上图时才显示占位。
+    if (mountedDoc !== d.id) {
+      showLoading();
+      toolsVisible(false);
+    }
     try {
       let svgText;
       if (d.format === "mermaid") {
@@ -343,10 +399,14 @@ window.DGM = window.DGM || {};
     const svg = stage.querySelector("svg");
     if (svg) normalizeSvg(svg);
     lastSvg = svgText;
+    mountedDoc = d.id;
     setPannable(true);
     toolsVisible(true);
     if (d.format === "dot") setSub(t("preview.dot.layout", { layout: d.layout || "dot" }));
-    fit();
+    // 自动适应**只在这份文档第一次挂上时**做一次（初始化）—— 此后一律保留用户自己
+    // 调过的缩放与位置。要重新适应就点「适应视图」（Ctrl+0 / 工具条 / 双击画布）。
+    apply(); // 先把用户的视口还回去（占位内容期间 DOM 上是归零的）
+    if (fittedFor !== d.id) fit();
   }
 
   /* ------------------------------------------------------------------ 画布型承载 */

@@ -1190,7 +1190,7 @@ window.DGM = window.DGM || {};
     if (mod && k === "w") { e.preventDefault(); return closeActive(); }
     if (mod && k === "q") { e.preventDefault(); return quit(); }
     if (mod && k === "f") { e.preventDefault(); return DGM.editor.openSearch(); }
-    if (mod && k === "0") { e.preventDefault(); return DGM.preview.resetZoom(); }
+    if (mod && k === "0") { e.preventDefault(); return DGM.preview.fit(); }
     if (mod && (k === "=" || k === "+")) { e.preventDefault(); return DGM.preview.zoomIn(); }
     if (mod && k === "-") { e.preventDefault(); return DGM.preview.zoomOut(); }
     if (mod && ["1", "2", "3"].includes(k)) { e.preventDefault(); return setMode(["source", "split", "preview"][+k - 1]); }
@@ -1338,7 +1338,9 @@ window.DGM = window.DGM || {};
     cmd({ id: "view.activitybar", group: "view", icon: "layers", run: () => togglePanel("activitybar") });
     cmd({ id: "view.fullscreen", group: "view", icon: "maximize", kbd: "Ctrl+Shift+F", run: () => zenMode() });
     cmd({ id: "view.theme", group: "view", icon: "moon", kbd: "Ctrl+K Ctrl+T", run: () => toggleTheme() });
-    cmd({ id: "view.zoom.fit", group: "view", icon: "fit", kbd: "Ctrl+0", run: () => DGM.preview.resetZoom() });
+    // 「适应视图」= 按画布大小适应（与工具条 #btn-fit / 双击画布 同一条路）。
+    // 状态栏那个「点击回到 100%」是另一回事，仍走 resetZoom。
+    cmd({ id: "view.zoom.fit", group: "view", icon: "fit", kbd: "Ctrl+0", run: () => DGM.preview.fit() });
     cmd({ id: "view.zoom.in", group: "view", icon: "zoomIn", kbd: "Ctrl+=", run: () => DGM.preview.zoomIn() });
     cmd({ id: "view.zoom.out", group: "view", icon: "zoomOut", kbd: "Ctrl+-", run: () => DGM.preview.zoomOut() });
     cmd({ id: "view.settings", group: "view", icon: "palette", run: () => DGM.dialogs.settings("appearance") });
