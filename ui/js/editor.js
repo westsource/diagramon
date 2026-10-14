@@ -5,6 +5,7 @@
  * - 光标/选区：vendor 不回调 selectionchange，这里自己挂在 view.dom 上读
  *   state.selection，经节流后写 state.setCaret（→ doc_set_caret）。
  * - 字体大小读 settings.editor.font_size，经 --editor-fs 下发。
+ * - Tab / Shift+Tab 的缩进由这里接管：vendor 没带 indentWithTab（见下方 watchTab）。
  * - vendor 缺失时回退到 <textarea>，功能降级但可编辑。
  */
 window.DGM = window.DGM || {};
@@ -52,6 +53,86 @@ window.DGM = window.DGM || {};
     ["keyup", "mouseup", "focus", "blur"].forEach((ev) => dom.addEventListener(ev, scheduleCaret));
   }
 
+  /* ------------------------------------------------------------------ Tab 缩进 */
+
+  /* vendor 的 basic setup 里有行号、当前行高亮（highlightActiveLine + 行号槽）、
+   * 括号匹配、历史，但**没有 indentWithTab** —— 源码窗口里按 Tab 走的是浏览器
+   * 默认行为（焦点跳到下一个可聚焦元素），缩进根本用不了。vendor 是随包资产
+   * （不当普通源码改），所以这里在应用层补上，语义与 CodeMirror 的
+   * indentWithTab（indentMore / indentLess）一致：
+   *   Tab        → 行首插入一个缩进单位；跨行选区时整块缩进
+   *   Shift+Tab  → 每行去掉至多一个缩进单位的前导空白
+   * 缩进插在**行首**而不是光标处：空选区按 Tab 就是"整行右移一格"，光标跟着走
+   * （与 indentMore 同款事务：userEvent=input.indent，撤销栈里是一步）。
+   * 只在可编辑区（contentDOM）里接管 —— 查找面板的输入框该有自己的 Tab 行为。 */
+  const INDENT = "    "; // 一个缩进单位：与格式注册表的默认正文一致（mermaid / dot 都缩 4 空格）
+
+  /** 反缩进一行：砍掉至多一个缩进单位的前导空白；没有前导空白 → null（这行不改）。 */
+  function outdentChange(line) {
+    const ws = /^[ \t]*/.exec(line.text)[0];
+    if (!ws) return null;
+    // 制表符按一档算 —— 编辑器自己只写空格，但外部文件可能带 tab
+    const cut = ws[0] === "\t" ? 1 : Math.min(INDENT.length, ws.length);
+    return { from: line.from, to: line.from + cut, insert: "" };
+  }
+
+  /** 按 Tab / Shift+Tab 重排各选区覆盖到的行。 */
+  function reindent(outdent) {
+    const view = inst && inst.view;
+    if (!view || view.state.readOnly) return;
+    const { state } = view;
+    const changes = [];
+    let lastLine = -1;
+    for (const r of state.selection.ranges) {
+      for (let pos = r.from; pos <= r.to; ) {
+        const line = state.doc.lineAt(pos);
+        // 与 CodeMirror 的 changeByLine 同规则：光标所在行总在内；
+        // 选区正好停在某行行首时，那一行不算被选中
+        if (line.number > lastLine && (r.empty || r.to > line.from)) {
+          lastLine = line.number;
+          const c = outdent ? outdentChange(line) : { from: line.from, insert: INDENT };
+          if (c) changes.push(c);
+        }
+        pos = line.to + 1;
+      }
+    }
+    // 反缩进时可能一行都没得删 —— 照样吞掉这次 Tab（否则焦点会溜出编辑器）
+    if (!changes.length) return;
+    // 先算出改动落到文档上的样子，再按 assoc=1 映射选区：光标/选区跟着缩进一起右移
+    const set = state.changes(changes);
+    // 选区的类只能从当前 selection 上取：vendor 只对外导出了 create / LANGUAGES，
+    // 没导出 EditorSelection；同一次 bundle 加载里它是同一个类。
+    // （别把 {anchor, head} 的**数组**传进 dispatch —— 这一版 CM 不认，会写出带
+    //   undefined 位置的选区，渲染时就地崩在 lineAt 上。单个对象形态才被接受。）
+    const Sel = state.selection.constructor;
+    view.dispatch({
+      changes: set,
+      selection: Sel.create(
+        state.selection.ranges.map((r) => Sel.range(set.mapPos(r.anchor, 1), set.mapPos(r.head, 1))),
+        state.selection.mainIndex,
+      ),
+      userEvent: outdent ? "delete.dedent" : "input.indent",
+    });
+  }
+
+  /** 接管可编辑区里的 Tab：捕获阶段挂在编辑器根上，抢在 CodeMirror 自己的按键处理之前。 */
+  function watchTab() {
+    if (!inst || !inst.view) return;
+    const view = inst.view;
+    view.dom.addEventListener(
+      "keydown",
+      (e) => {
+        // Ctrl/Cmd/Alt 组合留给应用（Ctrl+Tab 是标签页切换）
+        if (e.key !== "Tab" || e.ctrlKey || e.metaKey || e.altKey) return;
+        if (!view.contentDOM.contains(e.target)) return;
+        e.preventDefault(); // 挡掉浏览器默认的"焦点前移"
+        e.stopPropagation(); // 别让 CodeMirror 的按键处理再看到同一次 Tab
+        reindent(e.shiftKey);
+      },
+      true,
+    );
+  }
+
   /* ------------------------------------------------------------------ 创建 / 挂载 */
 
   function ensure() {
@@ -67,6 +148,7 @@ window.DGM = window.DGM || {};
       },
     });
     watchCaret();
+    watchTab();
     return inst;
   }
 

@@ -1189,6 +1189,119 @@ def main() -> int:
         )
         log(f"关闭按钮存在: {close_alive}")
 
+        # ---- 断言 22：源码窗口的 Tab 缩进 / Shift+Tab 反缩进 / 当前行高亮 ----
+        # vendor 的 basic setup 带行号与当前行高亮，但**没带 indentWithTab**：修之前按
+        # Tab 走的是浏览器默认行为（焦点挪出编辑器），源码窗口里根本缩不了行。
+        # 这里用真实按键 + 真实点击钉四件事：缩进落在行首、焦点不跑、反缩进对称、
+        # 撤销是一步；顺带钉住「当前行高亮」的装饰确实挂在光标行上（vendor 换包时
+        # 最容易悄悄丢掉的就是它 —— 它是随包资产，不在本仓库构建）。
+        def press(key: str, code: str, vk: int, modifiers: int = 0, times: int = 1) -> None:
+            for _ in range(times):
+                for t in ("keyDown", "keyUp"):
+                    cdp.call(
+                        "Input.dispatchKeyEvent",
+                        {"type": t, "key": key, "code": code,
+                         "windowsVirtualKeyCode": vk, "modifiers": modifiers},
+                        timeout=15,
+                    )
+                drain(0.15)
+
+        for t in ("keyDown", "keyUp"):  # 先收掉前面断言可能留着的对话框
+            cdp.call(
+                "Input.dispatchKeyEvent",
+                {"type": t, "key": "Escape", "code": "Escape", "windowsVirtualKeyCode": 27},
+                timeout=15,
+            )
+        drain(0.2)
+        src_ready = ev(
+            "(async () => {"
+            "  const d = DGM.state.docs.find(x => x.format === 'mermaid');"
+            "  if (!d) return JSON.stringify({noDoc: true});"
+            "  await DGM.state.activateDoc(d.id);"
+            "  await DGM.state.setViewMode(d.id, 'split');"
+            "  DGM.shell.render();"
+            "  await new Promise(r => setTimeout(r, 400));"
+            "  const ln = document.querySelectorAll('.cm-line')[1];"
+            "  const r = ln ? ln.getBoundingClientRect() : null;"
+            "  const al = document.querySelector('.cm-activeLine');"
+            "  const pl = [...document.querySelectorAll('.cm-line')].find(l => !l.classList.contains('cm-activeLine'));"
+            "  return JSON.stringify({"
+            "    mode: DGM.state.mode(d),"
+            "    lines: document.querySelectorAll('.cm-line').length,"
+            "    activeLine: document.querySelectorAll('.cm-activeLine').length,"
+            "    activeBg: al ? getComputedStyle(al).backgroundColor : null,"
+            "    plainBg: pl ? getComputedStyle(pl).backgroundColor : null,"
+            "    pos: r ? [r.left + 24, r.top + r.height / 2] : null"
+            "  });"
+            "})()"
+        )
+        log(f"源码窗口就绪: {src_ready}")
+        try:
+            sr = json.loads(src_ready or "{}")
+            if sr.get("noDoc"):
+                fails.append("没有 mermaid 文档，源码窗口断言无从下手")
+            else:
+                if sr.get("mode") != "split" or not sr.get("lines"):
+                    fails.append(f"源码窗口没渲染（mode={sr.get('mode')} 行数={sr.get('lines')}）")
+                if sr.get("activeLine") != 1:
+                    fails.append(f"当前行高亮缺失：.cm-activeLine 命中 {sr.get('activeLine')} 个（应为 1）")
+                # 有装饰类还不够 —— 底色得真的画出来（--accent 被改坏时 color-mix 会整条失效）
+                if sr.get("activeBg") and sr.get("activeBg") == sr.get("plainBg"):
+                    fails.append(f"当前行高亮没有底色：{sr.get('activeBg')}（与普通行相同）")
+                if sr.get("pos"):
+                    cx, cy = sr["pos"]
+                    for t in ("mousePressed", "mouseReleased"):
+                        cdp.call("Input.dispatchMouseEvent",
+                                 {"type": t, "x": cx, "y": cy, "button": "left", "clickCount": 1}, timeout=15)
+                    drain(0.25)
+                    base = ev("DGM.editor.getValue()") or ""
+                    press("Tab", "Tab", 9)
+                    tabbed = ev(
+                        "JSON.stringify({doc: DGM.editor.getValue(),"
+                        " focus: document.activeElement.className,"
+                        " activeLine: document.querySelectorAll('.cm-activeLine').length,"
+                        " activeText: (document.querySelector('.cm-activeLine') || {}).textContent || ''})"
+                    )
+                    tb = json.loads(tabbed or "{}")
+                    b_lines = base.split("\n")
+                    a_lines = (tb.get("doc") or "").split("\n")
+                    diff = [i for i in range(min(len(b_lines), len(a_lines))) if b_lines[i] != a_lines[i]]
+                    log(f"Tab 缩进: 变更行 {[i + 1 for i in diff]} | 焦点 {tb.get('focus')}"
+                        f" | 当前行高亮 {tb.get('activeLine')} 「{tb.get('activeText')}」")
+                    if len(diff) != 1 or a_lines[diff[0]] != "    " + b_lines[diff[0]]:
+                        bad = [f"{b_lines[i]!r}→{a_lines[i]!r}" for i in diff[:3]]
+                        fails.append(f"Tab 没把光标所在行缩进 4 空格（变更行 {[i + 1 for i in diff]} {bad}）")
+                    if "cm-content" not in str(tb.get("focus")):
+                        fails.append(f"按 Tab 后焦点跑出了编辑器：{tb.get('focus')}")
+                    if tb.get("activeLine") != 1:
+                        fails.append(f"缩进后当前行高亮没了：{tb.get('activeLine')}")
+                    # 撤销：Tab 缩进必须是一步（userEvent=input.indent）
+                    press("z", "KeyZ", 90, modifiers=2)
+                    if (ev("DGM.editor.getValue()") or "") != base:
+                        fails.append("Ctrl+Z 没把 Tab 缩进整步撤掉")
+                    # 反缩进：Tab 再 Shift+Tab 必须回到原样
+                    press("Tab", "Tab", 9)
+                    press("Tab", "Tab", 9, modifiers=8)
+                    if (ev("DGM.editor.getValue()") or "") != base:
+                        fails.append("Shift+Tab 与 Tab 不对称（没回到缩进前的样子）")
+                    # 整块缩进：Shift+↓ 选中多行 → Tab 时每一行都动，且只动这些行
+                    press("ArrowDown", "ArrowDown", 40, modifiers=8, times=2)
+                    pre_block = ev("DGM.editor.getValue()") or ""
+                    press("Tab", "Tab", 9)
+                    block = (ev("DGM.editor.getValue()") or "").split("\n")
+                    pb = pre_block.split("\n")
+                    bdiff = [i for i in range(min(len(block), len(pb))) if pb[i] != block[i]]
+                    log(f"整块缩进: 变更行 {[i + 1 for i in bdiff]}")
+                    if len(bdiff) < 2 or any(block[i] != "    " + pb[i] for i in bdiff):
+                        fails.append(f"跨行选区没整块缩进（变更行 {[i + 1 for i in bdiff]}）")
+                    press("Tab", "Tab", 9, modifiers=8)  # 反缩进回原位，别影响后面的截图
+                    if (ev("DGM.editor.getValue()") or "") != pre_block:
+                        fails.append("整块反缩进没回到原样")
+                else:
+                    fails.append("源码窗口拿不到第 2 行的坐标（点不进编辑器）")
+        except Exception as e:
+            log(f"（断言 22 解析失败：{e}）")
+
         # 汇总启动期间的 console error / 异常
         for params in cdp.seen("Runtime.exceptionThrown"):
             d = params.get("exceptionDetails", {})
