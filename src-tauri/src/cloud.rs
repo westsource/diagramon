@@ -297,10 +297,16 @@ pub async fn cloud_login(
     let device_id = match device_id {
         Some(id) => id,
         None => {
+            // 首登生成一次并持久化。**直接改结构体字段，不手写 JSON 补丁** ——
+            // 2026-10-15 的 bug 就是这么来的：这里曾经 `apply_patch(json!({"cloud":
+            // {"deviceId": id}}))`，而 settings.json 的字段是 `device_id`（snake_case），
+            // 补丁键对不上就被 `apply_patch` 当未知键**静默忽略** ⇒ device_id 永远是空的
+            // ⇒ 30 分钟后 access token 一过期就续不了（`/auth/refresh` 绑定设备，
+            // 空 deviceId → DEVICE_MISMATCH）⇒ 用户看到的是"登录过，下次启动还是未登录"。
+            // 走类型化赋值就不可能再写错键名。
             let id = uuid::Uuid::new_v4().simple().to_string();
-            let patch = json!({ "cloud": { "deviceId": id } });
             let mut s = state.settings().clone();
-            app_core::settings::apply_patch(&mut s, patch)?;
+            s.cloud.device_id = id.clone();
             state.persist_settings(&s)?;
             *state.settings() = s;
             id
@@ -569,4 +575,3 @@ pub async fn gateway_resolved(state: &AppState, alias: &str) -> R<ai::Resolved> 
         temperature: None,
     })
 }
-

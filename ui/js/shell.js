@@ -629,12 +629,11 @@ window.DGM = window.DGM || {};
       box.innerHTML = `<span class="dot"></span><b>${esc(t("app.name"))}</b><span class="path">${esc(t("status.noDoc"))}</span>`;
       return;
     }
-    const f = state.docFmt(d);
-    const path = d.path || t("tab.noPath");
+    // 只显示文件名：完整路径鼠标悬停在标签页头上就能看到（那才是它的位置）——
+    // 标题栏摆一长串路径只会把窗口标题挤没（2026-10-15 用户要求）。
     box.innerHTML =
       `<span class="dot" style="background:var(--fmt-${d.format})"></span>` +
-      `<b>${esc(d.name)}${d.dirty ? " ·" : ""}</b>` +
-      `<span class="path">${esc(path)}</span>`;
+      `<b>${esc(d.name)}${d.dirty ? " ·" : ""}</b>`;
   }
 
   /* ------------------------------------------------------------------ 活动栏 */
