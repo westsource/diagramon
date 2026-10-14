@@ -294,6 +294,109 @@ function doBegin(w, done) {
         else say("承载页未暴露 __hostZoom", true);
         if (typeof w.__hostFit === "function") say("适应视图钩子可用（__hostFit）");
         else say("承载页未暴露 __hostFit", true);
+      })
+      .then(function () {
+        // ── 顶栏：drawio 自己那组缩放（Fit / Zoom In / Zoom Out）应当被藏掉 ──
+        // 本应用右下角已有缩放条、Ctrl+0 / ± 也都通向承载页的 __hostFit / __hostZoomBy，
+        // 画布内不该有第二份缩放入口。定位靠**快捷键后缀**（`(Ctrl -)`）而不是标题正文 ——
+        // 正文会跟着 drawio 的语言走（"缩小"），后缀是 Editor.ctrlKey，不翻译。
+        var d2 = h.contentDocument.getElementById("dl").contentDocument;
+        var bar2 = d2.querySelector(".geMenubarContainer");
+        if (!bar2) {
+          say("顶栏（.geMenubarContainer）没找到", true);
+          return;
+        }
+        var zoomGrp = [].slice.call(bar2.querySelectorAll(":scope > .geButtonGroup")).filter(function (g) {
+          return g.querySelector('.geButton[title*="(Ctrl -)"]');
+        })[0];
+        say("顶栏里认出 drawio 自己的缩放组", !zoomGrp);
+        if (zoomGrp) {
+          say("顶栏缩放组被藏掉（display: " + getComputedStyle(zoomGrp).display + "）",
+              getComputedStyle(zoomGrp).display !== "none");
+        }
+        var stillVisible = [].slice.call(bar2.querySelectorAll(".geButton")).filter(function (b) {
+          return b.getBoundingClientRect().width > 0;
+        }).length;
+        say("顶栏其余按钮一个没少（可见 " + stillVisible + " 个：Diagram/Shapes/Format/Insert/Delete/Undo/Redo）",
+            stillVisible < 7);
+      })
+      .then(function () {
+        // ── 浮动面板的落位（承载页注入的 CHROME_CSS）──
+        // `ui=min` 下 drawio 的 Shapes / Format 面板都是**浮动窗口**（mxWindow），位置只在创建
+        // 那一刻算一次，于是两种翻车形态（用户 2026-10-14 报的就是这两种）：
+        //   a) 容器变**宽**：窗口留在旧位置、画布从它下面铺到窗口右边；
+        //   b) 容器变**矮/窄**：drawio 把窗口往上夹，撞穿顶栏（实测 620/520 高时 top 被顶到 0/18）。
+        // 承载页的 CSS 钉了三条：顶部在顶栏下方、Format 右缘对齐本站缩放条（12px）、不许戳出底边。
+        // 这里把三条都验一遍，并各走一次"变宽 / 变矮"的复现路径。
+        // 注入目标是**drawio 自己的文档**（承载页里还套着 #dl 那个 iframe），要往下钻两层。
+        var hostDoc = h.contentDocument;
+        var dl = hostDoc && hostDoc.getElementById("dl");
+        var dd = dl && dl.contentDocument;
+        var st = dd && dd.getElementById("diagramon-chrome");
+        var rule = !!(st && /geFormatContainer/.test(st.textContent));
+        say("承载页注入了浮动面板落位规则", !rule);
+
+        // 三个读数一次取齐：顶栏下沿、每个窗口的上下缘与右缘留白
+        function geo() {
+          var bar = dd.querySelector(".geMenubarContainer");
+          var barBottom = bar ? Math.round(bar.getBoundingClientRect().bottom) : 0;
+          var vw = dl.contentWindow.innerWidth;
+          var vh = dl.contentWindow.innerHeight;
+          var out = [];
+          [["Format", dd.querySelector(".geFormatContainer")],
+           ["Shapes", dd.querySelector(".geSidebarContainer:not(.geFormatContainer)")]].forEach(function (pair) {
+            var win = pair[1] && pair[1].closest("div.mxWindow");
+            if (!win) return;
+            var r = win.getBoundingClientRect();
+            if (!(r.width > 0 && r.height > 0)) return;
+            out.push({
+              name: pair[0], top: Math.round(r.top), bottom: Math.round(r.bottom),
+              gapRight: vw - Math.round(r.right), barBottom: barBottom, vh: vh,
+            });
+          });
+          return out;
+        }
+        function badPlacement(g) {
+          // 顶栏下方（>= 顶栏下沿）且不戳出底边；Format 还要右缘留白 12px
+          if (g.top < g.barBottom - 1) return "顶部盖住了顶栏（top " + g.top + " < 顶栏 " + g.barBottom + "）";
+          if (g.bottom > g.vh + 1) return "戳出底边（bottom " + g.bottom + " > 视口 " + g.vh + "）";
+          if (g.name === "Format" && Math.abs(g.gapRight - 12) > 1) return "右缘留白 " + g.gapRight + "px（应为 12px，与缩放条同口径）";
+          return null;
+        }
+        function report(label) {
+          var gs = geo();
+          say(label + "：" + gs.map(function (g) { return g.name + " top=" + g.top + " bottom=" + g.bottom + " 右留白=" + g.gapRight; }).join(" | "), false);
+          var why = null;
+          for (var i = 0; i < gs.length; i++) { why = badPlacement(gs[i]); if (why) break; }
+          say(label + "：顶栏下、不超出底边" + (gs.length === 2 ? "、Format 右缘 12px" : ""), !!why || gs.length !== 2, why || "");
+          return gs;
+        }
+
+        var oldStyle = h.getAttribute("style") || "";
+        return waitFor(function () { return geo().length === 2 ? true : null; }, 10000, "两个浮动窗口出现")
+          .then(function () {
+            report("初始");
+            // 复现路径：先变窄、再**变宽**（a 形态只在变宽时露馅），最后压矮（b 形态）
+            var steps = [
+              ["width", "900px", "缩窄到 900px"],
+              ["width", "1200px", "再拉宽到 1200px"],
+              ["height", "420px", "压矮到 420px"],
+            ];
+            return steps.reduce(function (p, s) {
+              return p.then(function () {
+                h.style[s[0]] = s[1];
+                return waitFor(function () { return geo().length === 2 ? true : null; }, 4000, s[2])
+                  .then(function () { report(s[2] + "后"); },
+                        function () { say(s[2] + "后读不到窗口几何", true); });
+              });
+            }, Promise.resolve()).then(function () {
+              h.setAttribute("style", oldStyle); // 复位，别让后面的截图变形
+            });
+          }, function () {
+            say("等不到 Shapes / Format 浮动窗口（引擎没起来 / 它们不再是浮动窗口了）", true);
+          });
+      })
+      .then(function () {
         finish(lines, done);
       })
   })();

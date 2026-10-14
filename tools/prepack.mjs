@@ -15,7 +15,7 @@
  * 于是有了这个脚本（便携版由 tools/pack-portable.mjs 过滤，它不受影响）。
  */
 
-import { existsSync, readdirSync, rmSync, statSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -67,6 +67,21 @@ for (const m of MOUNTS) {
 if (!existsSync(join(ROOT, "ui", "index.html"))) {
   assetsOk = false;
   log("  ✗ ui/index.html 缺失");
+}
+
+// 承载页是**本仓库**的文件（`tools/drawio-host/host.html`），由 fetch-assets 复制进挂载点 ——
+// 它不在上游资产里，所以"取资产"漏跑时不会报缺件，只会静默用上旧的那份（实测踩过：
+// target/debug/assets 里那份停在 2026-10-10，而源文件当天刚改过）。这里逐字节对一下：
+// 不一致就拦住 —— 用户侧看到的是"改了没生效"，比报错难查得多。
+const hostSrc = join(ROOT, "tools", "drawio-host", "host.html");
+const hostDst = join(ROOT, "assets", "drawio", "host.html");
+if (existsSync(hostSrc) && existsSync(hostDst)) {
+  if (readFileSync(hostSrc).equals(readFileSync(hostDst))) {
+    log("  ✓ assets/drawio/host.html 与 tools/drawio-host/host.html 一致");
+  } else {
+    assetsOk = false;
+    log("  ✗ assets/drawio/host.html 与 tools/drawio-host/host.html 不一致 —— 先跑 node tools/fetch-assets.mjs");
+  }
 }
 
 if (!assetsOk) {

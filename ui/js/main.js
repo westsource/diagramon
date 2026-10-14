@@ -498,6 +498,55 @@ window.DGM = window.DGM || {};
       ok("承载页与外壳同源（可直读 contentWindow）", sameOrigin);
       ok("canvas 模块认得两种画布格式", !!(DGM.canvas && DGM.canvas.supports("drawio") && DGM.canvas.supports("excalidraw")));
 
+      // 承载页里那两条注入规则（缩缩放框 + Format 贴右缘）—— **不依赖 drawio 引擎**：
+      // 注入本身发生在 drawio iframe 的 load 上（那时自检早跑完、且后台窗口的定时器被节流），
+      // 所以这里验"协议供出的那份 host.html 确实带着它们"。为什么要验：`ui=min` 下 drawio 的
+      // Format 面板是浮动窗口（mxWindow），位置只在创建那一刻算一次 —— 主窗口一变宽它就留在旧
+      // 位置、画布从它下面铺到窗口右边（用户 2026-10-14 报过）；规则随包丢了，用户侧就是
+      // "面板浮在半空"。**真实的贴边几何**（含拉宽容器）由 tools/dev/canvas_probe.py 验 ——
+      // 那边用普通 HTTP、定时器不受节流，还能改容器宽度走那个 bug 的复现路径。
+      let hostHtml = "";
+      try {
+        const r = await fetch("/drawio/host.html");
+        hostHtml = r.ok ? await r.text() : "";
+      } catch (e) {
+        hostHtml = "";
+      }
+      ok(
+        "承载页带着 CHROME_CSS（缩缩放框 + 浮动面板落位 + 顶栏缩放组）",
+        /geZoomInput/.test(hostHtml) &&
+          /geFormatContainer/.test(hostHtml) &&
+          /geSidebarContainer/.test(hostHtml) &&
+          /geMenubarContainer/.test(hostHtml),
+        hostHtml ? `${hostHtml.length} 字节` : "（取不到 /drawio/host.html）",
+      );
+
+      // 几何断言得等 drawio 引擎起来（浮动窗口是引擎建的）—— 拿不到就跳过：
+      // 自检里绝不等定时器（后台窗口被节流，等它只会把报告拖死）。
+      let pin = null;
+      try {
+        const host = frame.contentWindow.document;
+        const dl = host.getElementById("dl");
+        const dd = dl && dl.contentDocument;
+        const fmt = dd && dd.querySelector(".geFormatContainer");
+        const win = fmt && fmt.closest("div.mxWindow");
+        const r = win ? win.getBoundingClientRect() : null;
+        const bar = dd && dd.querySelector(".geMenubarContainer");
+        if (r && r.width > 0 && r.height > 0 && bar) {
+          pin = {
+            gap: Math.round(dl.contentWindow.innerWidth - r.right),
+            belowBar: Math.round(r.top) >= Math.round(bar.getBoundingClientRect().bottom),
+          };
+        }
+      } catch (e) {
+        pin = null;
+      }
+      ok(
+        "drawio 浮动面板落位（右缘 12px 对齐缩放条 / 顶部在顶栏下方）",
+        !pin || (Math.abs(pin.gap - 12) <= 1 && pin.belowBar),
+        pin ? JSON.stringify(pin) : "（浮动窗口未显示 / 引擎未就绪，跳过）",
+      );
+
       // dgm 协议真的把资产供出来了吗 —— 用 fetch 断言，不走定时器（后台窗口的定时器被节流）
       const headOk = async (path) => {
         try {

@@ -90,22 +90,63 @@
   });
 
   // ==========================================================================
-  // 顶栏工具条（含 zoom 下拉区）由 URL 的 **nav=0** 关掉 —— 本应用有自己的缩放
-  // 控件与快捷键，画布内不再需要第二份；底部状态条的「100%」输入则参数关不掉，
-  // 靠下面注入的 ZOOM_HIDE_CSS。
-  // 藏掉 drawio 自己的缩放输入框（底部状态条右侧的「100%」输入，类名 geZoomInput）。
+  // 一、藏掉 drawio 自己的缩放输入框（`.geZoomInput`，底部状态条右侧那个「100%」）。
   //
-  // 本应用的缩放语义只有一处（状态栏的百分数），画布内再摆一个读数就是两个数字互相打架；
-  // 而 drawio 的 embed 参数里**没有**关掉它的开关（只有 urlParams.zoom 设初值），只能注入样式。
-  // 选择在承载页注入而不是改 drawio 自己的 index.html：后者要走 tools/fetch-drawio.ps1 的补丁
-  // + 清单指纹（重下源码包），换来的是同一件事。
+  // 本应用的缩放语义只有一处（状态栏的百分数 + 画布右下角的缩放条），画布内再摆一个读数
+  // 就是两个数字互相打架；而 drawio 的 embed 参数里**没有**关掉它的开关（只有 urlParams.zoom
+  // 设初值），只能注入样式。**隐藏 ≠ 删除**：Alt+滚轮缩放照旧可用，元素仍在 DOM 里，
+  // drawio 也照常更新它的值（宿主轮询就是读它）。
   //
-  // **隐藏 ≠ 删除**：Alt+滚轮缩放照旧可用，元素仍在 DOM 里，drawio 也照常更新它的值。
+  // 二、`ui=min` 下 drawio 的 **Shapes / Format 面板都是浮动窗口**（mxWindow），位置在创建
+  // 那一刻算一次就不再重算，于是两种翻车形态（用户 2026-10-14 报的）：
+  //   a) 容器变**宽**：窗口留在旧位置不动，画布从它下面一直铺到窗口右边（实测 900 → 1500
+  //      时 Format 卡在 left=658，面板浮在半空）；
+  //   b) 容器变**矮/窄**：drawio 自己的"把窗口夹进容器"逻辑往上顶，撞穿顶栏
+  //      （实测 620/520 高的容器里 Shapes 的 top 被顶到 0 / 18 —— 直接盖住顶栏）。
+  // 这里用 CSS 钉住：顶部一律在顶栏下方、Format 贴右缘、两个窗口都不许戳出底边。
   //
-  // 挂在 iframe 的 load 上而不是注入一次就完事：drawio 内部会 window.location.reload()
-  // （语言/主题切换等路径），重载后注入的样式会一起消失，而 load 每次导航都会再来一次。
+  // 顶栏读数：`.geMinimal .geMenubarContainer { height: 48px; border-bottom: 1px }`
+  //（grapheditor.css，box-sizing: border-box ⇒ 连边框共 48）；下面留 8px ⇒ top: 56px。
+  // `max-height: calc(100% - 64px)` = 56 + 底边留 8：不夹的话顶栏刚修好、底边又戳出去
+  // （面板内容自己会滚：.geFormatContainer 与形状库都带 overflow-y）。
+  //
+  // Format 的右缘取 **12px**，与本站画布右下角那条缩放条（app.css `.canvas-tools{right:12px}`）
+  // **同口径** —— 这是一条对齐要求（用户拍的），改一处要改另一处；承载页 iframe 正好铺满
+  // `.canvas-viewport`（.canvas-frame 无边框、inset:0），所以两边的 12px 是同一个 12px。
+  //
+  // 为什么用 CSS 钉而不是 JS 调 mxWindow.setLocation：
+  //   - mxWindow 实例没法从 DOM 反查（元素上没有反向引用），只能靠 `mxWindow.activeWindow`
+  //     这个"当前激活窗口"的静态去碰运气；
+  //   - 只改 DOM 的 left/top 则 drawio 内部坐标（this.x/this.y，拖拽偏移就是用它算的）会落后，
+  //     用户一拖窗口先跳一下；
+  //   - 而 CSS 只是盖住视觉位置，内部坐标压根不参与 —— 没有"跳一下"这种事。
+  // 代价（用户拍板要的就是这个语义）：这两个窗口**横竖都拖不动了**，宽度仍可拖（width 没碰）。
+  // `:has()` 能用：drawio 自己的 grapheditor.css 里就有 15 处 `:has(`。
+  // `.geSidebarContainer:not(.geFormatContainer)` 是 drawio 自己区分"形状库窗口"与"格式窗口"
+  // 的写法（见它的 `.geEditor>.geSidebarContainer:not(.geFormatContainer)`）。
+  //
+  // 三、注入时机：挂在 iframe 的 load 上而不是注入一次就完事 —— drawio 内部会
+  // window.location.reload()（语言/主题切换等路径），重载后注入的样式会一起消失，
+  // 而 load 每次导航都会再来一次。
   // ==========================================================================
-  const ZOOM_HIDE_CSS = '.geZoomInput{display:none !important;}';
+  // 三、藏掉顶栏里 drawio **自己那组缩放**（Fit / Zoom In / Zoom Out 三个图标）—— 本应用右下角
+  // 已有缩放条、Ctrl+0 / Ctrl+= / Ctrl+- 也都通向承载页的 `__hostFit` / `__hostZoomBy`，
+  // 画布内不该有第二份缩放入口（与上面藏掉底部「100%」输入同一个口径）。
+  //
+  // 定位方式：按**快捷键后缀**找父组，`> .geButton[title*="(Ctrl -)"]`。
+  //   - 不能用 `:last-child` / `:nth-child`：顶栏那几组的构成会变（实测同一份参数下，有时后面
+  //     还跟着「Comments / Change User」那组，顶部最右的并不总是缩放组）；
+  //   - 不能用 `[title^="Zoom"]`：按钮标题跟着 drawio 的语言走（WebView2 跟随系统，多半是中文），
+  //     但标题里的快捷键后缀是 `Editor.ctrlKey`（"Ctrl"，不翻译）—— 看 "Format (Ctrl+Shift+P)"
+  //     就是译名 + 原样后缀，所以后缀是语言无关的那一半。
+  // ==========================================================================
+  const CHROME_CSS =
+    '.geZoomInput{display:none !important;}' +
+    'div.mxWindow:has(.geFormatContainer),' +
+    'div.mxWindow:has(.geSidebarContainer:not(.geFormatContainer))' +
+    '{top:56px !important;max-height:calc(100% - 64px);}' +
+    'div.mxWindow:has(.geFormatContainer){left:auto !important;right:12px !important;}' +
+    '.geMenubarContainer > .geButtonGroup:has(> .geButton[title*="(Ctrl -)"]){display:none !important;}';
 
   // ==========================================================================
   // 画布内的应用级快捷键转发。
@@ -167,7 +208,7 @@
       if (!doc.getElementById('diagramon-chrome')) {
         const style = doc.createElement('style');
         style.id = 'diagramon-chrome';
-        style.textContent = ZOOM_HIDE_CSS;
+        style.textContent = CHROME_CSS;
         doc.head.appendChild(style);
       }
 
