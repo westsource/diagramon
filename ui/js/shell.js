@@ -897,6 +897,36 @@ window.DGM = window.DGM || {};
     return stem + (ext || (d ? state.docFmt(d).exts[0] : ".mmd"));
   }
 
+  /**
+   * 保存对话框的「文件类型」清单：**本标签页的格式排第一位**，其后才是「所有文件」。
+   *
+   * 顺序不是装饰 —— Win32 的保存对话框拿**第一个过滤器的第一个扩展名**当缺省后缀
+   * （rfd 的 `add_filters` → `SetDefaultExtension`，见 rfd/…/win_cid/file_dialog/dialog_ffi.rs），
+   * 排错了 drawio / DOT / Excalidraw 标签页会被系统补成 `.mmd`：后缀与内容对不上，
+   * 下次打开按错格式解析（v2 客户端踩过这个坑，见其 FileService.SaveFileAsync 的注释）。
+   *
+   * 只列当前格式 + 所有文件：本应用的「保存」**不做跨格式转换**（要换格式走转换中心）。
+   */
+  function saveFilters(fmt) {
+    const exts = (fmt.exts || []).map((e) => String(e).replace(/^\./, "")).filter(Boolean);
+    const own = exts.length
+      ? [{ name: `${fmt.name} (${exts.map((e) => "*." + e).join("; ")})`, extensions: exts }]
+      : [];
+    return own.concat([{ name: t("common.allFiles"), extensions: ["*"] }]);
+  }
+
+  /**
+   * 补回规范扩展名：只有 Windows 的后端保证按过滤器的缺省后缀补（别的后端不保证），
+   * 而用户把名字里的后缀删掉是常事 —— 存出一个没有后缀的文件，重新打开会按 Mermaid 兜底解析。
+   * 已经写了后缀的（含用户自己敲的 `.txt`）原样保留：那是用户的决定。
+   */
+  function withCanonicalExt(path, fmt) {
+    const s = String(path);
+    const base = s.split(/[\\/]/).pop() || "";
+    if (/\.[^./\\]+$/.test(base)) return s;
+    return s.replace(/[.\s]+$/, "") + ((fmt.exts && fmt.exts[0]) || "");
+  }
+
   async function saveActive(as) {
     const d = state.activeDoc();
     if (!d) return;
@@ -918,8 +948,9 @@ window.DGM = window.DGM || {};
 
     let path = d.path;
     if (as || !path) {
-      const picked = await ipc.dialog.pickSavePath({ defaultPath: suggestedName(d) });
-      if (picked) path = picked;
+      const fmt = state.docFmt(d);
+      const picked = await ipc.dialog.pickSavePath({ defaultPath: suggestedName(d), filters: saveFilters(fmt) });
+      if (picked) path = withCanonicalExt(picked, fmt);
       else if (ipc.isMock) path = d.path || "E:/OpenCode/diagramon/docs/" + suggestedName(d);
       else return; // 用户取消
     }

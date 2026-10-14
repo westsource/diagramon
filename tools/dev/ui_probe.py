@@ -1042,6 +1042,58 @@ def main() -> int:
         except Exception as e:
             log(f"（断言 20 解析失败：{e}）")
 
+        # ---- 断言 21：保存对话框按**本标签页的格式**推荐扩展名 ----
+        # 历史 bug 形态（v2 客户端踩过，见其 FileService.SaveFileAsync 的注释）：类型清单按注册表
+        # 顺序排、Mermaid 恒在第一 ⇒ drawio / DOT / Excalidraw 标签页另存为时被补成 `.mmd`，
+        # 后缀与内容对不上、下次打开按错格式解析。这里钉住三件事：
+        #   1) 建议文件名带本格式的规范扩展名；
+        #   2) 类型清单第一项是本格式、首扩展名即规范扩展名（Win32 拿它当缺省后缀），末项是「所有文件」；
+        #   3) 用户把名字里的后缀删掉时，落盘路径补回**本格式**的扩展名。
+        save_check = ev(
+            "(async () => {"
+            "  const seen = []; let ret = null;"
+            "  const orig = DGM.ipc.dialog.pickSavePath;"
+            "  DGM.ipc.dialog.pickSavePath = async (o) => { seen.push(JSON.parse(JSON.stringify(o || {}))); return ret; };"
+            "  const got = [];"
+            "  for (const fmt of ['mermaid', 'dot', 'drawio', 'excalidraw']) {"
+            "    const d = await DGM.state.newDoc(fmt);"
+            "    await DGM.state.activateDoc(d.id);"
+            "    ret = null; await DGM.shell.saveActive(true);"
+            "    const o = seen[seen.length - 1] || {};"
+            "    ret = 'E:/tmp/probe-' + fmt; await DGM.shell.saveActive(true);"
+            "    const after = DGM.state.doc(d.id) || {};"
+            "    got.push({ fmt, def: o.defaultPath || '', filters: o.filters || [], saved: after.path || '' });"
+            "  }"
+            "  DGM.ipc.dialog.pickSavePath = orig;"
+            "  return JSON.stringify(got);"
+            "})()"
+        )
+        log(f"保存扩展名推荐: {save_check}")
+        try:
+            CANON = {"mermaid": "mmd", "dot": "dot", "drawio": "drawio", "excalidraw": "excalidraw"}
+            rows = json.loads(save_check or "[]")
+            if len(rows) != len(CANON):
+                fails.append(f"保存扩展名推荐没跑全（拿到 {len(rows)} 个格式）")
+            for row in rows:
+                fmt = row.get("fmt")
+                ext = CANON.get(fmt)
+                if not ext:
+                    continue
+                if not str(row.get("def") or "").lower().endswith("." + ext):
+                    fails.append(f"{fmt} 标签页的建议文件名没带规范扩展名 .{ext}：{row.get('def')}")
+                filters = row.get("filters") or []
+                if not filters:
+                    fails.append(f"{fmt} 保存对话框没有文件类型清单（用户删掉后缀就会存出个没后缀的文件）")
+                    continue
+                if (filters[0].get("extensions") or [None])[0] != ext:
+                    fails.append(f"{fmt} 类型清单第一项不是本格式的规范扩展名（Win32 据此补后缀）：{filters[0]}")
+                if "*" not in (filters[-1].get("extensions") or []):
+                    fails.append(f"{fmt} 类型清单末项不是「所有文件」：{filters[-1]}")
+                if not str(row.get("saved") or "").lower().endswith("." + ext):
+                    fails.append(f"{fmt} 用户没写后缀时应补 .{ext}，实际落盘路径 {row.get('saved')}")
+        except Exception as e:
+            fails.append(f"保存扩展名推荐断言解析失败：{e} / {save_check}")
+
         # ---- 追加截图：保存到云端窗口 / 登录窗口（留证用，不参与判定） ----
         # 截图走"先把视口撑到 1680×1000 再截"：`captureBeyondViewport` 在本机
         # 会静默返回空 data（原来那段就是这么一直什么都没截到的），所以显式改视口尺寸，

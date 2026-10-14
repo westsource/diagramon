@@ -65,7 +65,7 @@ $env:DGM_PYTHON="C:\Users\rong\.workbuddy\binaries\python\versions\3.13.12\pytho
 - **从受限会话（远程桌面、agent 沙箱、作业对象）拉起自检**：WebView2 浏览器子进程会**启动即崩**——症状是窗口纯白、`$LOCALAPPDATA/com.diagramon.app/EBWebView/Crashpad/reports/` 里**每次启动多一个 ~7MB 的 .dmp**、页面 boot 走完但心跳（`hb:` 打点）永远不出现。修法是给 WebView2 加 `--no-sandbox`（运行时开关，不进发布配置）：`DGM_BROWSER_EXTRA_ARGS="--no-sandbox" node tools/dev/check.mjs`。只在受限环境里用，普通桌面跑自检**不要**带它。
 - 判断"整场有没有走到第 7 步"**看报告时间戳**：脚本进循环前会先删报告，所以**时间戳还是旧的 = 前六步里有人 `exit(2)`**。
 - `DGM_PYTHON` 指向的解释器必须能 `import websocket`；本机唯一满足的是上面那条路径（机器上没有 `py` 启动器）。这个环境变量**曾经因为 `findPython()` 的 `shell:true` 从来没生效过**，别再把失败归因成"环境缺件"。
-- 单测当前 163 项、探针 20 条断言、自检 51 条 —— 数量会随开发变，**全绿才是要求**。
+- 单测当前 163 项、探针 21 条断言、自检 51 条 —— 数量会随开发变，**全绿才是要求**。
 
 改 `ui/**` 之后跑本地应用**必须先 `cargo build`**（或把改动 `cp` 到 `target/debug/ui/` 同路径），否则跑的是旧副本。
 
