@@ -1,7 +1,7 @@
 /* 对话框：新建 / 转换 / 识图 / 设置（五页签）/ 快捷键 / 历史 / 说明 / 关于 / 未保存 / 退出 / 布局。
  *
  * 取向：
- *   - 一律经 state + settings_patch 落盘；密钥走 cred_set/cred_delete，永不回显。
+ *   - 一律经 state + settings_patch 落盘；密钥走 ai_model_key_set / ai_model_key_delete，永不回显。
  *   - 「不可用 ≠ 不存在」：不可用的转换方向照样列出并给理由。
  *   - 转换执行：契约里没有 convert 命令，前端只对能忠实本地预演的 mermaid → dot
  *     提供"预演 + 另开标签页"；其余方向明确写"执行由 Rust 侧提供，本步未接线"，
@@ -687,12 +687,21 @@ window.DGM = window.DGM || {};
       const def = $("#ai-default");
       if (def && def.value) draftAi.default_model = def.value;
 
-      // 先写密钥（失败不阻断保存其它设置）
+      // 先写密钥（失败不阻断保存其它设置）。键名由 Rust 算（`ai_model_key_set`）——
+      // 前端不许自己拼前缀：曾经这里传原始 id，而读取端查的是 `ai-model:{id}`，
+      // 于是"填了密钥仍显示未配置、一调用就报缺少 API Key"（2026-10-14 修）。
       for (const w of keyWrites) {
         try {
-          await DGM.ipc.invoke("cred_set", { key: w.id, secret: w.secret });
+          await DGM.ipc.invoke("ai_model_key_set", { modelId: w.id, secret: w.secret });
         } catch (e) {
           DGM.toast({ icon: "alert", title: t("set.ai.apiKey"), sub: (e && e.message) || String(e), warn: true });
+        }
+      }
+      // 删掉的模型顺手清密钥，别在凭据库里留孤儿
+      const kept = new Set((draftAi.models || []).map((m) => m.id));
+      for (const m of state.ai().models || []) {
+        if (!kept.has(m.id)) {
+          await DGM.ipc.invoke("ai_model_key_delete", { modelId: m.id }).catch(() => {});
         }
       }
       await state.patchSettings({ ai: draftAi });

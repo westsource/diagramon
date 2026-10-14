@@ -12,7 +12,7 @@
  * 返回值约定（契约未固定返回值时的补充，前端一律做成可容错）：
  *   - 列表型变更（doc_new / doc_open_paths / doc_close / doc_activate）→ Session{docs,active}
  *   - 单文档变更（doc_save / doc_save_as / doc_set_body / doc_set_view_mode / doc_set_layout）→ Doc
- *   - doc_set_caret / cred_set / cred_delete / ai_chat / ai_cancel → 无意义返回值
+ *   - doc_set_caret / ai_model_key_set / ai_model_key_delete / ai_chat / ai_cancel → 无意义返回值
  *   - doc_issues → Issue[] · doc_outline → OutlineGroup[] · doc_scope → String
  *   前端 applyResult() 同时接受 Session 与 Doc，所以 Rust 侧两种都接得住。
  */
@@ -389,6 +389,20 @@ digraph Pipeline {
   const Mock = {
     _seq: 0,
     _ai: new Map(), // request_id -> {timer, aborted}
+    /** BYOK 密钥（mock 只记存不存在，不回显内容）—— 键名与真机一致：按 model_id 存 ✓ */
+    _cred: {},
+    /** 和真机的 `hydrate_models` 对齐：`has_key` 由凭据现状**现算**，不是磁盘上那份。
+     *  探针靠它断言"填了密钥 → 未配置变已配置"这条链路是通的。 */
+    _hydrateCreds() {
+      const ai = this.settings && this.settings.ai;
+      if (!ai || !Array.isArray(ai.models)) return;
+      for (const m of ai.models) {
+        const secret = this._cred[m.id];
+        m.has_key = m.provider === "ollama" || !!secret;
+        const s = String(secret || "");
+        m.key_hint = s ? s.slice(0, 3) + "…" + s.slice(-4) : "";
+      }
+    },
     docs: [],
     active: "d1",
     settings: null,
@@ -613,6 +627,7 @@ digraph Pipeline {
         }
 
         case "settings_get":
+          this._hydrateCreds();
           return this._clone(this.settings);
 
         case "settings_patch": {
@@ -622,6 +637,7 @@ digraph Pipeline {
           try {
             sessionStorage.setItem("dgm-mock-settings", JSON.stringify(this.settings));
           } catch (e) { /* 隐私模式等场景写不进就算了 */ }
+          this._hydrateCreds();
           return this._clone(this.settings);
         }
 
@@ -950,8 +966,12 @@ digraph Pipeline {
           // mock：不落盘，只回报目标路径
           return args.path || null;
 
-        case "cred_set":
-        case "cred_delete":
+        case "ai_model_key_set":
+          this._cred[args.modelId] = String(args.secret || "");
+          return null;
+
+        case "ai_model_key_delete":
+          delete this._cred[args.modelId];
           return null;
 
         case "ai_chat":
@@ -1081,6 +1101,37 @@ digraph Pipeline {
         return true;
       }
       const modelName = gwModel ? gwModel.display_name : localModel ? localModel.name : "auto";
+
+      // 探针夹具：prompt 带 `[think]` 时模拟**思考型模型**——先连推几帧 `ai://thinking`，
+      // 再以"没有正文"收尾（usage 里报 reasoning_tokens）。这正是 2026-10-14 用户报的形态：
+      // token 记了 2000+、对话里一个字都没有（真机抓包见 crates/ai/src/provider.rs 的
+      // reasoning_content_frames_are_kept）。真机走真流，这里只为浏览器原型可断言。
+      if (String(req.prompt || "").includes("[think]")) {
+        const reason = ["先读一遍这张图，", "把节点与边理清楚……", "（本轮预算全花在思考上，正文没有产出）"];
+        const job2 = { aborted: false, timer: 0, text: "" };
+        this._ai.set(request_id, job2);
+        let k = 0;
+        const tickThink = () => {
+          if (job2.aborted) return;
+          if (k < reason.length) {
+            emitLocal("ai://thinking", { request_id, delta: reason[k++] });
+            job2.timer = setTimeout(tickThink, 40);
+            return;
+          }
+          this._ai.delete(request_id);
+          emitLocal("ai://done", {
+            request_id,
+            text: "",
+            model: modelName,
+            prompt_tokens: 137,
+            completion_tokens: 2140,
+            reasoning_tokens: 2088,
+            usage_source: "server",
+          });
+        };
+        job2.timer = setTimeout(tickThink, 80);
+        return { request_id };
+      }
 
       // 按片段流式吐出（每 45ms 一段），最后 done
       const chunks = chunkText(text);

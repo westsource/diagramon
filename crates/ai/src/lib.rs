@@ -7,4 +7,4 @@ pub mod prompt;
 pub mod provider;
 
 pub use prompt::{build_messages, extract_code, system_prompt};
-pub use provider::{build_body, normalize_base_url, stream_chat, ChatError, Resolved, Usage};
+pub use provider::{build_body, normalize_base_url, stream_chat, ChatError, Chunk, Resolved, Usage};

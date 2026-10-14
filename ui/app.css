@@ -1703,6 +1703,25 @@ body.no-mock .mock-badge { display: none; }
 }
 @keyframes caret-blink { 0%, 50% { opacity: 1; } 50.01%, 100% { opacity: 0; } }
 
+/* 思考块（reasoning）：思考型模型在正文之前连推几十上百帧思考 —— 不给它一块地方，
+   用户就只能对着空气等（2026-10-14 的 bug）。摘要行低调，原文块比气泡更淡。 */
+.msg .think {
+  display: flex; gap: 5px; align-items: center;
+  font-size: var(--fs-xs); color: var(--muted); padding: 0 2px 4px;
+}
+.msg .think svg { color: var(--ai); }
+.msg .think-body {
+  font-size: var(--fs-xs); line-height: 1.65; color: var(--muted);
+  background: var(--surface-2, var(--surface)); border: 1px dashed var(--border);
+  border-radius: var(--radius); padding: 6px 8px; margin-bottom: 6px;
+  max-height: 220px; overflow: auto; white-space: normal;
+}
+/* 「没有正文」的说明：这不是错误（调用成功了），但必须显眼到不会被当成空气泡 */
+.bubble.notice {
+  color: var(--warn); background: var(--warn-soft);
+  border-color: color-mix(in srgb, var(--warn) 30%, transparent);
+}
+
 /* 设置对话框里 switch 行的密度微调 */
 .switch .txt { min-width: 0; }
 

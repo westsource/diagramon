@@ -1363,6 +1363,48 @@ def main() -> int:
             if not fresh or fresh == hundred:
                 fails.append(f"新文档没有重新适应视口：{hundred} → {fresh}")
 
+        # ---- 断言 24：AI「有 token、没有正文」不再是空气泡 ----
+        # 2026-10-14 用户报的 bug：用思考型模型改图，token 记了 2000+，对话里一个字都没有。
+        # 根因：客户端只认 `delta.content`，把整条流的 `reasoning_content` 全丢了（真机抓包
+        # 见 crates/ai/src/provider.rs 的 reasoning_content_frames_are_kept：104 帧全是思考）。
+        # mock 里用 prompt 带 `[think]` 复现同一形态：先流思考、再以"没有正文"收尾 ——
+        # 界面必须给出思考进度 + 一句说清为什么没有正文，而不是留一个空气泡。
+        think = ev(
+            "(async () => {"
+            "  const before = DGM.state.usage.completion;"
+            "  DGM.ai.focus('chat');"
+            "  await new Promise(r => setTimeout(r, 150));"
+            "  const ta = document.querySelector('#ai-input');"
+            "  ta.value = '[think] 把配色改成暗色';"
+            "  ta.dispatchEvent(new Event('input', { bubbles: true }));"  # 让发送按钮解禁（真实路径）
+            "  document.querySelector('#ai-send').click();"
+            "  await new Promise(r => setTimeout(r, 2500));"
+            "  const s = document.querySelector('#ai-stream');"
+            "  const notice = s.querySelector('.bubble.notice');"
+            "  return JSON.stringify({"
+            "    think: s.querySelectorAll('.think').length,"
+            "    thinkBody: ((s.querySelector('.think-body') || {}).textContent || '').slice(0, 40),"
+            "    notice: notice ? notice.textContent : '',"
+            "    tokens: DGM.state.usage.completion - before"
+            "  });"
+            "})()"
+        )
+        log(f"思考型模型（无正文）: {think}")
+        try:
+            tk = json.loads(think or "{}")
+            if not tk.get("think"):
+                fails.append("思考型模型这一轮没有显示思考块（reasoning 又被丢了？）")
+            if not tk.get("thinkBody"):
+                fails.append("思考原文没有显示出来（用户只能看到一行摘要）")
+            if not tk.get("notice"):
+                fails.append("没有正文时界面没给任何说明（空气泡 = 用户报的 bug 原形）")
+            elif "2088" not in tk.get("notice", ""):
+                fails.append(f"说明里没带上思考 token 数：{tk.get('notice')}")
+            if not (tk.get("tokens") or 0) > 0:
+                fails.append(f"用量没记上（这一轮真的花了 token）：{tk.get('tokens')}")
+        except Exception as e:
+            log(f"（断言 24 解析失败：{e}）")
+
         # 汇总启动期间的 console error / 异常
         for params in cdp.seen("Runtime.exceptionThrown"):
             d = params.get("exceptionDetails", {})

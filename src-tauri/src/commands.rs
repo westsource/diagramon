@@ -17,7 +17,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use app_ipc::{
-    events, AiChatRequest, AiDelta, AiDone, AiFailed, AiModel, AppInfo, ConvertOutcome,
+    events, AiChatRequest, AiDelta, AiDone, AiFailed, AiModel, AiThinking, AppInfo, ConvertOutcome,
     ConvertRequest, DevFlags, Doc, FormatId, Issue, OutlineGroup, Session as SessionPayload,
     Settings, ViewMode,
 };
@@ -311,17 +311,28 @@ pub fn convert_text(req: ConvertRequest) -> Result<ConvertOutcome, String> {
 
 /* ---------------- 凭据（密钥永不回传前端） ---------------- */
 
+/// 写某个 BYOK 模型的密钥。
+///
+/// **键名的唯一真源在 Rust**（`state::credential_key`）—— 前端不许自己拼前缀。
+/// 2026-10-14 的 bug 就是这么来的：设置对话框拿**原始 id** 去 `cred_set`，而读取端
+/// （`hydrate_models` / `resolve_target`）查的是 `ai-model:{id}` —— 于是"填了密钥仍显示
+/// 未配置、一调用就报缺少 API Key"（BYOK 整条路都不可用）。新模型也一样能写：
+/// 这里只要 id，不必先落进 settings。
 #[tauri::command]
-pub fn cred_set(state: State<'_, Arc<AppState>>, key: String, secret: String) -> R<()> {
+pub fn ai_model_key_set(state: State<'_, Arc<AppState>>, model_id: String, secret: String) -> R<()> {
     state
         .creds
-        .set(&key, secret.trim())
+        .set(&credential_key(&model_id), secret.trim())
         .map_err(|e| e.to_string())
 }
 
+/// 删某个模型的密钥（模型被删掉时顺手清，别在凭据库里留孤儿）。
 #[tauri::command]
-pub fn cred_delete(state: State<'_, Arc<AppState>>, key: String) -> R<()> {
-    state.creds.delete(&key).map_err(|e| e.to_string())
+pub fn ai_model_key_delete(state: State<'_, Arc<AppState>>, model_id: String) -> R<()> {
+    state
+        .creds
+        .delete(&credential_key(&model_id))
+        .map_err(|e| e.to_string())
 }
 
 /* ---------------- AI ---------------- */
@@ -395,17 +406,26 @@ pub async fn ai_chat(
     tauri::async_runtime::spawn(async move {
         let delta_app = app.clone();
         let delta_rid = request_id.clone();
-        let on_delta = move |piece: &str| {
-            let _ = delta_app.emit(
-                events::AI_DELTA,
-                AiDelta { request_id: delta_rid.clone(), delta: piece.to_string() },
-            );
+        // 正文与思考走两条事件：界面在"还没有正文"时要能显示思考进度（见 Chunk 的说明）
+        let on_delta = move |chunk: ai::Chunk| match chunk {
+            ai::Chunk::Text(piece) => {
+                let _ = delta_app.emit(
+                    events::AI_DELTA,
+                    AiDelta { request_id: delta_rid.clone(), delta: piece },
+                );
+            }
+            ai::Chunk::Reasoning(piece) => {
+                let _ = delta_app.emit(
+                    events::AI_THINKING,
+                    AiThinking { request_id: delta_rid.clone(), delta: piece },
+                );
+            }
         };
 
         let result = ai::stream_chat(&st.http, &resolved, messages, &cancel, on_delta).await;
 
         match result {
-            Ok((text, usage)) => {
+            Ok((text, _reasoning, usage)) => {
                 let _ = app.emit(
                     events::AI_DONE,
                     AiDone {
@@ -414,6 +434,7 @@ pub async fn ai_chat(
                         model: used_model,
                         prompt_tokens: usage.prompt_tokens,
                         completion_tokens: usage.completion_tokens,
+                        reasoning_tokens: usage.reasoning_tokens,
                         usage_source: if usage.reported() { "server" } else { "none" }.to_string(),
                     },
                 );

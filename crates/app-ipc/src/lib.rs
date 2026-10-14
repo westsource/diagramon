@@ -347,9 +347,20 @@ pub struct AiChatRequest {
     pub image_data_url: Option<String>,
 }
 
-/// 事件名：`ai://delta` / `ai://done` / `ai://failed`
+/// 事件名：`ai://delta` / `ai://thinking` / `ai://done` / `ai://failed`
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AiDelta {
+    pub request_id: String,
+    pub delta: String,
+}
+
+/// 模型的**思考**增量（GLM/DeepSeek/Qwen 这一族的 `reasoning_content`）。
+///
+/// 与正文分开报是刻意的：思考型模型会先连推几十上百帧思考、正文最后才来 —— 界面要能
+/// 在"还没有正文"的那段时间里显示进度，否则用户对着空气等（2026-10-14 的 bug：
+/// token 记了 2000+，对话里一个字都没有）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AiThinking {
     pub request_id: String,
     pub delta: String,
 }
@@ -362,6 +373,9 @@ pub struct AiDone {
     pub model: String,
     pub prompt_tokens: Option<u32>,
     pub completion_tokens: Option<u32>,
+    /// 其中有多少是思考 token（供应商不报就是 `None`）。界面用它解释"这一轮为什么没有正文"。
+    #[serde(default)]
+    pub reasoning_tokens: Option<u32>,
     /// "server" = 供应商在流末尾回报的；"none" = 没回报。
     /// **界面据此标注来源**（P3 拍板：两种都留，但别混成一个数，更别把"没有"当 0）。
     #[serde(default)]
@@ -701,6 +715,8 @@ pub const ENV_DEBUG_PORT: &str = "DIAGRAMON_DEBUG_PORT";
 
 pub mod events {
     pub const AI_DELTA: &str = "ai://delta";
+    /// 模型的思考增量（与正文分开，见 `AiThinking`）
+    pub const AI_THINKING: &str = "ai://thinking";
     pub const AI_DONE: &str = "ai://done";
     pub const AI_FAILED: &str = "ai://failed";
     /// 工作区文件被改动（批量 `Vec<FsChange>`）
@@ -750,8 +766,8 @@ pub mod commands {
     /// 同步版搜索：只给自检/诊断用（正常路径走 `search_run` 的事件流）
     pub const SEARCH_ONCE: &str = "search_once";
     pub const EXPORT_WRITE: &str = "export_write";
-    pub const CRED_SET: &str = "cred_set";
-    pub const CRED_DELETE: &str = "cred_delete";
+    pub const AI_MODEL_KEY_SET: &str = "ai_model_key_set";
+    pub const AI_MODEL_KEY_DELETE: &str = "ai_model_key_delete";
     pub const CONVERT_TEXT: &str = "convert_text";
     pub const AI_CHAT: &str = "ai_chat";
     pub const AI_CANCEL: &str = "ai_cancel";

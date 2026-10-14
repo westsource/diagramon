@@ -79,6 +79,26 @@ window.DGM = window.DGM || {};
       n.appendChild(th);
     }
 
+    // 思考块：思考型模型（GLM/DeepSeek/Qwen）在正文之前会连推几十上百帧 reasoning —
+    // 没有这一块，用户就只能对着空气等（2026-10-14 的 bug：token 记了 2000+，一个字没显示）。
+    // 流式期间摆思考原文（看得到在干活）；结束后缩成一行摘要；**没有正文**时原文留着给人读。
+    const thinking = (m.thinking || "").trim();
+    const hasText = !!(m.text || "").trim();
+    if (m.role !== "user" && (thinking || m.streaming)) {
+      const line = h("div", "think");
+      line.dataset.req = m.req || "";
+      line.innerHTML = thinking
+        ? `${icon("sparkles", "ico-sm")}<span>${esc(t("ai.think.live", { n: thinking.length }))}</span>`
+        : `${icon("refresh", "ico-sm")}<span>${esc(t("ai.waiting"))}</span>`;
+      n.appendChild(line);
+      if (thinking && (m.streaming || !hasText)) {
+        const body = h("div", "think-body");
+        body.dataset.req = m.req || "";
+        body.innerHTML = esc(thinking.length > 800 ? "…" + thinking.slice(-800) : thinking).replace(/\n/g, "<br>");
+        n.appendChild(body);
+      }
+    }
+
     const parsed = splitFences(m.text || "");
     if (parsed.text) {
       const b = h("div", "bubble" + (m.streaming ? " streaming" : ""), esc(parsed.text).replace(/\n/g, "<br>"));
@@ -88,6 +108,12 @@ window.DGM = window.DGM || {};
       const b = h("div", "bubble streaming");
       b.dataset.req = m.req || "";
       n.appendChild(b);
+    }
+
+    // 没有正文的收尾必须说清为什么，别留一个空气泡（token 是真花了）
+    if (m.notice) {
+      const w = h("div", "bubble notice", esc(m.notice));
+      n.appendChild(w);
     }
 
     for (const blk of parsed.blocks) {
@@ -452,6 +478,31 @@ window.DGM = window.DGM || {};
     }
   }
 
+  /**
+   * 模型的**思考**增量（GLM/DeepSeek/Qwen 的 `reasoning_content`）。
+   *
+   * 这些帧以前被整包丢掉：思考型模型把整段推理逐帧推过来、正文最后才来，于是一整轮
+   * "token 记了 2000+、界面上一个字都没有"（2026-10-14 用户报的 bug）。现在实时显示进度，
+   * 让用户看得见"它在干活"，也看得见钱花在哪。
+   */
+  function onThinking(ev) {
+    const m = findMsg(ev && ev.request_id);
+    if (!m) return;
+    const before = (m.thinking || "").length;
+    m.thinking = (m.thinking || "") + (ev.delta || "");
+    const txt = m.thinking.trim();
+    const line = $(`#ai-stream .think[data-req="${ev.request_id}"] span`);
+    if (!line) {
+      // 这一轮的第一帧思考：整栏重排一次，把思考块挂上去（之后都走增量更新）
+      if (m.m === tab()) render();
+      return;
+    }
+    line.textContent = t("ai.think.live", { n: txt.length });
+    const body = $(`#ai-stream .think-body[data-req="${ev.request_id}"]`);
+    if (body) body.innerHTML = esc(txt.length > 800 ? "…" + txt.slice(-800) : txt).replace(/\n/g, "<br>");
+    if (!before && m.m === tab()) render(); // 摘要行 + 原文块一起出现
+  }
+
   function onDone(ev) {
     const m = findMsg(ev && ev.request_id);
     state.ui.aiBusy = false;
@@ -462,13 +513,31 @@ window.DGM = window.DGM || {};
     }
     m.streaming = false;
     m.text = ev.text || m.text;
+    const reasoningTokens = ev.reasoning_tokens || 0;
     m.used = {
       model: ev.model || "",
       tokens: (ev.prompt_tokens || 0) + (ev.completion_tokens || 0),
+      reasoning: reasoningTokens,
     };
     state.addUsage(ev);
-    if (!state.panels().ai) unreadCount += 1; // 面板收起时的未读角标
-    state.pushOutput(t("ai.used", { model: m.used.model, tokens: m.used.tokens, credits: "—" }), "ok");
+    // **没有正文就必须说清为什么**，别留一个空气泡：token 是真花了。
+    // 思考型模型把本轮预算全花在推理上时，正文可以一个字都没有（真机实测：整条流 104 帧
+    // 全是 reasoning_content）；供应商漏报正文时也一样。
+    if (!(m.text || "").trim()) {
+      const chars = (m.thinking || "").trim().length;
+      m.notice =
+        chars > 0 || reasoningTokens > 0
+          ? t("ai.noContent.thinking", { tokens: reasoningTokens || m.used.tokens, chars })
+          : t("ai.noContent", { tokens: m.used.tokens });
+    }
+    // 面板收起、或回复落在**别的页签**里（用户正看着当前页签）——两种情况都要给未读角标，
+    // 否则就是"花了钱、界面上什么都没有"。
+    if (!state.panels().ai || m.m !== tab()) unreadCount += 1;
+    state.pushOutput(
+      t("ai.used", { model: m.used.model, tokens: m.used.tokens, credits: "—" }) +
+        (reasoningTokens ? " · " + t("ai.used.thinking", { n: reasoningTokens }) : ""),
+      "ok",
+    );
     render();
     if (DGM.shell && DGM.shell.renderActivity) DGM.shell.renderActivity();
     if (state.ui.aiSendThenApply) {
@@ -694,6 +763,7 @@ window.DGM = window.DGM || {};
     if (close) close.addEventListener("click", () => DGM.shell.togglePanel("ai"));
 
     ipc.on("ai://delta", onDelta);
+    ipc.on("ai://thinking", onThinking);
     ipc.on("ai://done", onDone);
     ipc.on("ai://failed", onFailed);
     // 截屏框选完成（Rust 发来 dataURL；取消时是 null）

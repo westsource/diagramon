@@ -43,6 +43,9 @@ impl Resolved {
 pub struct Usage {
     pub prompt_tokens: Option<u32>,
     pub completion_tokens: Option<u32>,
+    /// 其中有多少是**思考**（reasoning）token。界面用它解释"没有正文"：
+    /// 一整轮预算全花在推理上时，`completion_tokens` 很大而正文可以是空的。
+    pub reasoning_tokens: Option<u32>,
 }
 
 impl Usage {
@@ -118,16 +121,19 @@ pub fn build_body(r: &Resolved, messages: &[Value], stream: bool) -> Value {
     }
 }
 
-/// 流式对话。每收到一段增量就回调一次 `on_delta`；`cancel` 置位时立刻中止。
+/// 流式对话。每收到一段增量就回调一次 `on_delta`（正文与思考分开报）；`cancel` 置位时立刻中止。
+///
+/// 返回 `(正文, 思考, 用量)` —— 思考单独返回，界面据此在"还没有正文"的那段时间里显示进度，
+/// 而不是让用户对着空气等（见 `Chunk` 的说明）。
 pub async fn stream_chat<F>(
     client: &reqwest::Client,
     r: &Resolved,
     messages: Vec<Value>,
     cancel: &AtomicBool,
     mut on_delta: F,
-) -> Result<(String, Usage), ChatError>
+) -> Result<(String, String, Usage), ChatError>
 where
-    F: FnMut(&str),
+    F: FnMut(Chunk),
 {
     if !r.is_ollama() && r.api_key.as_deref().unwrap_or("").trim().is_empty() {
         return Err(ChatError::MissingKey);
@@ -153,6 +159,7 @@ where
     let mut resp = resp;
     let mut buf: Vec<u8> = Vec::new();
     let mut full = String::new();
+    let mut reasoning = String::new();
     let mut usage = Usage::default();
 
     loop {
@@ -195,9 +202,12 @@ where
                 continue; // 单帧解析失败不该中断整条流
             };
 
-            if let Some(delta) = extract_delta(&v, ollama) {
-                full.push_str(&delta);
-                on_delta(&delta);
+            for chunk in extract_chunks(&v, ollama) {
+                match &chunk {
+                    Chunk::Text(t) => full.push_str(t),
+                    Chunk::Reasoning(t) => reasoning.push_str(t),
+                }
+                on_delta(chunk);
             }
             merge_usage(&mut usage, &v, ollama);
         }
@@ -206,26 +216,79 @@ where
     if cancel.load(Ordering::Relaxed) {
         return Err(ChatError::Cancelled);
     }
-    Ok((full, usage))
+    Ok((full, reasoning, usage))
 }
 
-fn extract_delta(v: &Value, ollama: bool) -> Option<String> {
-    if ollama {
-        v.get("message")
-            .and_then(|m| m.get("content"))
-            .and_then(|c| c.as_str())
-            .map(str::to_string)
-            .filter(|s| !s.is_empty())
-    } else {
-        v.get("choices")
-            .and_then(|c| c.as_array())
-            .and_then(|arr| arr.first())
-            .and_then(|c| c.get("delta"))
-            .and_then(|d| d.get("content"))
-            .and_then(|c| c.as_str())
-            .map(str::to_string)
-            .filter(|s| !s.is_empty())
+/// 流里的一小段增量：模型**正文**，或它的**思考**。
+///
+/// 为什么必须分开（2026-10-14 用户实测的 bug）：思考型模型（GLM / DeepSeek / Qwen 这一族）
+/// 把整段推理放在 `delta.reasoning_content` 里逐帧推，正文要等推理结束才来 —— 而原来的
+/// `extract_delta` 只认 `delta.content`，于是一整轮"有 token、没有正文"的调用在界面上
+/// **一个字都不显示**：token 记了 2000+，对话里空白（真机抓包：`mermaid-reasoning` 连推
+/// 104 帧全是 reasoning_content，客户端全部丢掉）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Chunk {
+    Text(String),
+    Reasoning(String),
+}
+
+/// 把一个增量字段（字符串 / 数组两种形态）取成纯文本。
+///
+/// 数组形态是 OpenAI 多模态的分段写法：`[{"type":"text","text":"…"}]` —— 只认字符串的
+/// 实现遇到它会静默丢帧，同样是"有 token、没字"。
+fn text_of(v: Option<&Value>) -> String {
+    match v {
+        Some(Value::String(s)) => s.clone(),
+        Some(Value::Array(parts)) => {
+            let mut out = String::new();
+            for p in parts {
+                if let Some(s) = p.get("text").and_then(|t| t.as_str()) {
+                    out.push_str(s);
+                }
+            }
+            out
+        }
+        _ => String::new(),
     }
+}
+
+/// 一帧里能取出的所有增量（一般 0–1 个：首帧只有 role，末帧只有 usage）。
+fn extract_chunks(v: &Value, ollama: bool) -> Vec<Chunk> {
+    let mut out = Vec::new();
+    let mut push = |kind: fn(String) -> Chunk, text: String| {
+        if !text.is_empty() {
+            out.push(kind(text));
+        }
+    };
+
+    if ollama {
+        if let Some(m) = v.get("message") {
+            push(Chunk::Text, text_of(m.get("content")));
+            // Ollama 的思考字段叫 thinking（新版才有）
+            push(Chunk::Reasoning, text_of(m.get("thinking")));
+        }
+        return out;
+    }
+
+    let Some(choice) = v.get("choices").and_then(|c| c.as_array()).and_then(|a| a.first()) else {
+        return out;
+    };
+    match choice.get("delta") {
+        Some(d) => {
+            push(Chunk::Text, text_of(d.get("content")));
+            // `reasoning_content` 是 DeepSeek/GLM/Qwen 这一族的写法；`reasoning`/`thinking`
+            // 是别的网关的别名，一起认。
+            let r = d
+                .get("reasoning_content")
+                .or_else(|| d.get("reasoning"))
+                .or_else(|| d.get("thinking"));
+            push(Chunk::Reasoning, text_of(r));
+        }
+        // 没有 delta 的整包帧（网关把非流式的 message 塞进流里）——当作正文收下，
+        // 否则这一轮又是"有 token、没字"。
+        None => push(Chunk::Text, text_of(choice.pointer("/message/content"))),
+    }
+    out
 }
 
 fn merge_usage(usage: &mut Usage, v: &Value, ollama: bool) {
@@ -244,6 +307,15 @@ fn merge_usage(usage: &mut Usage, v: &Value, ollama: bool) {
         }
         if let Some(n) = u.get("completion_tokens").and_then(|x| x.as_u64()) {
             usage.completion_tokens = Some(n as u32);
+        }
+        // 思考占了多少 token（OpenAI 系：completion_tokens_details.reasoning_tokens）。
+        // 界面用它解释"为什么没有正文"：一整轮预算全花在思考上时，正文可以是空的。
+        if let Some(n) = u
+            .pointer("/completion_tokens_details/reasoning_tokens")
+            .or_else(|| u.get("reasoning_tokens"))
+            .and_then(|x| x.as_u64())
+        {
+            usage.reasoning_tokens = Some(n as u32);
         }
     }
 }
@@ -332,16 +404,61 @@ mod tests {
     #[test]
     fn openai_delta_extraction_reads_choices_delta_content() {
         let v = json!({"choices":[{"delta":{"content":"你好"}}]});
-        assert_eq!(extract_delta(&v, false).as_deref(), Some("你好"));
+        assert_eq!(extract_chunks(&v, false), vec![Chunk::Text("你好".into())]);
         // 只有 role 的首帧没有 content，不该产出空回调
         let v = json!({"choices":[{"delta":{"role":"assistant"}}]});
-        assert_eq!(extract_delta(&v, false), None);
+        assert!(extract_chunks(&v, false).is_empty());
+    }
+
+    /// 真机抓包（2026-10-14，云网关 `mermaid-reasoning`）：整条流 104 帧全是
+    /// `delta.reasoning_content`，一个 `content` 都没有。改之前这些帧被**全部丢掉** ——
+    /// 用户那边就是"消耗了 2000+ token，对话里一个字都没有"。
+    #[test]
+    fn reasoning_content_frames_are_kept() {
+        // 这两帧是从真流里抄下来的原样 JSON
+        let v: Value = serde_json::from_str(
+            r#"{"id":"e405a780806d23d3f0428d693ee0bef3","object":"chat.completion.chunk","created":1791985709,"model":"mermaid-reasoning","choices":[{"index":0,"delta":{"role":"assistant","reasoning_content":"用户想要暗色配色"},"finish_reason":null}]}"#,
+        )
+        .unwrap();
+        assert_eq!(extract_chunks(&v, false), vec![Chunk::Reasoning("用户想要暗色配色".into())]);
+
+        let v: Value = serde_json::from_str(
+            r#"{"choices":[{"index":0,"delta":{"role":"assistant","reasoning_content":"50f,stroke:#f"},"finish_reason":null}]}"#,
+        )
+        .unwrap();
+        assert_eq!(extract_chunks(&v, false), vec![Chunk::Reasoning("50f,stroke:#f".into())]);
+
+        // 别名（别的网关叫 reasoning / thinking）也认
+        for key in ["reasoning", "thinking"] {
+            let v = json!({"choices":[{"delta":{key:"想一下"}}]});
+            assert_eq!(extract_chunks(&v, false), vec![Chunk::Reasoning("想一下".into())], "{key}");
+        }
+    }
+
+    /// 正文以**分段数组**给出的形态（OpenAI 多模态写法）：只认字符串的实现会静默丢帧 ——
+    /// 同样是"有 token、没字"。
+    #[test]
+    fn content_as_parts_array_is_joined() {
+        let v = json!({"choices":[{"delta":{"content":[{"type":"text","text":"第一段"},{"type":"text","text":"第二段"}]}}]});
+        assert_eq!(extract_chunks(&v, false), vec![Chunk::Text("第一段第二段".into())]);
+    }
+
+    /// 没有 `delta`、直接给整包 `message` 的帧（有的网关把非流式响应塞进流里）。
+    #[test]
+    fn whole_message_frame_without_delta_counts_as_text() {
+        let v = json!({"choices":[{"message":{"role":"assistant","content":"整包正文"}}]});
+        assert_eq!(extract_chunks(&v, false), vec![Chunk::Text("整包正文".into())]);
+        // 有 delta 的帧就不能再看 message（否则正文会被算两遍）
+        let v = json!({"choices":[{"delta":{"content":"增量"},"message":{"content":"整包"}}]});
+        assert_eq!(extract_chunks(&v, false), vec![Chunk::Text("增量".into())]);
     }
 
     #[test]
     fn ollama_delta_extraction_reads_message_content() {
         let v = json!({"message":{"role":"assistant","content":"部分"},"done":false});
-        assert_eq!(extract_delta(&v, true).as_deref(), Some("部分"));
+        assert_eq!(extract_chunks(&v, true), vec![Chunk::Text("部分".into())]);
+        let v = json!({"message":{"role":"assistant","thinking":"先想"},"done":false});
+        assert_eq!(extract_chunks(&v, true), vec![Chunk::Reasoning("先想".into())]);
     }
 
     #[test]
@@ -350,11 +467,27 @@ mod tests {
         merge_usage(&mut u, &json!({"choices":[],"usage":{"prompt_tokens":11,"completion_tokens":7}}), false);
         assert_eq!(u.prompt_tokens, Some(11));
         assert_eq!(u.completion_tokens, Some(7));
+        assert_eq!(u.reasoning_tokens, None);
 
         let mut o = Usage::default();
         merge_usage(&mut o, &json!({"done":true,"prompt_eval_count":5,"eval_count":9}), true);
         assert_eq!(o.prompt_tokens, Some(5));
         assert_eq!(o.completion_tokens, Some(9));
+    }
+
+    /// 思考 token 单独计：界面用它解释"为什么这一轮没有正文"（预算全花在推理上）。
+    #[test]
+    fn reasoning_tokens_are_read_from_completion_details() {
+        let mut u = Usage::default();
+        merge_usage(
+            &mut u,
+            &json!({"choices":[],"usage":{"prompt_tokens":137,"completion_tokens":2140,
+                    "completion_tokens_details":{"reasoning_tokens":2088}}}),
+            false,
+        );
+        assert_eq!(u.prompt_tokens, Some(137));
+        assert_eq!(u.completion_tokens, Some(2140));
+        assert_eq!(u.reasoning_tokens, Some(2088));
     }
 
     #[test]
