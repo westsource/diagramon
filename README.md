@@ -13,7 +13,7 @@ runtimes shipped with the app — **no subprocess is ever spawned and no externa
 Code or images reach a model only when you actively use AI, and then only the endpoint you chose
 (BYOK talks straight to your own provider, membership goes through the Diagramon cloud gateway).
 
-Version **3.1.2** · Official website <https://www.diagramon.com>
+Version **3.1.3** · Official website <https://www.diagramon.com>
 
 ## Screenshots
 
