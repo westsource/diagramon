@@ -34,6 +34,9 @@ window.DGM = window.DGM || {};
     image: '<rect x="3" y="4.5" width="18" height="15" rx="2"/><circle cx="8.5" cy="10" r="1.7"/><path d="m4 17 4.8-4.4a1.6 1.6 0 0 1 2.2 0L20 20"/>',
     scan: '<path d="M4 8V6a2 2 0 0 1 2-2h2M16 4h2a2 2 0 0 1 2 2v2M20 16v2a2 2 0 0 1-2 2h-2M8 20H6a2 2 0 0 1-2-2v-2"/><path d="M4 12h16"/>',
     send: '<path d="M4.5 12 20 4.5 15 20l-3.4-6.1z"/><path d="m11.6 13.9 8.4-9.4"/>',
+    // 停止（中断正在跑的 AI 生成）：实心圆角方块 —— 唯一一个实心图标，
+    // 因为它画在**实心彩色按钮**上（`.send-btn`），描边方块在白底按钮上像"空框"。
+    stop: '<rect x="4.5" y="4.5" width="15" height="15" rx="3" fill="currentColor" stroke="none"/>',
     robot: '<rect x="4" y="8" width="16" height="11" rx="2.5"/><path d="M12 4v4M8.5 13v1.5M15.5 13v1.5M9.5 17h5"/><circle cx="12" cy="3" r="1.2"/>',
     wand: '<path d="m5 19 9.5-9.5M15.8 4.2l1 1M19 7l1.4.6M13 3l.6 1.4M17.5 8.5 19 9M12.5 6.5 14 5"/>',
     check: '<path d="M20 6 9 17l-5-5"/>',

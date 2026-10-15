@@ -278,8 +278,8 @@ window.DGM = window.DGM || {};
     if (!btn) return;
     const busy = state.ui.aiBusy;
     btn.disabled = !busy && (!state.hasModels() || !(input() || {}).value?.trim());
-    btn.title = busy ? t("ai.cancelled") : t("common.send");
-    btn.innerHTML = busy ? icon("close", "ico-sm") : icon("send", "ico-sm");
+    btn.title = busy ? t("ai.stop") : t("common.send");
+    btn.innerHTML = busy ? icon("stop", "ico-sm") : icon("send", "ico-sm");
     btn.classList.toggle("stop", busy);
   }
 
@@ -785,6 +785,10 @@ window.DGM = window.DGM || {};
 
   DGM.bus.on("settings:changed", render);
   DGM.bus.on("session:changed", render);
+  // 云状态一变就重渲染：网关模型别名、以及「一个模型都没有」时的引导文案（未登录 →
+  // 引导去登录，已登录 → 引导去 AI 设置）都取决于登录与否。少了这条，启动那一帧
+  // （云状态还没回来）会把 AI 面板钉在"未登录 / 没有模型"上，之后再也不会自己变。
+  DGM.bus.on("cloud:changed", render);
 
   DGM.ai = {
     render,
