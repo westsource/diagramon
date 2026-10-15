@@ -56,6 +56,12 @@
   --warn-soft: #f7efdf;
   --err-soft: #f8e9e6;
 
+  /* 微信式对话：我方的绿气泡 / AI 方的白气泡（明暗两套各自定义，见下） */
+  --chat-me: #95ec69;
+  --chat-me-ink: #10230f;
+  --chat-me-ava: #4fb345;
+  --chat-bot: #ffffff;
+
   /* 四种格式各自的标识色（低饱和，用于标签页圆点/徽章/转换卡） */
   --fmt-mermaid: #3d7d72;
   --fmt-dot: #a07f36;
@@ -114,6 +120,12 @@ html[data-theme="dark"] {
   --ok-soft: #1f2e23;
   --warn-soft: #2e2819;
   --err-soft: #33211e;
+
+  /* 微信式对话（暗色）：绿气泡压深、正文近黑；AI 气泡比面板底色亮一档 */
+  --chat-me: #3eb575;
+  --chat-me-ink: #062017;
+  --chat-me-ava: #2c8f5b;
+  --chat-bot: #232829;
 
   --fmt-mermaid: #6fb2a3;
   --fmt-dot: #cfa95f;
@@ -687,25 +699,63 @@ body.no-ai #ai-gutter { display: none; }
 .ai-tab:hover { color: var(--ink); background: var(--surface-3); }
 .ai-tab.on { color: var(--ai); background: var(--surface); border-color: var(--border); font-weight: 500; }
 
-.ai-stream { flex: 1; min-height: 0; overflow: auto; padding: 12px; display: flex; flex-direction: column; gap: 12px; }
+.ai-stream { flex: 1; min-height: 0; overflow: auto; padding: 12px; display: flex; flex-direction: column; gap: 14px; }
 
-.msg { display: flex; flex-direction: column; gap: 6px; max-width: 100%; }
+/* ---- 微信式对话（2026-10-15）-----------------------------------------
+ * 一条消息 = 头像 + 气泡：用户（「我」）在**右**、绿气泡；AI 在**左**、白气泡；
+ * 尖角用零尺寸元素的单边有色边框画（跟着气泡底色，不是描边）。
+ * 「居中系统提示」与「错误条」保持原样 —— 它们不是对话的一方。
+ */
+.msg { display: flex; align-items: flex-start; gap: 8px; max-width: 100%; }
+.msg.user { flex-direction: row-reverse; }
+.msg.sys { justify-content: center; }
+
+.ava {
+  width: 30px; height: 30px; flex: 0 0 auto;
+  display: grid; place-items: center;
+  border-radius: var(--radius-sm);
+  background: var(--ai-soft); color: var(--ai); border: 1px solid var(--ai-line);
+}
+.msg.user .ava { background: var(--chat-me-ava); color: #fff; border-color: transparent; }
+
+/* 气泡列：宽度由内容撑、上限是整条消息的可用宽（`align-items` 不拉伸 flex 项）。
+   用户侧再收一档到 86%，长句子不至于从左边贴着 AI 的气泡。 */
+.msg-body { display: flex; flex-direction: column; align-items: flex-start; gap: 5px; min-width: 0; flex: 1 1 auto; }
+.msg.user .msg-body { align-items: flex-end; flex: 0 1 auto; max-width: 86%; }
+
 .msg-head { display: flex; align-items: center; gap: 6px; font-size: var(--fs-xs); color: var(--muted); }
 .msg-head .who { font-weight: 600; color: var(--ink-2); }
 .msg-head .badge-used { font-size: 10px; color: var(--ai); background: var(--ai-soft); padding: 0 5px; border-radius: 999px; border: 1px solid var(--ai-line); }
+
 .bubble {
-  padding: 8px 11px;
+  position: relative;
+  max-width: 100%;
+  padding: 7px 11px;
   font-size: var(--fs-sm);
   line-height: 1.6;
-  border-radius: var(--radius);
+  border-radius: 8px;
+  background: var(--chat-bot);
+  color: var(--ink);
   word-break: break-word;
   user-select: text;
 }
-.msg.user .bubble { background: var(--surface); border: 1px solid var(--border); }
-.msg.bot .bubble { background: var(--surface); border: 1px solid var(--border); }
-.msg.sys { align-items: center; }
-.msg.sys .bubble { background: none; border: 0; color: var(--muted); font-size: var(--fs-xs); padding: 2px 6px; }
-.msg.err .bubble { color: var(--err); background: var(--err-soft); border-color: color-mix(in srgb, var(--err) 30%, transparent); }
+/* 尖角：`left:-11px` + 6px 边框 ⇒ 三角形的底边压住气泡 1px，顶点戳出去 5px（看着是连着的） */
+.bubble::before {
+  content: ""; position: absolute; top: 10px; width: 0; height: 0;
+  border: 6px solid transparent;
+}
+.msg.bot .bubble::before, .msg.err .bubble::before { left: -11px; border-right-color: var(--chat-bot); }
+.msg.user .bubble::before { right: -11px; border-left-color: var(--chat-me); }
+
+.msg.user .bubble { background: var(--chat-me); color: var(--chat-me-ink); }
+.msg.sys .bubble { background: none; color: var(--muted); font-size: var(--fs-xs); padding: 2px 6px; }
+.msg.sys .bubble::before { display: none; }
+.msg.err .bubble { color: var(--err); background: var(--err-soft); }
+.msg.err .bubble::before { border-right-color: var(--err-soft); }
+/* 提示条的气泡底色跟正文气泡不是一个色，不带尖角更干净 */
+.bubble.notice::before { display: none; }
+/* 「已应用」跟随气泡那侧对齐：`margin-left:auto` 在纵向 flex 里是交叉轴 auto，会把它顶到中间 */
+.msg .applied-tag { margin-left: 0; }
 
 .code-card {
   border: 1px solid var(--border);

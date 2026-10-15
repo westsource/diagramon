@@ -81,8 +81,18 @@ pub fn monitors_list() -> R<Vec<MonitorInfo>> {
 /* ------------------------------------------------------------------ 冻结帧 */
 
 /// 开始一次框选：截下鼠标所在的那块屏，开 overlay。
+///
+/// **必须是 `async`**：同步命令跑在**主线程**上，而 `WebviewWindowBuilder::build()`
+/// 是"把请求丢进事件循环、然后阻塞等结果"（tauri-runtime-wry 的 `create_tao_window`
+/// 里就是 `rx.recv()`）—— 主线程自己等自己 ⇒ 死锁。
+///
+/// 实测症状（2026-10-15 用户报的"点截取屏幕区域识别后整个屏幕变白、也没法截屏"）：
+/// overlay 窗口的**空框**出现了（无边框、置顶、铺满整屏），但它上面的 WebView 永远
+/// 建不出来 ⇒ 整块屏停在 WebView2 的默认白底上；页面没跑起来 ⇒ 拖拽/Enter/Esc 全无反应，
+/// 同时主窗口也失去响应（invoke 永不结算，只能杀进程）。`async` 之后 Tauri 把它扔到
+/// 工作线程，主线程空出来处理建窗消息，两个问题一起消失。
 #[tauri::command]
-pub fn vision_capture_start(app: AppHandle, state: State<'_, Arc<AppState>>) -> R<()> {
+pub async fn vision_capture_start(app: AppHandle, state: State<'_, Arc<AppState>>) -> R<()> {
     // 鼠标在哪块屏上，就截哪块 —— 比起"默认主屏"，这更符合"我看着哪块就框哪块"
     let (mx, my) = cursor_pos();
     let all = enumerate()?;
@@ -98,19 +108,24 @@ pub fn vision_capture_start(app: AppHandle, state: State<'_, Arc<AppState>>) -> 
 
     state.vision.lock().insert(info.id.clone(), (info.clone(), img));
 
-    open_overlay(&app, &info)?;
+    // 开窗失败就别把冻结帧留在缓存里：它已经不是"正在进行的框选"了
+    if let Err(e) = open_overlay(&app, &info) {
+        state.vision.lock().clear();
+        return Err(e);
+    }
     Ok(())
 }
 
 fn open_overlay(app: &AppHandle, info: &MonitorInfo) -> R<()> {
     // 已开着就先复用（避免连按两次快捷键叠出两个 overlay）
     if let Some(w) = app.get_webview_window("vision-overlay") {
+        let _ = w.show();
         let _ = w.set_focus();
         return Ok(());
     }
     // 物理像素 → 逻辑坐标：窗口必须正好盖满那块屏
     let scale = if info.scale > 0.0 { info.scale } else { 1.0 };
-    WebviewWindowBuilder::new(
+    let mut builder = WebviewWindowBuilder::new(
         app,
         "vision-overlay",
         WebviewUrl::App("capture.html".into()),
@@ -123,8 +138,26 @@ fn open_overlay(app: &AppHandle, info: &MonitorInfo) -> R<()> {
     .resizable(false)
     .skip_taskbar(true)
     .focused(true)
-    .build()
-    .map_err(|e| format!("开框选窗口失败：{e}"))?;
+    // 先建不显示、建完再 show：万一 webview 建不出来（见下面的参数坑），
+    // 留下的就只是一个**看不见**的孤儿窗口，而不是一块盖满整屏、又关不掉的纯白。
+    .visible(false)
+    // capture.html 的底色（#101314）。页面首帧之前 WebView2 露的是自己的默认白底 ——
+    // 一整屏白闪正是"点一下整个屏幕就白了"里最刺眼的那一下。
+    .background_color(tauri::window::Color(0x10, 0x13, 0x14, 0xFF));
+
+    // **必须与主窗口逐字一致**：wry 是"每个 webview 各建一次 WebView2 环境"
+    // （wry-0.57 src/webview2/mod.rs::create_environment），而同一个 user data dir 上
+    // 第二次建环境时**参数必须完全相同**，否则 CreateCoreWebView2EnvironmentWithOptions
+    // 直接回 ERROR_INVALID_STATE(0x8007139F)。自检/调试跑法只给主窗口挂了参数、overlay
+    // 没挂 ⇒ overlay 的 webview 永远建不出来（真机实测：报"开框选窗口失败：failed to
+    // create webview: WebView2 error: WindowsError(0x8007139F)"）。
+    if let Some(args) = crate::debug_browser_args() {
+        builder = builder.additional_browser_args(&args);
+    }
+
+    let w = builder.build().map_err(|e| format!("开框选窗口失败：{e}"))?;
+    let _ = w.show();
+    let _ = w.set_focus();
     Ok(())
 }
 

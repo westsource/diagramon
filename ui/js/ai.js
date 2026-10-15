@@ -57,6 +57,12 @@ window.DGM = window.DGM || {};
 
   /* ------------------------------------------------------------------ 渲染 */
 
+  /** 一条消息 = 微信式的「头像 + 气泡」：用户在右（绿气泡），AI 在左（白气泡）。
+   *
+   *  结构上多包了一层 `.msg-body`：头像要跟"这一条的全部内容"（气泡、附件缩略图、
+   *  代码卡、思考块）整体对齐，气泡本身还得是让宽度跟着文字走的那个 flex 项 ——
+   *  直接把头像塞进气泡行，代码卡就会被压成气泡那么窄，而 AI 的正文就是代码。
+   */
   function bubbleNode(m) {
     const roleCls = m.role === "user" ? "user" : m.role === "sys" ? "sys" : m.err ? "err" : "bot";
     const n = h("div", "msg " + roleCls);
@@ -64,19 +70,21 @@ window.DGM = window.DGM || {};
       n.innerHTML = `<div class="bubble">${icon("info", "ico-sm")} ${esc(m.text)}</div>`;
       return n;
     }
-    const head =
-      m.role === "user"
-        ? `<div class="msg-head"><span class="who">${esc(t("ai.you"))}</span></div>`
-        : `<div class="msg-head">${icon("robot", "ico-sm")}<span class="who">${esc(t("ai.assistant"))}</span>` +
-          (m.used ? `<span class="badge-used">${esc(m.used.model)} · ${esc(m.used.tokens)} tok</span>` : "") +
-          `</div>`;
-    n.innerHTML = head;
+    const mine = m.role === "user";
+    const ava = h("div", "ava" + (mine ? " me" : ""));
+    ava.innerHTML = icon(mine ? "user" : "robot", "ico-sm");
+    const body = h("div", "msg-body");
+    body.innerHTML =
+      `<div class="msg-head"><span class="who">${esc(t(mine ? "ai.you" : "ai.assistant"))}</span>` +
+      (!mine && m.used ? `<span class="badge-used">${esc(m.used.model)} · ${esc(m.used.tokens)} tok</span>` : "") +
+      `</div>`;
+    n.append(ava, body);
     if (m.image) {
       const th = h("div", "thumb");
       th.innerHTML =
         `<span class="pic">${m.image.dataUrl ? `<img src="${m.image.dataUrl}" alt="">` : icon("image", "ico-lg")}</span>` +
         `<span class="meta"><b>${esc(m.image.name)}</b><span>${esc(m.image.meta || "")}</span></span>`;
-      n.appendChild(th);
+      body.appendChild(th);
     }
 
     // 思考块：思考型模型（GLM/DeepSeek/Qwen）在正文之前会连推几十上百帧 reasoning —
@@ -90,12 +98,12 @@ window.DGM = window.DGM || {};
       line.innerHTML = thinking
         ? `${icon("sparkles", "ico-sm")}<span>${esc(t("ai.think.live", { n: thinking.length }))}</span>`
         : `${icon("refresh", "ico-sm")}<span>${esc(t("ai.waiting"))}</span>`;
-      n.appendChild(line);
+      body.appendChild(line);
       if (thinking && (m.streaming || !hasText)) {
-        const body = h("div", "think-body");
-        body.dataset.req = m.req || "";
-        body.innerHTML = esc(thinking.length > 800 ? "…" + thinking.slice(-800) : thinking).replace(/\n/g, "<br>");
-        n.appendChild(body);
+        const tb = h("div", "think-body");
+        tb.dataset.req = m.req || "";
+        tb.innerHTML = esc(thinking.length > 800 ? "…" + thinking.slice(-800) : thinking).replace(/\n/g, "<br>");
+        body.appendChild(tb);
       }
     }
 
@@ -103,25 +111,25 @@ window.DGM = window.DGM || {};
     if (parsed.text) {
       const b = h("div", "bubble" + (m.streaming ? " streaming" : ""), esc(parsed.text).replace(/\n/g, "<br>"));
       b.dataset.req = m.req || "";
-      n.appendChild(b);
+      body.appendChild(b);
     } else if (m.streaming) {
       const b = h("div", "bubble streaming");
       b.dataset.req = m.req || "";
-      n.appendChild(b);
+      body.appendChild(b);
     }
 
     // 没有正文的收尾必须说清为什么，别留一个空气泡（token 是真花了）
     if (m.notice) {
       const w = h("div", "bubble notice", esc(m.notice));
-      n.appendChild(w);
+      body.appendChild(w);
     }
 
     for (const blk of parsed.blocks) {
-      n.appendChild(codeCard(blk, m));
+      body.appendChild(codeCard(blk, m));
     }
     if (m.applied) {
       const done = h("span", "applied-tag", `${icon("check", "ico-sm")}${esc(t("ai.applied"))}`);
-      n.appendChild(done);
+      body.appendChild(done);
     }
     return n;
   }
