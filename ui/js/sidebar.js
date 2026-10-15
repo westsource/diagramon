@@ -606,6 +606,13 @@ window.DGM = window.DGM || {};
       return box;
     }
 
+    // 还没查过（启动那一查在路上）⇒ 说"正在检查"，**不要**摆出"未登录 + 登录按钮"：
+    // 那不是事实，而且会引用户去白登一次（2026-10-15 用户报的"启动后要手点一下才变登录"）。
+    if (!cloud.checked) {
+      box.appendChild(tip(esc(t("acct.checking"))));
+      return box;
+    }
+
     const a = cloud.status.signed_in ? cloud.status.account : null;
     box.appendChild(acctCard(a));
 

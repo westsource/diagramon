@@ -683,8 +683,18 @@ window.DGM = window.DGM || {};
     const acct = h("button", "act" + (p.sidebar_view === "account" && p.sidebar ? " on" : ""));
     acct.innerHTML = icon("user");
     acct.title = t("act.account");
-    acct.addEventListener("click", () => {
+    acct.addEventListener("click", async () => {
       const cur = state.panels();
+      // **"还没查回来" ≠ "未登录"**：启动那一查是后台跑的，用户完全可能在它回来之前就点
+      // 这一下。按未登录取值会直接把一个明明有效的会话丢进登录窗（2026-10-15 用户报的
+      // "启动后要手点一下账户才变登录"，症状就是这一支被走错）。没查过 / 上次没查成，
+      // 就先补一次；最多等 6s，等不到再按现状决定（真结果回来时 cloud:changed 还会再刷）。
+      if (!state.cloud.checked || state.cloud.lastError) {
+        await Promise.race([
+          state.cloudRefresh(),
+          new Promise((r) => setTimeout(r, 6000)),
+        ]);
+      }
       const signed = !!state.cloud.status.signed_in;
       const configured = !!((state.settings.cloud || {}).base_url || "").trim();
       if (configured && !signed) {
@@ -1252,6 +1262,10 @@ window.DGM = window.DGM || {};
     // 活动栏也**显示**云状态（账户钮的高亮、以及"未登录→弹窗"那一支），
     // 登录 / 登出要跟着刷新。少了这条，活动栏会一直停在登录前的样子。
     DGM.bus.on("cloud:changed", renderActivity);
+    // 状态栏那颗 AI 模型钮也吃云状态（网关别名是登录后才有的，`currentModel()` 拿不到
+    // 就显示「未配置」）。少了这条，启动时那一帧会把它钉在「未配置」上再也不变
+    // （2026-10-15 用户报的"启动后得手点一下账户才变登录"里就有它）。
+    DGM.bus.on("cloud:changed", renderStatus);
 
     // 全局点击 / 悬浮收起
     document.addEventListener("click", (e) => {

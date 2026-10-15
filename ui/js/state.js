@@ -77,6 +77,10 @@ window.DGM = window.DGM || {};
      * 令牌不在前端（在凭据库），所以"已登录"是事实陈述，不是页面能伪造的状态。 */
     cloud: {
       status: { signed_in: false, base_url: "", account: null },
+      /* **"查过了吗"必须与"查完是未登录"分开**：`status.signed_in=false` 既可能是
+       * 真未登录，也可能是"启动那一查还没回来"。界面拿它当未登录用，就会出现
+       * "启动后得手点一下账户才变登录"（2026-10-15 用户报的）。 */
+      checked: false,
       docs: null, // CloudDocList | null
       folders: null, // CloudFolderList | null
       loading: false,
@@ -556,32 +560,51 @@ window.DGM = window.DGM || {};
 
   /* ------------------------------------------------------------------ 云网关 */
 
-  /** 拉云端状态（登录与否 + 账户快照）。掉线/未配置都如实落地，不伪造。 */
+  /** 进行中的那一次云状态检查。并发调用**共用同一个 promise** ——
+   *  启动时那一查还没回来之前用户完全可能已经点了「账户」，再发一次不只是浪费：
+   *  401 时还会多一次令牌轮换，而轮换是**轮换+家族吊销**制的（并发刷新有把用户
+   *  所有设备踢下线的风险，见 src-tauri/src/cloud.rs::refresh_tokens）。 */
+  let cloudCheck = null;
+
+  /** 拉云端状态（登录与否 + 账户快照）。掉线/未配置都如实落地，不伪造。
+   *
+   *  结束时一定把 `cloud.checked` 置真（失败也算查过一轮，但留 `lastError`），
+   *  这样界面能区分"还没查"与"查完是未登录"。 */
   async function cloudRefresh() {
-    state.cloud.loading = true;
-    emit("cloud:changed");
+    if (cloudCheck) return cloudCheck;
+    cloudCheck = (async () => {
+      state.cloud.loading = true;
+      emit("cloud:changed");
+      try {
+        state.cloud.status = (await ipc.invoke("cloud_status")) || { signed_in: false, base_url: "", account: null };
+        state.cloud.lastError = "";
+      } catch (e) {
+        state.cloud.lastError = String((e && e.message) || e);
+        state.cloud.status = { signed_in: false, base_url: "", account: null };
+      }
+      state.cloud.checked = true;
+      state.cloud.loading = false;
+      emit("cloud:changed");
+      if (state.cloud.status.signed_in) {
+        await Promise.all([cloudDocs(), cloudFolders()]);
+      }
+      // 恢复已有会话时也把模型别名取回来 —— 否则重开应用后 AI 面板会说"没有模型"，
+      // 直到用户重新登录一次（那正是这次要修的观感问题）。
+      // 但这种场合**只补"空/悬空"的默认**，不覆盖用户上次挑的模型（见 autoPickGatewayModel）。
+      await refreshGatewayModels("ifMissing");
+      return state.cloud.status;
+    })();
     try {
-      state.cloud.status = (await ipc.invoke("cloud_status")) || { signed_in: false, base_url: "", account: null };
-      state.cloud.lastError = "";
-    } catch (e) {
-      state.cloud.lastError = String((e && e.message) || e);
-      state.cloud.status = { signed_in: false, base_url: "", account: null };
+      return await cloudCheck;
+    } finally {
+      cloudCheck = null;
     }
-    state.cloud.loading = false;
-    emit("cloud:changed");
-    if (state.cloud.status.signed_in) {
-      await Promise.all([cloudDocs(), cloudFolders()]);
-    }
-    // 恢复已有会话时也把模型别名取回来 —— 否则重开应用后 AI 面板会说"没有模型"，
-    // 直到用户重新登录一次（那正是这次要修的观感问题）。
-    // 但这种场合**只补"空/悬空"的默认**，不覆盖用户上次挑的模型（见 autoPickGatewayModel）。
-    await refreshGatewayModels("ifMissing");
-    return state.cloud.status;
   }
 
   async function cloudLogin(email, password) {
     const account = await ipc.invoke("cloud_login", { email, password });
     state.cloud.status = { signed_in: true, base_url: (state.settings.cloud || {}).base_url || "", account };
+    state.cloud.checked = true; // 登录是"确知"的一条路，别再让界面停在"正在检查"
     emit("cloud:changed");
     await Promise.all([cloudDocs(), cloudFolders()]);
     // 登录这个动作明确要求：落到第一个网关模型为默认（用户拍板）。
@@ -592,6 +615,7 @@ window.DGM = window.DGM || {};
   async function cloudLogout() {
     await ipc.invoke("cloud_logout");
     state.cloud.status = { signed_in: false, base_url: (state.settings.cloud || {}).base_url || "", account: null };
+    state.cloud.checked = true; // 登出是确定状态
     state.cloud.docs = null;
     state.cloud.folders = null;
     state.aiGateway.models = [];

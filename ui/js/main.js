@@ -270,9 +270,18 @@ window.DGM = window.DGM || {};
     note("boot:8-urlstate");
     applyUrlState();
 
-    // 云端状态：后台拉一次（失败也不影响启动 —— 侧栏如实显示"未登录/未配置"）
+    // 云端状态：后台拉一次（失败也不影响启动 —— 侧栏如实显示"未登录/未配置"）。
+    // **失败要重试**：启动初期网络/DNS/代理还没热起来很常见，一次失败就把"已登录"钉成
+    // "未登录"，用户看到的就是"启动后得点一下账户才变登录"（2026-10-15 报的）。
+    // 退避重试三次；全失败也如实留着 lastError（界面按 lastError 显示原因，不装成未登录）。
     if (state.cloudRefresh) {
-      state.cloudRefresh().catch((e) => note("cloud-refresh-failed " + String((e && e.message) || e)));
+      (async () => {
+        for (const wait of [0, 1500, 4000]) {
+          if (wait) await new Promise((r) => setTimeout(r, wait));
+          await state.cloudRefresh();
+          if (!state.cloud.lastError) return; // 查成功（含"确实未登录"）就收工
+        }
+      })().catch((e) => note("cloud-refresh-failed " + String((e && e.message) || e)));
     }
 
     // 检查更新：后台跑一次。**安静模式** —— 出错与"已最新"都不打扰，只有真发现新版才在
