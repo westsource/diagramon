@@ -56,10 +56,12 @@
   --warn-soft: #f7efdf;
   --err-soft: #f8e9e6;
 
-  /* 微信式对话：我方的绿气泡 / AI 方的白气泡（明暗两套各自定义，见下） */
-  --chat-me: #95ec69;
-  --chat-me-ink: #10230f;
-  --chat-me-ava: #4fb345;
+  /* 对话配色：我方与「账户」侧边栏的账户头像同源 ——
+     头像 = accent-soft 圆底 + accent 图标（同 .acct-card .avatar），
+     气泡/文字 = accent 系（AI 方用面板底色，见下）。明暗主题各取各的 accent */
+  --chat-me: var(--accent);
+  --chat-me-ink: var(--accent-ink);
+  --chat-me-ava: var(--accent-soft);
   --chat-bot: #ffffff;
 
   /* 四种格式各自的标识色（低饱和，用于标签页圆点/徽章/转换卡） */
@@ -121,10 +123,7 @@ html[data-theme="dark"] {
   --warn-soft: #2e2819;
   --err-soft: #33211e;
 
-  /* 微信式对话（暗色）：绿气泡压深、正文近黑；AI 气泡比面板底色亮一档 */
-  --chat-me: #3eb575;
-  --chat-me-ink: #062017;
-  --chat-me-ava: #2c8f5b;
+  /* 对话配色（暗色）：accent 系变量已按主题切换，此处只需 AI 气泡底色 */
   --chat-bot: #232829;
 
   --fmt-mermaid: #6fb2a3;
@@ -716,7 +715,8 @@ body.no-ai #ai-gutter { display: none; }
   border-radius: var(--radius-sm);
   background: var(--ai-soft); color: var(--ai); border: 1px solid var(--ai-line);
 }
-.msg.user .ava { background: var(--chat-me-ava); color: #fff; border-color: transparent; }
+/* 「我」方头像与「账户」侧边栏的账户图标同一画法：accent-soft 圆底 + accent 图标 */
+.msg.user .ava { background: var(--chat-me-ava); color: var(--accent); border-color: transparent; border-radius: 50%; }
 
 /* 气泡列：宽度由内容撑、上限是整条消息的可用宽（`align-items` 不拉伸 flex 项）。
    用户侧再收一档到 86%，长句子不至于从左边贴着 AI 的气泡。 */
