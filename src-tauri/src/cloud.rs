@@ -47,6 +47,26 @@ type R<T> = Result<T, String>;
 
 const ACCESS_KEY_HEADER: &str = "Authorization";
 
+/// 会话**确实**续不下去了（refresh token 被服务端拒绝/不存在）时的统一文案。
+/// 命令层靠 `.contains()` 识别这个串来广播 `cloud://changed`，改文案必须同步 —— 所以收成常量。
+pub const ERR_SESSION_EXPIRED: &str = "登录已过期，请重新登录（活动栏「账户」）";
+
+/// 续期失败是否**网络问题**（连不上云网关）。网络问题 ≠ 会话死了：
+/// 旧 access token 在服务端眼里可能还有效，不能拿一次断网当掉线处理。
+/// 判据就是 `refresh_tokens` 网络错误的固定前缀（那一句只有网络路径会拼）。
+pub fn is_network_failure(err: &str) -> bool {
+    err.starts_with("连不上")
+}
+
+/// 会话已死时的统一收尾：清掉本地令牌。**清是关键** —— 令牌还躺在凭据库里的话，
+/// `cloud_status` 会继续报"已登录"，于是出现用户看到的怪象：
+/// 侧栏明明登录着，AI 一调就报 token 过期（2026-10-16 用户反馈）。清掉之后，
+/// 下一次 `cloud_status` 就是如实的"未登录"。
+pub fn clear_session(state: &AppState) {
+    let _ = state.creds.delete(CLOUD_ACCESS_KEY);
+    let _ = state.creds.delete(CLOUD_REFRESH_KEY);
+}
+
 /// 解析当前应使用的 **API 根**。
 ///
 /// 自动探测（用户要求）：缓存命中（`cloud.api_base` 且仍以当前配置的根开头）直接用；
@@ -91,16 +111,21 @@ async fn access_token(state: &AppState) -> R<String> {
         .ok_or_else(|| "尚未登录云网关".to_string())?;
     // access token 是短命 JWT（默认 30 分钟）。**过期就先续期**——
     // 云网关 AI 那条路不经过 authed_send，全靠这里把"拿令牌"做成"保证拿到能用的令牌"。
-    // 续不了不在这里报错：把旧令牌交出去，调用方收到 401 后走各自的处理
-    // （authed_send 会再试一次续期，AI 对话则如实报 401）。
+    // 续期失败要分两种（2026-10-16）：
+    //   - **网络不通**：把旧令牌交出去，调用方收到 401 后走各自的处理
+    //     （authed_send 会再试一次续期，AI 对话则如实报 401）；
+    //   - **服务端拒绝**（refresh token 已吊销/过期）：会话是真的死了 —— 清掉本地令牌
+    //     并给出统一文案，别把一段必死的旧令牌交出去再让用户看一眼裸的 401。
     if let Some(exp) = jwt_exp_seconds(&token) {
         if exp <= unix_now_seconds() {
-            let _ = refresh_tokens(state).await;
-            return state
-                .creds
-                .get(CLOUD_ACCESS_KEY)
-                .map_err(|e| e.to_string())?
-                .ok_or_else(|| "尚未登录云网关".to_string());
+            return match refresh_tokens(state).await {
+                Ok(t) => Ok(t),
+                Err(e) if is_network_failure(&e) => Ok(token),
+                Err(_) => {
+                    clear_session(state);
+                    Err(ERR_SESSION_EXPIRED.into())
+                }
+            };
         }
     }
     Ok(token)
@@ -121,7 +146,8 @@ async fn access_token(state: &AppState) -> R<String> {
  * 还有一条：refresh **绑定设备**（`deviceId` 与登录时不一致 → DEVICE_MISMATCH），
  * 所以这里带的是登录时持久化的 `cloud.device_id`。
  */
-async fn refresh_tokens(state: &AppState) -> R<String> {
+/// 命令层也要用它（AI 网关 401 时续期一次再重试），所以是 crate 内公开。
+pub(crate) async fn refresh_tokens(state: &AppState) -> R<String> {
     // 跨 .await 持有 ⇒ 必须用 tokio 的异步锁（std MutexGuard 不是 Send，
     // 而 tauri 的 async command 要求 future 是 Send —— 编译器会直接拦下）。
     static REFRESH_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
@@ -131,10 +157,10 @@ async fn refresh_tokens(state: &AppState) -> R<String> {
         .creds
         .get(CLOUD_REFRESH_KEY)
         .map_err(|e| e.to_string())?
-        .ok_or_else(|| "登录已过期，请重新登录".to_string())?;
+        .ok_or_else(|| ERR_SESSION_EXPIRED.to_string())?;
     let device_id = state.settings().cloud.device_id.trim().to_string();
     if device_id.is_empty() {
-        return Err("登录已过期，请重新登录".into());
+        return Err(ERR_SESSION_EXPIRED.into());
     }
     let body = json!({ "refreshToken": refresh, "deviceId": device_id });
     // 续期请求**自己发**，不经过 call_json/authed_send —— 这不是偷懒：
@@ -225,7 +251,7 @@ async fn authed_send(
                     token = Some(t);
                     continue;
                 }
-                Err(_) => return Err("登录已过期，请重新登录（活动栏「账户」）".into()),
+                Err(_) => return Err(ERR_SESSION_EXPIRED.into()),
             }
         }
         return Ok((status, text));

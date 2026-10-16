@@ -381,6 +381,34 @@ async fn resolve_target(state: &AppState, model_id: &str) -> R<ai::Resolved> {
     })
 }
 
+/// 会话过期类错误统一收尾：广播 `cloud://changed`，让侧栏**立刻**回到未登录 ——
+/// 别再出现"侧栏登录着、AI 一调就报 token 过期"的假象（2026-10-16 用户反馈）。
+/// 错误本身继续由调用方上抛。
+fn note_session_error(app: &AppHandle, err: &str) {
+    if err.contains(crate::cloud::ERR_SESSION_EXPIRED) {
+        let _ = app.emit(events::CLOUD_CHANGED, ());
+    }
+}
+
+/// 正文与思考走两条事件：界面在"还没有正文"时要能显示思考进度（见 Chunk 的说明）。
+/// 收成一个函数：401 续期重试需要**第二个**转发闭包（FnMut 不可克隆）。
+fn delta_forwarder(app: tauri::AppHandle, request_id: String) -> impl FnMut(ai::Chunk) {
+    move |chunk: ai::Chunk| match chunk {
+        ai::Chunk::Text(piece) => {
+            let _ = app.emit(
+                events::AI_DELTA,
+                AiDelta { request_id: request_id.clone(), delta: piece },
+            );
+        }
+        ai::Chunk::Reasoning(piece) => {
+            let _ = app.emit(
+                events::AI_THINKING,
+                AiThinking { request_id: request_id.clone(), delta: piece },
+            );
+        }
+    }
+}
+
 /// 发起一次流式对话：立刻返回，内容经 `ai://delta` / `ai://done` / `ai://failed` 推进来。
 #[tauri::command]
 pub async fn ai_chat(
@@ -389,7 +417,13 @@ pub async fn ai_chat(
     req: AiChatRequest,
 ) -> R<bool> {
     let st = state.inner().clone();
-    let resolved = resolve_target(&st, &req.model_id).await?;
+    let resolved = match resolve_target(&st, &req.model_id).await {
+        Ok(r) => r,
+        Err(e) => {
+            note_session_error(&app, &e);
+            return Err(e);
+        }
+    };
 
     let messages = ai::build_messages_with_history(
         req.format,
@@ -411,26 +445,37 @@ pub async fn ai_chat(
     st.cancels().insert(request_id.clone(), cancel.clone());
 
     let used_model = resolved.model.clone();
+    // 只有网关模型做 401 续期重试：BYOK 的 401 是用户自己的密钥坏了，重试没有意义
+    let gateway = req.model_id.starts_with(app_ipc::GATEWAY_MODEL_PREFIX);
+    let model_id = req.model_id.clone();
     tauri::async_runtime::spawn(async move {
-        let delta_app = app.clone();
-        let delta_rid = request_id.clone();
-        // 正文与思考走两条事件：界面在"还没有正文"时要能显示思考进度（见 Chunk 的说明）
-        let on_delta = move |chunk: ai::Chunk| match chunk {
-            ai::Chunk::Text(piece) => {
-                let _ = delta_app.emit(
-                    events::AI_DELTA,
-                    AiDelta { request_id: delta_rid.clone(), delta: piece },
-                );
-            }
-            ai::Chunk::Reasoning(piece) => {
-                let _ = delta_app.emit(
-                    events::AI_THINKING,
-                    AiThinking { request_id: delta_rid.clone(), delta: piece },
-                );
-            }
-        };
+        let on_delta = delta_forwarder(app.clone(), request_id.clone());
 
-        let result = ai::stream_chat(&st.http, &resolved, messages, &cancel, on_delta).await;
+        // messages 先 clone 进第一次调用：401 重试要用原来的再发一遍
+        let mut result =
+            ai::stream_chat(&st.http, &resolved, messages.clone(), &cancel, on_delta).await;
+
+        // 网关 401 = access token 在服务端被拒（本地看还没过期/时钟不同步都可能）：
+        // 续期一次再试一轮 —— 此时尚未向前端输出任何内容，重试是安全的。
+        if gateway {
+            if let Err(ai::ChatError::Http { status: 401, .. }) = &result {
+                match crate::cloud::refresh_tokens(&st).await {
+                    Ok(_) => {
+                        if let Ok(resolved2) = resolve_target(&st, &model_id).await {
+                            let on_delta2 = delta_forwarder(app.clone(), request_id.clone());
+                            result = ai::stream_chat(&st.http, &resolved2, messages, &cancel, on_delta2).await;
+                        }
+                    }
+                    Err(e) if !crate::cloud::is_network_failure(&e) => {
+                        // 续期被服务端拒绝 = 会话真的死了：清凭据 + 广播，界面立刻回未登录
+                        crate::cloud::clear_session(&st);
+                        let _ = app.emit(events::CLOUD_CHANGED, ());
+                        result = Err(ai::ChatError::Session(crate::cloud::ERR_SESSION_EXPIRED.into()));
+                    }
+                    Err(_) => {}
+                }
+            }
+        }
 
         match result {
             Ok((text, _reasoning, usage)) => {
@@ -537,7 +582,13 @@ pub async fn ai_agent_run(
     req: AiChatRequest,
 ) -> R<bool> {
     let st = state.inner().clone();
-    let resolved = resolve_target(&st, &req.model_id).await?;
+    let resolved = match resolve_target(&st, &req.model_id).await {
+        Ok(r) => r,
+        Err(e) => {
+            note_session_error(&app, &e);
+            return Err(e);
+        }
+    };
 
     // 工具作用的对象是**当前活动文档**，与记忆的作用域同一来源（`session.payload().active`）
     let doc_id = st.session().payload().active.unwrap_or_default();

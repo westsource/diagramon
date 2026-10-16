@@ -632,6 +632,20 @@ window.DGM = window.DGM || {};
     emit("cloud:changed");
   }
 
+  /** Rust 侧判定"会话死了"（令牌续期被服务端拒绝）时会广播 `cloud://changed`。
+   *  这里立刻重查云状态，并做与登出一致的收尾（清掉指向网关的默认别名）——
+   *  否则就是用户看到的怪象：侧栏还登录着，AI 一调就报 token 过期（2026-10-16）。 */
+  ipc.on("cloud://changed", async () => {
+    try {
+      await cloudRefresh();
+      if (!state.cloud.status.signed_in && state.isGatewayModel(state.ai().default_model)) {
+        await patchSettings({ ai: { default_model: "" } });
+      }
+    } catch (e) {
+      console.error("[DGM] cloud session refresh failed:", e);
+    }
+  });
+
   /** 拉云网关**可用模型别名**（`GET /v1/ai/models`）。
    *
    *  失败时**清空列表而不是留着旧的**：这份数据是"当前账号能用什么"，

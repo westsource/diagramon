@@ -1614,7 +1614,7 @@ window.DGM = window.DGM || {};
     updateState = "downloading";
     updateProgress = { got: 0, total: 0 };
     updateLastPct = -1;
-    status(t("update.downloading"), "");
+    // 进度只落在状态栏左边的**更新按钮**与更新窗口里（状态栏消息区不再重复一份 —— 2026-10-16 用户反馈）
     DGM.note(`update:install-start version=${update.version}`);
     startUpdateWatchdog();
     syncUpdateUI(true);
@@ -1628,7 +1628,6 @@ window.DGM = window.DGM || {};
         if (ev.event === "Started") {
           updateProgress = { got: 0, total: (ev.data && ev.data.contentLength) || 0 };
           DGM.note(`update:started total=${updateProgress.total || "?"}`);
-          status(t("update.downloading"), "");
           syncUpdateUI(true);
           return;
         }
@@ -1639,7 +1638,6 @@ window.DGM = window.DGM || {};
             const pct = Math.floor((updateProgress.got / total) * 100);
             if (pct >= updateLastPct + 10) { updateLastPct = pct - (pct % 10); DGM.note(`update:progress ${pct}%`); }
           }
-          status(updateLabelText(), "");
           syncUpdateUI(false);
           return;
         }

@@ -68,6 +68,10 @@ pub enum ChatError {
     Network(String),
     #[error("服务返回 {status}：{body}")]
     Http { status: u16, body: String },
+    /// 会话已死（云网关续期被服务端拒绝）等**有明确处置**的失败：文案由调用方给，
+    /// 不是裸的 HTTP 401 —— 用户该看到"去重新登录"，不是一段错误码。
+    #[error("{0}")]
+    Session(String),
     #[error("响应格式异常：{0}")]
     Protocol(String),
 }
