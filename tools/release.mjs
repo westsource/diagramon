@@ -138,7 +138,16 @@ function tagSha0(tag) {
   return r.code === 0 ? r.out.trim() : "";
 }
 function gitEnv(remote) {
-  const base = { GIT_TERMINAL_PROMPT: "0" };
+  const base = {
+    GIT_TERMINAL_PROMPT: "0",
+    // 2026-10-16 起本机全局 ~/.gitconfig 有两枚雷：ghproxy.net 的 insteadOf 把
+    // 所有 github.com 地址改写到镜像（push 不该走镜像，且镜像没存凭据）；
+    // credential.helper=manager（GCM）不支持 socks5h 直接报错。发版推送必须
+    // 整体绕开全局/系统配置：仓库内配置 + store 助手（~/.git-credentials）
+    // + socks5h 直连 GitHub。Gitee 不走代理，同样吃这套干净配置。
+    GIT_CONFIG_GLOBAL: "/dev/null",
+    GIT_CONFIG_SYSTEM: "/dev/null",
+  };
   const cfg = ["-c", "credential.helper=store"];
   if (remote === CFG.originRemote) cfg.push("-c", `http.proxy=${CFG.ghProxy}`, "-c", "http.version=HTTP/1.1");
   return { env: base, cfg };
