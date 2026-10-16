@@ -455,6 +455,19 @@ pub async fn ai_chat(
         let mut result =
             ai::stream_chat(&st.http, &resolved, messages.clone(), &cancel, on_delta).await;
 
+        // 网络类失败（请求没送达 / 一帧未到就断）**自动重试一次**。走到 `Network` 就
+        // 意味着用户一个字都没收到 —— 收到正文后断流会原样交付（Ok），收到思考后断流
+        // 是 `Interrupted`（上游已计费，重试是用户的决定）—— 都不会进到这里，所以
+        // 这里重试不会让用户看到重复内容，上游大概率也还没产出，计费风险可接受。
+        // （真机实录 2026-10-16：改图流中途连接静默断死，报 "error decoding response
+        // body"，用户只能手动重发。）
+        if matches!(result, Err(ai::ChatError::Network(_))) && !cancel.load(Ordering::Relaxed) {
+            let on_delta_retry = delta_forwarder(app.clone(), request_id.clone());
+            result =
+                ai::stream_chat(&st.http, &resolved, messages.clone(), &cancel, on_delta_retry)
+                    .await;
+        }
+
         // 网关 401 = access token 在服务端被拒（本地看还没过期/时钟不同步都可能）：
         // 续期一次再试一轮 —— 此时尚未向前端输出任何内容，重试是安全的。
         if gateway {

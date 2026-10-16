@@ -49,7 +49,15 @@ impl AppState {
         let settings = app_core::settings::load(&paths.settings_file());
         let http = reqwest::Client::builder()
             .connect_timeout(std::time::Duration::from_secs(20))
+            // 总超时（整请求一刀切）：普通请求的兜底。
+            // **流式 AI 请求不能吃这个值** —— 思考型模型一条流跑 5 分钟+很正常，
+            // 撞上它就是"网络请求失败：error decoding response body"（真机实录
+            // 2026-10-16：改图流恰好在 300s 整被掐死，ai_usage 记 299.9s cancelled，
+            // 连续两天两笔）。stream_chat 里已按请求把总超时放宽到 30 分钟。
             .timeout(std::time::Duration::from_secs(300))
+            // 每次读单独计时、读到就重置：连接卡死（收不到任何字节）90 秒即报错，
+            // 流式慢但活着的连接不受影响。这是"卡死检测"，与上面的总 deadline 互补。
+            .read_timeout(std::time::Duration::from_secs(90))
             .build()
             .unwrap_or_default();
         let recovery_dir = app_core::recovery::dir_for(&paths.data_dir);

@@ -66,6 +66,13 @@ pub enum ChatError {
     MissingKey,
     #[error("网络请求失败：{0}")]
     Network(String),
+    /// 流中途断开、且**思考内容已到但正文未生成**。与 `Network` 的关键区别：这一单
+    /// 上游已经开始生成（推理 token 大概率已计费），自动重试等于双倍付费 —— 所以
+    /// 不能自动重试（调用方见 `Network` 才重试），把"要不要再试"的决定权交给用户。
+    /// （真机实录 2026-10-16：改图请求思考流到 6415 字节后连接静默断死，正文一个
+    /// 字都没有 —— 原来这条路径报 `Network` 且把已收到的思考一起丢掉。）
+    #[error("连接中断：思考内容已收到，但正文还没生成就断开了，请重试")]
+    Interrupted,
     #[error("服务返回 {status}：{body}")]
     Http { status: u16, body: String },
     /// 会话已死（云网关续期被服务端拒绝）等**有明确处置**的失败：文案由调用方给，
@@ -165,7 +172,13 @@ where
 
     let url = r.endpoint();
     let body = build_body(r, &messages, true);
-    let mut req = client.post(&url).json(&body);
+    let req = client.post(&url).json(&body);
+    // 流式请求**不能继承**客户端的 300s 总超时：思考型模型一条流跑 5 分钟+很正常，
+    // 撞上它会被硬掐成"error decoding response body"（真机实录 2026-10-16：改图流
+    // 恰在 300s 整断掉，服务端 ai_usage 记 299.9s cancelled）。这里放宽成 30 分钟
+    // 兜底——真正的卡死由客户端的 read_timeout（90s 无字节即断）负责检测，
+    // 上游持续吐 SSE 心跳注释帧（不算内容但保活连接）的长思考流也能活下来。
+    let mut req = req.timeout(std::time::Duration::from_secs(30 * 60));
     if let Some(key) = r.api_key.as_deref() {
         if !key.trim().is_empty() {
             req = req.bearer_auth(key.trim());
@@ -194,11 +207,17 @@ where
             Ok(Some(c)) => c,
             Ok(None) => break,
             Err(e) => {
-                // 已经收到内容后断开：不算失败，把已有的交出去
-                if full.is_empty() {
-                    return Err(ChatError::Network(e.to_string()));
+                // 已经收到正文后断开：不算失败，把已有的交出去
+                if !full.is_empty() {
+                    break;
                 }
-                break;
+                // 思考已到、正文未生成：无声成功会让用户看到"想了半天什么都没有"，
+                // 自动重试会双倍计费 —— 显式报错，让用户决定要不要再来一次。
+                if !reasoning.is_empty() {
+                    return Err(ChatError::Interrupted);
+                }
+                // 一帧都没到：纯连接失败，调用方可安全自动重试一次
+                return Err(ChatError::Network(e.to_string()));
             }
         };
         buf.extend_from_slice(&chunk);
