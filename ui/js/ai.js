@@ -20,14 +20,62 @@ window.DGM = window.DGM || {};
 
   const MAX_EDGE = 1568;
 
-  // 每个 tab 各存一份消息
-  const msgs = { chat: [], vision: [], review: [] };
+  /** 对话**按文档**分开：会话就是按文档身份持久化的（`conversations/`）。
+   *
+   *  曾经只有一份 `msgs`、三个页签共用 —— 那样切文档会把上一份的对话带过来，
+   *  与"会话按文档持久化"直接矛盾。结构：`docId -> { chat, vision, review }`。
+   *
+   *  未保存文档**也有桶**（用 docId 作键），只是它落不了盘（Rust 侧按"没有稳定身份"
+   *  直接拒绝）。界面上那句"本文档尚未保存，对话只在本次运行内有效"是如实说法。
+   */
+  const msgsByDoc = new Map();
+
+  function bucket(docId) {
+    const key = docId || "__none__";
+    let b = msgsByDoc.get(key);
+    if (!b) {
+      b = { chat: [], vision: [], review: [] };
+      msgsByDoc.set(key, b);
+    }
+    return b;
+  }
+
+  /** 当前文档某个页签的消息数组（省略 `which` 即当前页签）。 */
+  function msgs(which) {
+    const d = state.activeDoc();
+    return bucket(d && d.id)[which || tab()];
+  }
+
+  /** 已经尝试过从磁盘读会话的文档 —— 每份只读一次，别在每次渲染里重读。 */
+  const convLoaded = new Set();
   let unreadCount = 0;
   let selectionCtx = null; // 来自「让 AI 改这段」的选区
   let bound = false;
 
   function tab() {
     return state.ui.aiTab || "chat";
+  }
+
+  /** 待确认的记忆候选条。
+   *
+   *  为什么必须有这一条：自动提取的候选**不注入 prompt**，如果界面上完全看不见，
+   *  用户永远不知道 AI 提议记了什么，"确认"这个动作也就无从发生 —— 那这套机制
+   *  等于白做（而且用户会以为 AI 什么都没记住）。
+   */
+  function renderMemoryBar() {
+    const bar = $("#ai-memory-bar");
+    if (!bar) return;
+    const items = (state.memory && state.memory.items) || [];
+    const pending = items.filter((e) => e.state === "pending" && e.enabled !== false).length;
+    if (!pending || !state.ai().memory_enabled) {
+      bar.hidden = true;
+      bar.innerHTML = "";
+      return;
+    }
+    bar.hidden = false;
+    bar.innerHTML =
+      `${icon("sparkles", "ico-sm")}<span>${esc(t("ai.memory.pending", { n: pending }))}</span>` +
+      `<span class="sp"></span><span>${esc(t("ai.memory.review"))}</span>`;
   }
 
   /* ------------------------------------------------------------------ 文本 / 代码块 */
@@ -105,6 +153,15 @@ window.DGM = window.DGM || {};
         tb.innerHTML = esc(thinking.length > 800 ? "…" + thinking.slice(-800) : thinking).replace(/\n/g, "<br>");
         body.appendChild(tb);
       }
+    }
+
+    // 工具活动行：每一条就是一次真实的工具执行。失败的也要如实显示 ——
+    // 模型会拿到同样的失败并自己纠正，界面不该替它遮掩。
+    for (const s of m.steps || []) {
+      const line = h("div", "agent-step" + (s.ok ? "" : " bad"));
+      line.innerHTML =
+        `${icon(s.ok ? "bolt" : "alert", "ico-sm")}<b>${esc(s.tool)}</b><span>${esc(s.summary)}</span>`;
+      body.appendChild(line);
     }
 
     const parsed = splitFences(m.text || "");
@@ -213,14 +270,15 @@ window.DGM = window.DGM || {};
     if (!stream) return;
 
     $$("#ai-tabs .ai-tab").forEach((b) => b.classList.toggle("on", b.dataset.ai === cur));
+    renderMemoryBar();
 
     stream.innerHTML = "";
     if (!state.hasModels()) {
       stream.appendChild(noModelsNode());
-    } else if (!msgs[cur].length) {
+    } else if (!msgs(cur).length) {
       stream.appendChild(emptyNode());
     } else {
-      msgs[cur].forEach((m) => stream.appendChild(bubbleNode(m)));
+      msgs(cur).forEach((m) => stream.appendChild(bubbleNode(m)));
     }
 
     // 输入框占位与提示
@@ -390,6 +448,28 @@ window.DGM = window.DGM || {};
     return d || null;
   }
 
+  /** 取某个 tab 的**前序轮次**（不含本轮）。
+   *
+   *  只取文本，且只取 `user` / `assistant` 两种角色：
+   *  - **图片不进历史**。它只在内存里、不落盘，也不该在每个后续请求里重复上行 ——
+   *    否则一次识图会让之后每一轮都背上几百 KB 的 base64（服务端 body 上限会先炸）。
+   *  - **`sys` 提示与错误气泡不进历史**：它们是界面上的旁白，不是对话内容。
+   *
+   *  轮数与体积的裁剪在 Rust 侧做（`crates/ai::fit_history`，带单测）—— 这里只如实交出，
+   *  不各自猜一套策略；前端猜一份、Rust 再裁一次，两边迟早漂移。
+   */
+  function historyFor(cur) {
+    const out = [];
+    for (const m of msgs(cur) || []) {
+      if (m.role !== "user" && m.role !== "assistant") continue;
+      if (m.err) continue;
+      const text = (m.text || "").trim();
+      if (!text) continue;
+      out.push({ role: m.role, text });
+    }
+    return out;
+  }
+
   async function sendNow() {
     if (state.ui.aiBusy) return cancel();
     const ta = input();
@@ -429,21 +509,55 @@ window.DGM = window.DGM || {};
       format: fmtId,
       context: context || null,
       image_data_url: cur === "vision" && att ? att.dataUrl : null,
+      // 前序轮次：**在本轮 push 进 msgs 之前取**，所以天然不含本轮（见 historyFor）
+      history: historyFor(cur),
     };
 
     if (ta) ta.value = "";
     if (cur === "vision" && att) state.ui.aiAttachment = null;
     selectionCtx = null;
 
-    msgs[cur].push({ id: newId(), role: "user", text, image: cur === "vision" && att ? att : null });
-    const bot = { id: newId(), role: "assistant", text: "", streaming: true, req: req.request_id, m: cur };
-    msgs[cur].push(bot);
+    await dispatch(req, cur, { id: newId(), role: "user", text, image: cur === "vision" && att ? att : null });
+  }
+
+  /** 把一个请求挂进某个 tab 并发出去：用户消息 + 占位气泡 + busy 标记 + 调 `ai_chat`。
+   *
+   *  `sendNow`（走输入框）与「渲染校验回环」（自动重试，不经过输入框）共用它 ——
+   *  回环必须能自己造请求，否则用户得手动把报错粘进去，那就不叫自动修正了。
+   */
+  async function dispatch(req, cur, userMsg) {
+    // `at` 落在这条消息上：会话持久化要按它排跨页签的展示顺序，
+    // 落盘时再取 `Date.now()` 会让所有历史轮次挤在同一毫秒上。
+    if (userMsg) {
+      userMsg.at = Date.now();
+      msgs(cur).push(userMsg);
+    }
+    const bot = {
+      id: newId(),
+      role: "assistant",
+      text: "",
+      streaming: true,
+      req: req.request_id,
+      m: cur,
+      at: Date.now(),
+      // 记下这一轮的**来源与模型 id**：记忆提取要用它们（`m.used.model` 是展示名，不是 id）
+      prompt: (userMsg && userMsg.text) || "",
+      modelId: req.model_id || "",
+    };
+    msgs(cur).push(bot);
     state.ui.aiBusy = true;
     state.ui.aiRequestId = req.request_id;
     render();
 
+    // 受控工具循环：开关开着且**不是识图**时改走 `ai_agent_run`（非流式多步 +
+    // 工具活动事件）。识图那一路永远直连 —— 工具是为"画对图"设计的，看图用不上。
+    const cmd =
+      state.settings && state.settings.ai && state.settings.ai.tools_enabled && cur !== "vision"
+        ? "ai_agent_run"
+        : "ai_chat";
+
     try {
-      await ipc.invoke("ai_chat", { req });
+      await ipc.invoke(cmd, { req });
     } catch (e) {
       bot.streaming = false;
       bot.err = true;
@@ -466,10 +580,15 @@ window.DGM = window.DGM || {};
     render();
   }
 
+  /** 按请求 id 找消息。**要遍历所有文档的桶**：请求发出后用户可能已切到别的文档，
+   *  而 `ai://delta` 依然按 request_id 送回 —— 只查当前文档会把这些增量整包丢掉
+   *  （表现就是"切走再切回来，回复不见了"）。 */
   function findMsg(reqId) {
-    for (const k of Object.keys(msgs)) {
-      const m = msgs[k].find((x) => x.req === reqId);
-      if (m) return m;
+    for (const b of msgsByDoc.values()) {
+      for (const k of Object.keys(b)) {
+        const m = b[k].find((x) => x.req === reqId);
+        if (m) return m;
+      }
     }
     return null;
   }
@@ -484,6 +603,21 @@ window.DGM = window.DGM || {};
       const parsed = splitFences(m.text).text;
       node.innerHTML = esc(parsed).replace(/\n/g, "<br>");
     }
+  }
+
+  /**
+   * 工具循环里的一次工具执行（`ai://agent`）。
+   *
+   * 摘要行直接挂在气泡上（`m.steps`），随 `ai://done` 一起成为会话历史的一部分 ——
+   * 工具活动是"这一轮 AI 做了什么"的事实，落盘时一并持久化（图片除外）。
+   */
+  function onAgent(ev) {
+    const m = findMsg(ev && ev.request_id);
+    if (!m) return;
+    if (!m.steps) m.steps = [];
+    m.steps.push({ tool: ev.tool || "", summary: ev.summary || "", ok: ev.ok !== false });
+    // 工具活动低频（每轮最多几次），整栏重排的代价可以接受
+    render();
   }
 
   /**
@@ -548,10 +682,47 @@ window.DGM = window.DGM || {};
     );
     render();
     if (DGM.shell && DGM.shell.renderActivity) DGM.shell.renderActivity();
+    // 自动修正的那一轮：**直接把结果落回文档**，不再要求用户点一次「应用」——
+    // 用户本来就只是想要一张能渲染出来的图。
+    // 用 `m` 自己的代码块而不是 `applyLast()`：后者按「当前页签」找消息，
+    // 用户中途切了页签就会把别处的回复落进来。
+    if (retryCtx && retryCtx.reqId && ev.request_id === retryCtx.reqId) {
+      const { blocks } = splitFences(m.text || "");
+      if (blocks.length) applyBlock(blocks[0], m);
+    }
     if (state.ui.aiSendThenApply) {
       state.ui.aiSendThenApply = false;
       applyLast();
     }
+    // 一轮结束就落盘（不 await：落盘失败不该挡住界面）
+    persistConversation();
+    maybeExtractMemory(ev, m);
+  }
+
+  /** 一轮对话结束后提取候选记忆。
+   *
+   *  三道判定：
+   *  1. `memory_enabled` ∧ `memory_auto` —— 这是**额外一次真实计费**的调用，用户有权拒绝；
+   *  2. **只在 `chat` 页签** —— 识图/改图是针对某一张图的一次性任务，从那里"学长期偏好"
+   *     基本全是噪音；
+   *  3. 自动修正（渲染回环）那一轮不参与 —— 它是机器造的批评与答，不是用户偏好。
+   *
+   *  提取本身在 Rust 侧做；失败一律静默：记忆是锦上添花，不该让用户以为对话出了问题。
+   */
+  function maybeExtractMemory(ev, m) {
+    const ai = state.ai();
+    if (!ai.memory_enabled || !ai.memory_auto) return;
+    if (!m || m.m !== "chat") return;
+    if (retryCtx && retryCtx.reqId && m.req === retryCtx.reqId) return;
+    const prompt = (m.prompt || "").trim();
+    const reply = (ev.text || m.text || "").trim();
+    if (!prompt || !reply) return;
+    const d = state.activeDoc();
+    const modelId = m.modelId || (state.currentModel() ? state.currentModel().id : "");
+    ipc
+      .invoke("ai_memory_extract", { id: d ? d.id : "", model_id: modelId, prompt, reply })
+      .then(() => state.memoryRefresh())
+      .catch(() => {});
   }
 
   function onFailed(ev) {
@@ -564,11 +735,63 @@ window.DGM = window.DGM || {};
       m.text = (ev && ev.message) || t("ai.fail");
     }
     render();
+    // 失败也要落盘：**用户那一轮是真实存在的**（`persistConversation` 会跳过错误气泡，
+    // 所以不会把报错本身写进历史）。
+    persistConversation();
+  }
+
+  /**
+   * 渲染校验回环：刚应用到文档的代码**渲染失败**时，把报错原文 + 行号回喂模型修正一次。
+   *
+   * 零件都是现成的（`preview.js` 本来就有"先 parse 再 render + 抠行号"、诊断面板也在收），
+   * 之前缺的只是"把这条链路接起来"——设置里那个开关因此一直是个空开关：UI 上是开的，
+   * 行为上什么都不做。
+   *
+   * 三道闸一个都不能少：
+   *   1. 设置开关（第二次是**真实调用**，用户有权拒绝）；
+   *   2. 只认本次刚应用的那份文档（见 `retryCtx`）；
+   *   3. 每轮最多一次（`tried`）——这是防死循环的唯一硬闸。
+   */
+  function onRenderError(ev) {
+    const e = ev || {};
+    const ctx = retryCtx;
+    if (!ctx || ctx.tried) return;
+    if (ctx.docId !== e.docId) return;
+    if (!state.ai().render_retry) return;
+    ctx.tried = true;
+
+    const where = e.line ? t("ai.retry.line", { n: e.line }) : "";
+    const req = {
+      request_id: newId(),
+      model_id: state.currentModel() ? state.currentModel().id : "",
+      // 走 review：系统提示词对它已是"只做局部修改、不重写整张图"，正合修正语法的语义
+      intent: "review",
+      prompt: t("ai.retry.prompt", { where, err: e.raw || "" }),
+      format: ctx.format,
+      // 把刚应用的那版当上下文（就是它渲染失败了）
+      context: ctx.code || null,
+      image_data_url: null,
+      // 自动修正也是这条对话的延续，同样带上前序轮次
+      history: historyFor(ctx.tab),
+    };
+    ctx.reqId = req.request_id;
+    // 在这一轮原本所在的 tab 里追加，用户看到的是"同一条对话里它自己修了一次"
+    dispatch(req, ctx.tab, { id: newId(), role: "sys", text: t("ai.retry.sys", { where }) });
   }
 
   /* ------------------------------------------------------------------ 应用 */
 
   let lastApplied = null; // {id, body}
+
+  /** 「渲染校验回环」的布防状态。
+   *
+   *  `applyBlock` 每落一版就重新布防（刚进文档的这一版渲染失败就值得修正一次），
+   *  但**重试自身产出的那一版不再布防** —— 否则"失败 → 重试 → 又失败"会无限循环，
+   *  而每一轮都是**真实计费**的调用（设置项里也如实写着"会计入用量"）。
+   *
+   *  `docId` 只认本次刚应用的那份文档：用户在别的文档里手改出语法错，不该让 AI 去背锅。
+   */
+  let retryCtx = null; // { docId, format, code, tab, tried, reqId }
 
   async function applyBlock(blk, m) {
     const fmt = langToFormat(blk.lang);
@@ -587,13 +810,25 @@ window.DGM = window.DGM || {};
     lastApplied = { id: d.id, body: d.body };
     await DGM.editor.applyBody(blk.code);
     if (m) m.applied = true;
+    // 布防：这一版渲染失败就自动修正一次（开关见「AI 设置 → 渲染失败时…」）。
+    const selfRetry = !!(m && retryCtx && retryCtx.reqId && m.req === retryCtx.reqId);
+    if (!selfRetry) {
+      retryCtx = {
+        docId: d.id,
+        format: fmt,
+        code: blk.code,
+        tab: m && m.m ? m.m : tab(),
+        tried: false,
+        reqId: null,
+      };
+    }
     render();
     DGM.toast({ icon: "check", title: t("ai.appliedToast"), sub: t("ai.appliedToastSub") });
   }
 
   async function applyLast() {
     const cur = tab();
-    const list = msgs[cur];
+    const list = msgs(cur);
     for (let i = list.length - 1; i >= 0; i -= 1) {
       const m = list[i];
       if (m.role !== "assistant") continue;
@@ -699,14 +934,123 @@ window.DGM = window.DGM || {};
     if (send) sendNow();
   }
 
-  function unread() {
-    return unreadCount;
+  /* ------------------------------------------------------------------ 会话持久化 */
+
+  /** 把该文档的会话从磁盘读进来（每份只读一次；`force` 时以磁盘为准重载）。
+   *
+   *  读失败（文件坏了、目录权限不对）**不该让面板起不来** —— 会话是锦上添花，
+   *  不是 AI 能不能用的前提。所以这里吞掉异常，只丢了历史。
+   *
+   *  `force` 的用途是"以磁盘为准重新加载"：外部恢复过 `conversations/` 文件、
+   *  或诊断需要时用。此时**替换**该文档的桶，而不是往后追加（追加会把同一轮显示两遍）。
+   */
+  async function ensureConversation(docId, force) {
+    if (!docId) return;
+    if (convLoaded.has(docId) && !force) return;
+    convLoaded.add(docId);
+    let conv = null;
+    try {
+      conv = await ipc.invoke("conversation_load", { id: docId });
+    } catch (e) {
+      return;
+    }
+    const turns = (conv && conv.turns) || [];
+    if (!turns.length && !force) return;
+    const b = force ? { chat: [], vision: [], review: [] } : bucket(docId);
+    if (force) msgsByDoc.set(docId, b);
+    for (const tn of turns) {
+      const which = tn.tab === "vision" || tn.tab === "review" ? tn.tab : "chat";
+      const assistant = tn.role === "assistant";
+      b[which].push({
+        id: newId(),
+        role: assistant ? "assistant" : "user",
+        text: tn.text || "",
+        at: tn.at || 0,
+        // 还原 assistant 的用量徽标（没有模型名就不挂 used，别显示一个空徽标）
+        used: assistant && tn.model ? { model: tn.model, tokens: tn.tokens | 0, reasoning: 0 } : undefined,
+        restored: true,
+      });
+    }
+    render();
   }
 
-  function clear() {
-    msgs[tab()] = [];
+  /** 把该文档的会话落盘。`docId` 为未保存文档时 Rust 侧回 false，界面据此如实标注。
+   *
+   *  只交**文本**：图片是 dataURL、只在内存，永不落盘（对外承诺的"图片不落盘"）。
+   */
+  async function persistConversation() {
+    const d = state.activeDoc();
+    if (!d) return;
+    const b = bucket(d.id);
+    const turns = [];
+    for (const which of ["chat", "vision", "review"]) {
+      for (const m of b[which]) {
+        if (m.role !== "user" && m.role !== "assistant") continue;
+        if (m.err) continue;
+        const text = (m.text || "").trim();
+        if (!text) continue;
+        turns.push({
+          role: m.role,
+          text,
+          at: m.at || 0,
+          model: m.role === "assistant" && m.used ? m.used.model || "" : "",
+          tokens: m.role === "assistant" && m.used ? m.used.tokens | 0 : 0,
+          tab: which,
+        });
+      }
+    }
+    try {
+      await ipc.invoke("conversation_save", { id: d.id, turns });
+    } catch (e) {
+      /* 存不上不该打断对话；下次落盘会再试 */
+    }
+  }
+
+  /** 清空**当前文档**的会话（三个页签一起，与按钮文案"清空当前文档的对话"一致），
+   *  并同步删掉磁盘上那份。 */
+  async function clear() {
+    const d = state.activeDoc();
+    if (!d) return;
+    msgsByDoc.set(d.id, { chat: [], vision: [], review: [] });
     render();
     DGM.toast({ icon: "trash", title: t("ai.clearToast"), sub: "" });
+    try {
+      await ipc.invoke("conversation_clear", { id: d.id });
+    } catch (e) {
+      /* 删不掉不影响本地已清空；下次落盘会重写一份空的 */
+    }
+  }
+
+  /** 当前文档的轮次（**按时间序、跨页签**），供「历史会话」对话框渲染。
+   *
+   *  与 `persistConversation` 口径一致（同样只取有正文的 user/assistant），
+   *  区别只是这里返回给界面、那边落盘。两处口径必须一样，否则会出现
+   *  "对话框里的条数和落盘条数对不上"这种看着像 bug 的东西。
+   */
+  function turnsFor() {
+    const d = state.activeDoc();
+    if (!d) return [];
+    const b = bucket(d.id);
+    const out = [];
+    for (const which of ["chat", "vision", "review"]) {
+      for (const m of b[which]) {
+        if (m.role !== "user" && m.role !== "assistant") continue;
+        if (m.err) continue;
+        const text = (m.text || "").trim();
+        if (!text) continue;
+        out.push({ role: m.role, text, at: m.at || 0, tab: which, model: m.used ? m.used.model || "" : "" });
+      }
+    }
+    out.sort((a, b2) => a.at - b2.at);
+    return out;
+  }
+
+  function turnCount() {
+    return turnsFor().length;
+  }
+
+  function unread() {
+    return unreadCount;
   }
 
   /* ------------------------------------------------------------------ 绑定 */
@@ -714,6 +1058,13 @@ window.DGM = window.DGM || {};
   function bind() {
     if (bound) return;
     bound = true;
+
+    // 首次绑定时当前文档可能已经打开了（`bind` 的调用时机晚于首次 `session:changed`），
+    // 补一次读取 —— `ensureConversation` 自带去重，重复调用是安全的。
+    const first = state.activeDoc();
+    if (first) ensureConversation(first.id);
+    // 记忆清单也要在启动时拉一次，否则第一条待确认提示要等到用户发一轮才出现
+    state.memoryRefresh();
 
     $$("#ai-tabs .ai-tab").forEach((b) =>
       b.addEventListener("click", () => {
@@ -765,6 +1116,8 @@ window.DGM = window.DGM || {};
       });
     const hist = $("#ai-history");
     if (hist) hist.addEventListener("click", () => DGM.dialogs.history());
+    const mbar = $("#ai-memory-bar");
+    if (mbar) mbar.addEventListener("click", () => DGM.dialogs.memory());
     const clr = $("#ai-clear");
     if (clr) clr.addEventListener("click", clear);
     const close = $("#ai-close");
@@ -772,6 +1125,7 @@ window.DGM = window.DGM || {};
 
     ipc.on("ai://delta", onDelta);
     ipc.on("ai://thinking", onThinking);
+    ipc.on("ai://agent", onAgent);
     ipc.on("ai://done", onDone);
     ipc.on("ai://failed", onFailed);
     // 截屏框选完成（Rust 发来 dataURL；取消时是 null）
@@ -789,6 +1143,17 @@ window.DGM = window.DGM || {};
   // 引导去登录，已登录 → 引导去 AI 设置）都取决于登录与否。少了这条，启动那一帧
   // （云状态还没回来）会把 AI 面板钉在"未登录 / 没有模型"上，之后再也不会自己变。
   DGM.bus.on("cloud:changed", render);
+  // 渲染失败 → 自动修正一次（真正的判定在 `onRenderError` 里，这里只负责订阅）。
+  DGM.bus.on("doc:render-error", onRenderError);
+  // 切文档就把该文档的会话读进来（每份只读一次）。与 `render` 分开订阅：
+  // 读是异步的，读到了它自己会再 render 一次。
+  // 记忆也要重拉：文档级记忆的作用域取决于当前文档，换文档就该换那一份。
+  DGM.bus.on("session:changed", () => {
+    const d = state.activeDoc();
+    if (d) ensureConversation(d.id);
+    state.memoryRefresh();
+  });
+  DGM.bus.on("memory:changed", render);
 
   DGM.ai = {
     render,
@@ -806,5 +1171,12 @@ window.DGM = window.DGM || {};
     modelItems: groupModelItems,
     pickImage,
     compressImage,
+    // 会话持久化：`ensureConversation` 供启动与「历史会话」对话框用；
+    // `turnCount` 让对话框显示**真实**轮次数（以前拿 `state.usage.calls` 冒充，
+    // 那是本次运行内的调用计数，重启归零）。
+    ensureConversation,
+    persistConversation,
+    turnCount,
+    turnsFor,
   };
 })();

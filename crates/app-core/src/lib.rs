@@ -4,11 +4,13 @@
 //! 因此它可以被 `cargo test` 直接覆盖（各模块尾部都有 `#[cfg(test)]`）。
 
 pub mod cloudmap;
+pub mod conversations;
 pub mod convert;
 pub mod document;
 pub mod format;
 pub mod guard;
 pub mod lint;
+pub mod memory;
 pub mod outline;
 pub mod pixels;
 pub mod recovery;

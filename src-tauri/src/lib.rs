@@ -8,6 +8,7 @@
 
 mod cloud;
 mod commands;
+mod ai_tools;
 mod state;
 mod vision;
 mod watcher;
@@ -202,7 +203,16 @@ pub fn run() {
             commands::ai_model_key_set,
             commands::ai_model_key_delete,
             commands::ai_chat,
+            commands::ai_agent_run,
             commands::ai_cancel,
+            commands::conversation_load,
+            commands::conversation_save,
+            commands::conversation_clear,
+            commands::ai_memory_list,
+            commands::ai_memory_save,
+            commands::ai_memory_delete,
+            commands::ai_memory_clear,
+            commands::ai_memory_extract,
             workspace_cmds::workspace_open,
             workspace_cmds::workspace_get,
             workspace_cmds::workspace_close,

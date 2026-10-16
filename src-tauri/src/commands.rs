@@ -13,12 +13,13 @@
 //! （报 "invalid args"，测试里看不见）。单词参数没有这个坑。
 
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
 
 use app_ipc::{
-    events, AiChatRequest, AiDelta, AiDone, AiFailed, AiModel, AiThinking, AppInfo, ConvertOutcome,
-    ConvertRequest, DevFlags, Doc, FormatId, Issue, OutlineGroup, Session as SessionPayload,
+    events, AiAgentStep, AiChatRequest, AiDelta, AiDone, AiFailed, AiModel, AiThinking, AppInfo,
+    Conversation, ConversationTurn, ConvertOutcome, ConvertRequest, DevFlags, Doc, FormatId, Issue,
+    MemoryEntry, MemoryList, MemoryScope, MemoryState, OutlineGroup, Session as SessionPayload,
     Settings, ViewMode,
 };
 use base64::Engine as _;
@@ -390,13 +391,20 @@ pub async fn ai_chat(
     let st = state.inner().clone();
     let resolved = resolve_target(&st, &req.model_id).await?;
 
-    let messages = ai::build_messages(
+    let messages = ai::build_messages_with_history(
         req.format,
         req.intent,
         &req.prompt,
         req.context.as_deref(),
         req.image_data_url.as_deref(),
+        &req.history,
     );
+    // 长期记忆：作为**独立的 system 消息**注入（不改 `system_prompt` 本身）。
+    // 关掉开关时这里拿到 `None`，请求体与没有记忆时**逐字节一致**。
+    let messages = match memory_block(&st, &active_doc_key(&st)) {
+        Some(block) => ai::inject_memory(messages, &block),
+        None => messages,
+    };
 
     let request_id = req.request_id.clone();
     let cancel = Arc::new(AtomicBool::new(false));
@@ -462,6 +470,150 @@ pub async fn ai_chat(
     Ok(true)
 }
 
+/* ---------------- AI 受控工具循环 ---------------- */
+
+/// 把工具结果截成"给界面看的一行"：换行折叠、超长截断。
+/// 回给模型的**完整**结果已经在对话里，这里只是活动播报，别把整个工具输出又塞回前端。
+fn step_summary(s: &str) -> String {
+    let flat = s.split_whitespace().collect::<Vec<_>>().join(" ");
+    let mut out: String = flat.chars().take(160).collect();
+    if flat.chars().count() > 160 {
+        out.push('…');
+    }
+    out
+}
+
+/// 包装一层工具：每次执行都向界面播报 `ai://agent`。
+///
+/// 包在**工具**上而不是给循环加回调，是有意的 —— `ai::agent::run` 的签名保持不变
+/// （方案红线：`crates/ai` 只做加法），而工具执行本来就是"活动发生"的确切时刻。
+struct ReportingTool {
+    inner: Box<dyn ai::Tool>,
+    app: AppHandle,
+    request_id: String,
+    step: Arc<AtomicU32>,
+}
+
+impl ai::Tool for ReportingTool {
+    fn name(&self) -> &str {
+        self.inner.name()
+    }
+
+    fn schema(&self) -> serde_json::Value {
+        self.inner.schema()
+    }
+
+    fn call(&self, args: &serde_json::Value) -> Result<String, String> {
+        let n = self.step.fetch_add(1, Ordering::Relaxed) + 1;
+        let result = self.inner.call(args);
+        let (ok, summary) = match &result {
+            Ok(text) => (true, step_summary(text)),
+            Err(e) => (false, step_summary(e)),
+        };
+        let _ = self.app.emit(
+            events::AI_AGENT,
+            AiAgentStep {
+                request_id: self.request_id.clone(),
+                step: n,
+                tool: self.inner.name().to_string(),
+                summary,
+                ok,
+            },
+        );
+        result
+    }
+}
+
+/// 受控工具循环：请求体与 `ai_chat` 完全相同（`AiChatRequest`），模型侧换成
+/// **非流式多步**（`ai::agent::run`），每步工具活动经 `ai://agent` 播报，
+/// 收尾与 `ai_chat` 一致（`ai://done` / `ai://failed`）。
+///
+/// 工具只作用于**当前活动文档**的内存模型（`ai_tools::build`）——
+/// 与记忆的作用域同一来源（`session.active`），不新增请求字段。
+#[tauri::command]
+pub async fn ai_agent_run(
+    app: AppHandle,
+    state: State<'_, Arc<AppState>>,
+    req: AiChatRequest,
+) -> R<bool> {
+    let st = state.inner().clone();
+    let resolved = resolve_target(&st, &req.model_id).await?;
+
+    // 工具作用的对象是**当前活动文档**，与记忆的作用域同一来源（`session.payload().active`）
+    let doc_id = st.session().payload().active.unwrap_or_default();
+    let tools = crate::ai_tools::build(st.clone(), doc_id);
+
+    let messages = ai::build_messages_with_history(
+        req.format,
+        req.intent,
+        &req.prompt,
+        req.context.as_deref(),
+        req.image_data_url.as_deref(),
+        &req.history,
+    );
+    // 长期记忆与 `ai_chat` 同一套注入（关掉时逐字节一致）
+    let messages = match memory_block(&st, &active_doc_key(&st)) {
+        Some(block) => ai::inject_memory(messages, &block),
+        None => messages,
+    };
+
+    let request_id = req.request_id.clone();
+    let cancel = Arc::new(AtomicBool::new(false));
+    st.cancels().insert(request_id.clone(), cancel.clone());
+
+    let used_model = resolved.model.clone();
+    tauri::async_runtime::spawn(async move {
+        let completer = ai::HttpCompleter { client: &st.http, resolved: &resolved };
+        let step = Arc::new(AtomicU32::new(0));
+        let wrapped: Vec<Box<dyn ai::Tool>> = tools
+            .into_iter()
+            .map(|t| {
+                Box::new(ReportingTool {
+                    inner: t,
+                    app: app.clone(),
+                    request_id: request_id.clone(),
+                    step: step.clone(),
+                }) as Box<dyn ai::Tool>
+            })
+            .collect();
+
+        let result = ai::run(&completer, messages, &wrapped, ai::DEFAULT_MAX_STEPS, &cancel).await;
+
+        match result {
+            Ok(outcome) => {
+                let _ = app.emit(
+                    events::AI_DONE,
+                    AiDone {
+                        request_id: request_id.clone(),
+                        text: outcome.text,
+                        model: used_model,
+                        prompt_tokens: None,
+                        completion_tokens: None,
+                        reasoning_tokens: None,
+                        usage_source: "none".to_string(),
+                    },
+                );
+            }
+            Err(ai::ChatError::Cancelled) => {
+                let _ = app.emit(
+                    events::AI_FAILED,
+                    AiFailed { request_id: request_id.clone(), message: "已取消".into() },
+                );
+            }
+            Err(e) => {
+                let _ = app.emit(
+                    events::AI_FAILED,
+                    AiFailed { request_id: request_id.clone(), message: e.to_string() },
+                );
+            }
+        }
+        st.cancels().remove(&request_id);
+    });
+
+    // 与 `ai_chat` 同一条真机教训：async 命令返回 `Result<(), _>` 会被 wry 静默吞掉
+    Ok(true)
+}
+
 #[tauri::command]
 pub fn ai_cancel(state: State<'_, Arc<AppState>>, id: String) -> R<()> {
     match state.cancels().get(&id) {
@@ -471,4 +623,227 @@ pub fn ai_cancel(state: State<'_, Arc<AppState>>, id: String) -> R<()> {
         }
         None => Err("这个请求已经结束了".into()),
     }
+}
+
+/* ---------------- AI 会话持久化 ---------------- */
+
+fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
+
+/// 把文档解析成"会话身份"：`(doc_key, 路径)`。
+///
+/// **只有存过盘的文档才有稳定身份。** 未保存文档返回 `None` —— 调用方据此如实告诉用户
+/// "本文档尚未保存，对话只在本次运行内有效"，而不是伪造一份重启就丢的"持久化"。
+///
+/// 身份用**路径的 SHA256**（`app-core::conversations::doc_key`），不用文档 id：
+/// 文档 id 是本次运行内的临时标识，拿它当文件名等于永远读不回来。
+fn conversation_key(state: &AppState, doc_id: &str) -> R<Option<(String, String)>> {
+    let s = state.session();
+    let d = s.get(doc_id).ok_or_else(|| format!("文档不存在：{doc_id}"))?;
+    Ok(d.path
+        .as_deref()
+        .map(|p| (app_core::conversations::doc_key(p), p.to_string())))
+}
+
+/// 读该文档的会话。没有稳定身份（未保存）或没存过 → 空会话。
+#[tauri::command]
+pub fn conversation_load(state: State<'_, Arc<AppState>>, id: String) -> R<Conversation> {
+    let Some((key, _path)) = conversation_key(&state, &id)? else {
+        return Ok(Conversation::default());
+    };
+    Ok(app_core::conversations::load(&state.paths.conversations_dir(), &key))
+}
+
+/// 存该文档的会话。返回 `false` = **没落盘**（未保存文档，界面要如实标注）。
+#[tauri::command]
+pub fn conversation_save(
+    state: State<'_, Arc<AppState>>,
+    id: String,
+    turns: Vec<ConversationTurn>,
+) -> R<bool> {
+    let Some((key, path)) = conversation_key(&state, &id)? else {
+        return Ok(false);
+    };
+    let conv = Conversation { doc_key: key, path, turns, updated_at: now_ms() };
+    app_core::conversations::save(&state.paths.conversations_dir(), &conv)?;
+    Ok(true)
+}
+
+/// 清该文档的会话。返回 `false` = 没有可清的东西（未保存文档）。
+#[tauri::command]
+pub fn conversation_clear(state: State<'_, Arc<AppState>>, id: String) -> R<bool> {
+    let Some((key, _path)) = conversation_key(&state, &id)? else {
+        return Ok(false);
+    };
+    app_core::conversations::clear(&state.paths.conversations_dir(), &key)?;
+    Ok(true)
+}
+
+/* ---------------- AI 长期记忆 ---------------- */
+
+/// 某个文档的稳定身份（不存在 / 未保存 ⇒ 空串）。
+fn doc_key_of(state: &AppState, doc_id: &str) -> String {
+    if doc_id.is_empty() {
+        return String::new();
+    }
+    let s = state.session();
+    s.get(doc_id)
+        .and_then(|d| d.path.clone())
+        .map(|p| app_core::conversations::doc_key(&p))
+        .unwrap_or_default()
+}
+
+/// **当前活动文档**的稳定身份。记忆的作用域判定要用它 ——
+/// AI 面板永远是"针对当前这份文档"的，请求体里也就没有必要再带一次 doc id。
+///
+/// 走 `payload().active` 而不是读 `Session` 的字段：`active` 是私有的，
+/// 且 `payload()` 本来就是"对外可读的那一份"（契约在 `app-ipc`）。
+fn active_doc_key(state: &AppState) -> String {
+    let s = state.session();
+    let payload = s.payload();
+    payload
+        .active
+        .as_deref()
+        .and_then(|id| s.get(id))
+        .and_then(|d| d.path.clone())
+        .map(|p| app_core::conversations::doc_key(&p))
+        .unwrap_or_default()
+}
+
+/// 组装要注入的记忆块。**开关关掉 ⇒ `None`**，请求体于是与没有记忆时完全一致。
+fn memory_block(state: &AppState, doc_key: &str) -> Option<String> {
+    if !state.settings().ai.memory_enabled {
+        return None;
+    }
+    let items = app_core::memory::load(&state.paths.memory_dir());
+    let block = app_core::memory::prompt_block(&items, doc_key, app_core::memory::PROMPT_MAX_CHARS);
+    if block.trim().is_empty() {
+        None
+    } else {
+        Some(block)
+    }
+}
+
+fn memory_list(state: &AppState, doc_id: &str) -> MemoryList {
+    MemoryList {
+        items: app_core::memory::load(&state.paths.memory_dir()),
+        doc: doc_key_of(state, doc_id),
+    }
+}
+
+#[tauri::command]
+pub fn ai_memory_list(state: State<'_, Arc<AppState>>, id: String) -> R<MemoryList> {
+    Ok(memory_list(&state, &id))
+}
+
+/// 新增或更新一条（同 id 即更新）。**内容为空 / 已达条数上限** ⇒ 明确报错，不静默吞掉。
+#[tauri::command]
+pub fn ai_memory_save(
+    state: State<'_, Arc<AppState>>,
+    id: String,
+    entry: MemoryEntry,
+) -> R<MemoryList> {
+    let dir = state.paths.memory_dir();
+    let mut items = app_core::memory::load(&dir);
+    if !app_core::memory::upsert(&mut items, entry) {
+        return Err("这条记忆是空的，或已经达到条数上限".into());
+    }
+    app_core::memory::save(&dir, &items)?;
+    Ok(memory_list(&state, &id))
+}
+
+#[tauri::command]
+pub fn ai_memory_delete(
+    state: State<'_, Arc<AppState>>,
+    id: String,
+    entry: String,
+) -> R<MemoryList> {
+    let dir = state.paths.memory_dir();
+    let mut items = app_core::memory::load(&dir);
+    items.retain(|e| e.id != entry);
+    app_core::memory::save(&dir, &items)?;
+    Ok(memory_list(&state, &id))
+}
+
+/// 清空。`kind == "pending"` 只清"待确认"的候选（用户想扔掉模型猜的那些但保留自己写的）。
+#[tauri::command]
+pub fn ai_memory_clear(state: State<'_, Arc<AppState>>, id: String, kind: String) -> R<MemoryList> {
+    let dir = state.paths.memory_dir();
+    let mut items = app_core::memory::load(&dir);
+    if kind == "pending" {
+        items.retain(|e| e.state != MemoryState::Pending);
+    } else {
+        items.clear();
+    }
+    app_core::memory::save(&dir, &items)?;
+    Ok(memory_list(&state, &id))
+}
+
+/// 一轮对话结束后让模型总结候选记忆，写成 `Pending`（**不注入**，等用户确认）。
+///
+/// 这是**额外一次真实调用**，所以两道开关都要放行才发：`memory_enabled` ∧ `memory_auto`。
+/// 拿不到候选、解析失败、上游报错 —— 一律**静默返回当前清单**：记忆是锦上添花，
+/// 它失败了不该在界面上报一次错（那会让用户以为对话本身出了问题）。
+#[tauri::command]
+pub async fn ai_memory_extract(
+    state: State<'_, Arc<AppState>>,
+    id: String,
+    model_id: String,
+    prompt: String,
+    reply: String,
+) -> R<MemoryList> {
+    let st = state.inner().clone();
+    let (enabled, auto) = {
+        let s = st.settings();
+        (s.ai.memory_enabled, s.ai.memory_auto)
+    };
+    if !enabled || !auto || prompt.trim().is_empty() || reply.trim().is_empty() {
+        return Ok(memory_list(&st, &id));
+    }
+
+    let dir = st.paths.memory_dir();
+    let mut items = app_core::memory::load(&dir);
+    if items.len() >= app_core::memory::MAX_ENTRIES {
+        return Ok(memory_list(&st, &id));
+    }
+
+    let resolved = resolve_target(&st, &model_id).await?;
+    let messages = vec![
+        serde_json::json!({ "role": "system", "content": ai::MEMORY_EXTRACT_SYSTEM }),
+        serde_json::json!({ "role": "user", "content": ai::memory_extract_user(&prompt, &reply) }),
+    ];
+    let Ok((text, _usage)) = ai::chat_once(&st.http, &resolved, messages).await else {
+        return Ok(memory_list(&st, &id));
+    };
+
+    let now = now_ms();
+    let mut added = false;
+    for (i, text) in ai::parse_memory_candidates(&text).into_iter().enumerate() {
+        // 清单里已有的（不论状态）不再重复收 —— 否则同一句偏好会一轮攒一条
+        if items.iter().any(|e| e.text.trim().eq_ignore_ascii_case(text.trim())) {
+            continue;
+        }
+        let entry = MemoryEntry {
+            id: format!("mem-{now}-{i}"),
+            text,
+            // 自动候选默认**全局**：偏好多半跨文档成立；用户确认时可以改成"本文档"
+            scope: MemoryScope::Global,
+            doc: String::new(),
+            state: MemoryState::Pending,
+            source: "auto".into(),
+            enabled: true,
+            at: now + i as i64,
+        };
+        if app_core::memory::upsert(&mut items, entry) {
+            added = true;
+        }
+    }
+    if added {
+        let _ = app_core::memory::save(&dir, &items);
+    }
+    Ok(memory_list(&st, &id))
 }

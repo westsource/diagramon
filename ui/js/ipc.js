@@ -389,6 +389,10 @@ digraph Pipeline {
   const Mock = {
     _seq: 0,
     _ai: new Map(), // request_id -> {timer, aborted}
+    /** 会话持久化（mock）：docId -> turns[]。真机落盘，这里只存内存。 */
+    _conv: {},
+    /** 长期记忆（mock）：条目数组。真机落 memory/memory.json。 */
+    _mem: [],
     /** BYOK 密钥（mock 只记存不存在，不回显内容）—— 键名与真机一致：按 model_id 存 ✓ */
     _cred: {},
     /** 和真机的 `hydrate_models` 对齐：`has_key` 由凭据现状**现算**，不是磁盘上那份。
@@ -482,6 +486,9 @@ digraph Pipeline {
           vision_notice_accepted: false,
           render_retry: true,
           context_from_doc: true,
+          memory_enabled: true,
+          tools_enabled: false,
+          memory_auto: true,
         },
         cloud: { base_url: "https://www.diagramon.com", device_id: "" },
         recent: [
@@ -977,6 +984,9 @@ digraph Pipeline {
         case "ai_chat":
           return this._aiChat(args.req || args);
 
+        case "ai_agent_run":
+          return this._aiAgent(args.req || args);
+
         case "ai_cancel": {
           const job = this._ai.get(args.request_id);
           if (job) {
@@ -987,6 +997,75 @@ digraph Pipeline {
           return null;
         }
 
+        /* 会话持久化：真机按**文档路径的 SHA256** 落到 conversations/ 下，
+           mock 只存内存 —— 探针要断言的是"存进去能读回来、且按文档分开"，
+           不需要真的落盘（落盘那一侧的原子写/坏文件回退由 app-core 的单测覆盖）。 */
+        case "conversation_load": {
+          const turns = this._conv[args.id] || [];
+          return { doc_key: String(args.id || ""), path: "", turns: turns.map((x) => ({ ...x })), updated_at: Date.now() };
+        }
+
+        case "conversation_save": {
+          this._conv[args.id] = Array.isArray(args.turns) ? args.turns.map((x) => ({ ...x })) : [];
+          return true;
+        }
+
+        case "conversation_clear": {
+          delete this._conv[args.id];
+          return true;
+        }
+
+        /* 长期记忆。真机落 `memory/` 下，mock 只存内存 —— 探针要断言的是
+           "只有 confirmed 会注入、pending 不会"，落盘与体积上限由 app-core 的单测覆盖。 */
+        case "ai_memory_list":
+          return this._memoryList(args.id);
+
+        case "ai_memory_save": {
+          const e = { ...(args.entry || {}) };
+          const text = String(e.text || "").trim();
+          if (!text) throw new Error("这条记忆是空的");
+          e.text = text.slice(0, 200);
+          e.enabled = e.enabled !== false;
+          e.state = e.state === "pending" ? "pending" : "confirmed";
+          e.scope = e.scope === "doc" ? "doc" : "global";
+          e.doc = e.scope === "doc" ? e.doc || "" : "";
+          e.at = e.at || Date.now();
+          const i = this._mem.findIndex((x) => x.id === e.id);
+          if (i >= 0) this._mem[i] = e;
+          else this._mem.push(e);
+          return this._memoryList(args.id);
+        }
+
+        case "ai_memory_delete":
+          this._mem = this._mem.filter((x) => x.id !== args.entry);
+          return this._memoryList(args.id);
+
+        case "ai_memory_clear":
+          this._mem = args.kind === "pending" ? this._mem.filter((x) => x.state !== "pending") : [];
+          return this._memoryList(args.id);
+
+        case "ai_memory_extract": {
+          // 夹具：只有 prompt 带 `[remember]` 才产出候选（真模型对多数轮次也是回 `[]`）。
+          // 产出的固定是 `pending` —— 探针要能断言"候选不注入、确认后才注入"。
+          const p = String(args.prompt || "");
+          if (p.includes("[remember]")) {
+            const text = "偏好：" + p.replace("[remember]", "").trim().slice(0, 40);
+            if (!this._mem.some((x) => x.text === text)) {
+              this._mem.push({
+                id: this._newId("mem"),
+                text,
+                scope: "global",
+                doc: "",
+                state: "pending",
+                source: "auto",
+                enabled: true,
+                at: Date.now(),
+              });
+            }
+          }
+          return this._memoryList(args.id);
+        }
+
         default:
           console.warn("[DGM mock] 未实现的命令：", cmd, args);
           return null;
@@ -994,6 +1073,12 @@ digraph Pipeline {
     },
 
     /* ---- 派生：大纲 / 作用域 ---- */
+
+    /** 记忆清单 + 当前文档身份（未保存文档 ⇒ 空串，与真机的 `doc_key_of` 同口径）。 */
+    _memoryList(docId) {
+      const d = this._doc(docId);
+      return { items: this._mem.map((x) => ({ ...x })), doc: d && d.path ? "mock-" + docId : "" };
+    },
 
     _outline(id) {
       const d = this._doc(id);
@@ -1060,6 +1145,35 @@ digraph Pipeline {
       const f = this._fmt(req.format || "mermaid");
       const fence = f.surface === "canvas" ? "mermaid" : f.id;
       const intent = req.intent || "generate";
+      // 探针夹具：「渲染校验回环」的两端。
+      //   `[bad]` → 回一段**语法坏掉的** mermaid（`C{判断` 没闭合），预览必然渲染失败；
+      //   ai.js 随即自动补发一次 review 请求，prompt 里带「渲染失败」字样 →
+      //   这里回**正确的**代码。于是浏览器原型里能端到端断言"失败 → 自动修好"，
+      //   而不必依赖真机 + 真上游。真机走真流，夹具只服务于断言。
+      const probePrompt = String(req.prompt || "");
+      if (probePrompt.includes("[bad]")) {
+        return `第一版（这里故意留了个未闭合的花括号）：\n\n\`\`\`mermaid\nflowchart TD\n    A([开始]) --> B[第一步]\n    B --> C{判断\n\`\`\``;
+      }
+      if (probePrompt.includes("渲染失败") || /failed to render/i.test(probePrompt)) {
+        return `把没闭合的花括号补上了：\n\n\`\`\`mermaid\nflowchart TD\n    A([开始]) --> B[第一步]\n    B --> C{判断}\n    C --> D([结束])\n\`\`\``;
+      }
+      // `[hist]` → 把"这次请求收到了几条前序轮次"原样回报，供探针断言多轮消息真的上行
+      //（阶段二之前是单轮：每次请求都从零重建 messages，界面上的对话不参与请求）。
+      if (probePrompt.includes("[hist]")) {
+        const n = Array.isArray(req.history) ? req.history.length : 0;
+        return `本轮请求带了前序轮次 ${n} 条。`;
+      }
+      // `[mem]` → 报"客户端有没有自己往请求里塞记忆"。
+      // 记忆**只该由 Rust 在 `ai_chat` 里注入一处**；前端再塞一份就会双重注入。
+      // 这条夹具是钉住"前端不碰记忆"的守卫。
+      if (probePrompt.includes("[mem]")) {
+        const leaked = JSON.stringify(req).includes("长期偏好");
+        return leaked ? "客户端注入了记忆：是" : "客户端注入了记忆：否";
+      }
+      // `[remember]` / `[mem]` 的回复保持很短：探针要发好几轮，回复长了一轮就要等 6 秒
+      if (probePrompt.includes("[remember]") || probePrompt.includes("[mem]")) {
+        return `好的。\n\n\`\`\`mermaid\nflowchart TD\n    A[开始] --> B[结束]\n\`\`\``;
+      }
       if (intent === "vision") {
         return `识别出 6 个节点、7 条连线，是一个带审批回环的流程图。手写的「风控复核」字迹较淡，我按上下文补成了节点名。\n\n\`\`\`${fence}\nflowchart LR\n    A[提交申请] --> B{初审}\n    B -- 通过 --> C[风控复核]\n    B -- 退回 --> A\n    C -- 通过 --> D[放款]\n    C -- 拒绝 --> E[归档]\n    D --> F([结束])\n\`\`\`\n\n图里有两处低置信（节点文字 / 连线方向），落地前请核对一下。`;
       }
@@ -1155,6 +1269,53 @@ digraph Pipeline {
       };
       job.timer = setTimeout(tick, 260);
 
+      return { request_id };
+    },
+
+    /**
+     * 受控工具循环（mock）：走一遍"读文档 → 校验"的活动序列再收尾。
+     *
+     * 真机由 Rust 的 `ai::agent::run` 驱动（每步工具执行发一条 `ai://agent`）；
+     * 这里按同样的事件次序重放，让浏览器原型可以断言界面接线。`[agent]` 夹具
+     * 与 `ai_chat` 的 `[bad]` 夹具对齐：活动行 + 一份**合法**的最终代码。
+     */
+    _aiAgent(req) {
+      const request_id = req.request_id || this._newId("req");
+      const job = { aborted: false, timer: 0, text: "" };
+      this._ai.set(request_id, job);
+      const localModel = this.settings.ai.models.find(
+        (m) => m.id === (req.model_id || this.settings.ai.default_model),
+      );
+      const modelName = localModel ? localModel.name : "auto";
+
+      let k = 0;
+      const events = [
+        { step: 1, tool: "read_document", summary: "flowchart TD（2 行，从头读）", ok: true },
+        {
+          step: 2,
+          tool: "validate",
+          summary: "没有发现问题，这段代码在当前格式下是合法的。",
+          ok: true,
+        },
+      ];
+      const tickAgent = () => {
+        if (job.aborted) return;
+        if (k < events.length) {
+          emitLocal("ai://agent", { request_id, ...events[k++] });
+          job.timer = setTimeout(tickAgent, 60);
+          return;
+        }
+        this._ai.delete(request_id);
+        emitLocal("ai://done", {
+          request_id,
+          text:
+            "读了一遍文档并校验了候选版本，语法没有问题。\n\n```mermaid\nflowchart TD\n    A([开始]) --> B[结束]\n```",
+          model: modelName,
+          prompt_tokens: 412,
+          completion_tokens: 96,
+        });
+      };
+      job.timer = setTimeout(tickAgent, 80);
       return { request_id };
     },
   };

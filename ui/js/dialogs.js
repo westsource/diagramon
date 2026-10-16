@@ -506,7 +506,13 @@ window.DGM = window.DGM || {};
       <div class="field"><label>${esc(t("set.ai.defaultModel"))}</label><select data-act="noop" id="ai-default">${defaultOpts}</select><span class="hint">${esc(t("set.ai.defaultModelHint"))}</span></div>
       ${switchRow(!!ai.context_from_doc, t("set.ai.contextFromDoc"), null, "ctxdoc")}
       ${switchRow(!!ai.render_retry, t("set.ai.renderRetry"), "set.ai.renderRetryHint", "retry")}
-      ${switchRow(!!ai.vision_notice_accepted, t("set.ai.visionNotice"), null, "vnotice")}`;
+      ${switchRow(!!ai.tools_enabled, t("set.ai.tools"), "set.ai.toolsHint", "tools")}
+      ${switchRow(!!ai.vision_notice_accepted, t("set.ai.visionNotice"), null, "vnotice")}
+      ${switchRow(!!ai.memory_enabled, t("set.ai.memoryOn"), "set.ai.memoryOnHint", "memory")}
+      ${switchRow(!!ai.memory_auto, t("set.ai.memoryAuto"), "set.ai.memoryAutoHint", "memoryauto")}
+      <div class="field"><label>${esc(t("set.ai.memory"))}</label>
+        <div class="btn-row"><button class="btn sm" data-act="memory">${icon("sparkles")}${esc(t("set.ai.memoryManage"))}</button>
+        <span class="hint">${esc(t("set.ai.memoryManageHint"))}</span></div></div>`;
   }
 
   function pConvert() {
@@ -577,7 +583,10 @@ window.DGM = window.DGM || {};
         else if (a === "restrict") state.patchSettings({ editor: { restrict_to_workspace: on } });
         else if (a === "ctxdoc") state.patchSettings({ ai: { context_from_doc: on } });
         else if (a === "retry") state.patchSettings({ ai: { render_retry: on } });
+        else if (a === "tools") state.patchSettings({ ai: { tools_enabled: on } });
         else if (a === "vnotice") state.patchSettings({ ai: { vision_notice_accepted: on } });
+        else if (a === "memory") state.patchSettings({ ai: { memory_enabled: on } });
+        else if (a === "memoryauto") state.patchSettings({ ai: { memory_auto: on } });
       });
     });
 
@@ -635,6 +644,11 @@ window.DGM = window.DGM || {};
       }
       if (act === "add") return addModel();
       if (act.startsWith("del:")) return removeModel(act.slice(4));
+      if (act === "memory") {
+        close();
+        DGM.dialogs.memory();
+        return;
+      }
       if (act === "save") return saveSettings(cur);
       if (act === "noop") return;
     });
@@ -763,17 +777,40 @@ window.DGM = window.DGM || {};
 
   /* ================================================================== 历史 */
 
+  /**
+   * 「历史会话」：**当前文档的真实对话轮次**。
+   *
+   * 改之前这个对话框其实是"最近文档"列表 + 一句宣称已持久化、实际没做的说明
+   * （`dlg.history.note` 原文写着"按文档稳定身份持久化（真实实现里路径 SHA256）"，
+   * 而 `conversations_dir()` 当时全仓零读写）。现在持久化是真的了，这里也就
+   * 名副其实：显示该文档的轮次，清空只清这份文档。
+   *
+   * "最近文档"另有入口（侧栏的「最近」分区 + 欢迎页），不必在这里重复。
+   */
   function history() {
-    const recent = (state.settings && state.settings.recent) || [];
-    const rows = recent.length
-      ? recent
-          .map((r) => `<button class="hist-row" data-act="open:${esc(r.path)}"><span class="fmt-dot" style="background:var(--fmt-${r.format})"></span><b>${esc(r.name)}</b><span class="meta">${esc(r.path)}</span></button>`)
+    const d = state.activeDoc();
+    const turns = DGM.ai && DGM.ai.turnsFor ? DGM.ai.turnsFor() : [];
+    // 未保存文档没有稳定身份 ⇒ Rust 侧拒绝落盘，如实说明而不是假装存上了
+    const persisted = !!(d && d.path);
+    const rows = turns.length
+      ? turns
+          .map((tn) => {
+            const who = tn.role === "assistant" ? t("ai.assistant") : t("ai.you");
+            const tabKey = tn.tab === "vision" ? "ai.tab.vision" : tn.tab === "review" ? "ai.tab.review" : "ai.tab.chat";
+            const meta = [t(tabKey), tn.model, tn.at ? new Date(tn.at).toLocaleTimeString() : ""].filter(Boolean).join(" · ");
+            const shown = tn.text.length > 160 ? tn.text.slice(0, 160) + "…" : tn.text;
+            return (
+              `<div class="hist-row hist-turn ${tn.role === "assistant" ? "bot" : "user"}">` +
+              `<span class="who">${esc(who)}</span>` +
+              `<span class="txt">${esc(shown)}</span>` +
+              `<span class="meta">${esc(meta)}</span></div>`
+            );
+          })
           .join("")
-      : `<div class="callout">${icon("clock")}<span>${esc(t("side.recentEmpty"))}</span></div>`;
-    const rounds = state.usage.calls;
+      : `<div class="callout">${icon("clock")}<span>${esc(t("dlg.history.empty"))}</span></div>`;
     const body = `
-      <div class="callout">${icon("info")}<span>${esc(t("dlg.history.note"))}</span></div>
-      <h4>${esc(t("side.recent"))} <span class="meta">${esc(t("dlg.history.rounds", { n: rounds }))}</span></h4>
+      <div class="callout${persisted ? "" : " warn"}">${icon("info")}<span>${esc(persisted ? t("dlg.history.note") : t("dlg.history.unsaved"))}</span></div>
+      <h4>${esc(d ? d.name : t("common.none"))} <span class="meta">${esc(t("dlg.history.rounds", { n: turns.length }))}</span></h4>
       <div class="hist-list">${rows}</div>`;
     openDialog(
       head(t("dlg.history.title"), "history") +
@@ -783,14 +820,207 @@ window.DGM = window.DGM || {};
     );
     wire(async (act) => {
       if (act === "clear") {
-        DGM.ai.clear();
+        await DGM.ai.clear();
         close();
+      }
+    });
+  }
+
+  /* ================================================================== 记忆 */
+
+  /** 正在编辑的条目 id（null = 没有）。编辑器是**行内**的：点「编辑」把那一行换成输入框。 */
+  let memEditing = null;
+
+  function memNewId() {
+    return "mem-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 7);
+  }
+
+  /** 记忆管理：列出全部条目（含待确认），可新增 / 编辑 / 停用 / 删除 / 清空。
+   *
+   *  为什么做成**独立对话框**而不是塞进设置页：设置页有一套"草稿 + 保存"的语义
+   *  （改到一半关掉不该生效），而记忆的每次增删改都是**立即落盘**的。两种语义混在
+   *  一个表单里，用户会分不清"我改的到底生效没有"。这里没有保存按钮，就是明确信号。
+   */
+  function memory() {
+    memEditing = null;
+    DGM.state.memoryRefresh().then(renderMemory).catch(() => renderMemory());
+  }
+
+  function renderMemory() {
+    const mem = DGM.state.memory || { items: [], doc: "" };
+    const items = mem.items || [];
+    const confirmed = items.filter((e) => e.state === "confirmed");
+    const pending = items.filter((e) => e.state === "pending");
+
+    const row = (e) => {
+      const isPending = e.state === "pending";
+      const scopeLabel = e.scope === "doc" ? t("dlg.memory.scope.doc") : t("dlg.memory.scope.global");
+      const tags =
+        `<span class="mem-tag${isPending ? " pending" : ""}">${esc(isPending ? t("dlg.memory.pending") : t("dlg.memory.confirmed"))}</span>` +
+        `<span class="mem-tag">${esc(scopeLabel)}</span>` +
+        (e.enabled === false ? `<span class="mem-tag off">${esc(t("dlg.memory.disabled"))}</span>` : "");
+
+      if (memEditing === e.id) {
+        return (
+          `<div class="mem-row${isPending ? " pending" : ""}">` +
+          `<span class="mem-txt"><input type="text" id="mem-edit" value="${esc(e.text)}" maxlength="200"></span>` +
+          `<span class="mem-acts">` +
+          `<button class="mini-btn" data-act="savedit:${esc(e.id)}">${esc(t("common.save"))}</button>` +
+          `<button class="mini-btn" data-act="canceledit">${esc(t("common.cancel"))}</button>` +
+          `</span></div>`
+        );
+      }
+
+      const acts =
+        (isPending
+          ? `<button class="mini-btn" data-act="confirm:${esc(e.id)}">${icon("check", "ico-sm")}${esc(t("dlg.memory.confirm"))}</button>`
+          : "") +
+        `<button class="mini-btn" data-act="toggle:${esc(e.id)}">${esc(e.enabled === false ? t("dlg.memory.enable") : t("dlg.memory.disable"))}</button>` +
+        `<button class="mini-btn" data-act="edit:${esc(e.id)}">${esc(t("dlg.memory.edit"))}</button>` +
+        `<button class="mini-btn" data-act="del:${esc(e.id)}">${esc(t("dlg.memory.delete"))}</button>`;
+
+      return (
+        `<div class="mem-row${isPending ? " pending" : ""}">` +
+        `<span class="mem-txt">${esc(e.text)}</span>` +
+        `<span class="mem-tags">${tags}</span>` +
+        `<span class="mem-acts">${acts}</span></div>`
+      );
+    };
+
+    const section = (arr, titleKey) =>
+      arr.length
+        ? `<h4>${esc(t(titleKey))} <span class="meta">${arr.length}</span></h4><div class="hist-list">${arr.map(row).join("")}</div>`
+        : "";
+
+    const body = `
+      <div class="callout">${icon("info")}<span>${esc(t("dlg.memory.note"))}</span></div>
+      <div class="mem-head-acts">
+        <input type="text" id="mem-new" placeholder="${esc(t("dlg.memory.addPh"))}" maxlength="200">
+        <button class="btn sm" data-act="add">${icon("plus")}${esc(t("dlg.memory.add"))}</button>
+        <span class="sp"></span>
+        ${pending.length ? `<button class="btn sm ghost" data-act="clearpending">${esc(t("dlg.memory.clearPending"))}</button>` : ""}
+        ${items.length ? `<button class="btn sm ghost" data-act="clearall">${esc(t("dlg.memory.clear"))}</button>` : ""}
+      </div>
+      ${items.length ? "" : `<div class="callout">${icon("sparkles")}<span>${esc(t("dlg.memory.empty"))}</span></div>`}
+      ${section(pending, "dlg.memory.pendingTitle")}
+      ${section(confirmed, "dlg.memory.confirmedTitle")}`;
+
+    openDialog(
+      head(t("dlg.memory.title"), "sparkles") +
+        `<div class="dialog-body">${body}</div>` +
+        foot(
+          t("dlg.memory.foot", { n: items.length, max: 200 }),
+          `<button class="btn ghost" data-close>${esc(t("common.close"))}</button>`,
+        ),
+      true,
+    );
+
+    const fail = (e) =>
+      DGM.toast({ icon: "info", title: String((e && e.message) || e || ""), sub: "", warn: true });
+    const byId = (id) => items.find((x) => x.id === id);
+
+    wire(async (act) => {
+      if (act === "add") {
+        const box = $("#mem-new");
+        const text = box ? box.value.trim() : "";
+        if (!text) return;
+        try {
+          await DGM.state.memorySave({
+            id: memNewId(),
+            text,
+            scope: "global",
+            doc: "",
+            state: "confirmed",
+            source: "user",
+            enabled: true,
+            at: Date.now(),
+          });
+        } catch (e) {
+          fail(e);
+          return;
+        }
+        renderMemory();
         return;
       }
-      if (act.startsWith("open:")) {
-        const p = act.slice(5);
-        close();
-        DGM.shell.openPath(p);
+      if (act.startsWith("confirm:")) {
+        const e = byId(act.slice(8));
+        if (!e) return;
+        try {
+          await DGM.state.memorySave({ ...e, state: "confirmed", source: "user", at: Date.now() });
+        } catch (err) {
+          fail(err);
+          return;
+        }
+        renderMemory();
+        return;
+      }
+      if (act.startsWith("toggle:")) {
+        const e = byId(act.slice(7));
+        if (!e) return;
+        try {
+          await DGM.state.memorySave({ ...e, enabled: e.enabled === false });
+        } catch (err) {
+          fail(err);
+          return;
+        }
+        renderMemory();
+        return;
+      }
+      if (act.startsWith("del:")) {
+        try {
+          await DGM.state.memoryDelete(act.slice(4));
+        } catch (err) {
+          fail(err);
+          return;
+        }
+        memEditing = null;
+        renderMemory();
+        return;
+      }
+      if (act.startsWith("edit:")) {
+        memEditing = act.slice(5);
+        renderMemory();
+        return;
+      }
+      if (act === "canceledit") {
+        memEditing = null;
+        renderMemory();
+        return;
+      }
+      if (act.startsWith("savedit:")) {
+        const e = byId(act.slice(8));
+        const box = $("#mem-edit");
+        const text = box ? box.value.trim() : "";
+        if (!e || !text) return;
+        try {
+          await DGM.state.memorySave({ ...e, text });
+        } catch (err) {
+          fail(err);
+          return;
+        }
+        memEditing = null;
+        renderMemory();
+        return;
+      }
+      if (act === "clearpending") {
+        try {
+          await DGM.state.memoryClear("pending");
+        } catch (err) {
+          fail(err);
+          return;
+        }
+        renderMemory();
+        return;
+      }
+      if (act === "clearall") {
+        try {
+          await DGM.state.memoryClear("all");
+        } catch (err) {
+          fail(err);
+          return;
+        }
+        memEditing = null;
+        renderMemory();
       }
     });
   }
@@ -1079,6 +1309,7 @@ window.DGM = window.DGM || {};
     guide,
     about,
     history,
+    memory,
     unsaved,
     quit,
     layout,

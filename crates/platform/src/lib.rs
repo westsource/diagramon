@@ -55,9 +55,17 @@ impl AppPaths {
         self.data_dir.join("conversations")
     }
 
+    /// AI 长期记忆（`memory.json`）。
+    ///
+    /// **与凭据目录分开**：`credentials_dir()` 只放密钥（DPAPI 密文），
+    /// 记忆是用户内容，混进去会让"凭据库里都有什么"这件事变得说不清。
+    pub fn memory_dir(&self) -> PathBuf {
+        self.data_dir.join("memory")
+    }
+
     /// 首次运行要建目录；已存在不算错。
     pub fn ensure(&self) -> Result<(), Error> {
-        for d in [&self.config_dir, &self.data_dir, &self.conversations_dir()] {
+        for d in [&self.config_dir, &self.data_dir, &self.conversations_dir(), &self.memory_dir()] {
             std::fs::create_dir_all(d).map_err(|e| Error::CredentialIo(e.to_string()))?;
         }
         Ok(())

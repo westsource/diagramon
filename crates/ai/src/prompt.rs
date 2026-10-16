@@ -3,7 +3,7 @@
 //! 三件事在提示词里必须说清：**目标格式**、**只输出代码**、**当前正文是上下文而不是要重写的东西**。
 //! 提取侧则要容错：模型很爱把代码包在 ``` 里再配一段解释，围栏提取失败就退化为"整段当代码"。
 
-use app_ipc::{AiIntent, FormatId};
+use app_ipc::{AiIntent, AiTurn, FormatId};
 
 fn format_name(id: FormatId) -> &'static str {
     match id {
@@ -32,6 +32,12 @@ fn format_rules(id: FormatId) -> &'static str {
              每个元素带 id/type/x/y/width/height。"
         }
     }
+}
+
+/// 目标格式的名字与语法要点。给 `format_grammar` 工具用 —— 工具循环里模型能主动
+/// 去查"这个格式有什么讲究"，而不是只能靠一次性的系统提示词记着。
+pub fn format_hint(id: FormatId) -> String {
+    format!("目标格式：{}\n{}", format_name(id), format_rules(id))
 }
 
 /// 生成系统提示词。`intent` 决定任务是"从头画"、"看图还原"还是"局部改"。
@@ -97,6 +103,271 @@ pub fn build_messages(
         None => messages.push(json!({ "role": "user", "content": user_text })),
     }
     messages
+}
+
+/* ------------------------------------------------------------------ 前序轮次 */
+
+/// 最多带几轮前序对话。
+///
+/// 上限不是"省 token"而已：服务端 `ChatCompletionIn.messages` 有 `max_length=64`
+/// 的硬闸，而工具循环每轮要追加约 2 条 —— 不设上限就会在某一步突然收到 400。
+pub const HISTORY_MAX_TURNS: usize = 8;
+
+/// 前序对话的**字符**预算（按 `chars()` 计，中文一个算一个）。
+///
+/// 与轮数上限是两道独立的闸：一句话很长的对话，8 轮也可能撑爆请求体。
+pub const HISTORY_MAX_CHARS: usize = 6000;
+
+/// 按预算裁前序轮次：**从最近往前取**，超了就丢更早的（截尾，而不是拒绝整轮）。
+///
+/// 三条刻意的取舍：
+///
+/// 1. **返回顺序仍是时间序**（早 → 晚）。上游对消息顺序敏感，倒序会让模型把因果搞反。
+/// 2. **最新一轮一定保留**：它是模型马上要接的话。但如果它自己就超预算，**截断它的文本**
+///    而不是放行 —— 否则单条超长消息（比如整篇源码）能一个人撑爆请求体。
+/// 3. 角色的白名单只有 `user` / `assistant`，其余一律当 `user`。前端的对话数组里还混着
+///    `sys` 提示与错误气泡，别让它们以奇怪的角色漏到上游。
+pub fn fit_history(history: &[AiTurn], max_turns: usize, max_chars: usize) -> Vec<AiTurn> {
+    let mut out: Vec<AiTurn> = Vec::new();
+    let mut used = 0usize;
+    for turn in history.iter().rev() {
+        if out.len() >= max_turns {
+            break;
+        }
+        let mut text = turn.text.trim().to_string();
+        if text.is_empty() {
+            continue;
+        }
+        let len = text.chars().count();
+        if out.is_empty() {
+            if len > max_chars {
+                text = text.chars().take(max_chars).collect();
+            }
+        } else if used + len > max_chars {
+            break;
+        }
+        used += text.chars().count();
+        out.push(AiTurn { role: normalize_role(&turn.role), text });
+    }
+    out.reverse();
+    out
+}
+
+fn normalize_role(role: &str) -> String {
+    if role == "assistant" { "assistant".into() } else { "user".into() }
+}
+
+/// 在 `build_messages` 的基础上**插入前序轮次**（位置：system 之后、本轮 user 之前）。
+///
+/// 为什么不改 `build_messages` 的签名：它已有完整单测，且 BYOK 与云网关两条路共用 ——
+/// 加参数会把"没有历史"这个最常见的情形也拖进改动面。这里保持纯加法。
+pub fn build_messages_with_history(
+    format: FormatId,
+    intent: AiIntent,
+    prompt: &str,
+    context: Option<&str>,
+    image_data_url: Option<&str>,
+    history: &[AiTurn],
+) -> Vec<serde_json::Value> {
+    use serde_json::json;
+
+    let mut messages = build_messages(format, intent, prompt, context, image_data_url);
+    let fitted = fit_history(history, HISTORY_MAX_TURNS, HISTORY_MAX_CHARS);
+    if fitted.is_empty() {
+        return messages;
+    }
+
+    let mut out: Vec<serde_json::Value> = Vec::with_capacity(messages.len() + fitted.len());
+    let mut rest = messages.drain(..);
+    if let Some(system) = rest.next() {
+        out.push(system); // 系统提示词永远在最前
+    }
+    for turn in fitted {
+        out.push(json!({ "role": turn.role, "content": turn.text }));
+    }
+    out.extend(rest);
+    out
+}
+
+/* ------------------------------------------------------------------ 长期记忆 */
+
+/// 把记忆块作为**独立的 system 消息**插在第一条 system 之后。
+///
+/// 为什么不拼进 `system_prompt()`：那个函数有单测、且 BYOK 与云网关共用；拼进去会让
+/// "有记忆"和"没记忆"两种情形挤在同一个函数里，而它们必须能被**独立断言** ——
+/// 关掉记忆时请求体要与以前一模一样。
+pub fn inject_memory(messages: Vec<serde_json::Value>, block: &str) -> Vec<serde_json::Value> {
+    use serde_json::json;
+
+    let block = block.trim();
+    if block.is_empty() {
+        return messages;
+    }
+    let mut out = Vec::with_capacity(messages.len() + 1);
+    let mut inserted = false;
+    for message in messages {
+        let is_system = message.get("role").and_then(|r| r.as_str()) == Some("system");
+        out.push(message);
+        if is_system && !inserted {
+            out.push(json!({ "role": "system", "content": block }));
+            inserted = true;
+        }
+    }
+    if !inserted {
+        out.insert(0, json!({ "role": "system", "content": block }));
+    }
+    out
+}
+
+/// 最多留几条候选。宁缺勿滥：自动提取的价值在于"少而准"，多了就变成噪音清单。
+pub const MEMORY_EXTRACT_MAX: usize = 3;
+
+/// 记忆提取的系统指令。
+///
+/// 三条约束都是刻意的：**只输出 JSON 数组**（好解析）、**最多 3 条**（少而准）、
+/// **没东西可记就返回 `[]`**（不让模型为了"有产出"而编）。另外明确排除任务性内容 ——
+/// "帮我把这张图改成 LR"是一次性要求，不是长期偏好，把它记下来会污染之后所有请求。
+pub const MEMORY_EXTRACT_SYSTEM: &str = "\
+你要从一段图表工具的对话里，提取**值得长期记住的用户偏好**。
+
+只提取这三类：
+1. 风格偏好（配色、主题、节点形状、默认布局方向、命名习惯）
+2. 术语（用户对某个概念/模块的固定叫法）
+3. 长期约束（比如「不要用中文标签」「所有图都要带图例」）
+
+**不要提取**：一次性的任务要求（「把这张图改成 LR」）、对某张图的具体修改、
+对模型这次回答的评论、任何与长期偏好无关的内容。
+
+输出要求：
+- 只输出一个 JSON 数组，元素是**不超过 40 字的短句**，最多 3 条；
+- 没有可提取的内容就输出 `[]`；
+- 不要输出数组以外的任何文字、不要加代码围栏、不要解释。";
+
+/// 提取调用的 user 内容：把这一轮压成"用户说了什么 + 模型答了什么"。
+///
+/// 两侧都截断：提取只需要判断"有没有长期偏好"，把整篇源码塞进去既费 token
+/// 又会让模型把注意力放到代码细节上。
+pub fn memory_extract_user(prompt: &str, reply: &str) -> String {
+    let cut = |s: &str, n: usize| -> String {
+        let t = s.trim();
+        if t.chars().count() <= n {
+            t.to_string()
+        } else {
+            format!("{}…", t.chars().take(n).collect::<String>())
+        }
+    };
+    format!("用户说：{}\n\n模型答：{}", cut(prompt, 600), cut(reply, 1200))
+}
+
+/// 从提取回复里抠出候选条目。
+///
+/// 模型不一定听话，所以**两条路**：先按 JSON 数组解析（去掉可能存在的代码围栏），
+/// 失败再退化成按行解析（`- xxx` / `1. xxx`）。都不行就返回空 ——
+/// **宁可一条不记，也不要从一段解释文字里猜出半句假的偏好**。
+pub fn parse_memory_candidates(text: &str) -> Vec<String> {
+    let cleaned = strip_fences(text);
+    if let Some(items) = parse_json_array(&cleaned) {
+        return dedup(items);
+    }
+    let mut out: Vec<String> = Vec::new();
+    for line in cleaned.lines() {
+        let t = line.trim();
+        if t.is_empty() {
+            continue;
+        }
+        let stripped = t
+            .trim_start_matches(['-', '*', '•'])
+            .trim_start_matches(|c: char| c.is_ascii_digit())
+            .trim_start_matches(['.', ')', '、', ' ']);
+        let candidate = stripped.trim();
+        if is_meaningless(candidate) {
+            continue;
+        }
+        out.push(candidate.to_string());
+    }
+    dedup(out)
+}
+
+fn strip_fences(text: &str) -> String {
+    let mut out = String::new();
+    let mut inside: Option<bool> = None;
+    for line in text.lines() {
+        if line.trim_start().starts_with("```") {
+            // 进出围栏：围栏内的内容照收（模型常把 JSON 包在 ```json 里）
+            inside = match inside {
+                None => Some(true),
+                Some(_) => None,
+            };
+            continue;
+        }
+        let _ = inside;
+        out.push_str(line);
+        out.push('\n');
+    }
+    out
+}
+
+fn parse_json_array(text: &str) -> Option<Vec<String>> {
+    let start = text.find('[')?;
+    let end = text.rfind(']')?;
+    if end <= start {
+        return None;
+    }
+    let slice = &text[start..=end];
+    let parsed: Vec<serde_json::Value> = serde_json::from_str(slice).ok()?;
+    let mut out = Vec::new();
+    for value in parsed {
+        if let Some(s) = value.as_str() {
+            let t = s.trim();
+            if !t.is_empty() && !is_meaningless(t) {
+                out.push(t.to_string());
+            }
+        }
+    }
+    Some(out)
+}
+
+/// "没什么可记的"的各种写法 —— 它们**不是**候选记忆。
+///
+/// 除了逐字匹配，还要认**整句否定**：模型很爱回「没有需要记住的偏好」「本轮没有可提取的记忆」，
+/// 而这类句子一旦被当成候选，用户会在待确认列表里看到一条叫"没有需要记住的偏好"的"记忆"，
+/// 确认它就等于每轮都往 prompt 里塞一句废话。
+///
+/// 反过来要**小心误杀**：句首的"无"经常出现在真偏好里（"无边框节点"、"无限画布"），
+/// 所以只有"带否定 + 提到记忆/偏好/可记"才算否定，且长度要像一句答复。
+fn is_meaningless(s: &str) -> bool {
+    let t = s.trim().trim_matches(['`', '"', '\'']).trim();
+    if t.is_empty() || t == "[]" {
+        return true;
+    }
+    if matches!(
+        t.to_lowercase().as_str(),
+        "无" | "没有" | "暂无" | "none" | "n/a" | "null" | "nothing" | "no preferences" | "无偏好"
+    ) {
+        return true;
+    }
+    let negated = t.contains("没有") || t.contains("暂无") || t.contains("不需要") || t.starts_with('无');
+    let about_memory = ["偏好", "记住", "记忆", "可记", "可提取", "需要记"]
+        .iter()
+        .any(|k| t.contains(k));
+    negated && about_memory && t.chars().count() <= 30
+}
+
+fn dedup(items: Vec<String>) -> Vec<String> {
+    let mut seen: Vec<String> = Vec::new();
+    let mut out: Vec<String> = Vec::new();
+    for item in items {
+        let key = item.trim().to_lowercase();
+        if key.is_empty() || seen.contains(&key) {
+            continue;
+        }
+        seen.push(key);
+        out.push(item.trim().to_string());
+        if out.len() >= MEMORY_EXTRACT_MAX {
+            break;
+        }
+    }
+    out
 }
 
 /// 从模型回复里抠出代码。
@@ -220,5 +491,197 @@ mod tests {
         assert!(code.starts_with("flowchart TD"));
         assert!(code.trim_end().ends_with("B --> C{判断}"));
         assert!(!code.contains("```"), "围栏标记本身不能留在代码里");
+    }
+
+    /* ---------------- 前序轮次 ---------------- */
+
+    fn turn(role: &str, text: &str) -> AiTurn {
+        AiTurn { role: role.into(), text: text.into() }
+    }
+
+    /// 历史必须夹在 **system 之后、本轮 user 之前** —— 放到 system 前面会让系统提示词
+    /// 失去"最高优先级"的位置，模型会把它当成上一轮的话。
+    #[test]
+    fn history_sits_between_system_and_the_current_user_message() {
+        let m = build_messages_with_history(
+            FormatId::Mermaid,
+            AiIntent::Generate,
+            "再来一张时序图",
+            None,
+            None,
+            &[turn("user", "先画一张流程图"), turn("assistant", "好，这是流程图")],
+        );
+        assert_eq!(m.len(), 4);
+        assert_eq!(m[0]["role"], "system");
+        assert_eq!(m[1]["role"], "user");
+        assert_eq!(m[1]["content"], "先画一张流程图");
+        assert_eq!(m[2]["role"], "assistant");
+        assert_eq!(m[3]["role"], "user");
+        assert!(m[3]["content"].as_str().unwrap().ends_with("再来一张时序图"));
+    }
+
+    /// 没有历史时**必须与 `build_messages` 一模一样**：这是最常见的情形，
+    /// 多出任何一条消息都会改变已有行为的成本与结果。
+    #[test]
+    fn empty_history_is_a_no_op() {
+        let a = build_messages(FormatId::Dot, AiIntent::Generate, "画个依赖图", Some("digraph G {}"), None);
+        let b = build_messages_with_history(FormatId::Dot, AiIntent::Generate, "画个依赖图", Some("digraph G {}"), None, &[]);
+        assert_eq!(a, b);
+    }
+
+    /// 超轮数上限 ⇒ 丢**最早**的，保留最近的；返回仍是时间序。
+    #[test]
+    fn history_keeps_the_newest_turns_and_stays_in_chronological_order() {
+        let all: Vec<AiTurn> = (0..12).map(|i| turn(if i % 2 == 0 { "user" } else { "assistant" }, &format!("第{i}句"))).collect();
+        let fitted = fit_history(&all, 4, 100_000);
+        assert_eq!(fitted.len(), 4);
+        assert_eq!(fitted[0].text, "第8句", "应保留最近 4 条：{fitted:?}");
+        assert_eq!(fitted[3].text, "第11句");
+    }
+
+    /// 超字符预算同样是截尾，且**最新一轮一定留下**（它是模型马上要接的那句）。
+    #[test]
+    fn history_truncates_older_turns_by_char_budget_but_never_drops_the_newest() {
+        let history = vec![turn("user", &"啊".repeat(50)), turn("assistant", &"噢".repeat(50)), turn("user", &"嗯".repeat(50))];
+        let fitted = fit_history(&history, 8, 120);
+        assert_eq!(fitted.len(), 2, "50+50 放得下、再加一条就超了：{fitted:?}");
+        assert_eq!(fitted.last().unwrap().text, "嗯".repeat(50));
+    }
+
+    /// 最新一轮**自己**就超预算时：截断它的文本，而不是放行。
+    /// 放行等于"单条消息就能撑爆请求体"，而服务端 `ai_max_body_bytes` 只会给一个
+    /// 语义错误的 413。
+    #[test]
+    fn a_single_oversized_turn_is_truncated_not_passed_through() {
+        let huge = "字".repeat(5_000);
+        let fitted = fit_history(&[turn("user", &huge)], HISTORY_MAX_TURNS, 100);
+        assert_eq!(fitted.len(), 1);
+        assert_eq!(fitted[0].text.chars().count(), 100);
+    }
+
+    /// 角色白名单：前端的对话数组里混着 `sys` 提示与错误气泡，它们不该以奇怪的角色上行。
+    #[test]
+    fn unknown_roles_are_normalised_to_user() {
+        let fitted = fit_history(&[turn("sys", "渲染失败"), turn("tool", "x"), turn("assistant", "好")], 8, 100_000);
+        assert_eq!(fitted[0].role, "user");
+        assert_eq!(fitted[1].role, "user");
+        assert_eq!(fitted[2].role, "assistant");
+    }
+
+    /// 空白轮次不进历史 —— 空气泡（思考型模型没有正文那种）不该占预算。
+    #[test]
+    fn blank_turns_are_skipped() {
+        let fitted = fit_history(&[turn("user", "问"), turn("assistant", "   "), turn("user", "又问")], 8, 100_000);
+        assert_eq!(fitted.len(), 2);
+        assert_eq!(fitted[1].text, "又问");
+    }
+
+    /* ---------------- 长期记忆 ---------------- */
+
+    /// 记忆块必须夹在**第一条 system 之后**：这样它既在系统指令区（模型会当规则看），
+    /// 又不会顶掉格式提示词的位置。
+    #[test]
+    fn memory_block_lands_right_after_the_first_system_message() {
+        let base = build_messages(FormatId::Mermaid, AiIntent::Generate, "画个流程", None, None);
+        let with = inject_memory(base, "偏好：配色用暗色");
+        assert_eq!(with.len(), 3);
+        assert_eq!(with[0]["role"], "system");
+        assert!(with[0]["content"].as_str().unwrap().contains("Diagramon"));
+        assert_eq!(with[1]["role"], "system");
+        assert_eq!(with[1]["content"], "偏好：配色用暗色");
+        assert_eq!(with[2]["role"], "user");
+    }
+
+    /// 空块 = 原样返回。这条很重要：**关掉记忆时请求体必须与以前一模一样**，
+    /// 多出一条空的 system 消息就已经是"不一样"了。
+    #[test]
+    fn empty_memory_block_changes_nothing() {
+        let base = build_messages(FormatId::Dot, AiIntent::Generate, "画个依赖图", Some("digraph G {}"), None);
+        assert_eq!(inject_memory(base.clone(), ""), base);
+        assert_eq!(inject_memory(base.clone(), "   \n  "), base);
+    }
+
+    /// 记忆与历史同时在场时的相对顺序：system(格式) → system(记忆) → 历史 → 本轮 user。
+    #[test]
+    fn memory_and_history_stack_in_the_documented_order() {
+        let with_hist = build_messages_with_history(
+            FormatId::Mermaid,
+            AiIntent::Generate,
+            "再画一张",
+            None,
+            None,
+            &[turn("user", "先画一张")],
+        );
+        let full = inject_memory(with_hist, "偏好：配色用暗色");
+        assert_eq!(full.len(), 4);
+        assert_eq!(full[0]["role"], "system");
+        assert!(full[0]["content"].as_str().unwrap().contains("Diagramon"), "格式提示词要在最前");
+        assert_eq!(full[1]["content"], "偏好：配色用暗色");
+        assert_eq!(full[2]["content"], "先画一张");
+        assert_eq!(full[3]["role"], "user");
+    }
+
+    #[test]
+    fn candidates_parse_from_a_plain_json_array() {
+        let got = parse_memory_candidates(r#"["配色一律用暗色", "流程图默认 TD 方向"]"#);
+        assert_eq!(got, vec!["配色一律用暗色".to_string(), "流程图默认 TD 方向".to_string()]);
+    }
+
+    /// 模型很爱把 JSON 包在 ```json 里（真机必现），围栏不能把解析弄崩。
+    #[test]
+    fn candidates_parse_from_a_fenced_json_array() {
+        let got = parse_memory_candidates("```json\n[\"节点不要圆角\"]\n```");
+        assert_eq!(got, vec!["节点不要圆角".to_string()]);
+    }
+
+    /// `[]` = 没什么可记的 ⇒ 一条都不要。
+    #[test]
+    fn an_empty_array_yields_nothing() {
+        assert!(parse_memory_candidates("[]").is_empty());
+        assert!(parse_memory_candidates("```json\n[]\n```").is_empty());
+    }
+
+    /// JSON 解析不了时退化成按行读，但**必须滤掉"无 / none"这类答复** ——
+    /// 否则模型一句"无"会被记成一条叫"无"的偏好，然后每轮都注入。
+    #[test]
+    fn line_fallback_skips_meaningless_replies() {
+        assert!(parse_memory_candidates("无").is_empty());
+        assert!(parse_memory_candidates("None").is_empty());
+        assert!(parse_memory_candidates("").is_empty());
+        // 整句否定：模型最常给的就是这一句，不能当成候选
+        assert!(parse_memory_candidates("没有需要记住的偏好").is_empty());
+        assert!(parse_memory_candidates("本轮没有可提取的记忆").is_empty());
+        assert!(parse_memory_candidates("- 不需要记住任何偏好").is_empty());
+
+        let got = parse_memory_candidates("- 配色一律用暗色\n- 节点不要圆角");
+        assert_eq!(got.len(), 2);
+        assert_eq!(got[0], "配色一律用暗色");
+    }
+
+    /// 反向：句首的"无"经常出现在**真偏好**里，不能被上面那条启发式误杀。
+    #[test]
+    fn memory_mentions_are_not_killed_by_the_negation_heuristic() {
+        assert_eq!(parse_memory_candidates("无边框节点"), vec!["无边框节点".to_string()]);
+        assert_eq!(parse_memory_candidates("无限画布，不要分页"), vec!["无限画布，不要分页".to_string()]);
+        assert_eq!(parse_memory_candidates("无向图用 graph"), vec!["无向图用 graph".to_string()]);
+    }
+
+    /// 最多 3 条、且去重（大小写与空白差异算同一条）。
+    #[test]
+    fn candidates_are_capped_and_deduped() {
+        let got = parse_memory_candidates(r#"["A","a","B","C","D"]"#);
+        assert_eq!(got, vec!["A", "B", "C"]);
+
+        let many = r#"["1","2","3","4","5","6"]"#;
+        assert_eq!(parse_memory_candidates(many).len(), MEMORY_EXTRACT_MAX);
+    }
+
+    /// 提取的 user 内容要截断：把整篇源码塞进去既费 token 又会把注意力带偏。
+    #[test]
+    fn extraction_input_is_truncated() {
+        let long = "字".repeat(3_000);
+        let text = memory_extract_user(&long, &long);
+        assert!(text.contains('…'));
+        assert!(text.chars().count() < 2_000, "两侧都要截断：{}", text.chars().count());
     }
 }

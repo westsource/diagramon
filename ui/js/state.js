@@ -58,6 +58,10 @@ window.DGM = window.DGM || {};
     /** 外部改动与本地未保存撞上了，等着用户选 —— 每条 {path, docId, name} */
     conflicts: [],
 
+    /* 长期记忆（真源在 Rust：结构对齐 app-ipc 的 MemoryList）。
+       只有 `state: "confirmed"` 的条目会进 prompt；`pending` 是模型提取的候选，等用户确认。 */
+    memory: { items: [], doc: "" },
+
     /* 全库搜索（结果由 Rust 经 search://hit 推进来） */
     search: {
       scope: "open", // workspace | open
@@ -1062,6 +1066,43 @@ window.DGM = window.DGM || {};
 
   /* ------------------------------------------------------------------ 导出 */
 
+  function setMemory(list) {
+    state.memory = { items: (list && list.items) || [], doc: (list && list.doc) || "" };
+    emit("memory:changed");
+    return state.memory;
+  }
+
+  /** 重新拉取长期记忆清单。
+   *
+   *  读失败时**如实呈现"空"**而不是保留上一次的缓存 —— 否则界面会显示一份
+   *  已经不存在的记忆，用户点"删除"还会得到"条目不存在"这种莫名其妙的错。
+   */
+  async function memoryRefresh() {
+    const d = state.activeDoc();
+    try {
+      setMemory(await ipc.invoke("ai_memory_list", { id: d ? d.id : "" }));
+    } catch (e) {
+      setMemory(null);
+    }
+    return state.memory;
+  }
+
+  /** 新增或更新一条（同 id 即更新）。失败会把错误抛给调用方 —— 上限/空内容要能说出来。 */
+  async function memorySave(entry) {
+    const d = state.activeDoc();
+    return setMemory(await ipc.invoke("ai_memory_save", { id: d ? d.id : "", entry }));
+  }
+
+  async function memoryDelete(entry) {
+    const d = state.activeDoc();
+    return setMemory(await ipc.invoke("ai_memory_delete", { id: d ? d.id : "", entry }));
+  }
+
+  async function memoryClear(kind) {
+    const d = state.activeDoc();
+    return setMemory(await ipc.invoke("ai_memory_clear", { id: d ? d.id : "", kind: kind || "all" }));
+  }
+
   async function exportWrite(path, base64) {
     return ipc.invoke("export_write", { path, base64 });
   }
@@ -1098,6 +1139,10 @@ window.DGM = window.DGM || {};
     addUsage,
     setStatus,
     exportWrite,
+    memoryRefresh,
+    memorySave,
+    memoryDelete,
+    memoryClear,
     // 工作区 / 文件系统 / 搜索（第 4 步）
     bindEvents,
     loadWorkspace,

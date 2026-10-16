@@ -1405,6 +1405,379 @@ def main() -> int:
         except Exception as e:
             log(f"（断言 24 解析失败：{e}）")
 
+        # ---- 断言 25：渲染校验回环（渲染失败 → 自动修正一次；关掉开关就不修） ----
+        # 设置里那个「渲染失败时把报错原文发回模型修正一次」的开关，在接上这条链路之前
+        # 是个**空开关**：UI 上是开的，行为上什么都不做（全仓没有一处读 `render_retry`）。
+        # 这里钉三件事：
+        #   ① 坏语法落地后真的自动补发了一次（多一条 sys 提示 + 多一条回复）；
+        #   ② 修正结果**自动落回文档**，不需要用户再点一次「应用」；
+        #   ③ 关掉开关后**一次都不补发** —— 第二次是真实计费的调用，用户有权拒绝。
+        # mock 夹具见 ipc.js `_aiText` 的 `[bad]` 分支（第一版坏语法、修正那版好语法）。
+        def retry_round() -> str:
+            return ev(
+                "(async () => {"
+                "  const s = document.querySelector('#ai-stream');"
+                "  const snap = () => ({"
+                "    msgs: s.querySelectorAll('.msg').length,"
+                "    sys: s.querySelectorAll('.msg.sys').length,"
+                "    body: DGM.editor.getValue() || ''"
+                "  });"
+                "  const d = DGM.state.docs.find(x => x.format === 'mermaid');"
+                "  if (!d) return 'no-doc';"
+                "  await DGM.state.activateDoc(d.id);"
+                "  DGM.ai.focus('chat');"
+                "  await new Promise(r => setTimeout(r, 250));"
+                "  const before = snap();"
+                "  const ta = document.querySelector('#ai-input');"
+                "  ta.value = '[bad] 随便画一张';"
+                "  ta.dispatchEvent(new Event('input', { bubbles: true }));"
+                "  document.querySelector('#ai-send').click();"
+                "  await new Promise(r => setTimeout(r, 2200));"  # 等第一版流完
+                "  await DGM.ai.applyLast();"  # 落地 → 渲染失败 → 触发回环
+                "  await new Promise(r => setTimeout(r, 4500));"  # 等自动修正那一轮跑完
+                "  const after = snap();"
+                "  return JSON.stringify({"
+                "    dMsgs: after.msgs - before.msgs,"
+                "    dSys: after.sys - before.sys,"
+                "    body: after.body"
+                "  });"
+                "})()"
+            )
+
+        on_run = retry_round()
+        log(f"渲染回环（开关开）: {on_run}")
+        try:
+            r = json.loads(on_run or "{}")
+            if r.get("dSys") != 1:
+                fails.append(f"渲染失败后没自动补发修正（sys 提示 {r.get('dSys')} 条，应为 1）")
+            if (r.get("dMsgs") or 0) < 4:
+                fails.append(f"自动修正没产生新回复（本轮只多了 {r.get('dMsgs')} 条消息）")
+            if "([结束])" not in (r.get("body") or ""):
+                fails.append("自动修正的结果没落回文档（还停在那版坏语法上）")
+        except Exception as e:
+            log(f"（断言 25 解析失败：{e}）")
+
+        off_state = ev(
+            "(async () => {"
+            "  await DGM.state.patchSettings({ ai: { render_retry: false } });"
+            "  await new Promise(r => setTimeout(r, 150));"
+            "  return DGM.state.ai().render_retry === false ? 'off' : 'still-on';"
+            "})()"
+        )
+        if off_state != "off":
+            fails.append(f"渲染重试开关没关掉：{off_state}")
+        else:
+            off_run = retry_round()
+            log(f"渲染回环（开关关）: {off_run}")
+            try:
+                r = json.loads(off_run or "{}")
+                if r.get("dSys") != 0:
+                    fails.append(f"关掉开关后仍然自动补发（sys {r.get('dSys')} 条）—— 第二次是真实计费调用")
+                if (r.get("dMsgs") or 0) > 2:
+                    fails.append(f"关掉开关后仍多出 {r.get('dMsgs')} 条消息（应只有本轮的用户+回复）")
+            except Exception as e:
+                log(f"（断言 25 关闭态解析失败：{e}）")
+            # 复原：开关打开 + 文档回到可渲染的正文（后面的截图不该拍到错误面板）
+            ev(
+                "(async () => {"
+                "  await DGM.state.patchSettings({ ai: { render_retry: true } });"
+                "  await DGM.editor.applyBody('flowchart TD\\n    A([开始]) --> B[第一步]\\n    B --> C{判断}\\n    C --> D([结束])');"
+                "  await new Promise(r => setTimeout(r, 500));"
+                "  return 1;"
+                "})()"
+            )
+
+        # ---- 断言 26：多轮消息真的把前序轮次带上了 ----
+        # 阶段二之前这里是**单轮**：`build_messages` 每次只产出 system + 一条 user，
+        # 界面上那个"对话"只是转录显示、不参与请求。这条断言钉住两个方向：
+        # 第一轮带 0 条、第二轮带 2 条（上一轮的用户 + 回复）。
+        # mock 夹具 `[hist]` 把"收到几条前序轮次"原样回报（见 ipc.js `_aiText`）。
+        hist = ev(
+            "(async () => {"
+            "  DGM.ai.focus('chat');"
+            "  await new Promise(r => setTimeout(r, 200));"
+            "  DGM.ai.clear();"
+            "  await new Promise(r => setTimeout(r, 200));"
+            "  const ta = document.querySelector('#ai-input');"
+            "  const send = async (v) => {"
+            "    ta.value = v;"
+            "    ta.dispatchEvent(new Event('input', { bubbles: true }));"
+            "    document.querySelector('#ai-send').click();"
+            "    await new Promise(r => setTimeout(r, 1800));"
+            "  };"
+            "  await send('[hist] 第一句');"
+            "  await send('[hist] 第二句');"
+            "  const txt = (document.querySelector('#ai-stream').textContent) || '';"
+            "  return JSON.stringify({"
+            "    first: txt.includes('前序轮次 0 条'),"
+            "    second: txt.includes('前序轮次 2 条'),"
+            "    tail: txt.slice(-80)"
+            "  });"
+            "})()"
+        )
+        log(f"多轮前序轮次: {hist}")
+        try:
+            r = json.loads(hist or "{}")
+            if not r.get("first"):
+                fails.append("第一轮不该带前序轮次（或多轮链路没接上）")
+            if not r.get("second"):
+                fails.append(f"第二轮没把上一轮带上去（单轮重建 messages）：{r.get('tail')}")
+        except Exception as e:
+            log(f"（断言 26 解析失败：{e}）")
+            fails.append("断言 26 拿不到结果（多轮消息链路可能整个没接上）")
+
+        # ---- 断言 27：会话按文档持久化（写盘 → 读回 → 按文档分开） ----
+        # 阶段三之前：`conversations_dir()` 全仓零读写（只建了个空目录），而对话框的说明
+        # 却写着"按文档稳定身份持久化（真实实现里路径 SHA256）"。这条断言钉住四件事：
+        #   ① 一轮对话结束后**真的存了**（读回来的 turns 里有 user + assistant）；
+        #   ② assistant 那条带上了模型名（否则还原后就只剩一句无出处的文本）；
+        #   ③ 以磁盘为准重载后，内存条数与磁盘一致（读路径真的接通了）；
+        #   ④ **按文档分开**：新开一份文档，它的会话是空的（不是把上一份带过来）。
+        conv = ev(
+            "(async () => {"
+            "  DGM.ai.focus('chat');"
+            "  await new Promise(r => setTimeout(r, 150));"
+            "  DGM.ai.clear();"
+            "  await new Promise(r => setTimeout(r, 250));"
+            "  const d = DGM.state.activeDoc();"
+            "  if (!d) return 'no-doc';"
+            "  const ta = document.querySelector('#ai-input');"
+            "  ta.value = '画一张流程';"
+            "  ta.dispatchEvent(new Event('input', { bubbles: true }));"
+            "  document.querySelector('#ai-send').click();"
+            # 生成档的回复很长（mock 每 42ms 推一小段），**必须等够**：
+            # 等短了会读到"消息还在流、onDone 还没跑"的中间态，看起来像落盘坏了。
+            "  await new Promise(r => setTimeout(r, 6000));"
+            "  const mem = DGM.ai.turnCount();"
+            "  const saved = await DGM.ipc.invoke('conversation_load', { id: d.id });"
+            "  const turns = (saved && saved.turns) || [];"
+            "  await DGM.ai.ensureConversation(d.id, true);"
+            "  await new Promise(r => setTimeout(r, 400));"
+            "  const after = DGM.ai.turnCount();"
+            "  const fresh = await DGM.state.newDoc(['mermaid']);"
+            "  await new Promise(r => setTimeout(r, 400));"
+            "  const other = DGM.ai.turnCount();"
+            "  return JSON.stringify({"
+            "    mem,"
+            "    n: turns.length,"
+            "    roles: turns.map(x => x.role),"
+            "    model: (turns[1] || {}).model || '',"
+            "    hasImage: JSON.stringify(turns).includes('data:image'),"
+            "    after,"
+            "    other,"
+            "    freshOk: !!fresh"
+            "  });"
+            "})()"
+        )
+        log(f"会话持久化: {conv}")
+        try:
+            r = json.loads(conv or "{}")
+            if (r.get("n") or 0) < 2:
+                fails.append(f"一轮对话结束后没落盘（内存 {r.get('mem')} 条 / 磁盘读回 {r.get('n')} 条）")
+            elif r.get("roles") != ["user", "assistant"]:
+                fails.append(f"落盘的轮次角色不对：{r.get('roles')}")
+            if not r.get("model"):
+                fails.append("落盘的 assistant 轮次没带模型名（还原后无从展示出处）")
+            if r.get("hasImage"):
+                fails.append("会话里出现了 data:image —— 图片绝不能落盘")
+            if r.get("after") != r.get("n"):
+                fails.append(f"以磁盘为准重载后条数对不上：内存 {r.get('after')} / 磁盘 {r.get('n')}")
+            if not r.get("freshOk"):
+                fails.append("新开文档失败，无法验证会话按文档分开")
+            elif r.get("other") != 0:
+                fails.append(f"新文档不该带着上一份的会话（拿到 {r.get('other')} 条）")
+        except Exception as e:
+            log(f"（断言 27 解析失败：{e}）")
+            fails.append("断言 27 拿不到结果（会话持久化链路可能整个没接上）")
+
+        # ---- 断言 28：长期记忆（候选不生效 → 确认后才生效；前端不自己注入） ----
+        # 三条最要紧的性质在这里钉住：
+        #   ① 自动提取出来的候选是 `pending`，**不注入 prompt**（注入与否的语义由
+        #      app-core::memory 的单测覆盖，这里管的是"它真的落在 pending 上"）；
+        #   ② 关掉 `memory_auto` 后**不再发那次额外调用**（它是真实计费的）；
+        #   ③ 前端**不得**自己往请求里塞记忆 —— 注入只该发生在 Rust 的 `ai_chat` 一处，
+        #      前端再塞一份就是双重注入（mock 夹具 `[mem]` 回报这件事）。
+        mem = ev(
+            "(async () => {"
+            "  const items = () => ((DGM.state.memory && DGM.state.memory.items) || []);"
+            "  const bar = document.querySelector('#ai-memory-bar');"
+            "  const out = {};"
+            "  await DGM.state.memoryClear('all');"
+            "  await DGM.state.patchSettings({ ai: { memory_enabled: true, memory_auto: true } });"
+            "  DGM.ai.focus('chat');"
+            "  await new Promise(r => setTimeout(r, 250));"
+            "  DGM.ai.clear();"
+            "  await new Promise(r => setTimeout(r, 300));"
+            "  const ta = document.querySelector('#ai-input');"
+            "  const send = async (v) => {"
+            "    ta.value = v;"
+            "    ta.dispatchEvent(new Event('input', { bubbles: true }));"
+            "    document.querySelector('#ai-send').click();"
+            "    await new Promise(r => setTimeout(r, 2200));"
+            "  };"
+            # ① 带 [remember] 的一轮 → 自动提取出一条 pending
+            "  await send('[remember] 配色一律用暗色');"
+            "  await new Promise(r => setTimeout(r, 800));"
+            "  out.afterExtract = items().length;"
+            "  out.pendingState = (items()[0] || {}).state || '';"
+            "  out.barShown = !!bar && !bar.hidden;"
+            # ② 关掉自动提取后再聊一轮 → 不该再添候选
+            "  await DGM.state.patchSettings({ ai: { memory_auto: false } });"
+            "  await send('[remember] 节点不要圆角');"
+            "  await new Promise(r => setTimeout(r, 800));"
+            "  out.afterAutoOff = items().length;"
+            "  await DGM.state.patchSettings({ ai: { memory_auto: true } });"
+            # ③ 前端不得自己注入记忆
+            "  await send('[mem] 顺便画一张');"
+            "  const txt = document.querySelector('#ai-stream').textContent || '';"
+            "  out.clientInjected = txt.includes('客户端注入了记忆：是');"
+            # ④ 确认那条候选 → confirmed，提示条消失
+            "  const first = items().filter(x => x.state === 'pending')[0];"
+            "  if (first) await DGM.state.memorySave({ ...first, state: 'confirmed' });"
+            "  out.confirmed = items().filter(x => x.state === 'confirmed').length;"
+            "  out.stillPending = items().filter(x => x.state === 'pending').length;"
+            "  out.barHiddenAfterConfirm = !!bar && bar.hidden;"
+            # ⑤ 停用后不计入注入（此处只验证开关落盘；注入过滤由单测覆盖）
+            "  const conf = items().filter(x => x.state === 'confirmed')[0];"
+            "  if (conf) await DGM.state.memorySave({ ...conf, enabled: false });"
+            "  out.disabled = items().filter(x => x.enabled === false).length;"
+            # ⑥ 清空
+            "  await DGM.state.memoryClear('all');"
+            "  out.afterClear = items().length;"
+            "  return JSON.stringify(out);"
+            "})()"
+        )
+        log(f"长期记忆: {mem}")
+        try:
+            r = json.loads(mem or "{}")
+            if r.get("afterExtract") != 1:
+                fails.append(f"带 [remember] 的一轮没产出候选（拿到 {r.get('afterExtract')} 条）")
+            if r.get("pendingState") != "pending":
+                fails.append(f"自动候选不是 pending（拿到 {r.get('pendingState')!r}）—— 候选必须等用户确认")
+            if not r.get("barShown"):
+                fails.append("有待确认候选但提示条没出现（用户无从知道 AI 提议记了什么）")
+            if r.get("afterAutoOff") != 1:
+                fails.append(f"关掉自动提取后仍然新增候选（{r.get('afterAutoOff')} 条）—— 那是真实计费的调用")
+            if r.get("clientInjected"):
+                fails.append("前端自己往请求里塞了记忆 —— 注入只该在 Rust 一处，否则双重注入")
+            if r.get("confirmed") != 1 or r.get("stillPending") != 0:
+                fails.append(f"确认候选失败：confirmed={r.get('confirmed')} pending={r.get('stillPending')}")
+            if not r.get("barHiddenAfterConfirm"):
+                fails.append("候选确认后提示条仍在（会一直催用户）")
+            if r.get("disabled") != 1:
+                fails.append(f"停用没有落盘（enabled=false 的条目 {r.get('disabled')} 条）")
+            if r.get("afterClear") != 0:
+                fails.append(f"清空后仍有 {r.get('afterClear')} 条")
+        except Exception as e:
+            log(f"（断言 28 解析失败：{e}）")
+            fails.append("断言 28 拿不到结果（长期记忆链路可能整个没接上）")
+
+        # ---- 断言 29：受控工具循环（开关分流 + 工具活动行 + 最终正文可应用） ----
+        # ① 关着时走 `ai_chat`（流式：气泡里出现 delta 帧）；
+        # ② 开着时走 `ai_agent_run`：气泡里出现工具活动行（read_document / validate）、
+        #    请求体里**不该**再逐字流式（非流式的特征是 delta 帧为 0）；
+        # ③ 最终正文带合法代码块 —— 与 ai_chat 共用同一收尾（ai://done）。
+        agent = ev(
+            "(async () => {"
+            "  const out = {};"
+            # 等到不忙为止：上一轮的记忆提取调用也会占着 busy（断言 28 留下的状态），
+            # 固定等待会被它拖爆 —— 2026-10-16 断言 29 的假失败就是这条。
+            "  const waitIdle = async () => {"
+            "    for (let i = 0; i < 40 && DGM.state.ui.aiBusy; i++) await new Promise(r => setTimeout(r, 150));"
+            "  };"
+            "  const ta = document.querySelector('#ai-input');"
+            "  const send = async (v) => {"
+            "    ta.value = v;"
+            "    ta.dispatchEvent(new Event('input', { bubbles: true }));"
+            "    document.querySelector('#ai-send').click();"
+            "    await waitIdle();"
+            "    await new Promise(r => setTimeout(r, 300));"
+            "  };"
+            "  DGM.ai.focus('chat');"
+            "  await new Promise(r => setTimeout(r, 250));"
+            # 记忆提取（memory_auto）会额外发一轮流式调用，混进 delta 计数 —— 这里关掉
+            "  await DGM.state.patchSettings({ ai: { memory_auto: false, tools_enabled: false } });"
+            "  DGM.ai.clear();"
+            "  await waitIdle();"
+            "  await new Promise(r => setTimeout(r, 300));"
+            # ① 开关关：流式（delta 帧数 > 0 是 mock 流式的直接证据）
+            "  let deltas = 0;"
+            "  const onDelta = () => deltas++;"
+            "  const off1 = DGM.ipc.on('ai://delta', onDelta);"
+            "  await send('[agent] 画一张');"
+            "  out.offDeltas = deltas;"
+            "  off1();"
+            # ② 开关开：工具活动行出现、非流式
+            "  deltas = 0;"
+            "  let agentEvents = 0;"
+            "  const off2 = DGM.ipc.on('ai://delta', onDelta);"
+            "  const off3 = DGM.ipc.on('ai://agent', () => agentEvents++);"
+            "  await DGM.state.patchSettings({ ai: { tools_enabled: true } });"
+            "  out.setAfter = (DGM.state.settings.ai || {}).tools_enabled;"
+            "  await send('[agent] 再画一张');"
+            "  out.onDeltas = deltas;"
+            "  out.agentEvents = agentEvents;"
+            "  off2();"
+            "  off3();"
+            "  const steps = [...document.querySelectorAll('#ai-stream .agent-step b')].map(x => x.textContent);"
+            "  out.steps = steps;"
+            "  const stream = document.querySelector('#ai-stream');"
+            "  out.hasCode = (stream.textContent || '').includes('flowchart TD');"
+            "  await DGM.state.patchSettings({ ai: { tools_enabled: false, memory_auto: true } });"
+            "  return JSON.stringify(out);"
+            "})()"
+        )
+        log(f"工具循环: {agent}")
+        try:
+            r = json.loads(agent or "{}")
+            if (r.get("offDeltas") or 0) <= 0:
+                fails.append("开关关着时没有流式帧 —— ai_chat 的流式路径被误伤")
+            if not r.get("setAfter"):
+                fails.append("patchSettings 没能把 tools_enabled 打开（设置链路有问题）")
+            if (r.get("agentEvents") or 0) < 2:
+                fails.append(f"ai://agent 事件只有 {r.get('agentEvents')} 条 —— 前端没收到工具活动（ai_agent_run 可能没被调用）")
+            if (r.get("onDeltas") or 0) != 0:
+                fails.append(f"开关开着时仍出现了 {r.get('onDeltas')} 帧流式 —— 应走非流式的 ai_agent_run")
+            steps = r.get("steps") or []
+            if "read_document" not in steps or "validate" not in steps:
+                fails.append(f"工具活动行缺失：{steps}（应有 read_document 与 validate）")
+            if not r.get("hasCode"):
+                fails.append("工具循环的最终正文里没有代码块 —— 收尾没有走到 ai://done 的渲染路径")
+        except Exception as e:
+            log(f"（断言 29 解析失败：{e}）")
+            fails.append("断言 29 拿不到结果（工具循环链路可能整个没接上）")
+
+        # ---- 断言 30：PNG 导出在含 <br> 的标签上不炸 ----
+        # 2026-10-16 用户真机报「位图栅格化失败」：mermaid 的 htmlLabels 把标签里的
+        # `<br>` 以未闭合 HTML 写进 <foreignObject>，导出时按 image/svg+xml 严格解析
+        # 直接 parsererror。修复是优先克隆**活着的 DOM 节点**（XMLSerializer 必然良构）。
+        # 这条断言钉住：正文带 <br> / & 的 mermaid 文档必须能出 PNG。
+        png = ev(
+            "(async () => {"
+            "  const d = DGM.state.activeDoc();"
+            "  if (!d) return JSON.stringify({fail:'no doc'});"
+            "  const prev = d.body;"
+            "  await DGM.state.setBody(d.id, 'flowchart TD\\n    A[\"AT&T <br>换行\"] --> B[结束]');"
+            "  DGM.preview.render();"
+            "  await new Promise(r => setTimeout(r, 2600));"
+            "  const out = {};"
+            "  try { const u = await DGM.preview.toPngDataUrl(); out.png = 'ok:len=' + u.length; }"
+            "  catch (e) { out.png = 'fail: ' + (e && e.message || e); }"
+            "  await DGM.state.setBody(d.id, prev);"
+            "  DGM.preview.render();"
+            "  await new Promise(r => setTimeout(r, 800));"
+            "  return JSON.stringify(out);"
+            "})()"
+        )
+        log(f"PNG导出br回归: {png}")
+        try:
+            r = json.loads(png or "{}")
+            if not str(r.get("png", "")).startswith("ok:"):
+                fails.append(f"含 <br> 标签的图导出 PNG 失败：{r.get('png')}（foreignObject 的未闭合 HTML 又把 XML 解析炸了）")
+        except Exception as e:
+            log(f"（断言 30 解析失败：{e}）")
+            fails.append("断言 30 拿不到结果（PNG 导出链路可能整个没接上）")
+
         # 汇总启动期间的 console error / 异常
         for params in cdp.seen("Runtime.exceptionThrown"):
             d = params.get("exceptionDetails", {})

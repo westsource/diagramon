@@ -2,6 +2,8 @@
  *
  * - 文本型（Mermaid / DOT）：先 parse 校验再 render，报错解析出行号，不留在页面上
  *   半渲染的残迹。DOT 走 vendor 里的 graphviz（ESM，加载失败时显式提示）。
+ * - 渲染失败会额外发一次 `doc:render-error`（载荷 `{docId, format, line, raw}`）：
+ *   AI 的「渲染校验回环」靠它把报错原文回喂模型自动修正一次。`raw` 是上游原文。
  * - 画布型（drawio / Excalidraw）：交给 `DGM.canvas`（同源 iframe 承载面），
  *   本模块只切可见面并把工具条/缩放接到承载页的钩子上。
  * - 手势：滚轮平移 / Shift 横向 / Ctrl 以光标为中心缩放 / 拖拽 / 双击适应视图。
@@ -365,7 +367,25 @@ window.DGM = window.DGM || {};
       if (described.line) {
         state.refreshIssues(d.id);
       }
+      emitRenderError(d, described, err);
     }
+  }
+
+  /** 对外播报一次渲染失败。
+   *
+   *  消费者是 AI 的「渲染校验回环」（`ui/js/ai.js`）：它拿这份载荷去组装第二次请求，
+   *  把报错回喂模型修正一次。所以 **`raw` 必须是上游原文** —— `described.text` 是给
+   *  人看的中文 UI 串（里面还塞了 `preview.noRender` 的包装文案与本地化行号措辞），
+   *  喂模型会把真正有用的语法信息淹没掉。
+   */
+  function emitRenderError(d, described, err) {
+    DGM.bus.emit("doc:render-error", {
+      docId: d.id,
+      format: d.format,
+      line: described.line || 0,
+      // 个别引擎抛的是非 Error 对象，退化成字符串；截断避免把整篇栈塞进请求
+      raw: String((err && err.message) || err || "").slice(0, 800),
+    });
   }
 
   async function renderMermaid(body, mine) {
@@ -488,8 +508,18 @@ window.DGM = window.DGM || {};
       return data;
     }
     if (!lastSvg) throw new Error(t("exp.noContent"));
-    const doc = new DOMParser().parseFromString(lastSvg, "image/svg+xml");
-    const svg = doc.documentElement;
+    // 优先克隆**活着的 SVG 节点**，而不是拿渲染时的原始文本重新过一遍 XML 解析。
+    //
+    // 坑：mermaid 的 htmlLabels 会把标签文本原样写进 <foreignObject>，正文里的
+    // `<br>` 是未闭合的 HTML 形式。页面渲染没问题（innerHTML 是 HTML 解析，宽容），
+    // 但 DOMParser 按 image/svg+xml 严格解析会直接 parsererror —— 之后拿 parsererror
+    // 元素当 SVG 去加载，就是「位图栅格化失败」（用户标签里带 <br> 时必现）。
+    // 挂在页面上的那份已经被浏览器解析成 DOM，XMLSerializer 从 DOM 产出的必然良构。
+    const stage = nodes().stage;
+    const live = stage ? stage.querySelector("svg") : null;
+    const svg = live
+      ? live.cloneNode(true)
+      : new DOMParser().parseFromString(lastSvg, "image/svg+xml").documentElement;
     const { w, h } = svgSize(svg);
     const scale = exportScale(svg);
     svg.setAttribute("width", String(w));

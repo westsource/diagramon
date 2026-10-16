@@ -115,10 +115,30 @@ pub fn build_body(r: &Resolved, messages: &[Value], stream: bool) -> Value {
         if let Some(t) = r.temperature {
             body.insert("temperature".into(), json!(t));
         }
-        // 让最后一帧带回 usage：用量面板要用它，否则只能自己数 token
-        body.insert("stream_options".into(), json!({ "include_usage": true }));
+        // 让最后一帧带回 usage：用量面板要用它，否则只能自己数 token。
+        //
+        // **只在流式时加**：`stream_options` 只对 `stream: true` 有意义，
+        // 个别上游在非流式请求里带上它会直接 400 —— 而记忆提取走的正是非流式
+        // （`chat_once`）。原来这里无条件插入，那是个埋着的雷。
+        if stream {
+            body.insert("stream_options".into(), json!({ "include_usage": true }));
+        }
         Value::Object(body)
     }
+}
+
+/// 在 `build_body` 之上加工具（工具循环那一路用）。
+///
+/// `tools` 为空时**一个键都不加** —— 不用工具的请求必须与以前逐字节一致。
+pub fn build_body_with_tools(r: &Resolved, messages: &[Value], tools: &[Value], stream: bool) -> Value {
+    let mut body = build_body(r, messages, stream);
+    if tools.is_empty() {
+        return body;
+    }
+    if let Value::Object(map) = &mut body {
+        map.insert("tools".into(), Value::Array(tools.to_vec()));
+    }
+    body
 }
 
 /// 流式对话。每收到一段增量就回调一次 `on_delta`（正文与思考分开报）；`cancel` 置位时立刻中止。
@@ -236,7 +256,7 @@ pub enum Chunk {
 ///
 /// 数组形态是 OpenAI 多模态的分段写法：`[{"type":"text","text":"…"}]` —— 只认字符串的
 /// 实现遇到它会静默丢帧，同样是"有 token、没字"。
-fn text_of(v: Option<&Value>) -> String {
+pub(crate) fn text_of(v: Option<&Value>) -> String {
     match v {
         Some(Value::String(s)) => s.clone(),
         Some(Value::Array(parts)) => {
@@ -320,13 +340,56 @@ fn merge_usage(usage: &mut Usage, v: &Value, ollama: bool) {
     }
 }
 
-fn truncate(s: &str, max: usize) -> String {
+pub(crate) fn truncate(s: &str, max: usize) -> String {
     if s.chars().count() <= max {
         s.to_string()
     } else {
         let head: String = s.chars().take(max).collect();
         format!("{head}…")
     }
+}
+
+/// 非流式一次性对话。**只给内部辅助调用用**（当前就是记忆提取）。
+///
+/// 为什么不复用 `stream_chat`：提取只关心最后那段文本，流式还得自己拼装；
+/// 而非流式能直接从响应里读 `usage`，成本口径更准。
+pub async fn chat_once(
+    client: &reqwest::Client,
+    r: &Resolved,
+    messages: Vec<Value>,
+) -> Result<(String, Usage), ChatError> {
+    if !r.is_ollama() && r.api_key.as_deref().unwrap_or("").trim().is_empty() {
+        return Err(ChatError::MissingKey);
+    }
+
+    let url = r.endpoint();
+    let body = build_body(r, &messages, false);
+    let mut req = client.post(&url).json(&body);
+    if let Some(key) = r.api_key.as_deref() {
+        if !key.trim().is_empty() {
+            req = req.bearer_auth(key.trim());
+        }
+    }
+
+    let resp = req.send().await.map_err(|e| ChatError::Network(e.to_string()))?;
+    let status = resp.status();
+    if !status.is_success() {
+        let body = resp.text().await.unwrap_or_default();
+        return Err(ChatError::Http { status: status.as_u16(), body: truncate(&body, 600) });
+    }
+    let payload: Value = resp.json().await.map_err(|e| ChatError::Protocol(e.to_string()))?;
+
+    let ollama = r.is_ollama();
+    let content = if ollama {
+        payload.pointer("/message/content")
+    } else {
+        payload.pointer("/choices/0/message/content")
+    };
+    let text = text_of(content);
+
+    let mut usage = Usage::default();
+    merge_usage(&mut usage, &payload, ollama);
+    Ok((text, usage))
 }
 
 #[cfg(test)]
@@ -368,6 +431,15 @@ mod tests {
         assert_eq!(body["stream_options"]["include_usage"], true);
         assert_eq!(body["max_tokens"], 4096);
         assert_eq!(body["model"], "gpt-4o");
+    }
+
+    /// 非流式**不能**带 `stream_options`：它只对 `stream: true` 有意义，
+    /// 个别上游在非流式请求里带上会直接 400 —— 而记忆提取（`chat_once`）走的正是非流式。
+    #[test]
+    fn nonstream_body_omits_stream_options() {
+        let body = build_body(&openai(), &[json!({"role":"user","content":"hi"})], false);
+        assert_eq!(body["stream"], false);
+        assert!(body.get("stream_options").is_none(), "非流式不该带 stream_options：{body}");
     }
 
     #[test]

@@ -857,8 +857,35 @@ body.no-ai #ai-gutter { display: none; }
 .send-btn:hover { background: var(--ai-hover); }
 .send-btn[disabled] { background: var(--surface-3); color: var(--faint); cursor: not-allowed; }
 
-.ai-suggest { display: flex; flex-wrap: wrap; gap: 5px; padding: 0 10px 9px; }
-.sug {
+/* 记忆：待确认候选提示条（AI 面板顶部）+ 记忆管理对话框里的条目行 */
+.ai-memory-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 10px 8px;
+  padding: 7px 10px;
+  font-size: var(--fs-sm);
+  color: var(--accent-ink);
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-line);
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+.ai-memory-bar:hover { background: var(--accent-line); }
+.ai-memory-bar .sp { flex: 1 1 auto; }
+.mem-row { display: flex; align-items: flex-start; gap: 10px; padding: 9px 11px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); }
+.mem-row.pending { border-style: dashed; }
+.mem-row .mem-txt { flex: 1 1 auto; min-width: 0; word-break: break-word; color: var(--ink); }
+.mem-row .mem-tags { flex: 0 0 auto; display: flex; gap: 6px; align-items: center; }
+.mem-tag { padding: 1px 7px; font-size: var(--fs-xs); border-radius: 999px; background: var(--surface-inset); color: var(--muted); }
+.mem-tag.pending { color: var(--accent-ink); background: var(--accent-soft); }
+.mem-tag.off { opacity: .6; }
+.mem-row .mem-acts { flex: 0 0 auto; display: flex; gap: 4px; }
+.mem-save { display: flex; gap: 6px; align-items: center; margin-top: 8px; }
+.mem-save input { flex: 1 1 auto; min-width: 0; }
+.mem-head-acts { display: flex; gap: 6px; align-items: center; margin-bottom: 8px; }
+
+.ai-suggest { display: flex; flex-wrap: wrap; gap: 5px; padding: 0 10px 9px; }.sug {
   padding: 3px 9px;
   font-size: var(--fs-xs);
   color: var(--ink-2);
@@ -1509,6 +1536,13 @@ table.kv td .chip { vertical-align: middle; }
 .hist-list { display: flex; flex-direction: column; gap: 6px; }
 .hist-row { display: flex; gap: 12px; align-items: center; padding: 9px 11px; text-align: left; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); }
 .hist-row:hover { border-color: var(--accent-line); background: var(--accent-soft); }
+/* 历史会话里的一条对话轮次（`hist-row` 原本是"最近文档"按钮，这里复用容器、换内层）。
+   正文可能很长，所以顶对齐 + 换行，而不是像文件行那样单行居中。 */
+.hist-turn { align-items: flex-start; }
+.hist-turn .who { flex: 0 0 auto; min-width: 4.5em; font-weight: 500; color: var(--muted); }
+.hist-turn.bot .who { color: var(--accent); }
+.hist-turn .txt { flex: 1 1 auto; min-width: 0; white-space: pre-wrap; word-break: break-word; color: var(--ink); }
+.hist-turn .meta { flex: 0 0 auto; font-size: var(--fs-xs); color: var(--faint); }
 .hr-main { flex: 1; min-width: 0; }
 .hr-main b { display: block; font-size: var(--fs-sm); font-weight: 500; }
 .hr-main span { display: block; font-size: var(--fs-xs); color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -1760,6 +1794,15 @@ body.no-mock .mock-badge { display: none; }
   font-size: var(--fs-xs); color: var(--muted); padding: 0 2px 4px;
 }
 .msg .think svg { color: var(--ai); }
+.msg .agent-step {
+  display: flex; gap: 5px; align-items: baseline;
+  font-size: var(--fs-xs); color: var(--muted); padding: 1px 2px;
+}
+.msg .agent-step svg { color: var(--ai); flex: none; transform: translateY(1px); }
+.msg .agent-step b { font-weight: 600; color: var(--fg); }
+.msg .agent-step span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.msg .agent-step.bad { color: var(--err); }
+.msg .agent-step.bad svg { color: var(--err); }
 .msg .think-body {
   font-size: var(--fs-xs); line-height: 1.65; color: var(--muted);
   background: var(--surface-2, var(--surface)); border: 1px dashed var(--border);

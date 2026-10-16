@@ -13,4 +13,5 @@ image = { version = "0.25.10", default-features = false, features = ["png"] }
 regex = "1.13.1"
 serde = { workspace = true }
 serde_json = { workspace = true }
+sha2 = "0.10"
 walkdir = "2.5.0"

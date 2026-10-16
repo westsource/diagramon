@@ -245,6 +245,17 @@ pub struct AiPrefs {
     pub vision_notice_accepted: bool,
     pub render_retry: bool,
     pub context_from_doc: bool,
+    /// 长期记忆总开关。关掉后**请求体与没有记忆时完全一致**（单测钉住这一点）。
+    pub memory_enabled: bool,
+    /// 自动提取候选记忆。开着时每轮对话后多一次模型调用（真实计费），
+    /// 产出的只是 `Pending` 候选、**不注入**，要用户确认才生效。
+    pub memory_auto: bool,
+    /// 受控工具循环（`crates/ai::agent`）。
+    ///
+    /// **默认关**：开着时这一轮改走**非流式**多步调用，界面不再逐字流式（改为显示工具活动），
+    /// 而且模型每用一次工具就多一次真实计费。这种"拿流式换能力"的取舍必须由用户来定，
+    /// 不能默认替他们改掉已有的打字机体验。
+    pub tools_enabled: bool,
 }
 
 impl Default for AiPrefs {
@@ -255,6 +266,9 @@ impl Default for AiPrefs {
             vision_notice_accepted: false,
             render_retry: true,
             context_from_doc: true,
+            memory_enabled: true,
+            memory_auto: true,
+            tools_enabled: false,
         }
     }
 }
@@ -333,6 +347,17 @@ pub enum AiIntent {
     Review,
 }
 
+/// 一轮前序对话（发给上游的形态）。
+///
+/// **只带文本**：图片是 dataURL、动辄几百 KB，绝不该在每个后续请求里重复上行
+/// （一次识图就会让之后每一轮都背上它）—— 前端在 `historyFor()` 里就已经把它们滤掉了。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AiTurn {
+    /// `user` | `assistant`（其它值会被 `crates/ai` 归一到 `user`）。
+    pub role: String,
+    pub text: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AiChatRequest {
     pub request_id: String,
@@ -345,6 +370,12 @@ pub struct AiChatRequest {
     pub context: Option<String>,
     /// `data:image/png;base64,…`（识图）
     pub image_data_url: Option<String>,
+    /// 前序轮次（**不含本轮**的 prompt / context）。
+    ///
+    /// 轮数与体积的裁剪**在 `crates/ai` 里做**（`fit_history`）—— 那一层带单测，
+    /// 前端只负责如实把对话给出来，不各自猜一套策略。
+    #[serde(default)]
+    pub history: Vec<AiTurn>,
 }
 
 /// 事件名：`ai://delta` / `ai://thinking` / `ai://done` / `ai://failed`
@@ -363,6 +394,23 @@ pub struct AiDelta {
 pub struct AiThinking {
     pub request_id: String,
     pub delta: String,
+}
+
+/// 事件名：`ai://agent` —— 工具循环里的**一次工具执行**（含结果摘要）。
+///
+/// 摘要是"给界面看的简述"，不是回给模型的完整结果 —— 完整结果已经进了对话，
+/// 重复送到前端只会诱导界面把它渲染成一条助手消息。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AiAgentStep {
+    pub request_id: String,
+    /// 第几次工具执行（从 1 起）
+    pub step: u32,
+    /// 工具名（`read_document` / `format_grammar` / `validate`）
+    pub tool: String,
+    /// 结果摘要（截断过，界面上显示这一行就够了）
+    pub summary: String,
+    /// `false` = 工具执行失败（失败也是工具结果，模型会自己纠正，不是整轮失败）
+    pub ok: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -708,6 +756,98 @@ pub struct CloudDocBody {
     pub version: u64,
 }
 
+/* ---------------- AI 会话持久化 ---------------- */
+
+/// 一条持久化的对话轮次。
+///
+/// **只落文本**：图片（dataURL）永不落盘 —— 客户端对外承诺的是"图片只在内存、
+/// 不落盘"，会话持久化不该把这句话变成谎话。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConversationTurn {
+    /// `user` | `assistant`
+    pub role: String,
+    pub text: String,
+    /// 毫秒时间戳（跨页签还原展示顺序用）
+    #[serde(default)]
+    pub at: i64,
+    /// 该轮实际使用的模型名（assistant 才有；用户轮为空）
+    #[serde(default)]
+    pub model: String,
+    /// prompt + completion（供应商没回报就是 0，**不是"零消耗"**）
+    #[serde(default)]
+    pub tokens: u32,
+    /// 来自哪个页签：`chat` | `vision` | `review`
+    #[serde(default)]
+    pub tab: String,
+}
+
+/// 一份文档的会话。`doc_key` 是**路径的 SHA256 前 16 位**（见 `app-core::conversations`）。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Conversation {
+    pub doc_key: String,
+    /// 落盘时该文档的路径（便于人工排查；不参与身份计算）
+    pub path: String,
+    pub turns: Vec<ConversationTurn>,
+    pub updated_at: i64,
+}
+
+/* ---------------- AI 长期记忆 ---------------- */
+
+/// 记忆作用域。风格偏好多半是全局的；术语多半只对某一份文档有意义。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum MemoryScope {
+    Global,
+    Doc,
+}
+
+/// 记忆条目的状态。
+///
+/// **`Pending` 不注入 prompt** —— 这是"自动提取低摩擦"与"不静默污染"之间的取舍点：
+/// 让用户逐条手写就没人会用；让模型写的东西直接生效，一条错的记忆会静默降质之后所有输出。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum MemoryState {
+    Confirmed,
+    Pending,
+}
+
+/// 一条记忆。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MemoryEntry {
+    pub id: String,
+    /// 一句话，越短越好（每次请求都会带上）
+    pub text: String,
+    pub scope: MemoryScope,
+    /// `scope == Doc` 时的文档身份（路径 SHA256 前 16 位）；`Global` 时为空
+    #[serde(default)]
+    pub doc: String,
+    pub state: MemoryState,
+    /// `user`（手写/确认过的）| `auto`（模型提取的候选）
+    #[serde(default)]
+    pub source: String,
+    /// 停用后仍保留但**不注入**（比删除温和：用户可能只是想暂时关掉）
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// 毫秒时间戳（超限时按"最近"截断）
+    #[serde(default)]
+    pub at: i64,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+/// 记忆列表 + 当前文档身份（前端据此标出 `doc` 作用域是哪一份）。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct MemoryList {
+    pub items: Vec<MemoryEntry>,
+    /// 当前文档的稳定身份；空 = 当前文档没有身份（未保存）
+    pub doc: String,
+}
+
 /// 开发开关的环境变量名（前后端与文档统一引用，别各写一份字符串）。
 pub const ENV_SELFTEST: &str = "DIAGRAMON_SELFTEST";
 pub const ENV_SELFTEST_REPORT: &str = "DIAGRAMON_SELFTEST_REPORT";
@@ -719,6 +859,8 @@ pub mod events {
     pub const AI_THINKING: &str = "ai://thinking";
     pub const AI_DONE: &str = "ai://done";
     pub const AI_FAILED: &str = "ai://failed";
+    /// 工具循环里的一次工具执行（载荷 `AiAgentStep`）
+    pub const AI_AGENT: &str = "ai://agent";
     /// 工作区文件被改动（批量 `Vec<FsChange>`）
     pub const FS_CHANGED: &str = "fs://changed";
     /// 搜索逐条命中
@@ -771,6 +913,8 @@ pub mod commands {
     pub const CONVERT_TEXT: &str = "convert_text";
     pub const AI_CHAT: &str = "ai_chat";
     pub const AI_CANCEL: &str = "ai_cancel";
+    /// 受控工具循环（非流式多步；请求体与 `AiChatRequest` 相同）
+    pub const AI_AGENT_RUN: &str = "ai_agent_run";
     pub const MONITORS_LIST: &str = "monitors_list";
     pub const VISION_FRAME: &str = "vision_frame";
     pub const VISION_CROP: &str = "vision_crop";
@@ -787,4 +931,14 @@ pub mod commands {
     pub const CLOUD_DOC_DELETE: &str = "cloud_doc_delete";
     /// 云网关**可用模型别名**（登录后才有；无 AI 权益时为空列表）
     pub const AI_GATEWAY_MODELS: &str = "ai_gateway_models";
+    /// 会话持久化：读 / 存 / 清（按文档身份，见 `Conversation`）
+    pub const CONVERSATION_LOAD: &str = "conversation_load";
+    pub const CONVERSATION_SAVE: &str = "conversation_save";
+    pub const CONVERSATION_CLEAR: &str = "conversation_clear";
+    /// 长期记忆：列 / 存（含新增与编辑）/ 删 / 清空全部 / 自动提取候选
+    pub const AI_MEMORY_LIST: &str = "ai_memory_list";
+    pub const AI_MEMORY_SAVE: &str = "ai_memory_save";
+    pub const AI_MEMORY_DELETE: &str = "ai_memory_delete";
+    pub const AI_MEMORY_CLEAR: &str = "ai_memory_clear";
+    pub const AI_MEMORY_EXTRACT: &str = "ai_memory_extract";
 }
