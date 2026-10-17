@@ -924,7 +924,8 @@ body.no-panel .bottom-panel { display: none; }
 .bp-tab .n.err { background: var(--err-soft); color: var(--err); }
 .bp-tab .n.warn { background: var(--warn-soft); color: var(--warn); }
 .bp-tabs .sp { flex: 1; }
-.bp-body { flex: 1; min-height: 0; overflow: auto; padding: 8px 12px; font: var(--fs-xs)/1.7 var(--font-mono); color: var(--ink-2); }
+/* 问题 / 输出 / 转换记录 / 用量：这些是纯文本，报错原文多半从这里复制（body 全局 none，这里放开） */
+.bp-body { flex: 1; min-height: 0; overflow: auto; padding: 8px 12px; font: var(--fs-xs)/1.7 var(--font-mono); color: var(--ink-2); user-select: text; }
 .bp-body[hidden] { display: none; }
 .bp-line { display: grid; grid-template-columns: 62px 1fr; gap: 8px; padding: 1px 0; }
 .bp-line .t { color: var(--faint); }
@@ -1696,8 +1697,11 @@ html.full .doc-page { height: auto; overflow: visible; }
   user-select: text;
 }
 
-/* --- 19.3 预览面的文字态（空/错误/说明） --- */
-.preview-note { padding: 22px; font-size: var(--fs-sm); color: var(--muted); }
+/* --- 19.3 预览面的文字态（空/错误/说明） ---
+   这两种文字是**用户要复制出去**的：报错原文要贴给 AI 或写进 issue，说明文字也常被摘出来。
+   body 上有全局 `user-select: none`（见 §2 基础），所以这里必须显式放开 ——
+   否则预览区里拖不出选区，看着像"文字是图片"。（2026-10-17 用户反馈） */
+.preview-note { padding: 22px; font-size: var(--fs-sm); color: var(--muted); user-select: text; }
 .preview-error {
   max-width: 560px; margin: 20px;
   padding: 14px 16px;
@@ -1708,6 +1712,9 @@ html.full .doc-page { height: auto; overflow: visible; }
   border-radius: var(--radius);
   white-space: pre-wrap;
   word-break: break-word;
+  user-select: text;
+  -webkit-user-select: text;   /* WebView2 走 Chromium，标准属性就够；前缀只是老引擎兜底 */
+  cursor: text;                 /* 让指针提示"这里能选"，而不是变成拖动画布的抓手 */
 }
 .preview-loading {
   display: inline-flex; align-items: center; gap: 8px;
