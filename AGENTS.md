@@ -55,7 +55,7 @@ node tools/release.mjs --help
 
 ## 2. 验收：一条命令 `node tools/dev/check.mjs`
 
-七步（任一步失败即退出）：杀残留实例 → 前端语法 → **i18n 引用完整性**（`t()` 用到的键必须在 ZH/EN 都存在）→ **UI 交互冒烟 `ui_probe`** → 构建 → **Rust 单测** → **真机自检**。
+八步（任一步失败即退出）：杀残留实例 → 前端语法 → **i18n 引用完整性**（`t()` 用到的键必须在 ZH/EN 都存在）→ **UI 交互冒烟 `ui_probe`** → **画布承载探针 `excalidraw_probe`** → 构建 → **Rust 单测** → **真机自检**。
 
 ```powershell
 $env:DGM_PYTHON="C:\Users\rong\.workbuddy\binaries\python\versions\3.13.12\python.exe"; node tools/dev/check.mjs
@@ -66,7 +66,7 @@ $env:DGM_PYTHON="C:\Users\rong\.workbuddy\binaries\python\versions\3.13.12\pytho
 - **从受限会话（远程桌面、agent 沙箱、作业对象）拉起自检**：WebView2 浏览器子进程会**启动即崩**——症状是窗口纯白、`$LOCALAPPDATA/com.diagramon.app/EBWebView/Crashpad/reports/` 里**每次启动多一个 ~7MB 的 .dmp**、页面 boot 走完但心跳（`hb:` 打点）永远不出现。修法是给 WebView2 加 `--no-sandbox`（运行时开关，不进发布配置）：`DGM_BROWSER_EXTRA_ARGS="--no-sandbox" node tools/dev/check.mjs`。只在受限环境里用，普通桌面跑自检**不要**带它。
 - 判断"整场有没有走到第 7 步"**看报告时间戳**：脚本进循环前会先删报告，所以**时间戳还是旧的 = 前六步里有人 `exit(2)`**。
 - `DGM_PYTHON` 指向的解释器必须能 `import websocket`；本机唯一满足的是上面那条路径（机器上没有 `py` 启动器）。这个环境变量**曾经因为 `findPython()` 的 `shell:true` 从来没生效过**，别再把失败归因成"环境缺件"。
-- 单测当前 163 项、探针 21 条断言、自检 51 条 —— 数量会随开发变，**全绿才是要求**。
+- 单测当前 216 项、探针 25 条断言（`canvas_probe` 21 + `excalidraw_probe` 4）、自检 54 条 —— 数量会随开发变，**全绿才是要求**。
 
 改 `ui/**` 之后跑本地应用**必须先 `cargo build`**（或把改动 `cp` 到 `target/debug/ui/` 同路径），否则跑的是旧副本。
 
@@ -74,8 +74,9 @@ $env:DGM_PYTHON="C:\Users\rong\.workbuddy\binaries\python\versions\3.13.12\pytho
 
 - 别改 `third-party/schemars-0.8.22-order-fix/`（上游 bug 的临时补丁，上游修好后整体删掉）。
 - 别把 `ui/vendor/`（CodeMirror6 / mermaid / wasm-graphviz）当成普通源码改；那是随包资产。
-- 别把 98MB 的画布资产提交进仓库（`tools/drawio/`、`tools/excalidraw/`、`tools/graphviz/` 与 `../client/Assets/mermaid.min.js`；打包前由 `node tools/fetch-assets.mjs` 汇到 `assets/`）。
-- 改承载页（drawio / Excalidraw 的 `host.html`）**先读它顶部的契约注释块**（`__hostQueue` / `__apply` / `__hostZoom*`），那是 shell 与页面之间唯一的接口真源。
+- 别把 98MB 的画布资产提交进仓库（`tools/{drawio,excalidraw,graphviz,mermaid}/`；打包前由 `node tools/fetch-assets.mjs` 汇到 `assets/`）。
+- 改承载页（`tools/drawio-host/host.html`、`tools/excalidraw-host/index.html`）**先读它顶部的契约注释块**（`__hostQueue` / `__apply` / `__hostZoom*`），那是 shell 与页面之间唯一的接口真源。
+  **改完必须 `node tools/fetch-assets.mjs`** —— 运行时加载的是 `assets/` 里那份，`prepack` 与 `excalidraw_probe.py` 都会比对，不一致就拦。
 
 ## 4. 什么改动要重打包，什么只要推 git
 

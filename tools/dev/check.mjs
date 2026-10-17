@@ -286,6 +286,38 @@ async function main() {
     }
   }
 
+  step("画布承载探针（Excalidraw：mermaid 转换 / 图片附件的不变量）");
+  {
+    // 为什么这一步不能省：`__apply` 对不认识的动作**返回 false 且什么都不报**，
+    // 所以"承载页没把附件交出去"和"引擎没起来"在应用里长得一模一样 ——
+    // 真机自检也不覆盖这条（它只断言 iframe 挂上、同源可读）。
+    const py = findPython();
+    const page = join(ROOT, "assets", "excalidraw", "index.html");
+    if (!py) {
+      log(C.yellow("  （跳过 excalidraw_probe：没找到带 websocket-client 的 Python）"));
+      skipped.push("画布承载探针（excalidraw_probe）");
+    } else if (!existsSync(page)) {
+      log(C.yellow("  （跳过 excalidraw_probe：assets/excalidraw 不在位）"));
+      log(C.yellow("    先跑 node tools/fetch-assets.mjs —— 这一步测的是**汇出后的产物**，正是它才能抓到"));
+      log(C.yellow("    「改了承载页却没进产物」那类 bug（2026-10-17 实测踩过）。"));
+      skipped.push("画布承载探针（excalidraw 资产不在位）");
+    } else {
+      const r = spawnSync(py[0], [...py.slice(1), "tools/dev/excalidraw_probe.py"], {
+        cwd: ROOT,
+        stdio: "inherit",
+        timeout: 300_000,
+      });
+      if (r.status === 1) {
+        log(C.red("画布承载探针失败（见上方输出）"));
+        process.exit(2);
+      }
+      if (r.status !== 0) {
+        log(C.yellow(`  （excalidraw_probe 起不来，退出码 ${r.status}，跳过 —— 上面的输出是现场）`));
+        skipped.push("画布承载探针（起不来）");
+      }
+    }
+  }
+
   step("构建 diagramon");
   if (!build()) {
     log(C.red("构建失败 —— 两次都不行。日志里若有 `rustc' panicked at … rmeta\\encoder.rs`，"));

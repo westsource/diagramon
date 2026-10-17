@@ -14,15 +14,23 @@ use std::path::{Path, PathBuf};
 /// 一个资产挂载点。落在这些前缀下的请求会去挂载目录取，而不是前端产物目录。
 pub const MOUNTS: [&str; 4] = ["drawio", "excalidraw", "graphviz", "mermaid"];
 
+/// 各挂载点的入口文件。判断"这个目录像不像源工作树"只看入口在不在 ——
+/// 空壳目录（仓库根下曾有 `Assets/{drawio,…}/` 这种）不能被当成资产在位的证据。
+const MOUNT_ENTRY: [(&str, &str); 4] = [
+    ("drawio", "index.html"),
+    ("excalidraw", "index.html"),
+    ("graphviz", "graphviz.js"),
+    ("mermaid", "mermaid.min.js"),
+];
+
 /// 资源根集合。
 #[derive(Debug, Clone)]
 pub struct AssetRoots {
     /// 前端产物目录（`index.html` 与 js/css）。根路径 `/` 映射到 `index.html`。
     pub ui: PathBuf,
-    /// 取资产用的源工作树（旧的 `client/`）：`tools/{drawio,excalidraw,graphviz}`
-    /// 与 `Assets/mermaid.min.js`。
+    /// 源工作树**根**：其下 `tools/<挂载点>/` 就是取资产脚本的产物（四个挂载点全在里面）。
     ///
-    /// 开发期直接复用已经拉好的那份，避免在新分支重复下载 98MB。
+    /// 开发期直接复用已经拉好的那份，避免在仓库里多存一份 98MB。
     /// 发布形态靠 `packaged`，不依赖它。
     pub source_tree: Option<PathBuf>,
     /// 随包资产根：其下按挂载点建同名子目录（`assets/drawio/` …）。
@@ -33,11 +41,12 @@ impl AssetRoots {
     /// 探测可用根：环境变量优先，其次从 `ui` 目录向上找仓库布局。
     ///
     /// * `DIAGRAMON_ASSETS_DIR` → 随包资产根（含 `drawio/` 等子目录）
-    /// * `DIAGRAMON_SOURCE_TREE` → 取资产的源工作树（必须是 `tools/<挂载点>/` 那种布局）
+    /// * `DIAGRAMON_SOURCE_TREE` → 源工作树**根**（其下有 `tools/<挂载点>/`）
     ///
-    /// 注意 `search_ancestors(&ui, "client")` 是**历史兜底**：2026-10-17 起 `../client` 已被删除，
-    /// 正常路径是 `assets/`（由 `tools/fetch-assets.mjs` 从本仓库 `tools/` 汇出）。
-    /// 也就是说这条回退现在是死路径 —— 留着只是为了让"老工作区还能跑"。
+    /// 向上找的判据是"某层祖先的 `tools/<挂载点>/<入口>` 存在"，不再按目录名猜。
+    /// （2026-10-17 之前这里找的是旧客户端仓库 `client/`；那个仓库已删除，
+    /// 现在唯一的工作树就是 `client2/tools/`。宁可 `source_tree` 为 `None`
+    /// —— 请求照常 404、原因写在日志里 —— 也不要静默指到一份停更的副本。）
     pub fn detect(ui: PathBuf) -> Self {
         let packaged = dir_with_subdirs(std::env::var_os("DIAGRAMON_ASSETS_DIR").map(PathBuf::from))
             .or_else(|| dir_with_subdirs(Some(ui.join("../assets"))))
@@ -45,8 +54,8 @@ impl AssetRoots {
 
         let source_tree = std::env::var_os("DIAGRAMON_SOURCE_TREE")
             .map(PathBuf::from)
-            .filter(|p| p.join("tools/graphviz/graphviz.js").is_file())
-            .or_else(|| search_ancestors(&ui, "client"));
+            .filter(|p| has_tools_layout(p))
+            .or_else(|| find_tools_ancestor(&ui));
 
         Self {
             ui,
@@ -64,13 +73,30 @@ impl AssetRoots {
             }
         }
         let c = self.source_tree.as_ref()?;
-        let d = match mount {
-            // 旧仓库把 mermaid 直接放在 `Assets/` 下（`mermaid.min.js`），不在 tools/ 里。
-            "mermaid" => c.join("Assets"),
-            other => c.join("tools").join(other),
-        };
+        // 四个挂载点在源工作树里布局一致：`tools/<挂载点>/`。
+        // （旧仓库把 mermaid 单独放在 `Assets/` 下，那个特例随 `client/` 一起删了。）
+        let d = c.join("tools").join(mount);
         d.is_dir().then_some(d)
     }
+}
+
+/// `root/tools/<挂载点>/<入口>` 里**有任一个**存在 → 认为这是可用的源工作树。
+fn has_tools_layout(root: &Path) -> bool {
+    MOUNT_ENTRY
+        .iter()
+        .any(|(m, e)| root.join("tools").join(m).join(e).is_file())
+}
+
+/// 从 `start` 起逐级向上找最近的、`tools/<挂载点>` 已有产物的祖先目录。
+fn find_tools_ancestor(start: &Path) -> Option<PathBuf> {
+    let mut cur = Some(start);
+    while let Some(dir) = cur {
+        if has_tools_layout(dir) {
+            return Some(dir.to_path_buf());
+        }
+        cur = dir.parent();
+    }
+    None
 }
 
 /// 若目录存在且至少含一个挂载点子目录，则认作资产根。
@@ -81,19 +107,6 @@ fn dir_with_subdirs(dir: Option<PathBuf>) -> Option<PathBuf> {
     } else {
         None
     }
-}
-
-/// 从 `start` 起逐级向上查找名为 `name` 且形如资产树的目录。
-fn search_ancestors(start: &Path, name: &str) -> Option<PathBuf> {
-    let mut cur = Some(start);
-    while let Some(dir) = cur {
-        let cand = dir.join(name);
-        if cand.join("tools/graphviz/graphviz.js").is_file() {
-            return Some(cand);
-        }
-        cur = dir.parent();
-    }
-    None
 }
 
 /// URL 路径 → 磁盘文件。返回 `None` 表示 404。
@@ -220,15 +233,15 @@ mod tests {
         assert_eq!(mime_for(Path::new("x.unknownext")), "application/octet-stream");
     }
 
-    /// 源工作树缺 `packaged` 时的回退：mermaid 去 `Assets/`，其余去 `tools/<mount>/`。
+    /// 源工作树缺 `packaged` 时的回退：四个挂载点一律去 `tools/<挂载点>/`。
     #[test]
-    fn source_tree_fallback_maps_mermaid_to_assets_dir() {
+    fn source_tree_fallback_uses_tools_subdirs() {
         let root = std::env::temp_dir().join(format!("dgm-assets-src-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
-        let src = root.join("client");
-        std::fs::create_dir_all(src.join("Assets")).unwrap();
+        let src = root.join("repo");
+        std::fs::create_dir_all(src.join("tools/mermaid")).unwrap();
         std::fs::create_dir_all(src.join("tools/graphviz")).unwrap();
-        std::fs::write(src.join("Assets/mermaid.min.js"), b"// mermaid").unwrap();
+        std::fs::write(src.join("tools/mermaid/mermaid.min.js"), b"// mermaid").unwrap();
         std::fs::write(src.join("tools/graphviz/graphviz.js"), b"// gv").unwrap();
 
         let roots = AssetRoots {
@@ -236,9 +249,28 @@ mod tests {
             source_tree: Some(src.clone()),
             packaged: None,
         };
-        assert_eq!(roots.mount_dir("mermaid").unwrap(), src.join("Assets"));
+        assert_eq!(roots.mount_dir("mermaid").unwrap(), src.join("tools/mermaid"));
         assert_eq!(roots.mount_dir("graphviz").unwrap(), src.join("tools/graphviz"));
         assert!(roots.mount_dir("drawio").is_none(), "没拉过的挂载点应为 None");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// 向上找源工作树：从 `ui` 出发要能认出 `repo/tools/<挂载点>`，并且**只认入口文件**——
+    /// 空壳目录（`Assets/{drawio,…}/` 那种历史遗留）不算数。
+    #[test]
+    fn finds_tools_root_by_walking_up() {
+        let root = std::env::temp_dir().join(format!("dgm-assets-walk-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let repo = root.join("repo");
+        let ui = repo.join("ui");
+        std::fs::create_dir_all(&ui).unwrap();
+        std::fs::create_dir_all(repo.join("tools/drawio")).unwrap();
+        std::fs::write(repo.join("tools/drawio/index.html"), b"<html></html>").unwrap();
+
+        assert_eq!(find_tools_ancestor(&ui).unwrap(), repo);
+        // 只有空壳目录时不算
+        std::fs::remove_file(repo.join("tools/drawio/index.html")).unwrap();
+        assert!(find_tools_ancestor(&ui).is_none(), "空壳目录不能当成资产在位");
         let _ = std::fs::remove_dir_all(root);
     }
 }
