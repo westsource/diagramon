@@ -403,3 +403,6 @@ ui/.shots/
 
 # 本地验证产物与临时备份（与 service/var 同口径：不入库）
 /var/
+
+# WorkBuddy 会话的本地项目记忆（工作日志、笔记，属个人工作台，不入库）
+/.workbuddy/
