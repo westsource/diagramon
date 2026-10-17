@@ -344,6 +344,15 @@ async function portableStep() {
 
 async function manifest() {
   step("manifest · 重新生成 latest.json（红线 2）");
+  // 早退必须在 readFileSync **之前**：dry-run 不会执行 build，`.sig` 根本不存在，
+  // 放在后面会 ENOENT 直接终止 —— 那样 --dry-run 永远验不到 tag/push/publish/verify 这后半段
+  // （2026-10-17 实测撞到，dry-run 的价值就在于把后半段也预演一遍）。
+  if (opts.dryRun) {
+    const planUrl = `https://github.com/${CFG.repo}/releases/download/${TAG}/${basename(setupExe())}`;
+    log(`  （--dry-run：写出 ${manifestFile().replace(ROOT, ".")}：version ${VERSION}、`
+      + `signature 取 ${basename(sigFile())}、url ${planUrl}）`);
+    return;
+  }
   const sig = readFileSync(sigFile(), "utf8").trim();
   const url = `https://github.com/${CFG.repo}/releases/download/${TAG}/${basename(setupExe())}`;
   // 红线 3：清单只能指安装包。指向 zip 会被更新器判成 InvalidUpdaterFormat
@@ -360,7 +369,7 @@ async function manifest() {
     pub_date: new Date().toISOString().replace(/\.\d+Z$/, "Z"),
     platforms: { "windows-x86_64": { signature: sig, url } },
   };
-  if (opts.dryRun) { log(`  （--dry-run：写出 ${manifestFile().replace(ROOT, ".")}）`); return; }
+  if (opts.dryRun) return;   // 已在本函数开头早退，这里只是兜底
   writeFileSync(manifestFile(), JSON.stringify(m, null, 2) + "\n", "utf8");
   const back = JSON.parse(readFileSync(manifestFile(), "utf8"));
   if (back.version !== VERSION || back.platforms["windows-x86_64"].signature !== sig) die("清单回读不一致");
