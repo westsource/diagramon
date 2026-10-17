@@ -28,6 +28,8 @@ D2 走随包的官方 wasm 构建，drawio 与 Excalidraw 走随包自带的运�
 
 ![账户与 AI 额度](screenshots/07-cloud-account.png)
 
+![D2 预览](screenshots/08-d2-preview.png)
+
 ## 功能特性
 
 ### 编辑

@@ -8,11 +8,12 @@
 跑出与真机同一套界面代码。标题栏那个「mock 模式」徽标是"没检测到 Tauri 运行时"
 的提示，真机不存在 —— 截图前显式切到 no-mock 类把它收起来（不改源码）。
 
-映射规则与 crates/assets::resolve 相同：/drawio /excalidraw /graphviz /mermaid
+映射规则与 crates/assets::resolve 相同：/drawio /excalidraw /graphviz /mermaid /d2
 落挂载点，其余落 ui/。
 
 产物：client2/screenshots/*.png
-依赖：本机 Chrome/Edge；websocket-client；画布资产在 `tools/`（缺失只跳过画布那张）。
+依赖：本机 Chrome/Edge；websocket-client；渲染运行时在 `tools/`
+（drawio / excalidraw 不在位就跳过画布两张，D2 不在位就跳过 D2 那张）。
 """
 
 from __future__ import annotations
@@ -56,26 +57,87 @@ MOUNTS = {
     "excalidraw": _mount(("tools", "excalidraw")),
     "graphviz": _mount(("tools", "graphviz")),
     "mermaid": _mount(("tools", "mermaid")),
+    # D2 的入口是 index.js 不是 index.html（wasm 以内联 base64 藏在里面）—— 前端按
+    # `/d2/index.js` 取，所以这条映射只服务那一个请求
+    "d2": _mount(("tools", "d2")),
+}
+
+# 挂载点 → 入口文件。判「资产在不在位」与兜底请求（`/drawio/` 这种不带文件名的）都看它，
+# 与 `crates/assets` 的 MOUNT_ENTRY 同一口径。
+MOUNT_ENTRY = {
+    "drawio": "index.html",
+    "excalidraw": "index.html",
+    "graphviz": "graphviz.js",
+    "mermaid": "mermaid.min.js",
+    "d2": "index.js",
 }
 
 WIDTH, HEIGHT = 1440, 900
 
-# 每张 = (文件名, URL 查询串, 截图前的 JS, 额外等待秒)
+# 每张 = (文件名, URL 查询串, 截图前的 JS, 额外等待秒, 截图前的就绪表达式)
 # 查询串走的是 main.js::applyUrlState 认的那几个参数（theme/doc/mode/sidebar/…）。
-PLAN: list[tuple[str, str, str, float]] = [
+# 就绪表达式为空时只按「额外等待秒」等；非空时**轮询它**（D2 那张要等 wasm 实例化，
+# 固定睡几秒要么截到加载态、要么白等）。
+PLAN: list[tuple[str, str, str, float, str]] = [
     # 01–05 显式带 sidebar=explorer：这几张的取景就是「带资源管理器」的工作台，
     # 不跟默认布局走 —— 侧栏默认收起（2026-10-12）后不加这个参数截图会悄悄变样。
-    ("01-main-light.png", "doc=0&theme=light&noai=1&sidebar=explorer", "", 2.0),
-    ("02-ai-vision.png", "doc=0&theme=light&sidebar=explorer", "DGM.ai.focus('vision');", 2.0),
-    ("03-drawio-canvas.png", "doc=2&theme=light&sidebar=explorer", "", 12.0),
-    ("04-excalidraw-canvas.png", "doc=3&theme=light&sidebar=explorer", "", 14.0),
-    ("05-dark-preview.png", "doc=0&theme=dark&mode=preview&sidebar=explorer", "", 3.0),
-    ("06-cloud-docs.png", "mockcloud=signed&sidebar=cloud&theme=light&noai=1", "", 2.0),
-    ("07-cloud-account.png", "mockcloud=signed&sidebar=account&theme=light&noai=1", "", 2.0),
+    ("01-main-light.png", "doc=0&theme=light&noai=1&sidebar=explorer", "", 2.0, ""),
+    ("02-ai-vision.png", "doc=0&theme=light&sidebar=explorer", "DGM.ai.focus('vision');", 2.0, ""),
+    ("03-drawio-canvas.png", "doc=2&theme=light&sidebar=explorer", "", 12.0, ""),
+    ("04-excalidraw-canvas.png", "doc=3&theme=light&sidebar=explorer", "", 14.0, ""),
+    ("05-dark-preview.png", "doc=0&theme=dark&mode=preview&sidebar=explorer", "", 3.0, ""),
+    ("06-cloud-docs.png", "mockcloud=signed&sidebar=cloud&theme=light&noai=1", "", 2.0, ""),
+    ("07-cloud-account.png", "mockcloud=signed&sidebar=account&theme=light&noai=1", "", 2.0, ""),
+    # D2：正文现场建（mock 的初始文档里没有 .d2），等预览真的挂上 SVG 再截
+    (
+        "08-d2-preview.png",
+        "theme=light&sidebar=explorer&noai=1",
+        "window.__shot = (async () => {"
+        "  const d = await DGM.state.newDoc('d2');"
+        "  await DGM.state.setBodyNow(d.id, window.__D2_SAMPLE);"
+        "  DGM.editor.loadActive();"
+        "  await DGM.preview.render();"
+        "})();",
+        0.5,
+        # 只看 `#canvas-stage svg` 是不够的：页面一进来就先把默认的 mermaid 文档渲染出来了，
+        # 那个 SVG 也在同一个舞台上 —— 于是"就绪"会立刻为真，截到的是 D2 的加载态。
+        # `mountSvg` 会给舞台打上 `data-engine=<格式>`，用它才认得出"这次挂的是 D2"。
+        "document.querySelector('#canvas-stage').dataset.engine === 'd2'"
+        " && !!document.querySelector('#canvas-stage svg')",
+    ),
 ]
 
-# 截图画布那两张需要资产在位；不在位就跳过而不是失败。
-NEEDS_ASSETS = {"03-drawio-canvas.png", "04-excalidraw-canvas.png"}
+# 截图需要资产在位；不在位就跳过而不是失败。
+NEEDS_ASSETS = {
+    "03-drawio-canvas.png": "drawio",
+    "04-excalidraw-canvas.png": "excalidraw",
+    "08-d2-preview.png": "d2",
+}
+
+# D2 那张用的正文：把 Diagramon 自己的管线画一遍（顺便展示容器 / 形状 / 类样式 / 虚线边）
+D2_SAMPLE = """direction: right
+classes: {
+  wasm: { style: { fill: "#eef3f9"; stroke: "#4a7196" } }
+}
+客户端: {
+  direction: down
+  源码窗口: "源码"
+  预览窗口: "预览"
+  源码窗口 -> 预览窗口: "实时"
+}
+网关: "离线?"
+网关.shape: diamond
+本地引擎: "D2 wasm"
+本地引擎.class: wasm
+云网关: "云模型"
+云网关.class: wasm
+数据库: "结果缓存"
+数据库.shape: cylinder
+客户端 -> 网关: "图表代码"
+网关 -> 本地引擎: "是" { style.stroke-dash: 3 }
+网关 -> 云网关: "否（仅 AI）"
+本地引擎 -> 数据库
+"""
 
 
 def log(msg: str = "") -> None:
@@ -98,7 +160,7 @@ def make_handler():
                     # 承载页归本仓库（源工作树里那份是停更的旧副本）：与 canvas_probe.py 同一条规矩
                     return str(ROOT / "tools" / "excalidraw-host" / "index.html")
                 if len(segs) == 1 or not segs[1]:
-                    return str(MOUNTS[first] / "index.html")
+                    return str(MOUNTS[first] / MOUNT_ENTRY[first])
                 return str(MOUNTS[first].joinpath(*segs[1:]))
             rest = clean.lstrip("/") or "index.html"
             return str(UI / rest)
@@ -166,6 +228,19 @@ def wait_ready(cdp: Cdp, timeout: float = 25.0) -> bool:
     return False
 
 
+def wait_expr(cdp: Cdp, expr: str, timeout: float = 30.0) -> bool:
+    """轮询一个就绪表达式（等着色/渲染完成时用它，别用固定 sleep）。"""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            if cdp.evaluate(expr, timeout=5):
+                return True
+        except Exception:
+            pass
+        time.sleep(0.4)
+    return False
+
+
 def shoot(cdp: Cdp, name: str) -> None:
     cdp.call("Page.enable", timeout=20)
     cdp.call(
@@ -192,9 +267,11 @@ def main() -> int:
         log("✗ 找不到 Chrome/Edge")
         return 2
 
-    have_drawio = (MOUNTS["drawio"] / "index.html").is_file()
-    if not have_drawio:
-        log(f"（drawio 资产不在位：{MOUNTS['drawio']} —— 跳过画布那张）")
+    # 需要资产的那几张：入口不在位就跳过（而不是截出一张报错图）
+    missing = {m for m in NEEDS_ASSETS.values() if not (MOUNTS[m] / MOUNT_ENTRY[m]).is_file()}
+    for name, mount in NEEDS_ASSETS.items():
+        if mount in missing:
+            log(f"（{mount} 资产不在位：{MOUNTS[mount]} —— 跳过 {name}）")
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler())
     ui_port = server.server_address[1]
@@ -250,8 +327,9 @@ def main() -> int:
         cdp.call("Page.enable", timeout=10)
 
         made = 0
-        for name, query, js, extra in PLAN:
-            if name in NEEDS_ASSETS and not have_drawio:
+        for name, query, js, extra, ready in PLAN:
+            need = NEEDS_ASSETS.get(name)
+            if need and need in missing:
                 continue
             url = f"http://127.0.0.1:{ui_port}/index.html?{query}"
             cdp.call("Page.navigate", {"url": url}, timeout=20)
@@ -261,10 +339,14 @@ def main() -> int:
             time.sleep(extra)
             if js:
                 try:
+                    # D2 那张的正文从这里注入，免得在 JS 字符串里塞一大段中文正文
+                    cdp.evaluate("window.__D2_SAMPLE = " + json.dumps(D2_SAMPLE) + ";", timeout=10)
                     cdp.evaluate(js, timeout=10)
                 except Exception as exc:
                     log(f"  （{name} 的预处理 JS 报错，照样截：{exc}）")
                 time.sleep(1.2)
+            if ready and not wait_expr(cdp, ready, timeout=45):
+                log(f"  （{name}：就绪表达式超时，按当前画面截）")
             try:
                 shoot(cdp, name)
                 made += 1

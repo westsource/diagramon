@@ -32,6 +32,8 @@ Version **3.5.0** · Official website <https://www.diagramon.com>
 
 ![Account and AI credits](screenshots/07-cloud-account.png)
 
+![D2 preview](screenshots/08-d2-preview.png)
+
 ## Features
 
 ### Editing
