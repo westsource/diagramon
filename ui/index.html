@@ -3,6 +3,15 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- CSP（审计 F-2b）：这是挂 __TAURI__ 与渲染产物的那个文档，值得有一道内容安全策略。
+     script-src 不含 'unsafe-inline' —— 内联脚本已全部外置（js/graphviz-loader.js）；
+     'wasm-unsafe-eval' 给 graphviz / D2 的 wasm；connect-src 里的 ipc.localhost 是
+     Tauri 2 在 Windows 上的 invoke 通道，data: 给"复制图片"时对 dataURL 的 fetch。
+     样式要 'unsafe-inline'：界面模板里大量 style="…" 属性（fmtDot / 缩放列等）。
+     注意：drawio / Excalidraw 承载页是各自独立的文档，本 meta 管不到它们 ——
+     它们与外壳同源、同样摸得到 __TAURI__，那是"承载域分离"的架构项（见审计报告）。 -->
+<meta http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' data: http://ipc.localhost https://ipc.localhost; font-src 'self' data:; frame-src 'self'; object-src 'none'; base-uri 'none'">
 <title>Diagramon</title>
 <link rel="stylesheet" href="./app.css">
 </head>
@@ -204,22 +213,8 @@
         含非 ASCII 的 mermaid.min.js 会被误码成语法错误） ══ -->
 <script charset="utf-8" src="./vendor/mermaid.min.js"></script>
 <script charset="utf-8" src="./vendor/editor.bundle.js"></script>
-<script type="module">
-  // graphviz 是 ESM：file:// 下浏览器的模块加载被 CORS 拦截（origin null），
-  // 只有 Tauri 自定义协议 / http(s) 里才可用。失败时降级为「不可用」，不阻断整页。
-  window.DGMGraphvizReady = (async () => {
-    try {
-      const mod = await import("./vendor/graphviz.js");
-      const g = await mod.Graphviz.load();
-      window.DGMGraphviz = g;
-      return g;
-    } catch (e) {
-      window.DGMGraphvizError = (e && e.message) || String(e);
-      console.warn("[DGM] graphviz 加载失败（DOT 预览不可用）：", window.DGMGraphvizError);
-      return null;
-    }
-  })();
-</script>
+<!-- graphviz 预载：原内联 module 已外置（CSP script-src 'self' 不放行内联脚本） -->
+<script type="module" src="./js/graphviz-loader.js"></script>
 
 <!-- ══ 应用脚本（顺序即依赖；charset 同上） ══ -->
 <script charset="utf-8" src="./js/icons.js"></script>

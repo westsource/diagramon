@@ -47,6 +47,21 @@ type R<T> = Result<T, String>;
 
 const ACCESS_KEY_HEADER: &str = "Authorization";
 
+/// 把 doc_id 编码成安全的 URL 路径段（审计 F-8）。id 正常是 uuid，但它是
+/// 从响应体/前端来的字符串——防御性编码，`/` `?` `#` `%` 等进不了路径语义。
+fn enc_path_seg(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for b in s.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(b as char)
+            }
+            _ => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    out
+}
+
 /// 会话**确实**续不下去了（refresh token 被服务端拒绝/不存在）时的统一文案。
 /// 命令层靠 `.contains()` 识别这个串来广播 `cloud://changed`，改文案必须同步 —— 所以收成常量。
 pub const ERR_SESSION_EXPIRED: &str = "登录已过期，请重新登录（活动栏「账户」）";
@@ -494,7 +509,7 @@ pub async fn cloud_doc_save(
         "path": path.trim(),
     });
     let base = resolve_api_base(state.inner()).await?;
-    let url = format!("{base}/documents/{doc_id}");
+    let url = format!("{base}/documents/{}", enc_path_seg(&doc_id));
     // 走 authed_send：401 会先静默续期再重试。**错误格式保持原样** ——
     // 409 的响应体带 contentHash/updatedAt，前端靠它提示"云端已被别的设备改过"，
     // 所以这里不能用 call_json（它会把错误体归约成一句 message）。
@@ -531,7 +546,7 @@ pub async fn cloud_doc_open(state: State<'_, Arc<AppState>>, id: String) -> R<Cl
     let v = call_json(
         state.inner(),
         reqwest::Method::GET,
-        &format!("/documents/{}", id.trim()),
+        &format!("/documents/{}", enc_path_seg(id.trim())),
         None,
         true,
     )
@@ -550,7 +565,7 @@ pub async fn cloud_doc_delete(state: State<'_, Arc<AppState>>, id: String) -> R<
     call_json(
         state.inner(),
         reqwest::Method::DELETE,
-        &format!("/documents/{}", id.trim()),
+        &format!("/documents/{}", enc_path_seg(id.trim())),
         None,
         true,
     )

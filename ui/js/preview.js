@@ -442,14 +442,52 @@ window.DGM = window.DGM || {};
     };
   }
 
+  /**
+   * 渲染引擎的 SVG 产物进舞台前先消毒（审计 F-2a：第二道防线）。
+   *
+   * mermaid 有 securityLevel:"strict" 兜着，graphviz / D2 的 wasm 输出依赖上游
+   * 自己的转义纪律；而 innerHTML 插入的 SVG 里**事件属性是会执行的**。
+   * 用 <template> 承接：模板内容是惰性的（脚本不执行、事件不触发），
+   * 且 HTML 解析对 mermaid 标签里未闭合的 `<br>` 宽容（XML 解析会直接 parsererror，
+   * 见 toPngDataUrl 的注释），消毒完再把 <svg> 摘出来挂载。
+   */
+  function sanitizeSvgNode(svgText) {
+    const tpl = document.createElement("template");
+    tpl.innerHTML = String(svgText);
+    const root = tpl.content.querySelector("svg");
+    if (!root) return null;
+    // 可执行/可加载的元素整棵拔掉（script 选择器覆盖任意深度，含 foreignObject 内）
+    root.querySelectorAll("script, iframe, object, embed, link, base").forEach((n) => n.remove());
+    // 事件属性（on*）与 javascript: 可执行 URL
+    tpl.content.querySelectorAll("*").forEach((n) => {
+      for (const attr of Array.from(n.attributes || [])) {
+        const name = attr.name.toLowerCase();
+        if (name.startsWith("on")) {
+          n.removeAttribute(attr.name);
+        } else if ((name === "href" || name === "xlink:href" || name === "src") && /^\s*javascript:/i.test(attr.value)) {
+          n.removeAttribute(attr.name);
+        }
+      }
+    });
+    return root;
+  }
+
   function mountSvg(svgText, d) {
     const { stage } = nodes();
     if (!stage) return;
+    const sanitized = sanitizeSvgNode(svgText);
+    if (!sanitized) {
+      errorBox(t("preview.noRender", { msg: "svg" }));
+      toolsVisible(false);
+      return;
+    }
     stage.dataset.engine = d.format;
-    stage.innerHTML = svgText;
+    stage.innerHTML = "";
+    stage.appendChild(sanitized);
     const svg = stage.querySelector("svg");
     if (svg) normalizeSvg(svg);
-    lastSvg = svgText;
+    // 导出（SVG 文件 / 位图栅格化的兜底）拿的是消毒后的这份；没挂上图就清空，别把上一份的留给人导出
+    lastSvg = svg ? new XMLSerializer().serializeToString(svg) : "";
     mountedDoc = d.id;
     setPannable(true);
     toolsVisible(true);
@@ -593,6 +631,11 @@ window.DGM = window.DGM || {};
     return i >= 0 ? String(dataUrl).slice(i + 1) : String(dataUrl);
   }
 
+  /** 保存对话框被取消时如实收场（审计 F-9：原兜底会把文件写进写死的开发路径）。 */
+  function exportCancelled(kindLabel) {
+    DGM.toast({ icon: "alert", title: kindLabel, sub: t("exp.cancelled"), warn: true });
+  }
+
   async function exportPng() {
     try {
       const dataUrl = await toPngDataUrl();
@@ -600,7 +643,7 @@ window.DGM = window.DGM || {};
         defaultPath: stem() + ".png",
         filters: [{ name: "PNG", extensions: ["png"] }],
       });
-      if (!path) path = `E:/OpenCode/diagramon/export/${stem()}.png`; // mock / 无对话框时兜底
+      if (!path) return exportCancelled(t("exp.png"));
       await state.exportWrite(path, dataUrlToBase64(dataUrl));
       state.pushOutput(t("exp.saved", { path }), "ok");
       DGM.toast({ icon: "download", title: t("exp.png"), sub: path });
@@ -624,7 +667,7 @@ window.DGM = window.DGM || {};
         defaultPath: stem() + ".svg",
         filters: [{ name: "SVG", extensions: ["svg"] }],
       });
-      if (!path) path = `E:/OpenCode/diagramon/export/${stem()}.svg`;
+      if (!path) return exportCancelled(t("exp.svg"));
       const b64 = btoa(unescape(encodeURIComponent(lastSvg)));
       await state.exportWrite(path, b64);
       state.pushOutput(t("exp.saved", { path }), "ok");

@@ -112,12 +112,22 @@ fn dir_with_subdirs(dir: Option<PathBuf>) -> Option<PathBuf> {
 
 /// URL 路径 → 磁盘文件。返回 `None` 表示 404。
 ///
-/// 路径已做百分号解码；含 `..` 段一律拒绝（防目录穿越）。
+/// 路径已做百分号解码。三道防线（2026-10-17 审计 F-1）：
+/// 1. **反斜杠一律拒绝** —— `%5C` 解码成 `\` 后，Windows 把它当分隔符，
+///    按 `/` 切分的 `..` 检查会被穿透（`/drawio/..%5Csecret` 可落到挂载根外）；
+///    URL 路径里本来就不该出现反斜杠（UNC 的 `\\` 顺带挡掉）。
+/// 2. 按 `/` 切分的 `..` 段一律拒绝。
+/// 3. **绝对路径拒绝** —— `Path::join` 遇到 `C:/x` 会整体替换基目录
+///    （`/drawio/C:/Windows/win.ini` 直达任意盘），`is_absolute` 兜住。
 pub fn resolve(roots: &AssetRoots, url_path: &str) -> Option<PathBuf> {
     let decoded = percent_encoding::percent_decode_str(url_path.trim_start_matches('/'))
         .decode_utf8()
         .ok()?
         .into_owned();
+
+    if decoded.contains('\\') {
+        return None;
+    }
 
     if decoded.split('/').any(|seg| seg == "..") {
         return None;
@@ -134,7 +144,13 @@ pub fn resolve(roots: &AssetRoots, url_path: &str) -> Option<PathBuf> {
     };
 
     let rel = if rel.is_empty() { "index.html" } else { &rel };
-    let candidate = dir.join(rel);
+    let rel_path = Path::new(rel);
+    // `is_absolute` 挡 `C:/x`；`has_root` 再挡 Windows 上 `/x` 这种"无盘符但有根"的
+    // 形态（join 同样会整体替换基目录，落到当前盘的根）。
+    if rel_path.is_absolute() || rel_path.has_root() {
+        return None;
+    }
+    let candidate = dir.join(rel_path);
     candidate.is_file().then_some(candidate)
 }
 
@@ -215,6 +231,37 @@ mod tests {
         assert!(resolve(&r, "/../secret").is_none());
         assert!(resolve(&r, "/drawio/../../secret").is_none());
         assert!(resolve(&r, "/nope.js").is_none());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// 审计 F-1 回归：`%5C`（反斜杠）解码后绕过按 `/` 的 `..` 检查 ——
+    /// Windows 上 `Path::join` 把 `\` 当分隔符，曾实测落到挂载根之外。
+    #[test]
+    fn rejects_backslash_traversal_via_percent_encoding() {
+        let (root, r) = fixture("bslash");
+        std::fs::create_dir_all(r.packaged.as_ref().unwrap().join("secret")).unwrap();
+        std::fs::write(
+            r.packaged.as_ref().unwrap().join("secret/win.ini"),
+            b"x",
+        )
+        .unwrap();
+        // 挂载点内、前端产物目录两条路都要堵死
+        assert!(resolve(&r, "/drawio/..%5Csecret%5Cwin.ini").is_none());
+        assert!(resolve(&r, "/..%5C..%5Csecret%5Cwin.ini").is_none());
+        assert!(resolve(&r, "/drawio/..\\secret\\win.ini").is_none());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// 审计 F-1 回归（第二形态）：`Path::join` 遇绝对路径会整体替换基目录，
+    /// `/drawio/C:/Windows/win.ini` 不得直达任意盘。
+    #[test]
+    fn rejects_absolute_path_in_relative_part() {
+        let (root, r) = fixture("abs");
+        // Windows 上 `C:/x` 是绝对路径；`/x`（无盘符有根）在 Windows 上也会被
+        // join 整体替换 —— 两种都要挡。非 Windows 上再补一个经典的 `/etc`。
+        assert!(resolve(&r, "/drawio/C:/Windows/win.ini").is_none());
+        assert!(resolve(&r, "/C:/Windows/win.ini").is_none());
+        assert!(resolve(&r, "/drawio//etc/passwd").is_none());
         let _ = std::fs::remove_dir_all(root);
     }
 

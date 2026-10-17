@@ -131,7 +131,7 @@ window.DGM = window.DGM || {};
     if (m.image) {
       const th = h("div", "thumb");
       th.innerHTML =
-        `<span class="pic">${m.image.dataUrl ? `<img src="${m.image.dataUrl}" alt="">` : icon("image", "ico-lg")}</span>` +
+        `<span class="pic">${m.image.dataUrl ? `<img src="${esc(m.image.dataUrl)}" alt="">` : icon("image", "ico-lg")}</span>` +
         `<span class="meta"><b>${esc(m.image.name)}</b><span>${esc(m.image.meta || "")}</span></span>`;
       body.appendChild(th);
     }

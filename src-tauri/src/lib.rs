@@ -475,10 +475,10 @@ fn credential_store(paths: &AppPaths) -> Arc<dyn CredentialStore> {
 }
 
 fn open_cli_files(state: &AppState) {
-    let files: Vec<String> = std::env::args()
-        .skip(1)
-        .filter(|a| !a.starts_with('-'))
-        .collect();
+    // 与单实例路径（diagram_files）同一套过滤：只认注册的扩展名，挡掉
+    // `--flag` 与 exe 路径之类的杂参（审计 F-5：两条入口曾不一致）。
+    let argv: Vec<String> = std::env::args().collect();
+    let files = diagram_files(&argv);
     if files.is_empty() {
         return;
     }

@@ -23,7 +23,8 @@ window.DGM = window.DGM || {};
     if (html != null) n.innerHTML = html;
     return n;
   };
-  const esc = (s) => String(s == null ? "" : s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  // 审计 F-6：单引号也转义 —— 现有模板属性全是双引号包裹，这里补上是给未来代码上保险
+  const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   DGM.dom = { $, $$, h, esc };
 
   const el = {

@@ -190,6 +190,7 @@ window.DGM = window.DGM || {};
     "exp.saved": "已保存图片 {path}",
     "exp.copyFail": "剪贴板不可写（部分环境下需窗口聚焦）",
     "exp.exportIng": "导出中…",
+    "exp.cancelled": "已取消导出（没有选择保存位置）",
 
     /* 菜单里的提示（未接线动作） */
     "tip.openFromExplorer": "请在侧栏「资源管理器」点开一个文件",
@@ -1110,6 +1111,7 @@ window.DGM = window.DGM || {};
     "exp.saved": "Image saved to {path}",
     "exp.copyFail": "Clipboard not writable (needs window focus in some environments)",
     "exp.exportIng": "Exporting…",
+    "exp.cancelled": "Export cancelled (no save location chosen)",
 
     "tip.openFromExplorer": "Open a file from the Explorer in the side bar",
     "tip.undo": "Undo is provided by CodeMirror inside the editor",

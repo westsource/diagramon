@@ -205,11 +205,20 @@ pub fn doc_scope(state: State<'_, Arc<AppState>>, id: String) -> R<String> {
 }
 
 /// 原子写：先写临时文件再 rename —— 写一半断电也不会留下半个文件。
+///
+/// 临时名用**追加后缀**而不是 `with_extension`：`with_extension` 会替换原扩展名
+/// （`a.drawio` → `a.dgm-tmp`），同目录下 `foo.mmd` 与 `foo.drawio` 并存且同时
+/// 保存时会互踩同一份临时文件。`a.mmd.dgm-tmp` 的扩展名是 `dgm-tmp`，
+/// watcher 的 `is_open_ext` 过滤天然忽略它。
 pub(crate) fn atomic_write(path: &Path, contents: &str) -> R<()> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir).map_err(|e| format!("建目录失败：{e}"))?;
     }
-    let tmp = path.with_extension("dgm-tmp");
+    let file_name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .ok_or_else(|| "路径没有文件名".to_string())?;
+    let tmp = path.with_file_name(format!("{file_name}.dgm-tmp"));
     std::fs::write(&tmp, contents).map_err(|e| format!("写入失败：{e}"))?;
     std::fs::rename(&tmp, path).map_err(|e| format!("落盘失败：{e}"))
 }
@@ -253,6 +262,12 @@ fn save_to(state: &AppState, id: &str, path: &Path) -> R<Doc> {
     Ok(saved)
 }
 
+/// 导出允许的扩展名（小写）。**白名单而非黑名单**：这条命令的路径来自前端，
+/// 万一 webview 侧被注入脚本（审计 F-2 的前提），不能让它借这里往磁盘投
+/// 可执行物（.exe/.bat/.ps1/.hta/…）。图片是用户导出；`.json` 是真机自检的
+/// 报告落盘；`.mmd` 是自检造工作区用的演示文件（见 `ui/js/main.js`）。
+const EXPORT_EXTS: &[&str] = &["png", "jpg", "jpeg", "svg", "webp", "json", "mmd"];
+
 /// 导出：把前端渲染好的图片（base64）落到用户选的路径。
 #[tauri::command]
 pub fn export_write(
@@ -269,6 +284,21 @@ pub fn export_write(
         .decode(payload.trim())
         .map_err(|e| format!("图片数据不是合法 base64：{e}"))?;
     let p = PathBuf::from(&path);
+    // 扩展名白名单（审计 F-3）：另存为走系统对话框是用户本人的授权，不走这里；
+    // 这条命令是前端可直接调的，必须自带边界。
+    let ext_ok = p
+        .extension()
+        .map(|e| {
+            let e = e.to_string_lossy().to_ascii_lowercase();
+            EXPORT_EXTS.contains(&e.as_str())
+        })
+        .unwrap_or(false);
+    if !ext_ok {
+        return Err(format!(
+            "导出只支持 {} 格式，不能写：{path}",
+            EXPORT_EXTS.join(" / ")
+        ));
+    }
     state.check_writable(&p)?;
     if let Some(dir) = p.parent() {
         std::fs::create_dir_all(dir).map_err(|e| format!("建目录失败：{e}"))?;
