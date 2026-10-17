@@ -228,14 +228,15 @@ async function main() {
   // 模块求值即抛 → DGM.dialogs 整个没赋值 → 所有对话框（含退出确认）在真机上全灭，
   // 而语法检查、Rust 单测、甚至真机自检（不点对话框）全都是绿的。
   // ui_probe.py 用浏览器原型（mock 后端）抓启动异常 + 程序化点击菜单。
-  step("i18n 引用完整性（t() 用到的键必须在 ZH/EN 都存在；动态前缀在白名单）");
+  step("i18n 引用完整性（t() 用到的键必须在 ZH/EN 都存在；键集对称；占位符一致）");
   {
     const i18n = readFileSync(join(ROOT, "ui", "js", "i18n.js"), "utf8");
+    // 键 → 词条正文：既要判"有没有"，也要判占位符是否成对（{n} 只在一边出现就会漏出原文）
     const keysOf = (n) => {
       const i = i18n.indexOf("const " + n + " = {");
       const j = i18n.indexOf("\n  };", i);
       const body = i18n.slice(i, j);
-      return new Set([...body.matchAll(/^\s*"([^"]+)":/gm)].map((m) => m[1]));
+      return new Map([...body.matchAll(/^\s*"([^"]+)":\s*"((?:[^"\\]|\\.)*)"/gm)].map((m) => [m[1], m[2]]));
     };
     const ZH = keysOf("ZH"), EN = keysOf("EN");
     const used = new Set();
@@ -252,7 +253,27 @@ async function main() {
       log(C.red("i18n 缺键（运行时会显示裸键名）：\n" + miss.join("\n")));
       process.exit(2);
     }
-    log(C.dim(`  静态键 ${statics.length} 个全覆盖；动态前缀 ${dynamic.length} 个（${dynamic.join(", ")}）`));
+    // 键集必须**完全对称**：只有一边的键，另一种语言下要么回退到中文、要么只剩裸键名
+    const onlyZh = [...ZH.keys()].filter((k) => !EN.has(k));
+    const onlyEn = [...EN.keys()].filter((k) => !ZH.has(k));
+    if (onlyZh.length || onlyEn.length) {
+      log(C.red(`i18n 键集不对称：\n  只在 ZH：${onlyZh.join(", ") || "—"}\n  只在 EN：${onlyEn.join(", ") || "—"}`));
+      process.exit(2);
+    }
+    // 占位符集必须一致：`{n}` 只在一边有，另一边就会把 "{n}" 原样显示出来
+    const holes = (v) => new Set([...String(v).matchAll(/\{(\w+)\}/g)].map((m) => m[1]));
+    const phBad = [];
+    for (const [k, v] of ZH) {
+      const a = holes(v), b = holes(EN.get(k));
+      if (a.size !== b.size || [...a].some((x) => !b.has(x))) {
+        phBad.push(`  ${k}: ZH{${[...a].join(",")}} vs EN{${[...b].join(",")}}`);
+      }
+    }
+    if (phBad.length) {
+      log(C.red("i18n 占位符不一致：\n" + phBad.join("\n")));
+      process.exit(2);
+    }
+    log(C.dim(`  ${ZH.size} 个键：静态引用 ${statics.length} 个全覆盖、键集对称、占位符一致；动态前缀 ${dynamic.length} 个（${dynamic.join(", ")}）`));
   }
 
   step("UI 交互冒烟（浏览器原型：启动异常 / 菜单可点 / 分屏比例 / 标签挤压）");

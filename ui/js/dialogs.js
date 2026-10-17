@@ -796,13 +796,13 @@ window.DGM = window.DGM || {};
   function keys() {
     const groups = [
       { g: "keys.g.ai", rows: [["Ctrl+I", "keys.ai.i0"], ["Ctrl+Shift+I", "keys.ai.i1"], ["Ctrl+Shift+A", "keys.ai.i2"], ["Enter / Shift+Enter", "keys.ai.i3"], ["Ctrl+Enter", "keys.ai.i4"]] },
-      { g: "keys.g.panels", rows: [["Ctrl+B", "keys.panels.i0"], ["Ctrl+J", "keys.panels.i1"], ["Ctrl+Shift+P 或 F1", "keys.panels.i2"], ["Ctrl+1 / Ctrl+2 / Ctrl+3", "keys.panels.i3"], ["Ctrl+Shift+F", "keys.panels.i4"], ["Ctrl+K Ctrl+T", "keys.panels.i5"], ["Alt+1…Alt+5", "keys.panels.i6"]] },
+      { g: "keys.g.panels", rows: [["Ctrl+B", "keys.panels.i0"], ["Ctrl+J", "keys.panels.i1"], ["keys.key.k1", "keys.panels.i2"], ["Ctrl+1 / Ctrl+2 / Ctrl+3", "keys.panels.i3"], ["Ctrl+Shift+F", "keys.panels.i4"], ["Ctrl+K Ctrl+T", "keys.panels.i5"], ["Alt+1…Alt+5", "keys.panels.i6"]] },
       { g: "keys.g.file", rows: [["Ctrl+N / Ctrl+O / Ctrl+S", "keys.file.i0"], ["Ctrl+Shift+S", "keys.file.i1"], ["Ctrl+W", "keys.file.i2"], ["Ctrl+F", "keys.file.i3"], ["Shift+Alt+F", "keys.file.i4"], ["Ctrl+Shift+H", "keys.file.i5"], ["Alt+Shift+C", "keys.file.i6"], ["Tab / Shift+Tab", "keys.file.i7"]] },
-      { g: "keys.g.canvas", rows: [["滚轮 / Shift+滚轮", "keys.canvas.i0"], ["Ctrl+滚轮", "keys.canvas.i1"], ["拖拽", "keys.canvas.i2"], ["双击 或 Ctrl+0", "keys.canvas.i3"], ["Ctrl+= / Ctrl+-", "keys.canvas.i4"]] },
+      { g: "keys.g.canvas", rows: [["keys.key.k2", "keys.canvas.i0"], ["keys.key.k3", "keys.canvas.i1"], ["keys.key.k4", "keys.canvas.i2"], ["keys.key.k5", "keys.canvas.i3"], ["Ctrl+= / Ctrl+-", "keys.canvas.i4"]] },
     ];
     const html = groups
       .map(
-        (g) => `<div class="keys-group"><h4>${esc(t(g.g))}</h4><div class="keys-rows">${g.rows.map(([k, d]) => `<div class="keys-row"><span class="kbd-inline">${esc(k)}</span><span class="ks-d">${esc(t(d))}</span></div>`).join("")}</div></div>`,
+        (g) => `<div class="keys-group"><h4>${esc(t(g.g))}</h4><div class="keys-rows">${g.rows.map(([k, d]) => `<div class="keys-row"><span class="kbd-inline">${esc(k.startsWith("keys.key.") ? t(k) : k)}</span><span class="ks-d">${esc(t(d))}</span></div>`).join("")}</div></div>`,
       )
       .join("");
     openDialog(head(t("dlg.keys.title"), "keyboard") + `<div class="dialog-body">${html}</div>` + foot(t("dlg.keys.foot"), `<button class="btn ghost" data-close>${esc(t("common.close"))}</button>`), true);

@@ -55,7 +55,7 @@ node tools/release.mjs --help
 
 ## 2. 验收：一条命令 `node tools/dev/check.mjs`
 
-八步（任一步失败即退出）：杀残留实例 → 前端语法 → **i18n 引用完整性**（`t()` 用到的键必须在 ZH/EN 都存在）→ **UI 交互冒烟 `ui_probe`** → **画布承载探针 `excalidraw_probe`** → 构建 → **Rust 单测** → **真机自检**。
+八步（任一步失败即退出）：杀残留实例 → 前端语法 → **i18n 完整性**（`t()` 用到的键必须在 ZH/EN 都存在 + 键集完全对称 + 同一个键两侧占位符一致）→ **UI 交互冒烟 `ui_probe`** → **画布承载探针 `excalidraw_probe`** → 构建 → **Rust 单测** → **真机自检**。
 
 ```powershell
 $env:DGM_PYTHON="C:\Users\rong\.workbuddy\binaries\python\versions\3.13.12\python.exe"; node tools/dev/check.mjs

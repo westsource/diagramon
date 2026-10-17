@@ -17,7 +17,15 @@ window.DGM = window.DGM || {};
   const T = window.__TAURI__;
   const invoke = (T && T.core && T.core.invoke) || (T && T.invoke);
   if (!invoke) {
-    document.body.textContent = "no tauri runtime";
+    // 降级页：这句原来写死英文（页面其余文案都走 i18n），补上词条；i18n 也没起来就退回原文
+    let msg = "no tauri runtime";
+    try {
+      DGM.i18n.setLang(DGM.i18n.detect(), { persist: false });
+      msg = DGM.t("cap.noRuntime");
+    } catch (e) {
+      /* 保持英文原文 */
+    }
+    document.body.textContent = msg;
     return;
   }
 

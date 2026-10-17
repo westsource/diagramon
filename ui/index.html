@@ -16,7 +16,7 @@
       <span class="logo" data-tauri-drag-region><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-logo"></use></svg></span>
       <span class="brand-name" data-tauri-drag-region>Diagramon</span>
       <span class="brand-ver" id="brand-ver" data-tauri-drag-region hidden><!-- 真实版本，shell 由 app_info 填 --></span>
-      <span class="mock-badge" id="mock-badge" hidden title="未检测到 Tauri 运行时，已切到内置 mock 后端"></span>
+      <span class="mock-badge" id="mock-badge" hidden data-i18n="mock.badge" data-i18n-title="mock.title" title="未检测到 Tauri 运行时，已切到内置 mock 后端"></span>
     </div>
 
     <nav class="titlebar-menu" id="menubar"><!-- JS 渲染 --></nav>
@@ -26,13 +26,13 @@
     </div>
 
     <div class="titlebar-actions">
-      <button class="icon-btn" id="btn-cmd" title="命令面板  Ctrl+Shift+P"><svg class="ico"><use href="#i-bolt"></use></svg></button>
-      <button class="icon-btn" id="btn-theme" title="切换明暗主题  Ctrl+K Ctrl+T"><svg class="ico"><use href="#i-moon"></use></svg></button>
-      <button class="icon-btn" id="btn-layout" title="自定义布局"><svg class="ico"><use href="#i-layout"></use></svg></button>
+      <button class="icon-btn" id="btn-cmd" data-i18n-title="ui.cmdPalette" title="命令面板  Ctrl+Shift+P"><svg class="ico"><use href="#i-bolt"></use></svg></button>
+      <button class="icon-btn" id="btn-theme" data-i18n-title="ui.theme" title="切换明暗主题  Ctrl+K Ctrl+T"><svg class="ico"><use href="#i-moon"></use></svg></button>
+      <button class="icon-btn" id="btn-layout" data-i18n-title="ui.layout" title="自定义布局"><svg class="ico"><use href="#i-layout"></use></svg></button>
       <div class="win-btns" id="win-btns">
-        <button class="win-btn" id="win-min" title="最小化"><svg class="ico ico-sm"><use href="#i-minimize"></use></svg></button>
-        <button class="win-btn" id="win-max" title="最大化"><svg class="ico ico-sm"><use href="#i-maximize"></use></svg></button>
-        <button class="win-btn close" id="win-close" title="关闭"><svg class="ico ico-sm"><use href="#i-close"></use></svg></button>
+        <button class="win-btn" id="win-min" data-i18n-title="ui.minimize" title="最小化"><svg class="ico ico-sm"><use href="#i-minimize"></use></svg></button>
+        <button class="win-btn" id="win-max" data-i18n-title="ui.maximize" title="最大化"><svg class="ico ico-sm"><use href="#i-maximize"></use></svg></button>
+        <button class="win-btn close" id="win-close" data-i18n-title="ui.close" title="关闭"><svg class="ico ico-sm"><use href="#i-close"></use></svg></button>
       </div>
     </div>
   </header>
@@ -46,23 +46,23 @@
       <div class="side-head">
         <span id="side-title">资源管理器</span>
         <span class="sp"></span>
-        <button class="icon-btn" id="side-more" title="更多操作"><svg class="ico ico-sm"><use href="#i-more"></use></svg></button>
-        <button class="icon-btn" id="side-close" title="隐藏侧栏  Ctrl+B"><svg class="ico ico-sm"><use href="#i-close"></use></svg></button>
+        <button class="icon-btn" id="side-more" data-i18n-title="ui.more" title="更多操作"><svg class="ico ico-sm"><use href="#i-more"></use></svg></button>
+        <button class="icon-btn" id="side-close" data-i18n-title="ui.hideSidebar" title="隐藏侧栏  Ctrl+B"><svg class="ico ico-sm"><use href="#i-close"></use></svg></button>
       </div>
       <div class="side-view" id="side-view"><!-- JS 渲染 --></div>
     </aside>
 
     <!-- 侧栏宽度拖拽把手（无侧栏时由 CSS 隐藏） -->
-    <div class="v-gutter" id="sidebar-gutter" title="拖动调整侧栏宽度"></div>
+    <div class="v-gutter" id="sidebar-gutter" data-i18n-title="ui.resizeSidebar" title="拖动调整侧栏宽度"></div>
 
     <main class="editor-col" id="editor-col">
       <div class="tabbar" id="tabbar">
         <div class="tabs" id="tabs"><!-- JS 渲染 --></div>
-        <button class="tab-add" id="tab-add" title="新建图表  Ctrl+N"><svg class="ico ico-sm"><use href="#i-plus"></use></svg></button>
+        <button class="tab-add" id="tab-add" data-i18n-title="ui.newTab" title="新建图表  Ctrl+N"><svg class="ico ico-sm"><use href="#i-plus"></use></svg></button>
         <div class="tabbar-right">
-          <div class="viewmodes" id="viewmodes" role="group" aria-label="视图模式"><!-- JS 渲染 --></div>
+          <div class="viewmodes" id="viewmodes" role="group" data-i18n-aria-label="ui.viewMode" aria-label="视图模式"><!-- JS 渲染 --></div>
           <button class="icon-btn tab-conv" id="tab-convert" data-i18n-title="mi.convertTo" title="转换为"><svg class="ico ico-sm"><use href="#i-swap"></use></svg><span data-i18n="conv.title">转换</span></button>
-          <button class="icon-btn" id="tab-more" title="标签页操作"><svg class="ico ico-sm"><use href="#i-more"></use></svg></button>
+          <button class="icon-btn" id="tab-more" data-i18n-title="ui.tabActions" title="标签页操作"><svg class="ico ico-sm"><use href="#i-more"></use></svg></button>
         </div>
       </div>
 
@@ -72,25 +72,25 @@
           <div class="pane-head">
             <span class="lbl" id="src-lang">Mermaid</span>
             <span class="sp"></span>
-            <button class="mini-btn" id="btn-format" title="格式化源码"><svg class="ico ico-sm"><use href="#i-wand"></use></svg><span data-i18n="src.format">格式化</span></button>
-            <button class="mini-btn" id="btn-find" title="查找替换  Ctrl+F"><svg class="ico ico-sm"><use href="#i-search"></use></svg></button>
-            <button class="mini-btn" id="btn-src-ai" title="让 AI 改这段"><svg class="ico ico-sm"><use href="#i-sparkles"></use></svg>AI</button>
-            <button class="mini-btn" id="btn-hide-source" title="隐藏源码窗口  Ctrl+3"><svg class="ico ico-sm"><use href="#i-close"></use></svg></button>
+            <button class="mini-btn" id="btn-format" data-i18n-title="ui.formatSource" title="格式化源码"><svg class="ico ico-sm"><use href="#i-wand"></use></svg><span data-i18n="src.format">格式化</span></button>
+            <button class="mini-btn" id="btn-find" data-i18n-title="ui.find" title="查找替换  Ctrl+F"><svg class="ico ico-sm"><use href="#i-search"></use></svg></button>
+            <button class="mini-btn" id="btn-src-ai" data-i18n-title="ui.aiThis" title="让 AI 改这段"><svg class="ico ico-sm"><use href="#i-sparkles"></use></svg>AI</button>
+            <button class="mini-btn" id="btn-hide-source" data-i18n-title="ui.hideSource" title="隐藏源码窗口  Ctrl+3"><svg class="ico ico-sm"><use href="#i-close"></use></svg></button>
           </div>
           <div class="code-scroll" id="code-scroll">
             <div class="code-host" id="editor-host"><!-- CodeMirror 挂载点 --></div>
           </div>
         </section>
 
-        <div class="splitter" id="splitter" role="separator" aria-orientation="vertical" title="拖动调整比例"></div>
+        <div class="splitter" id="splitter" role="separator" aria-orientation="vertical" data-i18n-title="ui.resizeSplit" title="拖动调整比例"></div>
 
         <section class="pane pane-preview" id="pane-preview">
           <div class="pane-head">
             <span class="lbl">预览</span>
             <span class="pane-sub" id="preview-sub"></span>
             <span class="sp"></span>
-            <button class="mini-btn" id="btn-fit" title="适应视图  Ctrl+0"><svg class="ico ico-sm"><use href="#i-fit"></use></svg></button>
-            <button class="mini-btn" id="btn-show-source" title="显示源码窗口  Ctrl+1"><svg class="ico ico-sm"><use href="#i-code"></use></svg></button>
+            <button class="mini-btn" id="btn-fit" data-i18n-title="ui.fit" title="适应视图  Ctrl+0"><svg class="ico ico-sm"><use href="#i-fit"></use></svg></button>
+            <button class="mini-btn" id="btn-show-source" data-i18n-title="ui.showSource" title="显示源码窗口  Ctrl+1"><svg class="ico ico-sm"><use href="#i-code"></use></svg></button>
             <button class="mini-btn" id="btn-copy-img" data-i18n-title="preview.copyTip" title="复制图片"><svg class="ico ico-sm"><use href="#i-copy"></use></svg></button>
             <button class="mini-btn" id="btn-export" data-i18n-title="preview.exportTip" title="导出图片"><svg class="ico ico-sm"><use href="#i-download"></use></svg></button>
           </div>
@@ -102,10 +102,10 @@
             <div class="canvas-tools" id="canvas-tools">
               <div class="row">
                 <div class="zoom-pill">
-                  <button id="zoom-out" title="缩小  Ctrl+-"><svg class="ico ico-sm"><use href="#i-zoomOut"></use></svg></button>
+                  <button id="zoom-out" data-i18n-title="ui.zoomOut" title="缩小  Ctrl+-"><svg class="ico ico-sm"><use href="#i-zoomOut"></use></svg></button>
                   <span class="val" id="zoom-val">100%</span>
-                  <button id="zoom-in" title="放大  Ctrl+="><svg class="ico ico-sm"><use href="#i-zoomIn"></use></svg></button>
-                  <button id="zoom-fit" title="适应视图  Ctrl+0"><svg class="ico ico-sm"><use href="#i-fit"></use></svg></button>
+                  <button id="zoom-in" data-i18n-title="ui.zoomIn" title="放大  Ctrl+="><svg class="ico ico-sm"><use href="#i-zoomIn"></use></svg></button>
+                  <button id="zoom-fit" data-i18n-title="ui.fit" title="适应视图  Ctrl+0"><svg class="ico ico-sm"><use href="#i-fit"></use></svg></button>
                 </div>
               </div>
             </div>
@@ -117,7 +117,7 @@
       <div class="welcome" id="welcome" hidden><!-- JS 渲染 --></div>
 
       <!-- 底部面板 -->
-      <div class="panel-resizer" id="panel-resizer" title="拖动调整高度"></div>
+      <div class="panel-resizer" id="panel-resizer" data-i18n-title="ui.resizePanel" title="拖动调整高度"></div>
       <section class="bottom-panel" id="bottom-panel">
         <div class="bp-tabs" id="bp-tabs"><!-- JS 渲染 --></div>
         <div class="bp-body" id="bp-body"><!-- JS 渲染 --></div>
@@ -125,20 +125,20 @@
     </main>
 
     <!-- AI 面板宽度拖拽把手（无 AI 面板时由 CSS 隐藏） -->
-    <div class="v-gutter" id="ai-gutter" title="拖动调整 AI 面板宽度"></div>
+    <div class="v-gutter" id="ai-gutter" data-i18n-title="ui.resizeAi" title="拖动调整 AI 面板宽度"></div>
 
     <!-- AI 面板（第一公民） -->
     <aside class="ai-pane" id="ai-pane">
       <div class="ai-head">
         <span class="ai-title"><svg class="ico"><use href="#i-sparkles"></use></svg>AI</span>
         <span class="sp"></span>
-        <button class="ai-model" id="ai-model" title="切换模型档位">
+        <button class="ai-model" id="ai-model" data-i18n-title="ui.model" title="切换模型档位">
           <span class="dot"></span><span id="ai-model-name">未配置</span>
           <svg class="ico ico-sm"><use href="#i-chevD"></use></svg>
         </button>
-        <button class="icon-btn" id="ai-history" title="历史会话"><svg class="ico ico-sm"><use href="#i-history"></use></svg></button>
-        <button class="icon-btn" id="ai-clear" title="清空对话"><svg class="ico ico-sm"><use href="#i-trash"></use></svg></button>
-        <button class="icon-btn" id="ai-close" title="隐藏 AI 面板  Ctrl+Shift+A"><svg class="ico ico-sm"><use href="#i-close"></use></svg></button>
+        <button class="icon-btn" id="ai-history" data-i18n-title="ui.history" title="历史会话"><svg class="ico ico-sm"><use href="#i-history"></use></svg></button>
+        <button class="icon-btn" id="ai-clear" data-i18n-title="ui.clearChat" title="清空对话"><svg class="ico ico-sm"><use href="#i-trash"></use></svg></button>
+        <button class="icon-btn" id="ai-close" data-i18n-title="ui.hideAi" title="隐藏 AI 面板  Ctrl+Shift+A"><svg class="ico ico-sm"><use href="#i-close"></use></svg></button>
       </div>
 
       <div class="ai-tabs" id="ai-tabs">
@@ -158,12 +158,12 @@
         <div class="ai-box">
           <textarea id="ai-input" rows="2" placeholder="描述你想要的图，Enter 发送 / Shift+Enter 换行"></textarea>
           <div class="ai-box-row">
-            <button class="icon-btn" id="ai-attach" title="添加图片（识图）"><svg class="ico ico-sm"><use href="#i-image"></use></svg></button>
-            <button class="icon-btn" id="ai-screenshot" title="截取屏幕区域识别"><svg class="ico ico-sm"><use href="#i-scan"></use></svg></button>
-            <button class="icon-btn" id="ai-context" title="把当前图作为上下文"><svg class="ico ico-sm"><use href="#i-diagram"></use></svg></button>
+            <button class="icon-btn" id="ai-attach" data-i18n-title="ui.attachImage" title="添加图片（识图）"><svg class="ico ico-sm"><use href="#i-image"></use></svg></button>
+            <button class="icon-btn" id="ai-screenshot" data-i18n-title="ui.capture" title="截取屏幕区域识别"><svg class="ico ico-sm"><use href="#i-scan"></use></svg></button>
+            <button class="icon-btn" id="ai-context" data-i18n-title="ui.useDoc" title="把当前图作为上下文"><svg class="ico ico-sm"><use href="#i-diagram"></use></svg></button>
             <span class="sp"></span>
             <span class="ai-hint" id="ai-hint"></span>
-            <button class="send-btn" id="ai-send" title="发送  Enter"><svg class="ico ico-sm"><use href="#i-send"></use></svg></button>
+            <button class="send-btn" id="ai-send" data-i18n-title="ui.send" title="发送  Enter"><svg class="ico ico-sm"><use href="#i-send"></use></svg></button>
           </div>
         </div>
       </div>
@@ -176,10 +176,10 @@
 
 <!-- ══ 弹层容器 ══ -->
 <div class="overlay" id="overlay-palette" hidden>
-  <div class="palette" role="dialog" aria-label="命令面板">
+  <div class="palette" role="dialog" data-i18n-aria-label="ui.palette" aria-label="命令面板">
     <div class="palette-input">
       <svg class="ico dim"><use href="#i-bolt"></use></svg>
-      <input id="palette-input" type="text" placeholder="输入命令、格式或问题…" autocomplete="off" spellcheck="false">
+      <input id="palette-input" type="text" data-i18n-placeholder="ui.palettePh" placeholder="输入命令、格式或问题…" autocomplete="off" spellcheck="false">
       <span class="kbd-inline">Esc</span>
     </div>
     <div class="palette-list" id="palette-list"></div>

@@ -75,7 +75,7 @@ window.DGM = window.DGM || {};
     if (!src) return e; // 未知画布格式：不建 frame
     const frame = document.createElement("iframe");
     frame.className = "canvas-frame canvas-" + format;
-    frame.setAttribute("title", format + " 画布");
+    frame.setAttribute("title", t("canvas.frameTitle", { name: state.fmtById(format).name }));
     frame.src = src;
     container.appendChild(frame);
     e.frame = frame;

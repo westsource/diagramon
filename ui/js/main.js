@@ -191,7 +191,15 @@ window.DGM = window.DGM || {};
   function fatal(err) {
     const box = document.createElement("div");
     box.style.cssText = "position:fixed;inset:0;z-index:9999;padding:26px;background:var(--bg,#fff);color:var(--err,#b0554a);font:13px/1.7 var(--font-mono,monospace);white-space:pre-wrap;overflow:auto";
-    box.textContent = "[Diagramon] 前端启动失败：\n" + ((err && err.stack) || err);
+    // 启动就挂的路径：i18n 可能也没起来 —— 取不到词条就退回键名，报错屏自己绝不能再抛
+    const label = (() => {
+      try {
+        return DGM.i18n ? DGM.i18n.t("boot.failed") : "boot.failed";
+      } catch (e) {
+        return "boot.failed";
+      }
+    })();
+    box.textContent = label + "\n" + ((err && err.stack) || err);
     document.body.appendChild(box);
     console.error(err);
   }

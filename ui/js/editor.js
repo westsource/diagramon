@@ -149,6 +149,9 @@ window.DGM = window.DGM || {};
     });
     watchCaret();
     watchTab();
+    // 面板可能在创建时就已存在（search({top:true}) 预先建好、藏着），先翻一次并盯住重建
+    localizeSearchPanel();
+    watchSearchPanel();
     return inst;
   }
 
@@ -218,9 +221,90 @@ window.DGM = window.DGM || {};
     }
   }
 
+  /* ------------------------------------------------------------------ 查找面板本地化 */
+
+  /**
+   * 源码窗口里 CodeMirror 自带的「查找替换」面板是**英文硬编码**的（Find / Replace /
+   * next / match case …）。vendor bundle 是压过的随包资产、也没把 CM 的 `phrases`
+   * 选项透出来，所以在应用层按面板的 `name` 属性改写文案：
+   *
+   *   [name=search]/[name=replace]  输入框的 placeholder 与 aria-label
+   *   [name=next]/[prev]/[select]/[replace]/[replaceAll]  按钮文字
+   *   [name=case]/[re]/[word]       复选框所在的 <label> 里那个文本节点
+   *   [name=close]                  关闭按钮的 aria-label / title
+   *
+   * 这些 `name` 是 CM 面板的稳定契约（`ui_probe` 与截图都在用同一套），升级后若真变了，
+   * 这里只会**静默不生效**（界面回到英文），不会把面板弄坏。幂等：重复调用无副作用。
+   *
+   * 已知缺口：CM 用 `phrases` 做的那句 aria-live 播报（"replaced N matches"）改不到 ——
+   * 那是读屏软件才听到的，且要动 vendor 才能改，先记着。
+   */
+  const PANEL_TEXT = {
+    next: "search.next",
+    prev: "search.prev",
+    select: "search.all",
+    replaceAll: "search.replaceAll",
+  };
+  const PANEL_LABEL = { case: "search.case", re: "search.regexp", word: "search.word" };
+  const PLACEHOLDER = { search: "search.find", replace: "search.replace" };
+
+  function localizeSearchPanel() {
+    const root = host();
+    if (!root) return;
+    const panel = root.querySelector(".cm-search");
+    if (!panel) return;
+
+    for (const [name, key] of Object.entries(PANEL_TEXT)) {
+      const b = panel.querySelector(`button[name="${name}"]`);
+      if (b) b.textContent = t(key);
+    }
+    // `[name=replace]` 既是输入框也是按钮：按标签名分开处理
+    const replaceBtn = panel.querySelector('button[name="replace"]');
+    if (replaceBtn) replaceBtn.textContent = t("search.replaceDo");
+
+    for (const [name, key] of Object.entries(PLACEHOLDER)) {
+      const i = panel.querySelector(`input[name="${name}"]`);
+      if (!i) continue;
+      i.setAttribute("placeholder", t(key));
+      i.setAttribute("aria-label", t(key));
+    }
+    for (const [name, key] of Object.entries(PANEL_LABEL)) {
+      const cb = panel.querySelector(`input[name="${name}"]`);
+      const label = cb && cb.closest("label");
+      if (!label) continue;
+      const textNode = [...label.childNodes].find((n) => n.nodeType === Node.TEXT_NODE);
+      if (textNode) textNode.nodeValue = t(key);
+    }
+    const close = panel.querySelector('button[name="close"]');
+    if (close) {
+      close.setAttribute("aria-label", t("search.close"));
+      close.setAttribute("title", t("search.close"));
+    }
+  }
+
+  /** 面板可能在编辑器创建时就存在（`search({top:true})` 会先建好、藏起来），
+   *  也可能在关闭后被重建 —— 盯一下 host 的新增节点，出现 `.cm-search` 就翻译一次。 */
+  function watchSearchPanel() {
+    const root = host();
+    if (!root || typeof MutationObserver === "undefined") return;
+    new MutationObserver((records) => {
+      for (const r of records) {
+        for (const n of r.addedNodes) {
+          if (n.nodeType === 1 && (n.classList.contains("cm-search") || n.querySelector?.(".cm-search"))) {
+            localizeSearchPanel();
+            return;
+          }
+        }
+      }
+    }).observe(root, { childList: true, subtree: true });
+  }
+
   function openSearch() {
-    if (inst && inst.openSearch) inst.openSearch();
-    else if (!hasVendor()) DGM.toast({ icon: "search", title: t("src.find"), sub: t("common.notWired") });
+    if (inst && inst.openSearch) {
+      inst.openSearch();
+      // 面板刚显示出来：立刻翻译（首次创建时 observer 也会兜底）
+      localizeSearchPanel();
+    } else if (!hasVendor()) DGM.toast({ icon: "search", title: t("src.find"), sub: t("common.notWired") });
   }
 
   function focus() {
@@ -281,6 +365,8 @@ window.DGM = window.DGM || {};
     if (hide) hide.addEventListener("click", () => DGM.shell.setMode("preview"));
     const show = $("#btn-show-source");
     if (show) show.addEventListener("click", () => DGM.shell.setMode("source"));
+    // 切语言时把已打开的查找面板跟着翻（面板是 CM 画的，不会自己重渲染）
+    if (DGM.i18n && DGM.i18n.onChange) DGM.i18n.onChange(() => localizeSearchPanel());
   }
 
   /* 设置变化里字号/默认视图可能变 → 重新应用字号；文档切换交给 main/shell 调 loadActive。 */
