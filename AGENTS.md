@@ -8,7 +8,8 @@
 ## 0. 先搞清楚这是哪个仓库
 
 - `client2/` = **Diagramon 3.0 客户端**（Rust + Tauri 2 + 系统 WebView）。`main` 自 2026-10-12 起就是 3.0（此前是 v2.0 的 C# 客户端，已快进合并覆盖）。开发线在分支 `dev3.0`。
-- 同一工作区下另有 `../client`（C# 旧客户端，迁移期行为参照）与 `../service`（FastAPI 服务端）——**三个独立 git 仓库，提交各进各的目录**。
+- 同一工作区下另有 `../client` 与 `../service`（FastAPI 服务端）——**是两个独立 git 仓库**：本仓库与 `../service`，**提交各进各的目录**。
+- `../client`（C# Avalonia 旧客户端）**代码已废弃（2026-10-17 拍板）、不再提交**，只作行为参照。⚠️ 但目录别删：它的 `tools/{drawio,excalidraw,graphviz}` + `Assets/` 仍是**资产源兜底**（93MB 运行时 + 100MB 随包 node）。取资产脚本 `tools/fetch-{drawio,excalidraw,graphviz}.ps1` 与版本 pin **已迁进本仓库**，Excalidraw 的 bundle 入口源码在 `tools/excalidraw-entry/`。
 - 契约单一真源：IPC 类型只在 `crates/app-ipc`；格式注册表只在 `crates/app-core/src/format.rs`（前端经 `formats` 命令取）。**不要在前端另抄一份**。
 - 签名密钥在**仓库之外** `../keys/`，公钥在 `src-tauri/tauri.conf.json`。**永远不要把这些文件提交进来。**
 
@@ -73,7 +74,7 @@ $env:DGM_PYTHON="C:\Users\rong\.workbuddy\binaries\python\versions\3.13.12\pytho
 
 - 别改 `third-party/schemars-0.8.22-order-fix/`（上游 bug 的临时补丁，上游修好后整体删掉）。
 - 别把 `ui/vendor/`（CodeMirror6 / mermaid / wasm-graphviz）当成普通源码改；那是随包资产。
-- 别把 98MB 的画布资产提交进仓库（`client/tools/**` 与 `client/Assets/mermaid.min.js`；打包前由 `node tools/fetch-assets.mjs` 汇到 `assets/`）。
+- 别把 98MB 的画布资产提交进仓库（`tools/drawio/`、`tools/excalidraw/`、`tools/graphviz/` 与 `../client/Assets/mermaid.min.js`；打包前由 `node tools/fetch-assets.mjs` 汇到 `assets/`）。
 - 改承载页（drawio / Excalidraw 的 `host.html`）**先读它顶部的契约注释块**（`__hostQueue` / `__apply` / `__hostZoom*`），那是 shell 与页面之间唯一的接口真源。
 
 ## 4. 什么改动要重打包，什么只要推 git

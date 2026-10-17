@@ -296,6 +296,8 @@ tools/drawio/
 # Excalidraw 离线 bundle（由 tools/fetch-excalidraw.ps1 用 esbuild 打包生成，体积较大，不入库）
 # 注意：上面的 tools/excalidraw-host/（承载页）要入库，两者不是一回事。
 tools/excalidraw/
+# Mermaid 运行时（mermaid.min.js + Help/Languages，2026-10-17 从旧的 client/Assets 迁来，不入库）
+tools/mermaid/
 
 # Visual Studio 6 build log
 *.plg

@@ -8,34 +8,41 @@
  *
  * ## 为什么开发期不需要跑它
  *
- * `crates/assets` 的 `AssetRoots::detect` 会先看 `assets/`（随包），
- * 找不到就回退到**源工作树**（`DIAGRAMON_SOURCE_TREE`，默认同级目录的 `client/`）。
- * 也就是说：只要 `client/tools/{drawio,excalidraw,graphviz}` 在位，
- * 开发期一个字节都不用复制，98MB 也不会在仓库里多留一份。
- * 这个脚本只在**打包前**跑一次，产出 `assets/` 供发布形态使用。
+ * `crates/assets` 的 `AssetRoots::detect` 会先看 `assets/`（随包），找不到才回退到
+ * **源工作树**（`DIAGRAMON_SOURCE_TREE`，默认同级目录的 `client/`）。
+ * 也就是说只要有 `assets/`，开发期一个字节都不用复制，93MB 也不会在仓库里多留一份。
+ * 这个脚本在**打包前**跑一次，产出 `assets/` 供发布形态使用。
+ *
+ * ⚠️ 已知缺口（2026-10-17）：Rust 那个回退**仍只认 `client/`**，而取资产脚本已经迁到本仓库、
+ * 产物流在 `client2/tools/<挂载点>/`。所以"没有 `assets/` 且没有 `client/`"的机器上，
+ * 画布挂载点会 404 —— 先跑本脚本即可。真要修，是给 `AssetRoots` 支持按挂载点分别定位。
  *
  * ## 源工作树怎么来
  *
  * 本仓库不存这四个运行时（见 .gitignore：`tools/drawio/`、`tools/excalidraw/`、
- * `tools/graphviz/`）。它们由 dev2.0 的取资产脚本（`tools/fetch-drawio.ps1`、
- * `tools/fetch-excalidraw.ps1`、`tools/fetch-graphviz.ps1`）下载并离线化 ——
- * 那三个脚本连同它们拉好的产物在 git tag `dev2.0-freeze-2026-10-10` 里，
- * 需要重建运行时（升级 drawio / Excalidraw 版本）时从那里取：
- *
- *     git show dev2.0-freeze-2026-10-10:tools/fetch-drawio.ps1 > tools/fetch-drawio.ps1
+ * `tools/graphviz/`）。它们由**本仓库**的三个取资产脚本（`tools/fetch-drawio.ps1`、
+ * `tools/fetch-excalidraw.ps1`、`tools/fetch-graphviz.ps1`）下载并离线化，产物直接落在
+ * `tools/<挂载点>/` —— **2026-10-17 起这三个脚本从旧的 `client/` 迁过来了**（`client/` 已废弃、
+ * 不再提交；但它的 `tools/` 下还躺着 93MB 运行时和 100MB 随包 node，所以仍作兜底源）。
  *
  * 离线优先是本项目的底色，所以这里刻意**不实现联网下载**：
  * 复制是本机快速路径，联网那条路要处理代理 / 校验 / 离线化改写，留在上面那三个脚本里。
  *
  * ## 挂载点与入口
  *
- *   drawio     → client/tools/drawio          入口 index.html，另外必须包含 host.html
- *   excalidraw → client/tools/excalidraw      入口 index.html
- *   graphviz   → client/tools/graphviz        入口 graphviz.js（ESM）
- *   mermaid    → client/Assets                只取 mermaid.min.js
+ *   drawio     → tools/drawio（缺则 ../client/tools/drawio）            入口 index.html，另外必须包含 host.html
+ *   excalidraw → tools/excalidraw（缺则 ../client/tools/excalidraw）    入口 index.html
+ *   graphviz   → tools/graphviz（缺则 ../client/tools/graphviz）        入口 graphviz.js（ESM）
+ *   mermaid    → tools/mermaid（缺则 ../client/Assets）                 只取 mermaid.min.js
  *
- * `drawio/host.html` 是**本仓库的承载页**（`tools/drawio-host/host.html`），
- * 不属于上游资产：协议要求它落在挂载点内（`/drawio/host.html`），所以复制时一并放进去。
+ * `drawio/host.html` 与 `excalidraw/index.html` 是**本仓库的承载页**
+ * （`tools/drawio-host/host.html`、`tools/excalidraw-host/index.html`），
+ * 不属于上游资产：协议要求它们落在挂载点内（`/drawio/host.html`、`/excalidraw/index.html`），
+ * 所以复制时一并覆盖过去。
+ *
+ * ⚠️ 源工作树里的 `client/tools/{drawio-host/host.html,excalidraw-host/index.html}` 是**停更的旧副本**
+ * （dev2.0 时代留下的），别再拿它们当真源去改 —— 两处覆盖就是为此存在的。
+ * `tools/dev/*` 那几个探针直接挂源工作树，所以它们对这两个文件也要做同样的重定向。
  */
 
 import { createHash } from "node:crypto";
@@ -50,15 +57,38 @@ const MANIFEST = join(ASSETS, ".manifest.json");
 const argv = process.argv.slice(2);
 const VERIFY_ONLY = argv.includes("--verify");
 const fromArg = argv.indexOf("--from");
-const SOURCE = resolve(
-  fromArg >= 0 ? argv[fromArg + 1] : process.env.DIAGRAMON_SOURCE_TREE || join(ROOT, "..", "client"),
-);
+/** 显式指定源工作树时，四个挂载点全从它取（行为与以前一致）。 */
+const SOURCE_OVERRIDE = fromArg >= 0
+  ? resolve(argv[fromArg + 1])
+  : process.env.DIAGRAMON_SOURCE_TREE
+    ? resolve(process.env.DIAGRAMON_SOURCE_TREE)
+    : null;
+/** 旧的资产源工作树（C# 客户端仓库，已废弃不再提交，但 93MB 运行时还在它下面）。 */
+const LEGACY = join(ROOT, "..", "client");
+
+/**
+ * 某个挂载点的源目录。
+ *
+ * 2026-10-17 起：三个取资产脚本（`fetch-{drawio,excalidraw,graphviz}.ps1`）**迁进了本仓库
+ * 的 `tools/`**，产物也落在 `tools/<挂载点>/`（见 .gitignore）。所以这里**本仓库优先**，
+ * 旧的 `../client/tools/` 只作兜底（那 93MB 与 100MB 的随包 node 没跟着搬）。
+ * `--from` / `DIAGRAMON_SOURCE_TREE` 仍然是一票优先的显式覆盖。
+ *
+ * 判据是**入口文件在不在**，不是"目录在不在" —— 仓库根下有个 `Assets/{drawio,excalidraw,
+ * graphviz,mermaid}/` 的空壳目录（历史遗留），只看目录会让 mermaid 指到那里然后报缺件。
+ */
+function mountSource(ownSub, legacySub, entry) {
+  const legacy = SOURCE_OVERRIDE ? join(SOURCE_OVERRIDE, ...legacySub) : join(LEGACY, ...legacySub);
+  if (SOURCE_OVERRIDE) return legacy;
+  const own = join(ROOT, ...ownSub);
+  return existsSync(join(own, entry)) ? own : legacy;
+}
 
 /** 挂载点 → 源目录 + 入口（入口缺失就认为这份资产没准备好）。 */
 const MOUNTS = [
   {
     name: "drawio",
-    from: join(SOURCE, "tools", "drawio"),
+    from: mountSource(["tools", "drawio"], ["tools", "drawio"], "index.html"),
     entry: "index.html",
     // 上游 webapp 的必需子目录，缺了 drawio 起不来（比"复制了多少文件"更能说明问题）
     needDirs: ["js", "styles", "mxgraph"],
@@ -66,21 +96,22 @@ const MOUNTS = [
   },
   {
     name: "excalidraw",
-    from: join(SOURCE, "tools", "excalidraw"),
+    from: mountSource(["tools", "excalidraw"], ["tools", "excalidraw"], "index.html"),
     entry: "index.html",
     needDirs: ["fonts"],
-    extra: [],
+    // 承载页以本仓库的为准：源工作树里那份是停更的旧副本（缺 getScene ⇒ 转换取不回产物）
+    extra: [{ from: join(ROOT, "tools", "excalidraw-host", "index.html"), to: "index.html" }],
   },
   {
     name: "graphviz",
-    from: join(SOURCE, "tools", "graphviz"),
+    from: mountSource(["tools", "graphviz"], ["tools", "graphviz"], "graphviz.js"),
     entry: "graphviz.js",
     needDirs: [],
     extra: [],
   },
   {
     name: "mermaid",
-    from: join(SOURCE, "Assets"),
+    from: mountSource(["tools", "mermaid"], ["Assets"], "mermaid.min.js"),
     entry: "mermaid.min.js",
     needDirs: [],
     extra: [],
@@ -138,7 +169,7 @@ function checkSource() {
 }
 
 function fetchAll() {
-  const manifest = { generated_at: new Date().toISOString(), source: SOURCE, mounts: {} };
+  const manifest = { generated_at: new Date().toISOString(), source: SOURCE_OVERRIDE || ROOT, mounts: {} };
   let grand = 0;
 
   for (const m of MOUNTS) {
@@ -207,7 +238,9 @@ function main() {
     return verify();
   }
 
-  log(`源工作树：${SOURCE}`);
+  log(SOURCE_OVERRIDE
+    ? `源工作树（显式）：${SOURCE_OVERRIDE}`
+    : `源工作树：本仓库 tools/ 优先，缺则回退 ${LEGACY}`);
   const problems = checkSource();
   if (problems.length) {
     log(red("源工作树缺少资产："));

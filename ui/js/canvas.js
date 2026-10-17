@@ -197,9 +197,17 @@ window.DGM = window.DGM || {};
     }
   }
 
-  /** 把 Excalidraw 的 scene 事件还原成 `.excalidraw` 文件正文（保留载入时的 files）。 */
+  /**
+   * 把 Excalidraw 的 scene 事件还原成 `.excalidraw` 文件正文。
+   *
+   * `files` 是**图片元素的真正字节**（元素本身只存一个 `fileId`），所以不能只搬 elements：
+   * 漏了它，正文里就只剩一个悬空 fileId —— 存盘之后那张图再也回不来。
+   * 三个来源按优先级取：事件里带了就用它（承载页只在键集变化时才带，见承载页注释），
+   * 否则沿用本地缓存；取到就顺手刷新缓存（缓存是按格式常驻的，不刷新会把上一份文档的附件带过来）。
+   */
   function sceneToJson(msg, e) {
     try {
+      if (msg.files && typeof msg.files === "object") e.files = msg.files;
       return JSON.stringify({
         type: "excalidraw",
         version: 2,
@@ -364,6 +372,8 @@ window.DGM = window.DGM || {};
     if (pendingConversion && pendingConversion.format === format) {
       const source = pendingConversion.source;
       pendingConversion = null;
+      // 附件缓存是按格式常驻的单例：不归零，上一份文档的 files 会被写进这份新文档
+      e.files = {};
       loadMermaid(format, source);
       return true;
     }

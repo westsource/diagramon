@@ -33,7 +33,11 @@ impl AssetRoots {
     /// 探测可用根：环境变量优先，其次从 `ui` 目录向上找仓库布局。
     ///
     /// * `DIAGRAMON_ASSETS_DIR` → 随包资产根（含 `drawio/` 等子目录）
-    /// * `DIAGRAMON_SOURCE_TREE` → 取资产的源工作树（旧的 `client/`）
+    /// * `DIAGRAMON_SOURCE_TREE` → 取资产的源工作树（必须是 `tools/<挂载点>/` 那种布局）
+    ///
+    /// 注意 `search_ancestors(&ui, "client")` 是**历史兜底**：2026-10-17 起 `../client` 已被删除，
+    /// 正常路径是 `assets/`（由 `tools/fetch-assets.mjs` 从本仓库 `tools/` 汇出）。
+    /// 也就是说这条回退现在是死路径 —— 留着只是为了让"老工作区还能跑"。
     pub fn detect(ui: PathBuf) -> Self {
         let packaged = dir_with_subdirs(std::env::var_os("DIAGRAMON_ASSETS_DIR").map(PathBuf::from))
             .or_else(|| dir_with_subdirs(Some(ui.join("../assets"))))

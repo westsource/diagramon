@@ -69,18 +69,27 @@ if (!existsSync(join(ROOT, "ui", "index.html"))) {
   log("  ✗ ui/index.html 缺失");
 }
 
-// 承载页是**本仓库**的文件（`tools/drawio-host/host.html`），由 fetch-assets 复制进挂载点 ——
-// 它不在上游资产里，所以"取资产"漏跑时不会报缺件，只会静默用上旧的那份（实测踩过：
+// 承载页是**本仓库**的文件（`tools/*-host/`），由 fetch-assets 复制进挂载点 ——
+// 它们不在上游资产里，所以"取资产"漏跑时不会报缺件，只会静默用上旧的那份（实测踩过：
 // target/debug/assets 里那份停在 2026-10-10，而源文件当天刚改过）。这里逐字节对一下：
 // 不一致就拦住 —— 用户侧看到的是"改了没生效"，比报错难查得多。
-const hostSrc = join(ROOT, "tools", "drawio-host", "host.html");
-const hostDst = join(ROOT, "assets", "drawio", "host.html");
-if (existsSync(hostSrc) && existsSync(hostDst)) {
-  if (readFileSync(hostSrc).equals(readFileSync(hostDst))) {
-    log("  ✓ assets/drawio/host.html 与 tools/drawio-host/host.html 一致");
+//
+// Excalidraw 那一份是 2026-10-17 补上的：它此前**根本没接进覆盖链**，于是打包出来的
+// 承载页一直是源工作树里那份停更的旧副本（缺 `getScene` ⇒ 转换取不回产物），而源文件
+// 早就改过了 —— 同一个坑，第二次踩。两份都要查。
+const HOST_PAIRS = [
+  ["tools/drawio-host/host.html", "assets/drawio/host.html"],
+  ["tools/excalidraw-host/index.html", "assets/excalidraw/index.html"],
+];
+for (const [srcRel, dstRel] of HOST_PAIRS) {
+  const src = join(ROOT, srcRel);
+  const dst = join(ROOT, dstRel);
+  if (!existsSync(src) || !existsSync(dst)) continue;
+  if (readFileSync(src).equals(readFileSync(dst))) {
+    log(`  ✓ ${dstRel} 与 ${srcRel} 一致`);
   } else {
     assetsOk = false;
-    log("  ✗ assets/drawio/host.html 与 tools/drawio-host/host.html 不一致 —— 先跑 node tools/fetch-assets.mjs");
+    log(`  ✗ ${dstRel} 与 ${srcRel} 不一致 —— 先跑 node tools/fetch-assets.mjs`);
   }
 }
 

@@ -36,8 +36,25 @@
 //   1) 把 Excalidraw 挂到 #root；
 //   2) 把画布变更（onChange）压进 window.__hostQueue，由 C# 侧轮询取走 —— 与 drawio 那条通道
 //      形状一致（宿主只要能执行脚本就能工作，不依赖 WebView 包装层的事件）；
-//   3) 暴露 window.__apply 供 C# 侧下发指令：setScene / loadMermaid / fit / export。
+//   3) 暴露 window.__apply 供 C# 侧下发指令：setScene / loadMermaid / fit / getScene / export。
 // 内容真相始终是标签页里的 JSON 文本；本页只负责视图与事件。
+//
+// **`files` 必须在场（2026-10-17 修）**：Excalidraw 的图片元素只存一个 `fileId`，真正的字节在
+// 画布的 files 里。所以两个方向都要带上它，否则图片元素指向一个不存在的文件（画布上什么都没有）。
+//
+// ⚠️ 交附件的入口只有一个：**`api.addFiles(files)`**。
+//    `api.updateScene({...})` 在 API 层**压根不认 `files` / `replaceFiles`**（实测：它只处理
+//    elements / appState / collaborators，多给的字段被静默忽略）—— 往那里塞 files 看着像做了事，
+//    其实什么都没发生。这条踩过，别再改回去。
+//    `addFiles` 是**合并**语义（内部 addMissingFiles 不带 replaceFiles），没有"清空重设"的公开入口；
+//    因此跨文档泄漏不靠清画布，而靠下面这条回报规则从根上避免。
+//
+// 回报规则：`report('scene', {elements, appState, files})`，`files` 只含**元素真正引用到的**那些
+// （见 referencedFiles）—— 画布内存里可能还留着上一份文档的附件，但绝不会被写进这一份的正文。
+// 也只在"被引用的 fileId 集合"变化时才带（内含 base64；Excalidraw 的文件按 id 不可变，集合够用）。
+//
+// 另注：`convertMermaid` 对不支持的语法（如 subgraph）会兜底成**一整张位图**，位图就在 `files` 里 ——
+// 这条链断了的话，用户看到的就是一块空白画布。
 // ---------------------------------------------------------------------------
 (function () {
   // 承载页自产的可见文案（boot 覆盖层 + 失败横幅）：页面访问不到应用的语言表，
@@ -186,9 +203,12 @@
     if (msg.action === 'setScene') {
       const scene = typeof msg.scene === 'string' ? JSON.parse(msg.scene) : msg.scene;
       messages.pending = scene;               // 记下最近一次外部载入，避免立刻回写成"用户修改"
-      out.api.updateScene({ elements: scene.elements || [], appState: scene.appState || {} });
+      const elements = scene.elements || [];
+      out.api.updateScene({ elements: elements, appState: scene.appState || {} });
+      // 附件走 addFiles（updateScene 不认 files，见文件头）。文档自带的附件在这里交给画布。
+      applyFiles(scene.files || {});
       window.__excalidrawApi = out.api;
-      suppressEchoes(scene.elements || []);
+      suppressEchoes(elements);
       ensureViewportVisible();                // 载入文档 = 视图由这份文档决定，不沿用上一份的视口
       return true;
     }
@@ -212,11 +232,15 @@
 
     if (msg.action === 'loadMermaid') {
       return window.ExcalidrawApp.convertMermaid(msg.source).then(function (converted) {
-        messages.pending = { elements: converted.elements || [] };
-        out.api.updateScene({ elements: converted.elements || [] });
-        suppressEchoes(converted.elements || []);
+        const elements = converted.elements || [];
+        messages.pending = { elements: elements };
+        out.api.updateScene({ elements: elements });
+        // 同样走 addFiles；`converted.files` 一定要带到：上游对不支持的语法（如 subgraph）会
+        // 兜底成**一整张位图**，位图就在 files 里 —— 漏了它，画布上只剩一个悬空 fileId 的 image 元素。
+        applyFiles(converted.files || {});
+        suppressEchoes(elements);
         ensureViewportVisible();
-        report('loaded', { count: (converted.elements || []).length });
+        report('loaded', { count: elements.length });
         return true;
       }).catch(function (e) {
         fail(T.mermaidFailed + (e && e.message ? e.message : e));
@@ -229,9 +253,15 @@
       // （外部 setScene / loadMermaid 之后被 suppressEchoes 挡掉），
       // 所以「转换拿结果」和「落盘前 flush」这两条路取不到东西。
       // 形状与 onChange 那条 report('scene') 保持一致，消费侧只认一种。
+      // `files` 这里**必给**（主动要就是要一份完整可落盘的场景）；签名基线同步刷新，
+      // 免得紧接着的 onChange 又把它重发一遍。
+      const elements = out.api.getSceneElements();
+      const files = referencedFiles(elements);
+      filesSig = filesSignature(files);
       report('scene', {
-        elements: out.api.getSceneElements(),
+        elements: elements,
         appState: filterAppState(out.api.getAppState()),
+        files: files,
       });
       return true;
     }
@@ -277,6 +307,70 @@
 
   // 外部载入期间抑制回写：Excalidraw 的 onChange 在 updateScene 之后也会触发
   const messages = { pending: null, suppressUntil: 0 };
+
+  // --------------------------------------------------------------------------
+  // files 的搬运（见文件头注释）。
+  //
+  // `filesSig` = 最近一次回报过的"被引用附件"集合。用途只有一个：**别在每个 onChange 里重发 base64**。
+  // Excalidraw 的文件按 id 不可变（同一 id 的内容不会改），所以集合相同就等于没变化。
+  // --------------------------------------------------------------------------
+  let filesSig = "";
+  /** 最近一次交给画布的 files。只在 api 没暴露可枚举的 `getFiles` 时兜底用。 */
+  let lastFiles = {};
+
+  function filesSignature(files) {
+    return Object.keys(files || {}).sort().join(",");
+  }
+
+  /** 画布当前持有的全部附件。api 还没起来 / 没暴露 getFiles 时回最近一次交进去的那份。 */
+  function currentFiles() {
+    try {
+      if (out.api && typeof out.api.getFiles === 'function') {
+        const files = out.api.getFiles();
+        if (files && typeof files === 'object') {
+          return files;
+        }
+      }
+    } catch (e) {
+      // 落到下面的兜底：宁可回上一份，也不要回"没有附件"——那等于把图丢了
+    }
+    return lastFiles || {};
+  }
+
+  /**
+   * 把一份附件交给画布。
+   *
+   * **入口只能是 `api.addFiles`** —— `updateScene` 在 API 层不认 `files`（见文件头）。
+   * 它是合并语义：同 id 已存在时**不会覆盖**（Excalidraw 的文件按 id 不可变，正常情况下不会撞）。
+   */
+  function applyFiles(files) {
+    const incoming = files || {};
+    if (!Object.keys(incoming).length) {
+      return;                                  // 没有附件就别调，省一次不必要的重绘
+    }
+    lastFiles = incoming;
+    if (out.api && typeof out.api.addFiles === 'function') {
+      out.api.addFiles(incoming);
+    }
+  }
+
+  /**
+   * 元素**真正引用到**的附件（元素只存 fileId，字节要从画布的 files 里取）。
+   *
+   * 为什么不是直接把 `getFiles()` 整份回报：`addFiles` 是合并语义、没有公开的清空入口，
+   * 所以画布内存里会留着上一份文档的附件。整份回报 = 把别的文档的图片写进这一份的正文
+   * （文件里凭空多出一段 base64，还带隐私问题）。按"被引用"过滤，从根上不会发生。
+   */
+  function referencedFiles(elements) {
+    const all = currentFiles();
+    const out = {};
+    (elements || []).forEach(function (e) {
+      if (e && e.type === 'image' && e.fileId && all[e.fileId]) {
+        out[e.fileId] = all[e.fileId];
+      }
+    });
+    return out;
+  }
 
   // 基线签名：最近一次"外部载入完成 / 已上报"的场景指纹。
   // 用途是挡掉两类**回声**：挂载完成时的空场景 onChange，以及外部 setScene 之后的再次触发 ——
@@ -330,7 +424,16 @@
     }
 
     baseline = signature;
-    report('scene', { elements: elements, appState: filterAppState(appState) });
+    const payload = { elements: elements, appState: filterAppState(appState) };
+    // 被引用附件集合变了才带 files（典型场景：用户往画布上粘了一张图）。
+    // 内容按 id 不可变 ⇒ 集合相同就是没变，不必每个 onChange 重发一遍 base64。
+    const files = referencedFiles(elements);
+    const sig = filesSignature(files);
+    if (sig !== filesSig) {
+      filesSig = sig;
+      payload.files = files;
+    }
+    report('scene', payload);
   }
 
   function filterAppState(appState) {

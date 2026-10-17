@@ -29,7 +29,8 @@ Tauri 侧的协议注册由 `tools/dev/check.mjs` 的「承载面已挂载 / 同
 3. 本机有 HTTP 代理，`127.0.0.1` 必须显式绕过（`no_proxy` + 空 ProxyHandler），
    否则连本机端口都会走代理然后失败 —— 看起来像「端口没开」。
 
-依赖：本机 Chrome / Edge；`websocket-client`；drawio 资产已在 `client/tools/drawio`。
+依赖：本机 Chrome / Edge；`websocket-client`；drawio 资产在 `tools/drawio`（2026-10-17 起取资产脚本
+已迁进本仓库，旧位置 `../client/tools/drawio` 只作兜底）。
 """
 
 from __future__ import annotations
@@ -59,11 +60,26 @@ CHROME_CANDIDATES = [
 ]
 
 SOURCE_TREE = Path(os.environ.get("DIAGRAMON_SOURCE_TREE") or (ROOT.parent / "client"))
+
+
+def _mount(own: tuple, legacy: tuple) -> Path:
+    """挂载点目录：显式 DIAGRAMON_SOURCE_TREE 一票优先；否则**本仓库 tools/ 先，旧的 client/ 兜底**。
+
+    2026-10-17 起取资产脚本迁进了本仓库，产物落在 `tools/<挂载点>/`；还按旧树找会测到
+    停更的那一份（与"承载页两份"同一个坑）。mermaid 是例外：本仓库没有 `tools/mermaid`，
+    仍从旧树的 `Assets/` 取。
+    """
+    if os.environ.get("DIAGRAMON_SOURCE_TREE"):
+        return SOURCE_TREE.joinpath(*legacy)
+    own_path = ROOT.joinpath(*own)
+    return own_path if own_path.is_dir() else SOURCE_TREE.joinpath(*legacy)
+
+
 MOUNTS = {
-    "drawio": SOURCE_TREE / "tools" / "drawio",
-    "excalidraw": SOURCE_TREE / "tools" / "excalidraw",
-    "graphviz": SOURCE_TREE / "tools" / "graphviz",
-    "mermaid": SOURCE_TREE / "Assets",
+    "drawio": _mount(("tools", "drawio"), ("tools", "drawio")),
+    "excalidraw": _mount(("tools", "excalidraw"), ("tools", "excalidraw")),
+    "graphviz": _mount(("tools", "graphviz"), ("tools", "graphviz")),
+    "mermaid": _mount(("tools", "mermaid"), ("Assets",)),
 }
 
 MIME = {
@@ -426,9 +442,13 @@ def make_handler():
                 return None  # 由 do_GET 直接回
             if first in MOUNTS:
                 if first == "drawio" and len(segs) > 1 and segs[1] == "host.html":
-                    # 承载页属于本仓库（源工作树里没有它）。
+                    # 承载页属于本仓库（源工作树里那份是停更的旧副本）。
                     # 生产路径里它由取资产脚本复制进挂载点 —— 落点一致，只是这里不复制。
                     return str(ROOT / "tools" / "drawio-host" / "host.html")
+                if first == "excalidraw" and (len(segs) == 1 or not segs[1] or segs[1] == "index.html"):
+                    # 同理：Excalidraw 的承载页也归本仓库。
+                    # 旧副本缺 `getScene`（转换取不回产物），照它测等于测了个假对象。
+                    return str(ROOT / "tools" / "excalidraw-host" / "index.html")
                 if len(segs) == 1 or not segs[1]:
                     return str(MOUNTS[first] / "index.html")
                 return str(MOUNTS[first].joinpath(*segs[1:]))
@@ -587,7 +607,7 @@ def main() -> int:
         return 2
     if not (MOUNTS["drawio"] / "index.html").is_file():
         log(f"drawio 资产不在位：{MOUNTS['drawio']}")
-        log("  先按 README 的取资产说明把它放到 client/tools/drawio，或设 DIAGRAMON_SOURCE_TREE")
+        log("  先跑 tools/fetch-drawio.ps1 把资产拉到 tools/drawio，或设 DIAGRAMON_SOURCE_TREE")
         return 2
 
     SHOTS.mkdir(parents=True, exist_ok=True)

@@ -147,6 +147,9 @@ window.DGM = window.DGM || {};
    * 为什么不自己解析：这两个目标格式的上游解析器是 JS 库
    * （drawio 的 `drawio-mermaid`、Excalidraw 的 `mermaid-to-excalidraw`），
    * 重新实现一遍只会得到两个不一致的解析器（见 index.html §9.1）。
+   *
+   * 返回值是 `{ doc, notes }`：`notes` 是**这次转换的保真度说明**（与 Rust 方向共用同一套展示），
+   * 目前只有一条 —— 上游把整张图兜底成了一块位图（见 `bitmapFallbackNote`）。
    */
   async function convertViaEngine(to, source, srcDoc, dir) {
     const doc = await state.newDoc(to);
@@ -161,7 +164,31 @@ window.DGM = window.DGM || {};
       return null;
     }
     await state.setBodyNow(doc.id, body);
-    return doc;
+    const note = bitmapFallbackNote(to, body);
+    if (note) state.pushOutput(note, "warn");
+    return { doc: doc, notes: note ? [note] : [] };
+  }
+
+  /**
+   * 引擎给的产物是不是「一整张位图」。
+   *
+   * 为什么要在界面层判而不是当成失败：这是**上游的兜底行为**，不算错 ——
+   * `mermaid-to-excalidraw` 碰到它不支持的语法（实测 `subgraph` 必现）会把整张图渲染成一张
+   * PNG，形状就没了。位图本身完整可看，所以转换仍然算成功，但必须**如实说明**
+   * 「这图在画布上是张图片、不能单独编辑」，否则用户会以为转换丢了东西、或者对着空白猜。
+   *
+   * 判据取**真正落进正文的那份场景**（也就是最终会存盘的东西），而不是某个中间状态。
+   * 只在 Excalidraw 侧判：drawio 的导入器支持 subgraph，不适用。
+   */
+  function bitmapFallbackNote(to, body) {
+    if (to !== "excalidraw") return "";
+    try {
+      const els = (JSON.parse(body) || {}).elements || [];
+      if (els.length && els.every((e) => e && e.type === "image")) return t("conv.bitmapFallback");
+    } catch (err) {
+      // 不是 JSON 就别猜（编排由引擎负责，界面不做第二套解析）
+    }
+    return "";
   }
 
   /** 转换成功后统一收尾：刷新界面、记转换记录、提示。 */
@@ -287,17 +314,20 @@ window.DGM = window.DGM || {};
     }
 
     let created = null;
+    let extraNotes = [];
     if (p.engine === "rust") {
       created = await state.newDoc(dir.to);
       if (created) await state.setBodyNow(created.id, p.text);
     } else if (p.engine !== "none") {
-      created = await convertViaEngine(dir.to, srcDoc.body, srcDoc, dir);
+      const via = await convertViaEngine(dir.to, srcDoc.body, srcDoc, dir);
+      created = via && via.doc;
+      extraNotes = (via && via.notes) || [];
     } else {
       DGM.toast({ icon: "alert", title: t("dlg.convert.notImpl"), sub: dir.how, warn: true });
       return;
     }
     if (!created) return;
-    finishConvert(created, dir, srcDoc, p.notes);
+    finishConvert(created, dir, srcDoc, (p.notes || []).concat(extraNotes));
   }
 
   /* ================================================================== 识图 */

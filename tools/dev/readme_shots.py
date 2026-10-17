@@ -12,7 +12,7 @@
 落挂载点，其余落 ui/。
 
 产物：client2/screenshots/*.png
-依赖：本机 Chrome/Edge；websocket-client；画布资产在 client/tools 下（缺失只跳过画布那张）。
+依赖：本机 Chrome/Edge；websocket-client；画布资产在 `tools/`（缺则回退 `../client/tools/`；缺失只跳过画布那张）。
 """
 
 from __future__ import annotations
@@ -38,11 +38,21 @@ sys.path.insert(0, str(ROOT / "tools" / "dev"))
 from canvas_probe import Cdp, find_chrome, free_port  # noqa: E402
 
 SOURCE_TREE = Path(os.environ.get("DIAGRAMON_SOURCE_TREE") or (ROOT.parent / "client"))
+
+
+def _mount(own: tuple, legacy: tuple) -> Path:
+    """与 canvas_probe.py 同一套口径：显式环境变量优先，否则本仓库 tools/ 先、旧 client/ 兜底。"""
+    if os.environ.get("DIAGRAMON_SOURCE_TREE"):
+        return SOURCE_TREE.joinpath(*legacy)
+    own_path = ROOT.joinpath(*own)
+    return own_path if own_path.is_dir() else SOURCE_TREE.joinpath(*legacy)
+
+
 MOUNTS = {
-    "drawio": SOURCE_TREE / "tools" / "drawio",
-    "excalidraw": SOURCE_TREE / "tools" / "excalidraw",
-    "graphviz": SOURCE_TREE / "tools" / "graphviz",
-    "mermaid": SOURCE_TREE / "Assets",
+    "drawio": _mount(("tools", "drawio"), ("tools", "drawio")),
+    "excalidraw": _mount(("tools", "excalidraw"), ("tools", "excalidraw")),
+    "graphviz": _mount(("tools", "graphviz"), ("tools", "graphviz")),
+    "mermaid": _mount(("tools", "mermaid"), ("Assets",)),
 }
 
 WIDTH, HEIGHT = 1440, 900
@@ -81,6 +91,9 @@ def make_handler():
             if first in MOUNTS:
                 if first == "drawio" and len(segs) > 1 and segs[1] == "host.html":
                     return str(ROOT / "tools" / "drawio-host" / "host.html")
+                if first == "excalidraw" and (len(segs) == 1 or not segs[1] or segs[1] == "index.html"):
+                    # 承载页归本仓库（源工作树里那份是停更的旧副本）：与 canvas_probe.py 同一条规矩
+                    return str(ROOT / "tools" / "excalidraw-host" / "index.html")
                 if len(segs) == 1 or not segs[1]:
                     return str(MOUNTS[first] / "index.html")
                 return str(MOUNTS[first].joinpath(*segs[1:]))
