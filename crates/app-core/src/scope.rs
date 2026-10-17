@@ -13,17 +13,24 @@ use app_ipc::FormatId;
 ///   否则从块内往下挪一行，状态栏的作用域会闪一下消失。
 /// 也就是说：光标行上的 `end` 不参与弹栈。
 pub fn current_scope(format: FormatId, body: &str, line: u32) -> String {
-    if !matches!(format, FormatId::Mermaid | FormatId::Dot) {
+    if !matches!(format, FormatId::Mermaid | FormatId::Dot | FormatId::D2) {
         return String::new();
     }
     let upto = line.max(1) as usize;
     let mut stack: Vec<String> = Vec::new();
+    // D2 的保留字块（`classes: { … }`）不是作用域，跳过去
+    let mut skipped: i32 = 0;
 
     for (idx, raw) in body.lines().take(upto).enumerate() {
         // 光标所在行上的 end 不弹栈（见上）
         let on_caret_line = idx + 1 == upto;
         let text = raw.trim();
         if text.is_empty() || text.starts_with("//") || text.starts_with('#') || text.starts_with("%%") {
+            continue;
+        }
+        let net = text.matches('{').count() as i32 - text.matches('}').count() as i32;
+        if format == FormatId::D2 && skipped > 0 {
+            skipped += net;
             continue;
         }
         match format {
@@ -46,6 +53,18 @@ pub fn current_scope(format: FormatId, body: &str, line: u32) -> String {
                         .next()
                         .unwrap_or("");
                     stack.push(if name.is_empty() { "(匿名)".into() } else { name.to_string() });
+                } else if text == "}" && !on_caret_line {
+                    stack.pop();
+                }
+            }
+            FormatId::D2 => {
+                // 容器形如 `集成层: {`（一层花括号 = 一层作用域）
+                if let Some(name) = crate::d2syntax::container_name(&text) {
+                    if crate::d2syntax::is_keyword(&name) {
+                        skipped += net;
+                    } else {
+                        stack.push(name);
+                    }
                 } else if text == "}" && !on_caret_line {
                     stack.pop();
                 }
@@ -88,6 +107,15 @@ mod tests {
         let src = "digraph G {\n  subgraph cluster_local {\n    a -> b;\n  }\n  c -> d;\n}\n";
         assert_eq!(current_scope(FormatId::Dot, src, 3), "cluster_local");
         assert_eq!(current_scope(FormatId::Dot, src, 5), "");
+    }
+
+    #[test]
+    fn d2_container_scope_ignores_keyword_blocks() {
+        let src = "direction: right\n集成层: {\n  网关 -> 数据库\n}\nclasses: {\n  danger: { fill: \"#f00\" }\n}\n";
+        assert_eq!(current_scope(FormatId::D2, src, 3), "集成层");
+        assert_eq!(current_scope(FormatId::D2, src, 2), "集成层", "容器自己那一行就算在内");
+        assert_eq!(current_scope(FormatId::D2, src, 5), "", "classes 不是作用域");
+        assert_eq!(current_scope(FormatId::D2, src, 8), "", "整个块结束后应出作用域");
     }
 
     #[test]

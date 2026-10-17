@@ -9,6 +9,7 @@ fn format_name(id: FormatId) -> &'static str {
     match id {
         FormatId::Mermaid => "Mermaid",
         FormatId::Dot => "Graphviz DOT",
+        FormatId::D2 => "D2",
         FormatId::Drawio => "drawio（mxfile XML）",
         FormatId::Excalidraw => "Excalidraw（场景 JSON）",
     }
@@ -22,6 +23,13 @@ fn format_rules(id: FormatId) -> &'static str {
         }
         FormatId::Dot => {
             "语法要点：digraph 用 ->，graph 用 --；属性写在 [ ] 里；子图写成 subgraph cluster_xxx { … }（cluster_ 前缀才会画边框）。"
+        }
+        FormatId::D2 => {
+            "语法要点（D2 ≠ Mermaid，别混用）：方向写 `direction: right|down|left|up`；\n\
+             连线是 `a -> b`（不画箭头写 `a -- b`），标签写在冒号后：`a -> b: 说明`；\n\
+             节点标签同样用冒号：`a: 标签`；容器是 `组名: { … }`（可以嵌套，容器内能再写 direction）；\n\
+             形状/样式写成属性行：`a.shape: cylinder`、`a.style.fill: \"#f00\"`；\n\
+             注释用 `#`；字符串要成对引号。**不要**用 `-->`、`subgraph`、`end`、`%%` 这些 Mermaid 写法。"
         }
         FormatId::Drawio => {
             "输出 mxfile XML：根节点 <mxfile>，内含 <diagram> → <mxGraphModel> → <root>，每个图形是一个 <mxCell>，\
@@ -411,6 +419,14 @@ pub fn extract_code(text: &str, format: FormatId) -> Option<String> {
                 || body.starts_with("%%")
         }
         FormatId::Dot => body.starts_with("digraph") || body.starts_with("graph") || body.starts_with("strict"),
+        // D2 没有固定首行（`direction:` 可省），认三样：方向声明、连线、容器块
+        FormatId::D2 => {
+            body.starts_with("direction:")
+                || body.starts_with('{')
+                || body.contains("->")
+                || body.contains("--")
+                || body.lines().any(|l| l.trim_end().ends_with('{'))
+        }
         FormatId::Drawio => body.starts_with("<?xml") || body.starts_with("<mxfile") || body.starts_with("<mxGraphModel"),
         FormatId::Excalidraw => body.starts_with('{') && body.ends_with('}'),
     };

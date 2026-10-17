@@ -1,26 +1,27 @@
 //! 资产服务：把自定义协议 URL 路径映射到磁盘上的文件。
 //!
 //! **为什么整个应用都走自定义协议**（而不是只用它供资产）：
-//! 外壳页与四个承载页（drawio / Excalidraw / graphviz / mermaid）因此**同源**，
+//! 外壳页与五个承载页（drawio / Excalidraw / graphviz / mermaid / d2）因此**同源**，
 //! 于是 iframe 通信不受跨源限制，离线守卫也只需管一个 origin。
 //! Windows 上 origin 是 `http://dgm.localhost/`，其它平台是 `dgm://localhost/`
 //! （见 `src-tauri` 的 `webview_url`）。
 //!
-//! 挂载点沿用 dev2.0 的四个：`/drawio/`、`/excalidraw/`、`/graphviz/`、`/mermaid/`；
-//! 其余路径落到前端产物目录（`/` → `index.html`），从而外壳与资产同源。
+//! 挂载点沿用 dev2.0 的四个并新增 `d2`：`/drawio/`、`/excalidraw/`、`/graphviz/`、
+//! `/mermaid/`、`/d2/`；其余路径落到前端产物目录（`/` → `index.html`），从而外壳与资产同源。
 
 use std::path::{Path, PathBuf};
 
 /// 一个资产挂载点。落在这些前缀下的请求会去挂载目录取，而不是前端产物目录。
-pub const MOUNTS: [&str; 4] = ["drawio", "excalidraw", "graphviz", "mermaid"];
+pub const MOUNTS: [&str; 5] = ["drawio", "excalidraw", "graphviz", "mermaid", "d2"];
 
 /// 各挂载点的入口文件。判断"这个目录像不像源工作树"只看入口在不在 ——
 /// 空壳目录（仓库根下曾有 `Assets/{drawio,…}/` 这种）不能被当成资产在位的证据。
-const MOUNT_ENTRY: [(&str, &str); 4] = [
+const MOUNT_ENTRY: [(&str, &str); 5] = [
     ("drawio", "index.html"),
     ("excalidraw", "index.html"),
     ("graphviz", "graphviz.js"),
     ("mermaid", "mermaid.min.js"),
+    ("d2", "index.js"),
 ];
 
 /// 资源根集合。
@@ -28,9 +29,9 @@ const MOUNT_ENTRY: [(&str, &str); 4] = [
 pub struct AssetRoots {
     /// 前端产物目录（`index.html` 与 js/css）。根路径 `/` 映射到 `index.html`。
     pub ui: PathBuf,
-    /// 源工作树**根**：其下 `tools/<挂载点>/` 就是取资产脚本的产物（四个挂载点全在里面）。
+    /// 源工作树**根**：其下 `tools/<挂载点>/` 就是取资产脚本的产物（五个挂载点全在里面）。
     ///
-    /// 开发期直接复用已经拉好的那份，避免在仓库里多存一份 98MB。
+    /// 开发期直接复用已经拉好的那份，避免在仓库里多存一份 105MB。
     /// 发布形态靠 `packaged`，不依赖它。
     pub source_tree: Option<PathBuf>,
     /// 随包资产根：其下按挂载点建同名子目录（`assets/drawio/` …）。
@@ -73,7 +74,7 @@ impl AssetRoots {
             }
         }
         let c = self.source_tree.as_ref()?;
-        // 四个挂载点在源工作树里布局一致：`tools/<挂载点>/`。
+        // 五个挂载点在源工作树里布局一致：`tools/<挂载点>/`。
         // （旧仓库把 mermaid 单独放在 `Assets/` 下，那个特例随 `client/` 一起删了。）
         let d = c.join("tools").join(mount);
         d.is_dir().then_some(d)
@@ -233,7 +234,7 @@ mod tests {
         assert_eq!(mime_for(Path::new("x.unknownext")), "application/octet-stream");
     }
 
-    /// 源工作树缺 `packaged` 时的回退：四个挂载点一律去 `tools/<挂载点>/`。
+    /// 源工作树缺 `packaged` 时的回退：五个挂载点一律去 `tools/<挂载点>/`。
     #[test]
     fn source_tree_fallback_uses_tools_subdirs() {
         let root = std::env::temp_dir().join(format!("dgm-assets-src-{}", std::process::id()));

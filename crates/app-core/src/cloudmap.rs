@@ -286,6 +286,23 @@ mod tests {
         assert_eq!(d.path, "", "PUT 响应的 path 是空串（根目录）");
     }
 
+    /// 云端列表里的 `format` 直接决定这条记录在客户端按哪种格式打开 ——
+    /// D2 走的是同一张注册表（`FormatId::from_str_opt`），所以这里钉住它真的能解析出来，
+    /// 落回 mermaid 的兜底只该在**真不认识**时才生效。
+    #[test]
+    fn known_formats_are_mapped_from_the_server_field() {
+        for (raw, want) in [
+            ("mermaid", app_ipc::FormatId::Mermaid),
+            ("dot", app_ipc::FormatId::Dot),
+            ("d2", app_ipc::FormatId::D2),
+            ("drawio", app_ipc::FormatId::Drawio),
+            ("excalidraw", app_ipc::FormatId::Excalidraw),
+        ] {
+            let d = doc_of(&json!({"id": "x", "format": raw}));
+            assert_eq!(d.format, want, "{raw} 应解析成 {want:?}");
+        }
+    }
+
     #[test]
     fn missing_fields_become_empty_not_errors() {
         // 列表项字段是可选的：漂移时宁可拿到空串，也不要 panic

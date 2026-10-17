@@ -290,6 +290,17 @@ window.DGM = window.DGM || {};
     if (DGM.shell && DGM.shell.autoCheckUpdate) {
       setTimeout(() => DGM.shell.autoCheckUpdate(), 2000);
     }
+
+    // D2 引擎预热：**按需**（最近开过 `.d2` 才预）。
+    //
+    // D2 的 wasm 是 11MB，首次编译要解压 + 实例化（实测冷启动数秒）。给不用 D2 的
+    // 用户白背一份 127MB 常驻内存不值当，所以只在最近文件里真有 `.d2` 时提前解压；
+    // 否则等用户真打开时再加载（那时有加载态，见 preview.js::renderD2）。
+    // 失败**必须静默**：资产缺失 / 离线守卫拦下都不该在启动时弹错。
+    const recentList = (state.settings && state.settings.recent) || [];
+    if (recentList.some((r) => r && r.format === "d2") && DGM.d2) {
+      setTimeout(() => DGM.d2.warmup(), 3000);
+    }
     note("boot:done");
   }
 
@@ -410,7 +421,11 @@ window.DGM = window.DGM || {};
       // 版本号**别硬编码** —— 真源在 Cargo.toml（workspace version），它随每次发版变。
       // 曾经这里写死 "3.0.0"，把「关于窗口永远显示 3.0.0」这个 bug 盖了三个版本。
       ok("app_info 版本号是合法 semver", !!info && /^\d+\.\d+\.\d+$/.test(info.version || ""), info && info.version);
-      ok("注册表四种格式", info && info.formats && info.formats.length === 4, info && info.formats && info.formats.map((f) => f.id).join(","));
+      ok(
+        "注册表五种格式",
+        info && info.formats && info.formats.length === 5 && info.formats.map((f) => f.id).join(",") === "mermaid,dot,d2,drawio,excalidraw",
+        info && info.formats && info.formats.map((f) => f.id).join(","),
+      );
       ok(
         "画布型 split_view=false",
         info.formats.filter((f) => ["drawio", "excalidraw"].includes(f.id)).every((f) => f.split_view === false)
@@ -611,6 +626,56 @@ window.DGM = window.DGM || {};
         convertErr = (e && e.message) || String(e);
       }
       ok("dot → mermaid 如实报未实现（不是静默成功）", convertErr.includes("实验方向"), convertErr.slice(0, 60));
+
+      // ── D2（第 5 种格式）──
+      //
+      // 为什么这几条必须在真机自检里跑：D2 的 wasm 走 `/d2/index.js` 这个**自定义协议挂载点**，
+      // 而且它自己用 `blob:` 建一个模块 Worker 再喂内联 wasm —— 这两件事在 headless Chrome 里
+      // 通过不代表在 WebView2 的自定义协议下也通过（挂载点没接上就是 404，Worker 被 CSP 拦就是白屏）。
+      ok("协议能供出 D2 运行时 /d2/index.js", await headOk("/d2/index.js"));
+
+      const toD2 = await invoke("convert_text", { req: { from: "mermaid", to: "d2", source: srcBody } });
+      ok("mermaid → d2 由 Rust 完成", toD2.engine === "rust" && toD2.body.includes("direction: down"), toD2.engine);
+      ok("subgraph 变成 D2 容器且边用点号路径", toD2.body.includes("风控: {") && toD2.body.includes("风控.L -> 风控.M"), "");
+      const dotToD2 = await invoke("convert_text", { req: { from: "dot", to: "d2", source: 'digraph G { rankdir=LR; a -> b [label="x"] }' } });
+      ok("dot → d2 由 Rust 完成且带上方向", dotToD2.engine === "rust" && dotToD2.body.includes("direction: right"), dotToD2.engine);
+      const d2Refuse = await invoke("convert_text", { req: { from: "d2", to: "mermaid", source: "a -> b" } }).then(() => "", (e) => (e && e.message) || String(e));
+      ok("D2 → Mermaid 如实说不做（不是静默转换）", d2Refuse.includes("超集"), d2Refuse.slice(0, 60));
+      const d2Mx = await invoke("convert_text", { req: { from: "d2", to: "drawio", source: "a -> b: 标签\n" } });
+      ok("d2 → drawio 点名前端 wasm 引擎", d2Mx.engine === "d2wasm" && d2Mx.body === "", d2Mx.engine);
+
+      // 真渲染一次：引擎首次要把 11MB 的 wasm 解压 + 实例化（实测冷启动几秒），
+      // 所以给一个**有界**等待。后台窗口定时器被节流到约 1 次/秒，超时仍会触发；
+      // 拿不到结果就如实 FAIL，绝不无限等（等下去整场自检就没有报告了）。
+      const d2doc = await invoke("doc_new", { format: "d2" });
+      // 必须走 state 的激活（`doc_activate` 只改 Rust 侧的会话，界面还停在上一份文档上）——
+      // 之前只发 IPC，于是这一条渲染的是那份 drawio 画布，副标题也还是画布的。
+      if (st && st.activateDoc) await st.activateDoc(d2doc.id);
+      await invoke("doc_activate", { id: d2doc.id });
+      try {
+        await Promise.race([DGM.preview.render(), new Promise((r) => setTimeout(r, 45000))]);
+      } catch (e) {
+        /* 渲染失败由下面的断言如实报出来 */
+      }
+      const d2svg = document.querySelectorAll("#canvas-stage svg").length;
+      const d2sub = (document.getElementById("preview-sub") || {}).textContent || "";
+      ok("D2 文档能在真机渲染出 SVG", d2svg > 0, `${d2svg} 个 svg`);
+      ok("预览副标题标出 D2 与当前布局", d2sub.includes("D2") && d2sub.includes("dagre"), d2sub);
+
+      // D2 → drawio 的产物（前端把 compile() 的绝对几何映射成 mxfile）
+      let mxRes = null;
+      try {
+        mxRes = await DGM.d2.toDrawio("a -> b: 标签\nb -> c\n", "dagre");
+      } catch (e) {
+        mxRes = { err: (e && e.message) || String(e) };
+      }
+      const mxXml = (mxRes && mxRes.xml) || "";
+      ok(
+        "D2 → mxfile 产物是合法 mxfile（mxCell + edge）",
+        mxXml.includes("<mxfile") && mxXml.includes('<mxCell') && mxXml.includes('edge="1"'),
+        mxRes && mxRes.err ? mxRes.err : mxXml.length + " 字节",
+      );
+      ok("D2 → mxfile 附保真度说明", !!(mxRes && mxRes.notes && mxRes.notes.length), ((mxRes && mxRes.notes) || []).join(" / "));
 
       // ── 工作区与文件系统（第 4 步）：全是纯 IPC，不靠定时器 ──
       // 造一个真实目录：借 export_write 的"父目录会自动建"这一特性

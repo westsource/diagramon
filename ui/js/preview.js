@@ -1,7 +1,8 @@
-/* 预览面：mermaid / graphviz 页内真渲染 + 画布手势 + 位图导出。
+/* 预览面：mermaid / graphviz / D2 页内真渲染 + 画布手势 + 位图导出。
  *
- * - 文本型（Mermaid / DOT）：先 parse 校验再 render，报错解析出行号，不留在页面上
- *   半渲染的残迹。DOT 走 vendor 里的 graphviz（ESM，加载失败时显式提示）。
+ * - 文本型（Mermaid / DOT / D2）：先 parse 校验再 render，报错解析出行号，不留在页面上
+ *   半渲染的残迹。DOT 走 vendor 里的 graphviz（ESM，加载失败时显式提示）；
+ *   D2 走 `/d2/index.js`（11MB 的官方 wasm 构建，单例懒加载 + 首开加载态，见 `ui/js/d2.js`）。
  * - 渲染失败会额外发一次 `doc:render-error`（载荷 `{docId, format, line, raw}`）：
  *   AI 的「渲染校验回环」靠它把报错原文回喂模型自动修正一次。`raw` 是上游原文。
  * - 画布型（drawio / Excalidraw）：交给 `DGM.canvas`（同源 iframe 承载面），
@@ -45,6 +46,8 @@ window.DGM = window.DGM || {};
   let targetDoc = null;
   let fittedFor = null;
   let mountedDoc = null;
+  /** 已经为哪些文档提示过「该文档有 N 个板」（只提示一次） */
+  const notedBoards = new Set();
 
   function nodes() {
     stage = stage || $("#canvas-stage");
@@ -353,6 +356,8 @@ window.DGM = window.DGM || {};
         svgText = await renderMermaid(body, mine);
       } else if (d.format === "dot") {
         svgText = await renderDot(body, d.layout || "dot");
+      } else if (d.format === "d2") {
+        svgText = await renderD2(body, d.layout || "dagre");
       } else {
         throw new Error(t("preview.noRender", { msg: d.format }));
       }
@@ -360,7 +365,9 @@ window.DGM = window.DGM || {};
       mountSvg(svgText, d);
     } catch (err) {
       if (mine !== renderToken) return;
-      const described = describeError(err && err.message ? err.message : err);
+      // D2 抛的是 JSON 数组串（行列号在 errmsg 里），通用解析认不出来，先单独试一次
+      const d2err = d.format === "d2" ? DGM.d2.describeError(err && err.message ? err.message : err) : null;
+      const described = d2err ? describeD2(d2err) : describeError(err && err.message ? err.message : err);
       errorBox(described.text);
       toolsVisible(false);
       if (DGM.status) DGM.status(described.text, "err");
@@ -411,6 +418,30 @@ window.DGM = window.DGM || {};
     return window.DGMGraphviz.layout(body, "svg", engine, {});
   }
 
+  /**
+   * D2：页内 wasm（`DGM.d2` 管单例与懒加载，这里只管加载态与产物）。
+   *
+   * 首次编译要几秒（11MB 的 wasm 要先解压实例化），期间把状态栏说清楚 ——
+   * 不然看起来就是卡死。之后就复用实例（~30ms）。
+   */
+  async function renderD2(body, engine) {
+    if (!DGM.d2) throw new Error(t("preview.d2.unavailable", { msg: "ui/js/d2.js 未加载" }));
+    if (!DGM.d2.isReady()) {
+      showLoading();
+      setSub(t("preview.d2.init"));
+    }
+    return DGM.d2.renderSvg(body, engine);
+  }
+
+  /** D2 的解析结果 → 与其它格式同一套报错面板文案（行号在前，用户能直接对到源码）。 */
+  function describeD2(e) {
+    if (!e.line) return { line: 0, text: e.text };
+    return {
+      line: e.line,
+      text: t("preview.noRender", { msg: t("common.line") + " " + e.line + "：" + e.text }),
+    };
+  }
+
   function mountSvg(svgText, d) {
     const { stage } = nodes();
     if (!stage) return;
@@ -423,6 +454,17 @@ window.DGM = window.DGM || {};
     setPannable(true);
     toolsVisible(true);
     if (d.format === "dot") setSub(t("preview.dot.layout", { layout: d.layout || "dot" }));
+    if (d.format === "d2") {
+      // 有 `layers:` 的文档 D2 只渲染 root 板（输出可能是空图）—— 必须说清，否则像坏了。
+      // 板切换器按方案不做；提示只在**每份文档第一次**挂图时发一条，免得刷满输出面板。
+      const n = DGM.d2 ? DGM.d2.boardCount(d.body || "") : 0;
+      const layoutText = t("preview.d2.layout", { layout: d.layout || "dagre" });
+      setSub(n ? layoutText + " · " + t("preview.d2.boards", { n }) : layoutText);
+      if (n && !notedBoards.has(d.id)) {
+        notedBoards.add(d.id);
+        state.pushOutput(t("preview.d2.boards", { n }), "warn");
+      }
+    }
     // 自动适应**只在这份文档第一次挂上时**做一次（初始化）—— 此后一律保留用户自己
     // 调过的缩放与位置。要重新适应就点「适应视图」（Ctrl+0 / 工具条 / 双击画布）。
     apply(); // 先把用户的视口还回去（占位内容期间 DOM 上是归零的）

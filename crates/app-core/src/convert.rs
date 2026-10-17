@@ -18,6 +18,8 @@
 use std::collections::HashMap;
 use std::fmt::Write as _;
 
+use crate::d2syntax::{d2_id, d2_str};
+
 /// 一次转换的结果。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Conversion {
@@ -81,6 +83,26 @@ impl Shape {
             Shape::Diamond => "shape=diamond",
             // 非对称形 DOT 没有；退化成普通框
             Shape::Asymmetric => "shape=box",
+        }
+    }
+
+    /// D2 里等价的形状。`None` = D2 的默认矩形（不必写 `shape` 属性）。
+    ///
+    /// 与 DOT 一样：没有对应形状的**退化**最接近的一个，并由 `notes` 说明 —— 不假装形状还在。
+    fn d2_shape(self) -> Option<&'static str> {
+        match self {
+            // D2 的 rectangle 自带圆角，`[文本]` 与 `(文本)` 落到同一个形状
+            Shape::Box | Shape::Rounded => None,
+            // 体育场形 D2 没有；退化
+            Shape::Stadium => Some("oval"),
+            // 子程序框 D2 没有；退化
+            Shape::Subroutine => Some("page"),
+            Shape::Cylinder => Some("cylinder"),
+            Shape::Hexagon => Some("hexagon"),
+            Shape::Circle => Some("circle"),
+            Shape::Diamond => Some("diamond"),
+            // 非对称形 D2 没有；退化
+            Shape::Asymmetric => Some("callout"),
         }
     }
 }
@@ -849,6 +871,373 @@ fn emit_edge(out: &mut String, from: &str, to: &str, link: &Link, indent: usize)
     let _ = writeln!(out, "{pad}{} -> {}{suffix};", dot_id(from), dot_id(to));
 }
 
+/* ------------------------------------------------------------------ Mermaid → D2 */
+
+/// Mermaid 的布局方向 → D2 的 `direction`。
+fn d2_direction(dir: &str) -> &'static str {
+    match dir {
+        "BT" => "up",
+        "LR" => "right",
+        "RL" => "left",
+        // TD / TB（`parse` 已经把 TD 归一成 TB）
+        _ => "down",
+    }
+}
+
+/// 样式值：纯数字裸写，其余加引号（`#f00` 裸写会被当成注释起点）。
+fn d2_value(v: &str) -> String {
+    if v.parse::<f32>().is_ok() { v.to_string() } else { d2_str(v) }
+}
+
+/// Mermaid 的样式串（`fill:#f00,stroke:#333`）→ D2 的 `style.*` 键值对。
+///
+/// 返回 `(保留的键值对, 丢弃的键)` —— 丢掉的键由 `notes` 逐条说明（不静默丢）。
+fn style_to_d2(style: &str) -> (Vec<(String, String)>, Vec<String>) {
+    let mut kept: Vec<(String, String)> = Vec::new();
+    let mut dropped: Vec<String> = Vec::new();
+
+    for part in style.split(',') {
+        let part = part.trim();
+        if part.is_empty() {
+            continue;
+        }
+        let (k, v) = match part.split_once(':') {
+            Some((k, v)) => (k.trim(), v.trim()),
+            None => (part, ""),
+        };
+        if v.is_empty() {
+            dropped.push(k.to_string());
+            continue;
+        }
+        // Mermaid 的 dasharray 是「线长 间隔」，D2 只接受一个数字（虚线段长）
+        if matches!(k, "stroke-dasharray" | "stroke-dash") {
+            match v.split_whitespace().next().filter(|n| n.parse::<f32>().is_ok()) {
+                Some(n) => kept.push(("stroke-dash".into(), n.to_string())),
+                None => dropped.push(k.to_string()),
+            }
+            continue;
+        }
+        let key = match k {
+            "fill" => "fill",
+            "stroke" => "stroke",
+            "stroke-width" => "stroke-width",
+            "color" => "font-color",
+            _ => {
+                dropped.push(k.to_string());
+                continue;
+            }
+        };
+        kept.push((key.to_string(), d2_value(v)));
+    }
+    (kept, dropped)
+}
+
+/// Mermaid flowchart → D2。
+///
+/// 复用 `mermaid_to_dot` 的解析器与归属规则（同一个 `parse()`，同样两遍），只换 emitter：
+/// 形状 → `shape`，subgraph → **容器**（D2 的容器能带局部 `direction`，这点比转 DOT 强），
+/// `classDef` → `classes` + `节点.class`，线型 → `style.stroke-dash` / `style.stroke-width`。
+///
+/// 边**一律写在全文件末尾**，容器里的节点用点号路径（`容器.节点`）引用 ——
+/// 边若写进容器，另一头在别处的边会凭空造出一个同名新节点。
+pub fn mermaid_to_d2(src: &str) -> Result<Conversion, String> {
+    let (direction, stmts) = parse(src)?;
+
+    /* ---------- 第一遍：classDef ---------- */
+    let mut class_styles: HashMap<String, Vec<(String, String)>> = HashMap::new();
+    let mut dropped_keys: Vec<String> = Vec::new();
+    let mut ignored_directive = false;
+    for st in &stmts {
+        match st {
+            Stmt::ClassDef { name, style } => {
+                let (kv, dropped) = style_to_d2(style);
+                class_styles.insert(name.clone(), kv);
+                dropped_keys.extend(dropped);
+            }
+            Stmt::Ignored => ignored_directive = true,
+            _ => {}
+        }
+    }
+
+    /* ---------- 第二遍：结构 ---------- */
+    let mut order: Vec<String> = Vec::new();
+    let mut label_of: HashMap<String, (Option<String>, Shape)> = HashMap::new();
+    let mut container_of: HashMap<String, Option<usize>> = HashMap::new();
+    let mut containers: Vec<Cluster> = Vec::new();
+    let mut stack: Vec<usize> = Vec::new();
+    let mut edges: Vec<(String, String, Link)> = Vec::new();
+    let mut node_styles: HashMap<String, Vec<(String, String)>> = HashMap::new();
+    let mut node_class: HashMap<String, String> = HashMap::new();
+    let mut container_direction: HashMap<usize, String> = HashMap::new();
+    let mut used_shapes: Vec<Shape> = Vec::new();
+    let mut used_families: Vec<Family> = Vec::new();
+
+    for st in &stmts {
+        match st {
+            Stmt::Direction(d) => {
+                // 容器内的 direction：D2 支持，原样带过去
+                if let Some(top) = stack.last().copied() {
+                    container_direction.insert(top, d2_direction(d).to_string());
+                }
+            }
+            Stmt::SubgraphOpen(name) => {
+                let idx = containers.len();
+                containers.push(Cluster {
+                    name: if name.is_empty() { format!("组{}", idx + 1) } else { name.clone() },
+                    parent: stack.last().copied(),
+                    children: Vec::new(),
+                });
+                if let Some(p) = stack.last().copied() {
+                    containers[p].children.push(idx);
+                }
+                stack.push(idx);
+            }
+            Stmt::SubgraphClose => {
+                stack.pop();
+            }
+            Stmt::ClassAssign { name, ids } => {
+                for id in ids {
+                    node_class.insert(id.clone(), name.clone());
+                }
+            }
+            Stmt::StyleAssign { id, style } => {
+                let (kv, dropped) = style_to_d2(style);
+                node_styles.entry(id.clone()).or_default().extend(kv);
+                dropped_keys.extend(dropped);
+            }
+            Stmt::Chain { operands, links } => {
+                for (i, op) in operands.iter().enumerate() {
+                    if !label_of.contains_key(&op.id) {
+                        order.push(op.id.clone());
+                        container_of.insert(op.id.clone(), stack.last().copied());
+                    } else if let Some(c) = stack.last().copied() {
+                        // 顶层提过、后来又在容器里提到 ⇒ 归容器（与转 DOT 同一套语义）
+                        if container_of.get(&op.id) == Some(&None) {
+                            container_of.insert(op.id.clone(), Some(c));
+                        }
+                    }
+                    if op.label.is_some() {
+                        label_of.insert(op.id.clone(), (op.label.clone(), op.shape));
+                    } else {
+                        label_of.entry(op.id.clone()).or_insert((None, Shape::Box));
+                    }
+                    if op.shape != Shape::Box && !used_shapes.contains(&op.shape) {
+                        used_shapes.push(op.shape);
+                    }
+                    if i > 0 {
+                        if links[i - 1].family != Family::Solid && !used_families.contains(&links[i - 1].family) {
+                            used_families.push(links[i - 1].family);
+                        }
+                        edges.push((operands[i - 1].id.clone(), op.id.clone(), links[i - 1].clone()));
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    if !stack.is_empty() {
+        return Err("subgraph 没有配对的 `end`".into());
+    }
+
+    let model = D2Emit {
+        label_of,
+        container_of,
+        containers,
+        node_styles,
+        node_class,
+        container_direction,
+    };
+
+    /* ---------- 输出 ---------- */
+    let mut out = String::new();
+    // Mermaid 的 `%%` 注释 → D2 的 `#` 注释。位置无法逐行保留（`parse` 不产出注释语句），
+    // 所以按出现顺序汇总到文件开头，并在 notes 里说清这一点。
+    let comments: Vec<&str> = src
+        .lines()
+        .filter_map(|l| l.trim().strip_prefix("%%").map(str::trim))
+        .filter(|c| !c.is_empty())
+        .collect();
+    for c in &comments {
+        let _ = writeln!(out, "# {c}");
+    }
+    let _ = writeln!(out, "direction: {}", d2_direction(&direction));
+
+    if !class_styles.is_empty() {
+        let _ = writeln!(out, "classes: {{");
+        for (name, kv) in &class_styles {
+            let _ = writeln!(out, "    {}: {{ style: {{ {} }} }}", d2_id(name), d2_style_inline(kv));
+        }
+        let _ = writeln!(out, "}}");
+    }
+
+    for id in &order {
+        if model.container_of.get(id).copied().flatten().is_none() {
+            model.emit_node(&mut out, id, 0);
+        }
+    }
+    let roots: Vec<usize> = (0..model.containers.len())
+        .filter(|i| model.containers[*i].parent.is_none())
+        .collect();
+    for r in roots {
+        model.emit_container(&mut out, r, &order, 0);
+    }
+    for (from, to, link) in &edges {
+        emit_d2_edge(&mut out, &model.path_of(from), &model.path_of(to), link, 0);
+    }
+
+    /* ---------- 保真度说明 ---------- */
+    let mut notes = Vec::new();
+    if !model.containers.is_empty() {
+        notes.push("subgraph 映射为 D2 容器（嵌套关系保留；容器内的 direction 也带过去了）".to_string());
+    }
+    for s in &used_shapes {
+        match s {
+            Shape::Stadium => {
+                notes.push("`([文本])` 体育场形在 D2 里没有对应形状，退化为 oval".to_string())
+            }
+            Shape::Subroutine => {
+                notes.push("`[[文本]]` 映射为 page，外观与 Mermaid 的子程序框略有差异".to_string())
+            }
+            Shape::Asymmetric => {
+                notes.push("`>文本]` 非对称形在 D2 里没有对应形状，退化为 callout".to_string())
+            }
+            Shape::Rounded => {
+                notes.push("圆角 `(文本)` 与方框 `[文本]` 在 D2 里都是 rectangle（D2 的矩形自带圆角）".to_string())
+            }
+            _ => {}
+        }
+    }
+    for f in &used_families {
+        match f {
+            Family::Dotted => notes.push("虚线边以 `style.stroke-dash` 表达".to_string()),
+            Family::Thick => notes.push("加粗边以 `style.stroke-width` 表达".to_string()),
+            Family::Solid => {}
+        }
+    }
+    if !dropped_keys.is_empty() {
+        dropped_keys.sort();
+        dropped_keys.dedup();
+        notes.push(format!(
+            "样式只迁移 fill / stroke / stroke-width / color / stroke-dasharray；其余键未迁移：{}",
+            dropped_keys.join(" / ")
+        ));
+    }
+    if !comments.is_empty() {
+        notes.push("`%%` 注释改写为 `#` 并汇总到文件开头（位置不再逐行对应）".to_string());
+    }
+    if ignored_directive {
+        notes.push("`click` / `linkStyle` 等指令未迁移".to_string());
+    }
+    notes.push("版式由 D2 的布局引擎重新计算（Mermaid 不保留位置信息）".to_string());
+
+    notes.dedup();
+    Ok(Conversion { body: out, notes })
+}
+
+/// 把一组 `style.*` 键值对写成一行 `k: v; k2: v2`（`classes` 块里用）。
+fn d2_style_inline(kv: &[(String, String)]) -> String {
+    kv.iter()
+        .map(|(k, v)| format!("{k}: {v}"))
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
+fn emit_d2_edge(out: &mut String, from: &str, to: &str, link: &Link, indent: usize) {
+    let pad = "    ".repeat(indent);
+    let arrow = if link.arrow { "->" } else { "--" };
+    let mut line = format!("{pad}{from} {arrow} {to}");
+    if let Some(label) = &link.label {
+        line.push_str(&format!(": {}", d2_str(label)));
+    }
+    // 边的属性块跟在标签之后（`a -> b: 标签 { style.stroke-dash: 3 }`）
+    let attrs: Vec<(String, String)> = match link.family {
+        Family::Solid => Vec::new(),
+        Family::Dotted => vec![("stroke-dash".into(), "3".into())],
+        Family::Thick => vec![("stroke-width".into(), "3".into())],
+    };
+    if !attrs.is_empty() {
+        let body = attrs
+            .iter()
+            .map(|(k, v)| format!("style.{k}: {v}"))
+            .collect::<Vec<_>>()
+            .join("; ");
+        line.push_str(&format!(" {{ {body} }}"));
+    }
+    let _ = writeln!(out, "{line}");
+}
+
+/// Mermaid → D2 的中间模型：一个 subgraph = 一个 D2 容器。
+struct D2Emit {
+    label_of: HashMap<String, (Option<String>, Shape)>,
+    /// 值语义同转 DOT：`None` = 顶层，`Some(i)` = 归第 i 个容器
+    container_of: HashMap<String, Option<usize>>,
+    containers: Vec<Cluster>,
+    node_styles: HashMap<String, Vec<(String, String)>>,
+    node_class: HashMap<String, String>,
+    /// 容器 → 容器内声明的局部 `direction`（D2 支持，DOT 不支持）
+    container_direction: HashMap<usize, String>,
+}
+
+impl D2Emit {
+    /// 节点在全文里的引用名：容器里的节点要写点号路径（`集成层.网关`），
+    /// 否则顶层那行边会造出一个新的同名节点。
+    fn path_of(&self, id: &str) -> String {
+        match self.container_of.get(id).copied().flatten() {
+            Some(idx) => format!("{}.{}", self.container_path(idx), d2_id(id)),
+            None => d2_id(id),
+        }
+    }
+
+    fn container_path(&self, idx: usize) -> String {
+        let mut segs: Vec<String> = vec![d2_id(&self.containers[idx].name)];
+        let mut cur = self.containers[idx].parent;
+        while let Some(p) = cur {
+            segs.push(d2_id(&self.containers[p].name));
+            cur = self.containers[p].parent;
+        }
+        segs.reverse();
+        segs.join(".")
+    }
+
+    fn emit_node(&self, out: &mut String, id: &str, indent: usize) {
+        let pad = "    ".repeat(indent);
+        let (label, shape) = self.label_of.get(id).cloned().unwrap_or((None, Shape::Box));
+        if let Some(l) = &label {
+            let _ = writeln!(out, "{pad}{}: {}", d2_id(id), d2_str(l));
+        }
+        if let Some(s) = shape.d2_shape() {
+            let _ = writeln!(out, "{pad}{}.shape: {s}", d2_id(id));
+        }
+        if let Some(cls) = self.node_class.get(id) {
+            let _ = writeln!(out, "{pad}{}.class: {}", d2_id(id), d2_id(cls));
+        }
+        if let Some(kv) = self.node_styles.get(id) {
+            for (k, v) in kv {
+                let _ = writeln!(out, "{pad}{}.style.{k}: {v}", d2_id(id));
+            }
+        }
+    }
+
+    fn emit_container(&self, out: &mut String, idx: usize, order: &[String], indent: usize) {
+        let pad = "    ".repeat(indent);
+        let c = &self.containers[idx];
+        let _ = writeln!(out, "{pad}{}: {{", d2_id(&c.name));
+        if let Some(dir) = self.container_direction.get(&idx) {
+            let _ = writeln!(out, "{pad}    direction: {dir}");
+        }
+        for id in order {
+            if self.container_of.get(id).copied().flatten() == Some(idx) {
+                self.emit_node(out, id, indent + 1);
+            }
+        }
+        for child in &c.children {
+            self.emit_container(out, *child, order, indent + 1);
+        }
+        let _ = writeln!(out, "{pad}}}");
+    }
+}
+
 /* ------------------------------------------------------------------ 分派 */
 
 /// 某个转换方向该由谁执行。
@@ -863,19 +1252,10 @@ pub enum Engine {
     Drawio,
     /// 交给 Excalidraw 的 `mermaid-to-excalidraw`
     Excalidraw,
+    /// 交给**前端的 D2 wasm**：几何在页面里算出来，再转 mxGraph（Rust 侧没有 wasm 跑不了）
+    D2Wasm,
     /// 暂不支持
     None,
-}
-
-/// 目标格式 → 由哪个引擎完成转换。
-pub fn engine_for(to: app_ipc::FormatId) -> Engine {
-    use app_ipc::FormatId::*;
-    match to {
-        Dot => Engine::Rust,
-        Drawio => Engine::Drawio,
-        Excalidraw => Engine::Excalidraw,
-        Mermaid => Engine::None,
-    }
 }
 
 impl Engine {
@@ -885,6 +1265,7 @@ impl Engine {
             Engine::Rust => "rust",
             Engine::Drawio => "drawio",
             Engine::Excalidraw => "excalidraw",
+            Engine::D2Wasm => "d2wasm",
             Engine::None => "none",
         }
     }
@@ -902,50 +1283,107 @@ pub struct Plan {
 ///
 /// **结构化回答，而不是让前端从错误字符串里猜引擎** —— 猜字符串的方案一改文案就崩。
 /// 真正的「做不了」（源格式不对）仍然返回 `Err`。
+///
+/// 这一层是全应用**唯一**的「哪个方向归谁」的真源：前端不维护第二张表
+/// （每个格式的 `convert_to` 只管"能不能"，"谁做"在这里回答）。
+///
+/// 矩阵按 `from` 逐层展开（而不是 `match (from, to)` + `_`）：
+/// 加第六种格式时编译器会把每一条**没想过的**方向都点名，不会静默落到兜底分支。
 pub fn plan(from: app_ipc::FormatId, to: app_ipc::FormatId) -> Result<Plan, String> {
     use app_ipc::FormatId::*;
 
-    if from == to {
-        return Err("源格式与目标格式相同".into());
-    }
-    if from != Mermaid {
-        return Err(match from {
-            Dot => "DOT → Mermaid 只在 flowchart 子集内可行，尚无映射器（转换中心把它列为实验方向）".to_string(),
-            Drawio => "drawio 不作为转换源：画布内容要转文本格式请先导出 XML".to_string(),
-            Excalidraw => "Excalidraw 不作为转换源：场景 JSON 没有到文本图表的通用映射".to_string(),
-            Mermaid => unreachable!(),
-        });
+    fn same() -> String {
+        "源格式与目标格式相同".to_string()
     }
 
-    let engine = engine_for(to);
-    let reason = match engine {
-        Engine::Rust => "由 Rust 侧的 Mermaid 解析器直接完成，可立即预览".to_string(),
-        Engine::Drawio => "由 drawio 自带的 Mermaid 导入器解析（经画布承载页），结果落在新标签页".to_string(),
-        Engine::Excalidraw => {
-            "由 Excalidraw 的 mermaid-to-excalidraw 解析（经画布承载页），结果落在新标签页".to_string()
-        }
-        Engine::None => format!("不支持转换到 {to:?}"),
+    let (engine, reason) = match from {
+        Mermaid => match to {
+            Dot => (Engine::Rust, "由 Rust 侧的 Mermaid 解析器直接完成，可立即预览"),
+            D2 => (Engine::Rust, "由 Rust 侧的 Mermaid 解析器直接完成，可立即预览（flowchart 子集）"),
+            Drawio => (
+                Engine::Drawio,
+                "由 drawio 自带的 Mermaid 导入器解析（经画布承载页），结果落在新标签页",
+            ),
+            Excalidraw => (
+                Engine::Excalidraw,
+                "由 Excalidraw 的 mermaid-to-excalidraw 解析（经画布承载页），结果落在新标签页",
+            ),
+            Mermaid => return Err(same()),
+        },
+        Dot => match to {
+            // 实验方向：没有映射器，转换中心如实标出来
+            Mermaid => {
+                return Err(
+                    "DOT → Mermaid 只在 flowchart 子集内可行，尚无映射器（转换中心把它列为实验方向）".into(),
+                )
+            }
+            D2 => (Engine::Rust, "由 Rust 侧的 DOT 解析器完成，可立即预览（基础子集，版式会重新计算）"),
+            Drawio | Excalidraw => {
+                return Err("DOT 只能转 D2 或（实验性的）Mermaid：画布承载页没有 DOT 导入器".into())
+            }
+            Dot => return Err(same()),
+        },
+        D2 => match to {
+            Drawio => (
+                Engine::D2Wasm,
+                "由 D2 的 wasm 编译器产出绝对几何后转成 mxGraph（保几何），结果落在新标签页",
+            ),
+            Mermaid | Dot => return Err(
+                "D2 → Mermaid / DOT 不做：D2 是它们的超集（容器、classes、vars、imports、layers…），\
+                 反向压缩每一样都要单独决定丢什么。要可继续编辑的图形请转 drawio（保几何）"
+                    .into(),
+            ),
+            Excalidraw => {
+                return Err("D2 → Excalidraw 不做：Excalidraw 只接 Mermaid；D2 的图形要进画布请转 drawio".into())
+            }
+            D2 => return Err(same()),
+        },
+        Drawio => match to {
+            Mermaid | Dot | D2 | Excalidraw => {
+                return Err("drawio 不作为转换源：画布内容要转文本格式请先导出 XML".into())
+            }
+            Drawio => return Err(same()),
+        },
+        Excalidraw => match to {
+            Mermaid | Dot | D2 | Drawio => {
+                return Err("Excalidraw 不作为转换源：场景 JSON 没有到文本图表的通用映射".into())
+            }
+            Excalidraw => return Err(same()),
+        },
     };
-    Ok(Plan { engine, reason })
+    Ok(Plan { engine, reason: reason.to_string() })
 }
 
 /// 执行一次**纯 Rust** 转换。
 ///
-/// 引擎型的两个方向在这里返回 `Err`（并点名是谁的活）——
+/// 引擎型的三个方向在这里返回 `Err`（并点名是谁的活）——
 /// 调用方应先问 `plan()`，别把这里的 `Err` 当成「不支持」。
 pub fn convert(
     from: app_ipc::FormatId,
     to: app_ipc::FormatId,
     source: &str,
 ) -> Result<Conversion, String> {
+    use app_ipc::FormatId::*;
+
     let p = plan(from, to)?;
-    match p.engine {
-        Engine::Rust => mermaid_to_dot(source),
-        Engine::Drawio => Err("mermaid → drawio 由 drawio 的 Mermaid 导入器完成（经画布承载页）".into()),
-        Engine::Excalidraw => {
-            Err("mermaid → Excalidraw 由 mermaid-to-excalidraw 完成（经画布承载页）".into())
-        }
-        Engine::None => Err(p.reason),
+    match (from, to) {
+        (Mermaid, Dot) => mermaid_to_dot(source),
+        (Mermaid, D2) => mermaid_to_d2(source),
+        (Dot, D2) => crate::convert_dot::dot_to_d2(source),
+        _ => match p.engine {
+            Engine::Drawio => {
+                Err("mermaid → drawio 由 drawio 的 Mermaid 导入器完成（经画布承载页）".into())
+            }
+            Engine::Excalidraw => {
+                Err("mermaid → Excalidraw 由 mermaid-to-excalidraw 完成（经画布承载页）".into())
+            }
+            Engine::D2Wasm => {
+                Err("D2 → drawio 由前端的 D2 wasm 编译器完成（经画布承载页）".into())
+            }
+            // 走到这里说明 plan() 放行了却没有 Rust 侧的实现 —— 是接线漏了，如实说出来
+            Engine::Rust => Err(format!("{from:?} → {to:?} 缺 Rust 侧的映射器")),
+            Engine::None => Err(p.reason),
+        },
     }
 }
 
@@ -1109,13 +1547,15 @@ mod tests {
         assert!(c2.body.contains("第一行\\n第二行"), "{}", c2.body);
     }
 
-    /// 分派：mermaid → dot 走 Rust，另外两个方向点名引擎，不谎称「不支持」。
+    /// 分派：mermaid → dot 走 Rust，引擎型方向点名引擎，不谎称「不支持」。
     #[test]
     fn dispatch_names_the_right_engine() {
         use app_ipc::FormatId::*;
-        assert_eq!(engine_for(Dot), Engine::Rust);
-        assert_eq!(engine_for(Drawio), Engine::Drawio);
-        assert_eq!(engine_for(Excalidraw), Engine::Excalidraw);
+        assert_eq!(plan(Mermaid, Dot).unwrap().engine, Engine::Rust);
+        assert_eq!(plan(Mermaid, Drawio).unwrap().engine, Engine::Drawio);
+        assert_eq!(plan(Mermaid, Excalidraw).unwrap().engine, Engine::Excalidraw);
+        assert_eq!(plan(D2, Drawio).unwrap().engine, Engine::D2Wasm, "D2 → drawio 只能在前端跑（wasm）");
+        assert_eq!(plan(Dot, D2).unwrap().engine, Engine::Rust);
 
         let ok = convert(Mermaid, Dot, "flowchart TD\n    A --> B\n").unwrap();
         assert!(ok.body.contains("A -> B;"));
@@ -1133,16 +1573,115 @@ mod tests {
         assert_eq!(p.engine.id(), "drawio");
         assert!(p.reason.contains("drawio"));
         assert_eq!(plan(Mermaid, Dot).unwrap().engine.id(), "rust");
+        assert_eq!(plan(D2, Drawio).unwrap().engine.id(), "d2wasm");
         assert!(plan(Dot, Mermaid).is_err(), "源格式不对要报错，而不是返回 none");
     }
 
     #[test]
     fn same_format_and_non_mermaid_sources_are_rejected_with_reasons() {
         use app_ipc::FormatId::*;
-        assert!(convert(Mermaid, Mermaid, "flowchart TD\n A --> B\n").is_err());
+        for id in [Mermaid, Dot, D2, Drawio, Excalidraw] {
+            let e = plan(id, id).unwrap_err();
+            assert!(e.contains("相同"), "{id:?} → 自己应报「相同」：{e}");
+        }
         let e = convert(Dot, Mermaid, "digraph { a -> b }").unwrap_err();
         assert!(e.contains("实验方向"), "{e}");
         assert!(convert(Drawio, Dot, "<mxfile/>").is_err());
+        let e = plan(D2, Mermaid).unwrap_err();
+        assert!(e.contains("超集"), "反向转换要说清为什么不做的道理：{e}");
+        assert!(plan(D2, Excalidraw).unwrap_err().contains("drawio"));
+        assert!(plan(Dot, Drawio).unwrap_err().contains("没有 DOT 导入器"));
+    }
+
+    /* ---------------- Mermaid → D2 ---------------- */
+
+    #[test]
+    fn d2_direction_and_chain_edges() {
+        let c = mermaid_to_d2("flowchart LR\n    A --> B --> C\n").unwrap();
+        assert!(c.body.contains("direction: right"), "{}", c.body);
+        assert!(c.body.contains("A -> B"), "{}", c.body);
+        assert!(c.body.contains("B -> C"), "{}", c.body);
+        // TD 归一成 TB 之后仍是 down
+        assert!(mermaid_to_d2("flowchart TD\n    A --> B\n").unwrap().body.contains("direction: down"));
+        assert!(mermaid_to_d2("flowchart BT\n    A --> B\n").unwrap().body.contains("direction: up"));
+    }
+
+    #[test]
+    fn d2_shapes_and_labels_are_quoted() {
+        let c = mermaid_to_d2("flowchart TD\n    A([开始]) --> B{判断}\n    B --> C((圆))\n").unwrap();
+        assert!(c.body.contains("A.shape: oval"), "{}", c.body);
+        assert!(c.body.contains("B.shape: diamond"), "{}", c.body);
+        assert!(c.body.contains("C.shape: circle"), "{}", c.body);
+        assert!(c.body.contains("A: \"开始\""), "标签一律加引号：{}", c.body);
+        assert!(c.notes.iter().any(|n| n.contains("体育场")), "{:?}", c.notes);
+    }
+
+    /// 形状名写错 D2 会**编译失败**（实测 `unknown shape "nope"`），所以钉住这张表。
+    #[test]
+    fn d2_shape_names_are_the_ones_d2_knows() {
+        for (src, want) in [
+            ("flowchart TD\n    A([x]) --> B\n", "shape: oval"),
+            ("flowchart TD\n    A[[x]] --> B\n", "shape: page"),
+            ("flowchart TD\n    A[(x)] --> B\n", "shape: cylinder"),
+            ("flowchart TD\n    A{{x}} --> B\n", "shape: hexagon"),
+            ("flowchart TD\n    A>x] --> B\n", "shape: callout"),
+            // 方框与圆角都是 D2 的默认矩形，不写 shape 属性（D2 的矩形自带圆角）
+            ("flowchart TD\n    A[x] --> B\n", "A: \"x\""),
+        ] {
+            let c = mermaid_to_d2(src).unwrap();
+            assert!(c.body.contains(want), "{src:?} 应映射到 {want}：{}", c.body);
+            assert!(!c.body.contains("unknown"), "{}", c.body);
+        }
+    }
+
+    #[test]
+    fn d2_subgraph_becomes_container_with_local_direction() {
+        let c = mermaid_to_d2("flowchart TD\n    subgraph 风控\n        direction LR\n        L --> M\n    end\n    A --> L\n").unwrap();
+        assert!(c.body.contains("风控: {"), "{}", c.body);
+        assert!(c.body.contains("direction: right"), "容器内的 direction 要保留：{}", c.body);
+        assert!(c.body.contains("风控.L -> 风控.M"), "容器里的边用具名路径引用：{}", c.body);
+        assert!(c.body.contains("A -> 风控.L"), "跨容器的边同样用点号路径：{}", c.body);
+        assert!(c.body.find("风控: {").unwrap() < c.body.find("风控.L -> 风控.M").unwrap(), "边一律在末尾：{}", c.body);
+    }
+
+    #[test]
+    fn d2_edge_styles_and_classes() {
+        let c = mermaid_to_d2(
+            "flowchart TD\n    A -.-> B\n    C ==> D\n    classDef danger fill:#f8e9e6,stroke:#b0554a\n    class A danger\n",
+        )
+        .unwrap();
+        assert!(c.body.contains("style.stroke-dash: 3"), "{}", c.body);
+        assert!(c.body.contains("style.stroke-width: 3"), "{}", c.body);
+        assert!(c.body.contains("classes: {"), "{}", c.body);
+        assert!(c.body.contains("A.class: danger"), "{}", c.body);
+        assert!(c.body.contains("fill: \"#f8e9e6\""), "类样式值要带引号：{}", c.body);
+        assert!(c.notes.iter().any(|n| n.contains("虚线")), "{:?}", c.notes);
+    }
+
+    #[test]
+    fn d2_notes_list_what_was_lost() {
+        let c = mermaid_to_d2("flowchart TD\n%% 说明\n    A[[子程序]] --> B\n    click A \"https://x\"\n").unwrap();
+        assert!(c.body.starts_with("# 说明"), "注释汇总到开头：{}", c.body);
+        assert!(c.notes.iter().any(|n| n.contains("page")), "{:?}", c.notes);
+        assert!(c.notes.iter().any(|n| n.contains("click")), "{:?}", c.notes);
+        assert!(c.notes.iter().any(|n| n.contains("注释")), "{:?}", c.notes);
+        assert!(c.notes.iter().any(|n| n.contains("版式")), "{:?}", c.notes);
+    }
+
+    /// 带 `.` 的 id 必须加引号：D2 的 `.` 是路径分隔符，裸写会被当成「容器里的节点」。
+    #[test]
+    fn d2_quotes_ids_that_would_be_read_as_paths() {
+        let c = mermaid_to_d2("flowchart TD\n    a.b[x] --> c\n").unwrap();
+        assert!(c.body.contains("\"a.b\""), "{}", c.body);
+        assert!(c.body.contains("\"a.b\" -> c"), "{}", c.body);
+    }
+
+    #[test]
+    fn d2_conversion_is_dispatched_by_convert() {
+        use app_ipc::FormatId::*;
+        let c = convert(Mermaid, D2, "flowchart TD\n    A --> B\n").unwrap();
+        assert!(c.body.contains("direction: down"));
+        assert!(convert(Mermaid, D2, "sequenceDiagram\n    A->>B: hi\n").is_err(), "非 flowchart 要报错");
     }
 
     /// 生成物要能真的被 graphviz 跑（结构层面：括号配平、语句以分号收尾）。

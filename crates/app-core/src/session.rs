@@ -146,7 +146,7 @@ impl Session {
             view_mode: format::default_view_mode(format),
             caret_line: 1,
             caret_col: 1,
-            layout: if format == FormatId::Dot { Some("dot".into()) } else { None },
+            layout: document::default_layout(format),
         };
         let id = doc.id.clone();
         self.entries.push(Entry::born_dirty(doc));
@@ -199,13 +199,11 @@ impl Session {
 
     pub fn set_layout(&mut self, id: &str, layout: String) -> bool {
         match self.entry_mut(id) {
-            Some(e) if e.doc.format == FormatId::Dot => {
-                if crate::format::DOT_LAYOUTS.contains(&layout.as_str()) {
-                    e.doc.layout = Some(layout);
-                    true
-                } else {
-                    false
-                }
+            // 合法布局由**注册表**说了算（DOT 六个、D2 三个、其余没有）——
+            // 这里不再各写一份清单，否则加格式时必然漏一处。
+            Some(e) if format::info(e.doc.format).layouts.contains(&layout) => {
+                e.doc.layout = Some(layout);
+                true
             }
             _ => false,
         }
@@ -311,14 +309,22 @@ mod tests {
     }
 
     #[test]
-    fn layout_only_applies_to_dot_and_must_be_known() {
+    fn layout_is_limited_to_formats_that_declare_one() {
         let mut s = Session::default();
         let dot = s.new_doc(FormatId::Dot);
         let mmd = s.new_doc(FormatId::Mermaid);
+        let d2 = s.new_doc(FormatId::D2);
+
+        assert_eq!(s.get(&dot.id).unwrap().layout.as_deref(), Some("dot"), "DOT 出生即带默认布局");
+        assert_eq!(s.get(&d2.id).unwrap().layout.as_deref(), Some("dagre"), "D2 默认布局是快的那个");
+        assert_eq!(s.get(&mmd.id).unwrap().layout, None);
+
         assert!(s.set_layout(&dot.id, "neato".into()));
         assert_eq!(s.get(&dot.id).unwrap().layout.as_deref(), Some("neato"));
+        assert!(s.set_layout(&d2.id, "tala".into()));
+        assert!(!s.set_layout(&d2.id, "neato".into()), "D2 没有 neato，未知布局应拒绝");
         assert!(!s.set_layout(&dot.id, "nope".into()), "未知布局应拒绝");
-        assert!(!s.set_layout(&mmd.id, "dot".into()), "非 DOT 文档不接布局");
+        assert!(!s.set_layout(&mmd.id, "dot".into()), "Mermaid 没有布局引擎，不接布局");
     }
 
     #[test]

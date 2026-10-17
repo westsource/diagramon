@@ -27,7 +27,7 @@ pub fn from_path(id: String, path: &Path) -> std::io::Result<Doc> {
         view_mode: format::default_view_mode(format),
         caret_line: 1,
         caret_col: 1,
-        layout: if format == FormatId::Dot { Some("dot".into()) } else { None },
+        layout: default_layout(format),
     })
 }
 
@@ -45,8 +45,17 @@ pub fn untitled(id: String, format: FormatId, seq: u32) -> Doc {
         view_mode: format::default_view_mode(format),
         caret_line: 1,
         caret_col: 1,
-        layout: if format == FormatId::Dot { Some("dot".into()) } else { None },
+        layout: default_layout(format),
     }
+}
+
+/// 新文档的初始布局引擎：**取注册表里的第一个**（DOT → `dot`，D2 → `dagre`）；
+/// 没有布局的格式（Mermaid / 画布型）为 `None`。
+///
+/// 这里以前写死 `format == FormatId::Dot`，加第五种格式时就成了"漏一处、D2 静默没有布局"。
+/// 布局清单本来就是注册表的一部分，按它取是唯一不会再漂的第二份。
+pub fn default_layout(format: FormatId) -> Option<String> {
+    format::info(format).layouts.first().cloned()
 }
 
 pub fn file_name(path: &Path) -> String {
@@ -101,6 +110,15 @@ mod tests {
         let p = temp_file("weird.txt", "flowchart TD\n A-->B\n");
         let d = from_path("d2".into(), &p).unwrap();
         assert_eq!(d.format, FormatId::Mermaid);
+    }
+
+    #[test]
+    fn d2_documents_get_their_default_layout_from_the_registry() {
+        let p = temp_file("c.d2", "a -> b\n");
+        let d = from_path("d4".into(), &p).unwrap();
+        assert_eq!(d.format, FormatId::D2);
+        assert_eq!(d.view_mode, crate::format::default_view_mode(FormatId::D2), "文本型默认分屏");
+        assert_eq!(d.layout.as_deref(), Some("dagre"), "新文档的布局取注册表里的第一个（快的那个）");
     }
 
     #[test]

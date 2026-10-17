@@ -9,6 +9,7 @@ pub fn outline(format: FormatId, body: &str) -> Vec<OutlineGroup> {
     match format {
         FormatId::Mermaid => mermaid(body),
         FormatId::Dot => dot(body),
+        FormatId::D2 => d2(body),
         FormatId::Drawio => xml(body),
         FormatId::Excalidraw => json(body),
     }
@@ -158,6 +159,82 @@ fn dot(body: &str) -> Vec<OutlineGroup> {
         .collect()
 }
 
+/// D2 大纲：容器（`名: {` … `}`）→ 分组，`a -> b: 标签` → 节点与边，`a: 标签` → 节点。
+///
+/// **不解析样式**：`a.shape: cylinder` / `a.style.fill: "#f00"` 这类属性行的键里带 `.`，
+/// 一律跳过；`classes: { … }` 这类保留字块也不算容器（它们不是图里的东西）。
+/// D2 的容器比 Mermaid 的 subgraph 更适合做大纲 —— 它本来就是树的形状。
+fn d2(body: &str) -> Vec<OutlineGroup> {
+    use crate::d2syntax;
+
+    let mut containers = Vec::new();
+    let mut nodes = Vec::new();
+    let mut edges = Vec::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    // >0 表示正在跳过保留字块（`classes: { … }` 这类不是图里的东西）；值是块内花括号净值
+    let mut skipped: i32 = 0;
+
+    for (idx, raw) in body.lines().enumerate() {
+        let line = idx as u32 + 1;
+        let text = d2syntax::strip_comment(raw).trim().to_string();
+        if text.is_empty() {
+            continue;
+        }
+        let net = text.matches('{').count() as i32 - text.matches('}').count() as i32;
+        if skipped > 0 {
+            skipped += net;
+            continue;
+        }
+        if let Some(name) = d2syntax::container_name(&text) {
+            if d2syntax::is_keyword(&name) {
+                skipped += net;
+            } else {
+                containers.push(row(name, "cluster", line));
+            }
+            continue;
+        }
+        if text == "}" {
+            continue;
+        }
+        if d2syntax::is_edge(&text) {
+            edges.push(row(text.split_whitespace().take(6).collect::<Vec<_>>().join(" "), "edge", line));
+            for id in d2syntax::edge_endpoints(&text) {
+                if seen.insert(id.clone()) {
+                    nodes.push(row(id, "node", line));
+                }
+            }
+            continue;
+        }
+        match text.split_once(':') {
+            // 属性行（`a.shape: …`）不是节点声明
+            Some((key, value)) if !key.contains('.') => {
+                let key = key.trim().trim_matches('"').trim().to_string();
+                if key.is_empty() || d2syntax::is_keyword(&key) {
+                    continue;
+                }
+                let label = value.trim().trim_matches('"').trim();
+                let name = if label.is_empty() { key.clone() } else { label.to_string() };
+                if seen.insert(key) {
+                    nodes.push(row(name, "node", line));
+                }
+            }
+            Some(_) => {}
+            // 裸节点名（`a` 单独一行）
+            None => {
+                let id = text.trim_matches('"').trim();
+                if !id.is_empty() && !id.contains(char::is_whitespace) && seen.insert(id.to_string()) {
+                    nodes.push(row(id, "node", line));
+                }
+            }
+        }
+    }
+
+    [group("容器", containers), group("节点", nodes), group("边", edges)]
+        .into_iter()
+        .flatten()
+        .collect()
+}
+
 fn xml(body: &str) -> Vec<OutlineGroup> {
     let mut rows = Vec::new();
     for (idx, raw) in body.lines().enumerate() {
@@ -267,6 +344,38 @@ mod tests {
         assert_eq!(g[0].rows[0].line, 3);
         assert_eq!(g[0].rows[1].name, "arrow a1");
         assert_eq!(g[0].rows[1].line, 4);
+    }
+
+    #[test]
+    fn d2_outline_groups_containers_nodes_and_edges() {
+        let src = "direction: right\n网关: 网关服务\n前端应用 -> 网关: HTTPS 请求\n集成层: {\n  网关 -> 数据库: SELECT\n}\nclasses: {\n  danger: { style.fill: \"#f00\" }\n}\n";
+        let g = outline(FormatId::D2, src);
+        let titles: Vec<_> = g.iter().map(|x| x.title.as_str()).collect();
+        assert_eq!(titles, vec!["容器", "节点", "边"]);
+
+        let containers = &g[0];
+        assert_eq!(containers.rows.len(), 1, "classes 是保留字块，不算容器");
+        assert_eq!(containers.rows[0].name, "集成层");
+        assert_eq!(containers.rows[0].line, 4);
+
+        let nodes = &g[1];
+        let names: Vec<_> = nodes.rows.iter().map(|r| r.name.as_str()).collect();
+        assert_eq!(names, vec!["网关服务", "前端应用", "数据库"], "`名: 标签` 取标签，边的端点取 id，整体按首现去重");
+        assert_eq!(nodes.rows[0].line, 2);
+
+        let edges = &g[2];
+        assert_eq!(edges.rows.len(), 2);
+        assert_eq!(edges.rows[0].line, 3);
+        assert!(edges.rows[0].name.contains("HTTPS 请求"));
+    }
+
+    #[test]
+    fn d2_outline_ignores_style_attributes_and_comments() {
+        let src = "a.shape: cylinder\na.style.fill: \"#f00\" # 注释\n# 整行注释\nb\n";
+        let g = outline(FormatId::D2, src);
+        assert_eq!(g.len(), 1, "只有节点一组");
+        let names: Vec<_> = g[0].rows.iter().map(|r| r.name.as_str()).collect();
+        assert_eq!(names, vec!["b"], "属性行与注释都不产生条目");
     }
 
     #[test]

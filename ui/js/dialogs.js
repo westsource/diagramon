@@ -191,6 +191,37 @@ window.DGM = window.DGM || {};
     return "";
   }
 
+  /**
+   * D2 → drawio：**只能在前端做**（几何要 wasm 算），所以走 `engine === "d2wasm"` 这条支线。
+   *
+   * 为什么不用 `convertViaEngine`：那条路是「把 Mermaid 源码交给承载页、由承载页的
+   * Mermaid 导入器解析」，而 D2 的产物**已经是一份完整的 mxfile**了（`DGM.d2.toDrawio`
+   * 把 `compile()` 的绝对几何映射成 mxGraph）。于是它就是一份普通的 drawio 文档：
+   * 建标签页 → 写正文 → 承载页照常 `load` 它，用户能接着拖拽编辑。
+   *
+   * `notes` 由 `toDrawio` 逐条给出（形状退化 / 主题 / 多板 / icon），在转换记录里展示。
+   */
+  async function convertViaD2Wasm(source, srcDoc, dir) {
+    if (!DGM.d2) {
+      DGM.toast({ icon: "alert", title: t("dlg.convert.title"), sub: t("preview.d2.unavailable", { msg: "ui/js/d2.js 未加载" }), warn: true });
+      return null;
+    }
+    let made = null;
+    try {
+      made = await DGM.d2.toDrawio(source, srcDoc.layout || "");
+    } catch (e) {
+      const raw = (e && e.message) || String(e);
+      const parsed = DGM.d2.describeError(raw);
+      state.pushConvert({ from: dir.from, to: dir.to, doc: srcDoc.name, ok: false, note: parsed ? parsed.text : raw });
+      DGM.toast({ icon: "alert", title: t("dlg.convert.title"), sub: parsed ? parsed.text : raw, warn: true });
+      return null;
+    }
+    const doc = await state.newDoc(dir.to);
+    if (!doc) return null;
+    await state.setBodyNow(doc.id, made.xml);
+    return { doc, notes: made.notes };
+  }
+
   /** 转换成功后统一收尾：刷新界面、记转换记录、提示。 */
   function finishConvert(created, dir, srcDoc, notes) {
     DGM.editor.loadActive();
@@ -318,6 +349,11 @@ window.DGM = window.DGM || {};
     if (p.engine === "rust") {
       created = await state.newDoc(dir.to);
       if (created) await state.setBodyNow(created.id, p.text);
+    } else if (p.engine === "d2wasm") {
+      // D2 → drawio：几何在前端由 wasm 算，产物是一份完整的 mxfile
+      const via = await convertViaD2Wasm(srcDoc.body, srcDoc, dir);
+      created = via && via.doc;
+      extraNotes = (via && via.notes) || [];
     } else if (p.engine !== "none") {
       const via = await convertViaEngine(dir.to, srcDoc.body, srcDoc, dir);
       created = via && via.doc;
@@ -1308,13 +1344,16 @@ window.DGM = window.DGM || {};
     };
   }
 
-  /* ================================================================== DOT 布局 */
+  /* ================================================================== 布局引擎 */
 
   function layout() {
     const d = state.activeDoc();
-    if (!d || d.format !== "dot") return;
+    if (!d) return;
     const layouts = state.docFmt(d).layouts || [];
-    const items = layouts.map((l) => ({ label: l, check: true, on: (d.layout || "dot") === l, l }));
+    // 没有布局引擎的格式（Mermaid / 画布型）什么都不弹：命令的 avail 已经拦过一次，
+    // 这里是第二道 —— 别给一个空列表的菜单。
+    if (!layouts.length) return;
+    const items = layouts.map((l) => ({ label: l, check: true, on: (d.layout || layouts[0]) === l, l }));
     DGM.pop.show(items, { x: innerWidth / 2 - 90, y: 120 }, (it) => {
       DGM.pop.hide();
       if (it.l) {

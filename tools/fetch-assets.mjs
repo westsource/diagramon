@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * 取资产：把四个挂载点的运行时资源汇到 `assets/`（随包形态用）。
+ * 取资产：把五个挂载点的运行时资源汇到 `assets/`（随包形态用）。
  *
  *   node tools/fetch-assets.mjs                从默认源工作树复制到 assets/
  *   node tools/fetch-assets.mjs --from <dir>   指定源工作树
@@ -19,9 +19,10 @@
  *
  * ## 源工作树怎么来
  *
- * 本仓库不存这四个运行时（见 .gitignore：`tools/drawio/`、`tools/excalidraw/`、
- * `tools/graphviz/`）。它们由**本仓库**的三个取资产脚本（`tools/fetch-drawio.ps1`、
- * `tools/fetch-excalidraw.ps1`、`tools/fetch-graphviz.ps1`）下载并离线化，产物直接落在
+ * 本仓库不存这五个运行时（见 .gitignore：`tools/drawio/`、`tools/excalidraw/`、
+ * `tools/graphviz/`、`tools/mermaid/`、`tools/d2/`）。它们由**本仓库**的几个取资产脚本
+ * （`tools/fetch-drawio.ps1`、`tools/fetch-excalidraw.ps1`、`tools/fetch-graphviz.ps1`、
+ * `tools/fetch-d2.mjs`）下载 / 解出并离线化，产物直接落在
  * `tools/<挂载点>/`（2026-10-17 起脚本与产物都只在本仓库；旧的 `client/` 已删除）。
  *
  * 离线优先是本项目的底色，所以这里刻意**不实现联网下载**：
@@ -33,6 +34,7 @@
  *   excalidraw → tools/excalidraw        入口 index.html
  *   graphviz   → tools/graphviz          入口 graphviz.js（ESM）
  *   mermaid    → tools/mermaid           只取 mermaid.min.js
+ *   d2         → tools/d2                入口 index.js（D2 的 wasm 构建）
  *
  * `drawio/host.html` 与 `excalidraw/index.html` 是**本仓库的承载页**
  * （`tools/drawio-host/host.html`、`tools/excalidraw-host/index.html`），
@@ -56,7 +58,7 @@ const MANIFEST = join(ASSETS, ".manifest.json");
 const argv = process.argv.slice(2);
 const VERIFY_ONLY = argv.includes("--verify");
 const fromArg = argv.indexOf("--from");
-/** 显式指定源工作树时，四个挂载点全从它取（行为与以前一致）。 */
+/** 显式指定源工作树时，五个挂载点全从它取（行为与以前一致）。 */
 const SOURCE_OVERRIDE = fromArg >= 0
   ? resolve(argv[fromArg + 1])
   : process.env.DIAGRAMON_SOURCE_TREE
@@ -107,6 +109,13 @@ const MOUNTS = [
     name: "mermaid",
     from: mountSource(["tools", "mermaid"], "mermaid.min.js"),
     entry: "mermaid.min.js",
+    needDirs: [],
+    extra: [],
+  },
+  {
+    name: "d2",
+    from: mountSource(["tools", "d2"], "index.js"),
+    entry: "index.js",
     needDirs: [],
     extra: [],
   },
@@ -170,7 +179,9 @@ function fetchAll() {
     const dest = join(ASSETS, m.name);
     rmSync(dest, { recursive: true, force: true });
     mkdirSync(dest, { recursive: true });
-    cpSync(m.from, dest, { recursive: true });
+    // 挂载点目录里只该有运行时资产：`tools/d2/` 还放着解包用的 npm tarball（31MB），
+    // 那是**源**不是**产物**，复制时按扩展名剔掉，免得发布包里多塞一份。
+    cpSync(m.from, dest, { recursive: true, filter: (src) => !src.endsWith(".tgz") });
     for (const e of m.extra) cpSync(e.from, join(dest, e.to));
 
     const files = walk(dest, dest);
@@ -222,7 +233,7 @@ function verify() {
     }
   }
   log("");
-  log(bad ? red(`✗ ${bad} 个挂载点不完整`) : green(`✓ 四个挂载点完整（共 ${mb(grand)}）`));
+  log(bad ? red(`✗ ${bad} 个挂载点不完整`) : green(`✓ ${MOUNTS.length} 个挂载点完整（共 ${mb(grand)}）`));
   return bad ? 1 : 0;
 }
 

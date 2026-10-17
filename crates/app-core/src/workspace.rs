@@ -29,7 +29,7 @@ pub const SKIP_DIRS: &[&str] = &[
 ];
 
 /// 本应用能打开的扩展名（小写、不带点）。
-pub const OPEN_EXTS: &[&str] = &["mmd", "mermaid", "dot", "gv", "drawio", "excalidraw"];
+pub const OPEN_EXTS: &[&str] = &["mmd", "mermaid", "dot", "gv", "d2", "drawio", "excalidraw"];
 
 pub fn is_open_ext(ext: &str) -> bool {
     let e = ext.trim_start_matches('.').to_ascii_lowercase();

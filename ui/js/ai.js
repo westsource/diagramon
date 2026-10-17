@@ -98,6 +98,7 @@ window.DGM = window.DGM || {};
 
   function langToFormat(lang) {
     if (lang === "dot" || lang === "graphviz") return "dot";
+    if (lang === "d2") return "d2";
     if (lang === "xml") return "drawio";
     if (lang === "json") return "excalidraw";
     return "mermaid";

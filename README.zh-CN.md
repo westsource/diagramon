@@ -3,11 +3,11 @@
 [English](README.md)
 
 **本地优先**的多格式图表编辑器。支持 **Mermaid**（`.mmd` / `.mermaid`）、**Graphviz DOT**（`.dot` / `.gv`）、
-**drawio**（`.drawio`）与 **Excalidraw**（`.excalidraw`）四种格式，都能编辑并实时预览。
+**D2**（`.d2`）、**drawio**（`.drawio`）与 **Excalidraw**（`.excalidraw`）五种格式，都能编辑并实时预览。
 AI 是第一公民：既可用自有 Key 直连（BYOK），也可走会员云网关，含**识图**（图片 → 图表代码）。
 
 **渲染、语法校验、格式转换全部在本机完成**：Mermaid 与 Graphviz 走内置引擎（WASM / 打包 JS），
-drawio 与 Excalidraw 走随包自带的运行时，**不起任何子进程、不发任何外部请求**。
+D2 走随包的官方 wasm 构建，drawio 与 Excalidraw 走随包自带的运行时，**不起任何子进程、不发任何外部请求**。
 只有你主动使用 AI 时，相关代码或图片才会发往你选择的上游（BYOK 直连你的服务商，会员走 Diagramon 云网关）。
 
 版本 **3.3.1** · 官网 <https://www.diagramon.com>
@@ -35,8 +35,8 @@ drawio 与 Excalidraw 走随包自带的运行时，**不起任何子进程、�
   `Ctrl+Tab` / `Ctrl+PgUp` / `Ctrl+PgDn` 循环切换
 - **语法校验与行内报错**：括号/引号/标签配对、JSON 解析失败等**能确证**的问题才报，不做风格猜测；
   问题面板汇总所有已打开文档，逐行标出文档名、行列号
-- **大纲与当前作用域**：从正文解出节点与 `subgraph` / `cluster` 树；状态栏在行列号旁显示
-  光标所在的 subgraph/cluster（不重复出现在别处）
+- **大纲与当前作用域**：从正文解出节点与 `subgraph` / `cluster` / D2 容器树；状态栏在行列号旁显示
+  光标所在的 subgraph/cluster/容器（不重复出现在别处）
 - **查找替换**、撤销重做、右键菜单、命令面板（`Ctrl+Shift+P` 或 `F1`）
 - **大文档护栏**：行数/字节超阈值时预览先问一句「仍要渲染」，不默默把引擎拖死（阈值只存一份，由 Rust 下发）
 
@@ -45,9 +45,9 @@ drawio 与 Excalidraw 走随包自带的运行时，**不起任何子进程、�
 - **统一手势**：滚轮平移、`Shift+滚轮` 横向平移、`Ctrl+滚轮` 以光标为锚缩放、拖拽平移、
   双击适应视图；`Ctrl+0` / `Ctrl+=` / `Ctrl+-` 由外壳转发给当前视图（预览与两个画布共用一套语义）
 - **状态栏缩放读数**：只显示**当前**视图的缩放值（画布自己的读数被隐藏，避免两个数字打架）
-- **DOT 布局引擎切换**：`dot` / `neato` / `fdp` / `sfdp` / `twopi` / `circo`，切换走增量重排，
-  不重载 WASM
-- **导出**：导出图片（PNG，倍率可选）与复制到剪贴板；DOT 走 `SVG → canvas → PNG`，零子进程
+- **布局引擎切换**：DOT 有 `dot` / `neato` / `fdp` / `sfdp` / `twopi` / `circo`（切换走增量重排，
+  不重载 WASM）；D2 有 `dagre` / `elk` / `tala`（切换重新编译，引擎实例复用；`tala` 慢，按需用）
+- **导出**：导出图片（PNG，倍率可选）与复制到剪贴板；文本型走 `SVG → canvas → PNG`，零子进程
 
 ### 画布编辑（drawio / Excalidraw）
 - **画布即编辑器**：不藏控件，而是明说 —— 两个格式都不提供源码/分屏三态
@@ -59,8 +59,11 @@ drawio 与 Excalidraw 走随包自带的运行时，**不起任何子进程、�
 - **离线自带**：drawio（裁剪过的运行时）与 Excalidraw（本地打包）都随安装包分发，零外部请求
 
 ### 格式转换（转换中心）
-- **方向**：`Mermaid → DOT`（纯 Rust 实现）、`Mermaid → drawio`、`Mermaid → Excalidraw`
-  （交给各自的引擎，不重新实现解析器）
+- **方向**：`Mermaid → DOT` / `Mermaid → D2` / `DOT → D2`（纯 Rust 实现）、`Mermaid → drawio`、
+  `Mermaid → Excalidraw`（交给各自的引擎，不重新实现解析器）、`D2 → drawio`（在前端用 D2 自己的
+  wasm 先算出几何，再映射成 mxGraph —— **保几何**，转出来还能继续拖拽编辑）
+- **明确不做的方向也说明理由**：D2 是 Mermaid / DOT 的超集（容器、classes、vars、layers…），
+  反向压缩要逐项决定丢什么，所以不做；「从 D2 出去」由 `D2 → drawio` 承接
 - **单向语义**：产物另开标签页，原文件字节不变
 - **有损就说清楚**：结果带 `notes`，逐条列出「哪类信息没迁移」（如 `subgraph → cluster` 丢样式），
   对话框直接显示，不静默丢
@@ -115,19 +118,19 @@ drawio 与 Excalidraw 走随包自带的运行时，**不起任何子进程、�
 - **语言 / 框架**：Rust（2021 版次）+ Tauri 2，前端无框架、**无构建链**、零 CDN
 - **WebView**：系统 WebView（Windows 上为 WebView2）
 - **编辑器**：CodeMirror 6（打包进 `ui/vendor/`，暴露给外壳，不落 npm 依赖）
-- **渲染引擎**：Mermaid（打包 JS）· Graphviz（WASM）· drawio（随包裁剪运行时）· Excalidraw（本地打包）
+- **渲染引擎**：Mermaid（打包 JS）· Graphviz（WASM）· D2（随包的官方 wasm 构建）· drawio（随包裁剪运行时）· Excalidraw（本地打包）
 - **AI 网络层**：Rust（reqwest + SSE 流式），凭据走 DPAPI
-- **打包**：NSIS 安装包；画布运行时与前端 `ui/` 都作为资源打进包（约 60 MB）
+- **打包**：NSIS 安装包；画布/渲染运行时与前端 `ui/` 都作为资源打进包（其中 D2 的 wasm 约 11MB）
 
 ### 为什么有个自定义协议 `dgm`
 
-外壳与四个承载页（drawio / Excalidraw / graphviz / mermaid）**必须同源**：承载页的
+外壳与承载页（drawio / Excalidraw / graphviz / mermaid / d2）**必须同源**：承载页的
 「画布 ↔ 正文」往返靠直接读写 `iframe.contentWindow` 上的 `__hostQueue` / `__apply`
 （契约真源见 `tools/drawio-host/host.html` 的注释块）。跨源就拿不到，只能退回
 「宿主轮询 + 脚本注入」——那套在 WebView 包装层上不稳。
 
 所以整个应用都从 `dgm` 加载：Windows 是 `http://dgm.localhost/`，其它平台是 `dgm://localhost/`。
-`/drawio/`、`/excalidraw/`、`/graphviz/`、`/mermaid/` 是挂载点，其余路径落到 `ui/`。
+`/drawio/`、`/excalidraw/`、`/graphviz/`、`/mermaid/`、`/d2/` 是挂载点，其余路径落到 `ui/`。
 
 ### 运行时分工（一句话）
 
@@ -163,7 +166,8 @@ node tools/dev/check.mjs --skip-test   # 只跑真机自检（构建仍会跑）
 python tools/dev/canvas_probe.py   # 画布链路探针：真 drawio 载入 → 取回 → 截图
 python tools/dev/ui_probe.py       # 界面探针：浏览器原型里跑真实交互断言
 python tools/dev/readme_shots.py   # 重新生成 screenshots/ 里的界面截图
-node tools/fetch-assets.mjs        # 打包前把四个挂载点的资产汇到 assets/
+node tools/fetch-d2.mjs            # 打包前取 D2 运行时（自动：npm pack / 直连 registry；已在位则跳过）
+node tools/fetch-assets.mjs        # 打包前把五个挂载点的资产汇到 assets/
 ```
 
 `check.mjs` 的顺序是固定的：**杀残留实例 → 构建 → Rust 单测 → 启动客户端跑真实 IPC 断言**
@@ -203,18 +207,18 @@ npx tauri build --bundles nsis
 crates/
   app-ipc/           前后端契约（唯一真源，前端不维护第二份字段清单）
   app-core/          格式注册表 · 文档与会话 · 语法校验 · 大纲 · 作用域 · 格式转换 · 工作区 · 设置
-  assets/            自定义协议 dgm 的路径解析（外壳与四个承载页同源的实现）
+  assets/            自定义协议 dgm 的路径解析（外壳与五个挂载点同源的实现）
   ai/                提示词与供应商（BYOK 流式对话）
   platform/          平台适配层接口（凭据、路径）+ 非 Windows 的明文兜底
   platform-windows/  DPAPI 凭据存储（按当前用户加密）
 src-tauri/           Tauri 装配与命令层（窗口、协议注册、命令、事件、监视、截屏）
 ui/                  前端外壳（无框架、无构建链、零 CDN）
-  js/                外壳 · 侧栏 · 面板 · 标签 · 编辑器 · 画布承载 · 预览 · AI · 云端 · 对话框
-  vendor/            CodeMirror 6 打包 · mermaid · wasm-graphviz（随包，无外部请求）
+  js/                外壳 · 侧栏 · 面板 · 标签 · 编辑器 · 画布承载 · D2 引擎 · 预览 · AI · 云端 · 对话框
+  vendor/            CodeMirror 6 打包 · mermaid · wasm-graphviz（随包，无外部请求；D2 的运行时在 `assets/d2/`）
 assets/              随包资产根（打包前由 tools/fetch-assets.mjs 汇出，不入库）
 design/ui-proto/     界面原型与设计说明（index.html 是设计真源，含截图索引与实施映射）
 docs/                路线图与发布检查单
-tools/               取资产脚本 · drawio / Excalidraw 承载页 · 开发用验收脚本
+tools/               取资产脚本（drawio / excalidraw / graphviz / mermaid / d2）· drawio / Excalidraw 承载页 · 开发用验收脚本
 ```
 
 ## 键盘快捷键
@@ -259,6 +263,7 @@ Apache-2.0，见 [`LICENSE`](LICENSE)；第三方组件与许可见 [`NOTICE`](N
 - [CodeMirror](https://codemirror.net/) - 代码编辑器
 - [Mermaid](https://mermaid.js.org/) - Mermaid 图表渲染引擎
 - [Graphviz](https://graphviz.org/) / [@hpcc-js/wasm-graphviz](https://github.com/hpcc-systems/wasm-graphviz) - DOT 渲染（WASM）
+- [D2](https://d2lang.com/) - `.d2` 图表（随包的官方浏览器 wasm 构建，MPL-2.0）
 - [drawio](https://github.com/jgraph/drawio) - `.drawio` 画布（随包裁剪运行时，Apache-2.0）
 - [Excalidraw](https://github.com/excalidraw/excalidraw) - `.excalidraw` 手绘风格画布（MIT）
 - [OpenAI 兼容 API](https://platform.openai.com/docs/api-reference) - BYOK 与云网关的对话协议

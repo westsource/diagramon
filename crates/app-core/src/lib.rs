@@ -6,6 +6,8 @@
 pub mod cloudmap;
 pub mod conversations;
 pub mod convert;
+pub mod convert_dot;
+mod d2syntax;
 pub mod document;
 pub mod format;
 pub mod guard;

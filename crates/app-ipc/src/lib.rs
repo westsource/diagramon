@@ -5,12 +5,13 @@
 
 use serde::{Deserialize, Serialize};
 
-/// 四种格式。`rename_all = "lowercase"` ⇒ 前端拿到 `"mermaid" | "dot" | "drawio" | "excalidraw"`。
+/// 五种格式。`rename_all = "lowercase"` ⇒ 前端拿到 `"mermaid" | "dot" | "d2" | "drawio" | "excalidraw"`。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum FormatId {
     Mermaid,
     Dot,
+    D2,
     Drawio,
     Excalidraw,
 }
@@ -20,6 +21,7 @@ impl FormatId {
         match self {
             Self::Mermaid => "mermaid",
             Self::Dot => "dot",
+            Self::D2 => "d2",
             Self::Drawio => "drawio",
             Self::Excalidraw => "excalidraw",
         }
@@ -29,6 +31,7 @@ impl FormatId {
     pub fn from_ext(ext: &str) -> Self {
         match ext.trim_start_matches('.').to_ascii_lowercase().as_str() {
             "dot" | "gv" => Self::Dot,
+            "d2" => Self::D2,
             "drawio" => Self::Drawio,
             "excalidraw" => Self::Excalidraw,
             _ => Self::Mermaid,
@@ -39,6 +42,7 @@ impl FormatId {
         match s {
             "mermaid" => Some(Self::Mermaid),
             "dot" => Some(Self::Dot),
+            "d2" => Some(Self::D2),
             "drawio" => Some(Self::Drawio),
             "excalidraw" => Some(Self::Excalidraw),
             _ => None,

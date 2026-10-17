@@ -10,6 +10,7 @@ pub fn issues(format: FormatId, body: &str) -> Vec<Issue> {
     let mut out = match format {
         FormatId::Mermaid => mermaid(body),
         FormatId::Dot => dot(body),
+        FormatId::D2 => d2(body),
         FormatId::Drawio => xml(body),
         FormatId::Excalidraw => json(body),
     };
@@ -141,6 +142,51 @@ fn dot(body: &str) -> Vec<Issue> {
 
     for (_, line) in stack {
         out.push(err(line, "花括号没有闭合", "补一个 }"));
+    }
+    out
+}
+
+/* ---------------- D2 ---------------- */
+
+/// D2 的**真语法错交给渲染器**：wasm 编译器抛的是带行列号的 JSON（`index:1:1: connection missing
+/// destination`），能直接回喂 AI 修正一次。本地只报"扫一遍就能确证"的两件事：
+/// 花括号是块的边界（未闭合 / 多余）、引号成对。
+///
+/// **刻意不查圆括号与方括号**：D2 的标签是自由文本（`a: 用户服务 (beta`），
+/// 那在 D2 里合法但在括号配对规则下会变成假报警 —— 问题面板一旦有噪音就没人看了。
+fn d2(body: &str) -> Vec<Issue> {
+    use crate::d2syntax;
+
+    let mut out = Vec::new();
+    let mut stack: Vec<u32> = Vec::new();
+
+    for (idx, raw) in body.lines().enumerate() {
+        let line = idx as u32 + 1;
+        // 注释与引号内的 `#` 都要先拿掉，否则 `style.fill: "#f00"` 会被当成注释起点
+        let text = d2syntax::strip_comment(raw).trim().to_string();
+        if text.is_empty() {
+            continue;
+        }
+
+        if text.matches('"').count() % 2 == 1 {
+            out.push(err(line, "字符串引号没有闭合", "这一行的 \" 少了配对的一个（标签里的引号要写成 \\\"）"));
+        }
+
+        for c in text.chars() {
+            match c {
+                '{' => stack.push(line),
+                '}' => {
+                    if stack.pop().is_none() {
+                        out.push(err(line, "多余的 }", "没有与之配对的 {"));
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    for line in stack {
+        out.push(err(line, "花括号没有闭合", "这个容器没有关掉，补一个 }"));
     }
     out
 }
@@ -305,6 +351,28 @@ mod tests {
     fn mermaid_ignores_brackets_inside_comments() {
         let v = issues(FormatId::Mermaid, "%% 这里有个 [ 不算\nflowchart TD\n    A-->B\n");
         assert!(v.is_empty(), "注释里的括号不该触发校验：{v:?}");
+    }
+
+    #[test]
+    fn d2_reports_unclosed_brace_and_odd_quote() {
+        let v = issues(FormatId::D2, "a -> b\n集成层: {\n  x -> y\n");
+        assert!(has_error(&v, "花括号没有闭合"), "{v:?}");
+        assert_eq!(v.iter().find(|i| i.message.contains("花括号没有闭合")).unwrap().line, 2);
+
+        let q = issues(FormatId::D2, "a: \"没关的引号\n");
+        assert!(has_error(&q, "引号没有闭合"), "{q:?}");
+
+        let extra = issues(FormatId::D2, "a -> b\n}\n");
+        assert!(has_error(&extra, "多余的 }"), "{extra:?}");
+    }
+
+    /// 两个**必须不报**的形态：引号里的颜色值不是注释；标签里的圆括号是自由文本。
+    /// （假报警会把问题面板变成噪音 —— 与 mermaid 尖括号那条测试同一个理由。）
+    #[test]
+    fn d2_colors_and_label_parens_are_not_reported() {
+        let src = "a: 用户服务 (beta)\n风格: { style.fill: \"#f00\" } # 这是注释\n";
+        let v = issues(FormatId::D2, src);
+        assert!(v.is_empty(), "合法 D2 不该报问题：{v:?}");
     }
 
     #[test]

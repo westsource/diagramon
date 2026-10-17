@@ -3,13 +3,14 @@
 [中文文档](README.zh-CN.md)
 
 A **local-first** multi-format diagram editor. **Mermaid** (`.mmd` / `.mermaid`), **Graphviz DOT**
-(`.dot` / `.gv`), **drawio** (`.drawio`) and **Excalidraw** (`.excalidraw`) can all be edited with live
-preview. AI is a first-class citizen: bring your own key (BYOK) or use the membership cloud gateway,
-including **image recognition** (picture → diagram code).
+(`.dot` / `.gv`), **D2** (`.d2`), **drawio** (`.drawio`) and **Excalidraw** (`.excalidraw`) can all be
+edited with live preview. AI is a first-class citizen: bring your own key (BYOK) or use the membership
+cloud gateway, including **image recognition** (picture → diagram code).
 
 **Rendering, syntax checking and format conversion all happen on this machine**: Mermaid and Graphviz
-run on engines bundled in the package (WASM / packaged JS), drawio and Excalidraw run on their own
-runtimes shipped with the app — **no subprocess is ever spawned and no external request is ever made**.
+run on engines bundled in the package (WASM / packaged JS), D2 runs on its official wasm build shipped
+with the app, and drawio and Excalidraw run on their own runtimes — **no subprocess is ever spawned and
+no external request is ever made**.
 Code or images reach a model only when you actively use AI, and then only the endpoint you chose
 (BYOK talks straight to your own provider, membership goes through the Diagramon cloud gateway).
 
@@ -40,9 +41,9 @@ Version **3.3.1** · Official website <https://www.diagramon.com>
 - **Syntax checking with inline errors** — only problems that can actually be *proven* (unbalanced
   brackets/quotes/tags, JSON that fails to parse) are reported, never style guesses; the Problems panel
   aggregates every open document and labels each row with its file name and line/column
-- **Outline and current scope** — nodes and the `subgraph` / `cluster` tree are derived from the body;
-  the status bar shows the enclosing subgraph/cluster next to the caret position (and nowhere else,
-  so no information is duplicated)
+- **Outline and current scope** — nodes and the `subgraph` / `cluster` / D2 container tree are derived
+  from the body; the status bar shows the enclosing subgraph/cluster/container next to the caret
+  position (and nowhere else, so no information is duplicated)
 - **Find & replace**, undo/redo, context menu, command palette (`Ctrl+Shift+P` or `F1`)
 - **Large-document guard rail** — past a line/byte threshold the preview asks "render anyway?" instead of
   silently dragging the engine down (the threshold lives in exactly one place, pushed down from Rust)
@@ -54,9 +55,10 @@ Version **3.3.1** · Official website <https://www.diagramon.com>
   `Ctrl+-` are forwarded by the shell to whichever surface is active
 - **Status-bar zoom readout** — shows the zoom of the *active* view only (each canvas's own readout is
   hidden so two numbers can never disagree on screen)
-- **DOT layout engine picker** — `dot` / `neato` / `fdp` / `sfdp` / `twopi` / `circo`, switched
-  incrementally without reloading the WASM engine
-- **Export** — save an image (PNG, selectable scale) or copy it to the clipboard; DOT goes
+- **Layout engine picker** — DOT offers `dot` / `neato` / `fdp` / `sfdp` / `twopi` / `circo`, switched
+  incrementally without reloading the WASM engine; D2 offers `dagre` / `elk` / `tala`, recompiled for the
+  new layout while the engine instance is reused (`tala` is slow — pick it deliberately)
+- **Export** — save an image (PNG, selectable scale) or copy it to the clipboard; text formats go
   `SVG → canvas → PNG` with zero subprocesses
 
 ### Canvas editing (drawio / Excalidraw)
@@ -73,8 +75,13 @@ Version **3.3.1** · Official website <https://www.diagramon.com>
   installer; zero external requests
 
 ### Format conversion (Conversion Center)
-- **Directions** — `Mermaid → DOT` (implemented in pure Rust), `Mermaid → drawio` and
-  `Mermaid → Excalidraw` (handed to each engine's own parser instead of reimplementing one)
+- **Directions** — `Mermaid → DOT` / `Mermaid → D2` / `DOT → D2` (implemented in pure Rust),
+  `Mermaid → drawio` and `Mermaid → Excalidraw` (handed to each engine's own parser instead of
+  reimplementing one), and `D2 → drawio` (D2's own wasm computes the geometry in the page first, then it
+  is mapped to mxGraph — **geometry preserved**, and the result stays draggable and editable)
+- **Directions that are deliberately not built say why** — D2 is a superset of Mermaid / DOT
+  (containers, classes, vars, layers…), so folding it back would mean deciding per feature what to drop;
+  the "get out of D2" need is served by `D2 → drawio` instead
 - **One-way semantics** — the product opens in a new tab and the original file's bytes never change
 - **Lossy conversions say so** — the result carries `notes` listing exactly what did not migrate
   (e.g. `subgraph → cluster` drops styling); the dialog shows them, nothing is dropped silently
@@ -151,23 +158,23 @@ Version **3.3.1** · Official website <https://www.diagramon.com>
 - **WebView**: the system webview (WebView2 on Windows)
 - **Editor**: CodeMirror 6 (bundled into `ui/vendor/` and exposed to the shell — no npm dependency at
   runtime)
-- **Rendering engines**: Mermaid (packaged JS) · Graphviz (WASM) · drawio (pruned runtime shipped in the
-  installer) · Excalidraw (locally bundled)
+- **Rendering engines**: Mermaid (packaged JS) · Graphviz (WASM) · D2 (official wasm build shipped in the
+  installer) · drawio (pruned runtime shipped in the installer) · Excalidraw (locally bundled)
 - **AI networking**: Rust (reqwest + SSE streaming), credentials in DPAPI
-- **Packaging**: NSIS installer; both the canvas runtimes and the front-end `ui/` are bundled as resources
-  (about 60 MB)
+- **Packaging**: NSIS installer; both the rendering runtimes and the front-end `ui/` are bundled as
+  resources (the D2 wasm alone is about 11 MB)
 
 ### Why there is a custom `dgm` protocol
 
-The shell and the four carrier pages (drawio / Excalidraw / graphviz / mermaid) **must be same-origin**:
+The shell and the carrier pages (drawio / Excalidraw / graphviz / mermaid / d2) **must be same-origin**:
 the canvas ↔ body round trip works by reading and writing `__hostQueue` / `__apply` directly on
 `iframe.contentWindow` (the contract's source of truth is the comment block in
 `tools/drawio-host/host.html`). Cross-origin makes that impossible and forces a fallback to
 "host polling + script injection", which is not reliable on a WebView wrapper layer.
 
 So the whole application is loaded through `dgm`: `http://dgm.localhost/` on Windows and
-`dgm://localhost/` elsewhere. `/drawio/`, `/excalidraw/`, `/graphviz/` and `/mermaid/` are mount points;
-everything else resolves into `ui/`.
+`dgm://localhost/` elsewhere. `/drawio/`, `/excalidraw/`, `/graphviz/`, `/mermaid/` and `/d2/` are mount
+points; everything else resolves into `ui/`.
 
 ### Runtime split (in one line)
 
@@ -206,7 +213,8 @@ node tools/dev/check.mjs --skip-test   # on-device self-test only (build still r
 python tools/dev/canvas_probe.py       # canvas probe: real drawio load → read back → screenshot
 python tools/dev/ui_probe.py           # UI probe: real interaction assertions in the browser prototype
 python tools/dev/readme_shots.py       # regenerate the screenshots in screenshots/
-node tools/fetch-assets.mjs            # export the four mount points into assets/ before packaging
+node tools/fetch-d2.mjs                # fetch the D2 runtime (auto: npm pack / registry download; skipped if present)
+node tools/fetch-assets.mjs            # export the five mount points into assets/ before packaging
 ```
 
 `check.mjs` always runs in the same order: **kill stale instances → build → Rust unit tests → launch the
@@ -256,12 +264,12 @@ crates/
   platform-windows/  DPAPI credential store (encrypted per user)
 src-tauri/           Tauri wiring and command layer (windows, protocol registration, commands, events, watcher, capture)
 ui/                  front-end shell (no framework, no build chain, no CDN)
-  js/                shell · sidebar · panels · tabs · editor · canvas carrier · preview · AI · cloud · dialogs
-  vendor/            bundled CodeMirror 6 · mermaid · wasm-graphviz (shipped, no external requests)
+  js/                shell · sidebar · panels · tabs · editor · canvas carrier · D2 engine · preview · AI · cloud · dialogs
+  vendor/            bundled CodeMirror 6 · mermaid · wasm-graphviz (shipped, no external requests; the D2 runtime lives in `assets/d2/`)
 assets/              bundled asset root (exported by tools/fetch-assets.mjs before packaging; not committed)
 design/ui-proto/     UI prototypes and design notes (index.html is the design source of truth)
 docs/                roadmap and release checklist
-tools/               asset fetching · drawio / Excalidraw carrier pages · development acceptance scripts
+tools/               asset fetching (drawio / excalidraw / graphviz / mermaid / d2) · drawio / Excalidraw carrier pages · development acceptance scripts
 ```
 
 ## Keyboard shortcuts
@@ -309,6 +317,7 @@ This project uses the following open-source projects:
 - [CodeMirror](https://codemirror.net/) - code editor
 - [Mermaid](https://mermaid.js.org/) - Mermaid diagram rendering engine
 - [Graphviz](https://graphviz.org/) / [@hpcc-js/wasm-graphviz](https://github.com/hpcc-systems/wasm-graphviz) - DOT rendering (WASM)
+- [D2](https://d2lang.com/) - `.d2` diagrams (official browser wasm build shipped in the installer, MPL-2.0)
 - [drawio](https://github.com/jgraph/drawio) - the `.drawio` canvas (pruned runtime shipped in the installer, Apache-2.0)
 - [Excalidraw](https://github.com/excalidraw/excalidraw) - the `.excalidraw` hand-drawn canvas (MIT)
 - [OpenAI-compatible API](https://platform.openai.com/docs/api-reference) - the chat protocol used by BYOK and the cloud gateway

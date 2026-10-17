@@ -28,7 +28,7 @@ import { fileURLToPath } from "node:url";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const RELEASE = join(ROOT, "target", "release");
-const MOUNTS = ["drawio", "excalidraw", "graphviz", "mermaid"];
+const MOUNTS = ["drawio", "excalidraw", "graphviz", "mermaid", "d2"];
 
 const argv = process.argv.slice(2);
 const argOf = (name, fallback) => {
@@ -202,6 +202,8 @@ const must = [
   "WebView2Loader.dll",
   "ui/index.html",
   "assets/drawio/index.html",
+  // D2 的运行时（11MB）：缺了它便携版的 `.d2` 预览就是「引擎不可用」
+  "assets/d2/index.js",
   "README-PORTABLE.txt",
 ];
 const missing = must.filter((m) => !listingText.includes(m));

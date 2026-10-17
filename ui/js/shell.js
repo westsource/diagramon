@@ -757,8 +757,10 @@ window.DGM = window.DGM || {};
     parts.push(`<span class="st-spacer"></span>`);
     parts.push(`<span class="st ${ui.status.kind === "err" ? "err" : ui.status.kind === "warn" ? "warn" : ui.status.kind === "ok" ? "accent" : ""}" id="status-msg">${esc(statusText)}</span>`);
     parts.push(`<span class="st-spacer"></span>`);
-    if (d && d.format === "dot") {
-      parts.push(`<button class="st" data-a="layout" title="${esc(t("status.layoutTip"))}">${icon("diagram", "ico-sm")}${esc(t("status.layout", { name: d.layout || "dot" }))}</button>`);
+    // 有布局引擎的格式才有这一格（DOT 六种、D2 三种；Mermaid / 画布型没有）
+    const layouts = d ? state.docFmt(d).layouts || [] : [];
+    if (layouts.length) {
+      parts.push(`<button class="st" data-a="layout" title="${esc(t("status.layoutTip"))}">${icon("diagram", "ico-sm")}${esc(t("status.layout", { name: d.layout || layouts[0] }))}</button>`);
     }
     parts.push(`<span class="st ro" title="${esc(t("status.modeTip"))}">${icon(modeIcon, "ico-sm")}${esc(modeName)}</span>`);
     parts.push(`<button class="st" data-a="zoom" title="${esc(t("status.zoomTip"))}">${icon("zoomIn", "ico-sm")}${zoomPct}%</button>`);
@@ -798,11 +800,13 @@ window.DGM = window.DGM || {};
   function popLayouts(anchor) {
     const d = state.activeDoc();
     if (!d) return;
-    const layouts = state.docFmt(d).layouts || [];
+    const fmt = state.docFmt(d);
+    const layouts = fmt.layouts || [];
+    const current = d.layout || layouts[0];
     const r = anchor.getBoundingClientRect();
     showPop(
-      [{ label2: t("layout.dotEngine") }].concat(
-        layouts.map((l) => ({ label: l, icon: "diagram", on: (d.layout || "dot") === l, lay: l })),
+      [{ label2: t("layout.engine") }].concat(
+        layouts.map((l) => ({ label: l, icon: "diagram", on: current === l, lay: l })),
         [{ sep: true }, { label: t("layout.dotMore"), icon: "info", act: "more" }],
       ),
       { x: r.left - 120, y: r.top - 6, flip: r.height + 8 },
@@ -810,8 +814,10 @@ window.DGM = window.DGM || {};
         hidePop();
         if (it.act === "more") return DGM.dialogs.layout();
         state.setLayout(d.id, it.lay);
+        // 这句话不写"未重载 WASM"之类的实现细节：DOT 是增量更新、D2 要重新编译，
+        // 两种情形都由各自的渲染器负责，界面只报结果（写死一句就对另一种是假话）。
         status(t("layout.switched", { name: it.lay }), "ok");
-        state.pushOutput("DOT 布局切换 → " + it.lay + "（增量更新，未重载 WASM）", "ok");
+        state.pushOutput(`${fmt.name} 布局切换 → ${it.lay}`, "ok");
       },
     );
   }
@@ -977,7 +983,7 @@ window.DGM = window.DGM || {};
 
   async function openFile() {
     let paths = await ipc.dialog.pickPaths({
-      filters: [{ name: "Diagram", extensions: ["mmd", "mermaid", "dot", "gv", "drawio", "excalidraw"] }],
+      filters: [{ name: "Diagram", extensions: ["mmd", "mermaid", "dot", "gv", "d2", "drawio", "excalidraw"] }],
     });
     if (!paths.length && ipc.isMock) {
       // mock：没有真实文件对话框，用示例路径演示「打开 → 落进会话」这条链路
@@ -1364,7 +1370,7 @@ window.DGM = window.DGM || {};
       const d = state.activeDoc();
       return d ? state.docFmt(d).convert_to || [] : [];
     };
-    ["drawio", "excalidraw", "dot"].forEach((to) => {
+    ["drawio", "excalidraw", "dot", "d2"].forEach((to) => {
       cmd({
         id: "conv." + to, group: "convert", icon: "swap",
         label: () => t("palette.convert", { from: state.docFmt(state.activeDoc()).name, to: state.fmtById(to).name }),
@@ -1374,7 +1380,8 @@ window.DGM = window.DGM || {};
     });
     cmd({ id: "conv.center", group: "convert", icon: "swap", run: () => setSidebarView("convert") });
     cmd({ id: "fmt.format", group: "format", icon: "wand", kbd: "Shift+Alt+F", run: () => formatSource() });
-    cmd({ id: "fmt.layout", group: "format", icon: "diagram", run: (a) => DGM.dialogs.layout(), avail: () => (state.activeDoc() && state.activeDoc().format === "dot" ? true : { why: t("status.formatTip") }) });
+    // 布局菜单按**注册表**开放（DOT 六种、D2 三种），不在前端写第二份格式清单
+    cmd({ id: "fmt.layout", group: "format", icon: "diagram", run: (a) => DGM.dialogs.layout(), avail: () => (state.activeDoc() && (state.docFmt(state.activeDoc()).layouts || []).length ? true : { why: t("status.formatTip") }) });
     cmd({ id: "exp.png", group: "format", icon: "download", run: () => DGM.preview.exportPng() });
     cmd({ id: "exp.svg", group: "format", icon: "download", run: () => DGM.preview.exportSvg() });
     cmd({ id: "exp.copy", group: "format", icon: "copy", kbd: "Ctrl+Shift+C", run: () => DGM.preview.copyImage() });

@@ -298,6 +298,8 @@ tools/drawio/
 tools/excalidraw/
 # Mermaid 运行时（mermaid.min.js + Help/Languages，2026-10-17 从旧的 client/Assets 迁来，不入库）
 tools/mermaid/
+# D2 官方 wasm 构建（由 tools/fetch-d2.mjs 解出，约 11MB，不入库）
+tools/d2/
 
 # Visual Studio 6 build log
 *.plg

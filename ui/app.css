@@ -64,9 +64,10 @@
   --chat-me-ava: var(--accent-soft);
   --chat-bot: #ffffff;
 
-  /* 四种格式各自的标识色（低饱和，用于标签页圆点/徽章/转换卡） */
+  /* 五种格式各自的标识色（低饱和，用于标签页圆点/徽章/转换卡） */
   --fmt-mermaid: #3d7d72;
   --fmt-dot: #a07f36;
+  --fmt-d2: #8a5f8f;
   --fmt-drawio: #4a7196;
   --fmt-excalidraw: #8a6f9e;
 
@@ -128,6 +129,7 @@ html[data-theme="dark"] {
 
   --fmt-mermaid: #6fb2a3;
   --fmt-dot: #cfa95f;
+  --fmt-d2: #c79ac7;
   --fmt-drawio: #7ea6cc;
   --fmt-excalidraw: #b39ac9;
 
@@ -420,6 +422,7 @@ body.no-ai #ai-gutter { display: none; }
 }
 .chip.mermaid { color: var(--fmt-mermaid); background: color-mix(in srgb, var(--fmt-mermaid) 12%, transparent); border-color: color-mix(in srgb, var(--fmt-mermaid) 28%, transparent); }
 .chip.dot { color: var(--fmt-dot); background: color-mix(in srgb, var(--fmt-dot) 12%, transparent); border-color: color-mix(in srgb, var(--fmt-dot) 28%, transparent); }
+.chip.d2 { color: var(--fmt-d2); background: color-mix(in srgb, var(--fmt-d2) 12%, transparent); border-color: color-mix(in srgb, var(--fmt-d2) 28%, transparent); }
 .chip.drawio { color: var(--fmt-drawio); background: color-mix(in srgb, var(--fmt-drawio) 12%, transparent); border-color: color-mix(in srgb, var(--fmt-drawio) 28%, transparent); }
 .chip.excalidraw { color: var(--fmt-excalidraw); background: color-mix(in srgb, var(--fmt-excalidraw) 12%, transparent); border-color: color-mix(in srgb, var(--fmt-excalidraw) 28%, transparent); }
 

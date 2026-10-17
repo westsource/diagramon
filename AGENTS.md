@@ -66,7 +66,7 @@ $env:DGM_PYTHON="C:\Users\rong\.workbuddy\binaries\python\versions\3.13.12\pytho
 - **从受限会话（远程桌面、agent 沙箱、作业对象）拉起自检**：WebView2 浏览器子进程会**启动即崩**——症状是窗口纯白、`$LOCALAPPDATA/com.diagramon.app/EBWebView/Crashpad/reports/` 里**每次启动多一个 ~7MB 的 .dmp**、页面 boot 走完但心跳（`hb:` 打点）永远不出现。修法是给 WebView2 加 `--no-sandbox`（运行时开关，不进发布配置）：`DGM_BROWSER_EXTRA_ARGS="--no-sandbox" node tools/dev/check.mjs`。只在受限环境里用，普通桌面跑自检**不要**带它。
 - 判断"整场有没有走到第 7 步"**看报告时间戳**：脚本进循环前会先删报告，所以**时间戳还是旧的 = 前六步里有人 `exit(2)`**。
 - `DGM_PYTHON` 指向的解释器必须能 `import websocket`；本机唯一满足的是上面那条路径（机器上没有 `py` 启动器）。这个环境变量**曾经因为 `findPython()` 的 `shell:true` 从来没生效过**，别再把失败归因成"环境缺件"。
-- 单测当前 216 项、探针 25 条断言（`canvas_probe` 21 + `excalidraw_probe` 4）、自检 54 条 —— 数量会随开发变，**全绿才是要求**。
+- 单测当前 265 项、探针 25 条断言（`canvas_probe` 21 + `excalidraw_probe` 4）、自检 64 条 —— 数量会随开发变，**全绿才是要求**。
 
 改 `ui/**` 之后跑本地应用**必须先 `cargo build`**（或把改动 `cp` 到 `target/debug/ui/` 同路径），否则跑的是旧副本。
 
@@ -74,7 +74,15 @@ $env:DGM_PYTHON="C:\Users\rong\.workbuddy\binaries\python\versions\3.13.12\pytho
 
 - 别改 `third-party/schemars-0.8.22-order-fix/`（上游 bug 的临时补丁，上游修好后整体删掉）。
 - 别把 `ui/vendor/`（CodeMirror6 / mermaid / wasm-graphviz）当成普通源码改；那是随包资产。
-- 别把 98MB 的画布资产提交进仓库（`tools/{drawio,excalidraw,graphviz,mermaid}/`；打包前由 `node tools/fetch-assets.mjs` 汇到 `assets/`）。
+  **唯一的例外**：`editor.bundle.js` 里的语言表 `Ln={…}` 加过一项 `d2:Jy`（D2 复用 DOT 的高亮扩展，
+  因为 D2 的语法形态与 DOT 最接近）。这个 bundle 的**源码不在本仓库**（无构建脚本、无 sourcemap），
+  所以高亮只能"近似"，CM6 升级时这一行要手工重放 —— 这是已知技术债，不是可以顺手清理的东西。
+- 别把画布/渲染运行时提交进仓库（`tools/{drawio,excalidraw,graphviz,mermaid,d2}/`；打包前由
+  `node tools/fetch-assets.mjs` 汇到 `assets/`）。D2 由 `node tools/fetch-d2.mjs` 取：版本 pin 在
+  `tools/d2.version`（**入库**），tarball 的 sha256 钉在脚本里，取法四选一（`--from <tgz>` /
+  `tools/d2/` 里的缓存 / `npm pack`（默认 registry→npmmirror）/ 直接下 registry 的 tarball 地址）。
+  产物 `tools/d2/index.js` 约 11MB；它**只能进 `assets/`**，不能放 `ui/`
+  （`build.frontendDist = "../ui"` 会把 ui 再嵌进 exe 一份，11MB 会变成 22MB）。
 - 改承载页（`tools/drawio-host/host.html`、`tools/excalidraw-host/index.html`）**先读它顶部的契约注释块**（`__hostQueue` / `__apply` / `__hostZoom*`），那是 shell 与页面之间唯一的接口真源。
   **改完必须 `node tools/fetch-assets.mjs`** —— 运行时加载的是 `assets/` 里那份，`prepack` 与 `excalidraw_probe.py` 都会比对，不一致就拦。
 

@@ -322,6 +322,7 @@ digraph Pipeline {
   const NEW_BODIES = {
     mermaid: "flowchart TD\n    A([开始]) --> B[第一步]\n    B --> C{判断}\n    C -- 是 --> D([结束])\n    C -- 否 --> B\n",
     dot: "digraph G {\n    rankdir=LR;\n    node [shape=box];\n    A -> B -> C;\n}\n",
+    d2: "direction: right\n前端应用 -> 网关: HTTPS 请求\n网关 -> 用户服务: 令牌校验\n用户服务 -> 数据库: SELECT users\n",
     drawio: '<?xml version="1.0" encoding="UTF-8"?>\n<mxfile host="Diagramon">\n  <diagram name="Page-1" id="p1">\n    <mxGraphModel dx="800" dy="600" grid="1" page="1">\n      <root>\n        <mxCell id="0" />\n        <mxCell id="1" parent="0" />\n      </root>\n    </mxGraphModel>\n  </diagram>\n</mxfile>\n',
     excalidraw: '{\n  "type": "excalidraw",\n  "version": 2,\n  "source": "https://diagramon.app",\n  "elements": [],\n  "appState": { "viewBackgroundColor": "#ffffff" }\n}\n',
   };
@@ -330,7 +331,7 @@ digraph Pipeline {
     {
       id: "mermaid", name: "Mermaid", short: "Mermaid", exts: [".mmd", ".mermaid"],
       surface: "text", split_view: true, ai: true,
-      convert_to: ["drawio", "excalidraw", "dot"], layouts: [],
+      convert_to: ["drawio", "excalidraw", "dot", "d2"], layouts: [],
       note: "文本图表，支持源码 / 分屏 / 预览三态",
       default_body: NEW_BODIES.mermaid,
     },
@@ -340,6 +341,13 @@ digraph Pipeline {
       convert_to: [], layouts: ["dot", "neato", "fdp", "sfdp", "twopi", "circo"],
       note: "文本图表，支持源码 / 分屏 / 预览三态，六种布局引擎",
       default_body: NEW_BODIES.dot,
+    },
+    {
+      id: "d2", name: "D2", short: "D2", exts: [".d2"],
+      surface: "text", split_view: true, ai: true,
+      convert_to: ["drawio"], layouts: ["dagre", "elk", "tala"],
+      note: "文本图表，支持源码 / 分屏 / 预览三态；三种布局引擎（tala 较慢）",
+      default_body: NEW_BODIES.d2,
     },
     {
       id: "drawio", name: "drawio", short: "drawio", exts: [".drawio"],
@@ -681,7 +689,7 @@ digraph Pipeline {
             }
             const name = p.split(/[\\/]/).pop() || p;
             const ext = (name.split(".").pop() || "").toLowerCase();
-            const fid = ext === "dot" || ext === "gv" ? "dot" : ext === "drawio" ? "drawio" : ext === "excalidraw" ? "excalidraw" : "mermaid";
+            const fid = ext === "dot" || ext === "gv" ? "dot" : ext === "d2" ? "d2" : ext === "drawio" ? "drawio" : ext === "excalidraw" ? "excalidraw" : "mermaid";
             const f = this._fmt(fid);
             const doc = {
               id: this._newId("o"),
@@ -1106,6 +1114,33 @@ digraph Pipeline {
           else if (/->|--/.test(t)) push("边", { name: t.slice(0, 34), kind: "edge", line: i + 1 });
           else if (/^\w+\s*\[/.test(t)) push("节点", { name: t.split(/\s*\[/)[0], kind: "node", line: i + 1 });
         });
+      } else if (d.format === "d2") {
+        // 与 Rust 侧同口径的**行式扫描**（mock 只演示界面，不做第二套解析器）：
+        // 容器 `名: {` → cluster，`->` 行 → 边，`a: 标签` → 节点（属性行带 `.` 不算）
+        lines.forEach((ln, i) => {
+          const t = ln.replace(/#.*$/, "").trim();
+          if (!t || t === "}") return;
+          if (/\{$/.test(t)) {
+            const name = t.replace(/\{$/, "").replace(/:$/, "").trim();
+            if (name && !/^(classes|vars|layers|scenarios|steps|style|direction|title|label)$/.test(name)) {
+              push("容器", { name, kind: "cluster", line: i + 1 });
+            }
+          } else if (/->|<-|--/.test(t)) {
+            push("边", { name: t.slice(0, 34), kind: "edge", line: i + 1 });
+            t.split(/<->|->|--/).forEach((id) => {
+              const name = id.split(":")[0].trim().replace(/^"|"$/g, "");
+              if (name && !name.includes(" ") && !name.includes(".")) push("节点", { name, kind: "node", line: i + 1 });
+            });
+          } else {
+            const m = t.match(/^([^:]+):\s*(.*)$/);
+            if (m && !m[1].includes(".")) {
+              const key = m[1].trim().replace(/^"|"$/g, "");
+              if (key && !/^(classes|vars|layers|direction)$/.test(key)) {
+                push("节点", { name: m[2].trim().replace(/^"|"$/g, "") || key, kind: "node", line: i + 1 });
+              }
+            }
+          }
+        });
       } else if (d.format === "drawio") {
         lines.forEach((ln, i) => {
           const m = ln.match(/<mxCell id="([^"]+)"\s+value="([^"]*)"/);
@@ -1117,7 +1152,7 @@ digraph Pipeline {
           if (m) push("场景元素", { name: m[1], kind: "element", line: i + 1 });
         });
       }
-      const order = ["子图 subgraph", "子图 cluster", "节点", "边", "图元 mxCell", "场景元素"];
+      const order = ["子图 subgraph", "子图 cluster", "容器", "节点", "边", "图元 mxCell", "场景元素"];
       return order.filter((k) => groups[k]).map((k) => groups[k]);
     },
 
@@ -1134,6 +1169,11 @@ digraph Pipeline {
         } else if (d.format === "dot") {
           if (/^subgraph\b/.test(t)) stack.push((t.match(/subgraph\s+(\S+)/) || [])[1] || "(匿名)");
           else if (/^}\s*$/.test(t)) stack.pop();
+        } else if (d.format === "d2") {
+          if (/\{$/.test(t)) {
+            const name = t.replace(/\{$/, "").replace(/:$/, "").trim();
+            if (name && !/^(classes|vars|layers|scenarios|steps|style|direction|title|label)$/.test(name)) stack.push(name);
+          } else if (/^}\s*$/.test(t)) stack.pop();
         }
       }
       return stack.length ? stack[stack.length - 1] : "";

@@ -294,10 +294,11 @@ async function preflight() {
   } else log(`✓ ${TAG} 尚不存在`);
 
   // 7. 资产挂载点（prepack 会再校验，这里先给个早退）
-  for (const mp of ["drawio", "excalidraw", "graphviz", "mermaid"]) {
+  const MOUNTS = ["drawio", "excalidraw", "graphviz", "mermaid", "d2"];
+  for (const mp of MOUNTS) {
     if (!existsSync(join(ROOT, "assets", mp))) die(`资产缺 ${mp} —— 先 node tools/fetch-assets.mjs`);
   }
-  log("✓ 四个挂载点都在（assets/）");
+  log(`✓ ${MOUNTS.length} 个挂载点都在（assets/）`);
 }
 
 async function prepack() {

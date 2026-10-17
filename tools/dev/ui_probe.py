@@ -1055,7 +1055,7 @@ def main() -> int:
             "  const orig = DGM.ipc.dialog.pickSavePath;"
             "  DGM.ipc.dialog.pickSavePath = async (o) => { seen.push(JSON.parse(JSON.stringify(o || {}))); return ret; };"
             "  const got = [];"
-            "  for (const fmt of ['mermaid', 'dot', 'drawio', 'excalidraw']) {"
+            "  for (const fmt of ['mermaid', 'dot', 'd2', 'drawio', 'excalidraw']) {"
             "    const d = await DGM.state.newDoc(fmt);"
             "    await DGM.state.activateDoc(d.id);"
             "    ret = null; await DGM.shell.saveActive(true);"
@@ -1070,7 +1070,7 @@ def main() -> int:
         )
         log(f"保存扩展名推荐: {save_check}")
         try:
-            CANON = {"mermaid": "mmd", "dot": "dot", "drawio": "drawio", "excalidraw": "excalidraw"}
+            CANON = {"mermaid": "mmd", "dot": "dot", "d2": "d2", "drawio": "drawio", "excalidraw": "excalidraw"}
             rows = json.loads(save_check or "[]")
             if len(rows) != len(CANON):
                 fails.append(f"保存扩展名推荐没跑全（拿到 {len(rows)} 个格式）")
