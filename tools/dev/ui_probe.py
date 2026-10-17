@@ -681,6 +681,33 @@ def main() -> int:
         except Exception as e:
             log(f"（断言 14 解析失败：{e}）")
 
+        # ---- 断言 14b：帮助菜单下有三种格式的官方文档入口（Mermaid / DOT / D2）----
+        # 这三条点了会用系统浏览器打开官方文档（不是"离线优先不外跳"的占位）。D2 是后加的，
+        # 这里钉住它别在后续调整菜单时被漏掉。**只读标签，不点那三行** ——
+        # 点了会真去开浏览器，探针不该做这种副作用。
+        doc_menu = ev(
+            "(() => {"
+            "  const bar = document.querySelector('#menubar .tb-item[data-menu=\"help\"]');"
+            "  if (!bar) return JSON.stringify({err: 'no-help-item'});"
+            "  bar.click();"
+            "  const rows = [...document.querySelectorAll('#pop .pop-row .lbl')].map(e => e.textContent.trim());"
+            "  bar.click();"
+            "  const has = (s) => rows.some(x => x.includes(s));"
+            "  return JSON.stringify({rows, mermaid: has('Mermaid'), dot: has('DOT'), d2: has('D2')});"
+            "})()"
+        )
+        log(f"帮助菜单文档入口: {doc_menu}")
+        try:
+            dm = json.loads(doc_menu or "{}")
+            if dm.get("err"):
+                fails.append(f"找不到帮助菜单：{dm.get('err')}")
+            else:
+                for key, name in (("mermaid", "Mermaid 文档"), ("dot", "Graphviz DOT 规范"), ("d2", "D2 参考")):
+                    if not dm.get(key):
+                        fails.append(f"帮助菜单缺「{name}」入口（现有：{dm.get('rows')}）")
+        except Exception as e:
+            fails.append(f"帮助菜单文档入口断言解析失败：{e} / {doc_menu}")
+
         # ---- 断言 15：未登录时点「账户」→ 直接弹登录窗口；注册地址可复制且由配置推导 ----
         # 三件事一起验：登录搬进了独立窗口（不再内联在侧栏）、窗口只做登录（注册是跳官网的
         # 导航动作）、回显的注册地址来自 settings.cloud.base_url 而不是硬编码域名。

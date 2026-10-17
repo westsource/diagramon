@@ -141,6 +141,7 @@ window.DGM = window.DGM || {};
     "mi.guide": "操作说明",
     "mi.mermaidDocs": "Mermaid 文档",
     "mi.dotDocs": "Graphviz DOT 规范",
+    "mi.d2Docs": "D2 参考",
     "mi.checkUpdate": "检查更新…",
     "mi.about": "关于 Diagramon",
     "exp.png": "导出：PNG（自适应倍率）",
@@ -159,7 +160,7 @@ window.DGM = window.DGM || {};
     "tip.undo": "编辑器内的撤销由 CodeMirror 提供",
     "tip.redo": "编辑器内的重做由 CodeMirror 提供",
     "tip.find": "CodeMirror SearchPanel，作用域是当前源码窗口",
-    "tip.noExternal": "离线优先：文档链接不外跳",
+    "tip.openFailed": "打不开系统浏览器，请手动访问：{url}",
 
     /* ---- 活动栏 / 侧栏 ---- */
     "act.explorer": "资源管理器",
@@ -1004,6 +1005,7 @@ window.DGM = window.DGM || {};
     "mi.guide": "Operations guide",
     "mi.mermaidDocs": "Mermaid docs",
     "mi.dotDocs": "Graphviz DOT reference",
+    "mi.d2Docs": "D2 reference",
     "mi.checkUpdate": "Check for updates…",
     "mi.about": "About Diagramon",
     "exp.png": "Export: PNG (adaptive scale)",
@@ -1021,7 +1023,7 @@ window.DGM = window.DGM || {};
     "tip.undo": "Undo is provided by CodeMirror inside the editor",
     "tip.redo": "Redo is provided by CodeMirror inside the editor",
     "tip.find": "CodeMirror SearchPanel, scoped to the current source pane",
-    "tip.noExternal": "Offline-first: documentation links are not opened externally",
+    "tip.openFailed": "Couldn't open the system browser — open this URL manually: {url}",
 
     "act.explorer": "Explorer",
     "act.search": "Search",

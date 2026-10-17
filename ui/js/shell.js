@@ -285,6 +285,19 @@ window.DGM = window.DGM || {};
 
   /* ------------------------------------------------------------------ 菜单栏 */
 
+  /**
+   * 帮助菜单里的官方文档（一种格式一条，与注册表的顺序一致）。
+   *
+   * 地址放在这里而不是格式注册表里：注册表描述的是**格式能力**（能不能分屏 / 能不能转换），
+   * 文档站是内容，两者寿命不同 —— 换文档站不该动 IPC 契约。点击才用系统浏览器打开，
+   * 不打不开就把地址回显出来（静默失败等于"按了没反应"）。
+   */
+  const DOC_LINKS = [
+    { label: "mi.mermaidDocs", url: "https://mermaid.js.org/intro/" },
+    { label: "mi.dotDocs", url: "https://graphviz.org/doc/info/lang.html" },
+    { label: "mi.d2Docs", url: "https://d2lang.com/tour/intro" },
+  ];
+
   function buildMenus() {
     const panels = state.panels();
     const activeId = state.active;
@@ -411,8 +424,8 @@ window.DGM = window.DGM || {};
           { label: t("mi.shortcuts"), kbd: "Ctrl+K Ctrl+S", icon: "keyboard", act: "cmd:help.keys" },
           { label: t("mi.guide"), icon: "info", act: "cmd:help.guide" },
           { sep: true },
-          { label: t("mi.mermaidDocs"), icon: "globe", act: "tip:tip.noExternal" },
-          { label: t("mi.dotDocs"), icon: "globe", act: "tip:tip.noExternal" },
+          // 官方文档：点一下用系统浏览器打开（地址写死在 DOC_LINKS，不硬编码在菜单里）
+          ...DOC_LINKS.map((d) => ({ label: t(d.label), icon: "globe", act: "link:" + d.url })),
           { sep: true },
           { label: t("mi.checkUpdate"), icon: "refresh", act: "cmd:help.update" },
           { label: t("mi.about"), icon: "info", act: "cmd:help.about" },
@@ -521,6 +534,7 @@ window.DGM = window.DGM || {};
     if (!act) return;
     if (act === "todo") return;
     if (act.startsWith("tip:")) return toast({ icon: "info", title: it ? it.label : t("common.help"), sub: t(act.slice(4)) });
+    if (act.startsWith("link:")) return openDocLink(act.slice(5), it ? it.label : "");
     if (act.startsWith("new:")) return DGM.dialogs.newDoc(act.slice(4));
     if (act.startsWith("open:")) return activateDocById(act.slice(5));
     if (act.startsWith("openpath:")) return openPath(act.slice(9));
@@ -532,6 +546,25 @@ window.DGM = window.DGM || {};
     if (act === "app:quit") return quit();
     if (act.startsWith("cmd:")) return runCommand(act.slice(4));
     return;
+  }
+
+  /**
+   * 打开官方文档（帮助菜单那三条）。
+   *
+   * 走的是与「去官网注册」同一个通道（`tauri-plugin-opener`，能力位已放行 https）：
+   * **用户点一下才开系统浏览器**，应用自己不发起任何网络请求 —— 离线优先说的是
+   * "渲染与校验不依赖网络"，不是"点文档也不许跳"。
+   * 打不开（装了精简版浏览器 / 无默认浏览器）就如实把地址回显在提示里，让人手工访问。
+   */
+  async function openDocLink(url, label) {
+    let ok = false;
+    try {
+      ok = DGM.cloud && typeof DGM.cloud.openExternal === "function" ? await DGM.cloud.openExternal(url) : false;
+    } catch (e) {
+      ok = false;
+    }
+    if (ok) toast({ icon: "globe", title: label || t("common.help"), sub: url });
+    else toast({ icon: "alert", title: label || t("common.help"), sub: t("tip.openFailed", { url }), warn: true });
   }
 
   function activateDocById(id) {
