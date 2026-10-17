@@ -12,7 +12,7 @@
 落挂载点，其余落 ui/。
 
 产物：client2/screenshots/*.png
-依赖：本机 Chrome/Edge；websocket-client；画布资产在 `tools/`（缺则回退 `../client/tools/`；缺失只跳过画布那张）。
+依赖：本机 Chrome/Edge；websocket-client；画布资产在 `tools/`（缺失只跳过画布那张）。
 """
 
 from __future__ import annotations
@@ -37,22 +37,25 @@ SHOTS = ROOT / "screenshots"
 sys.path.insert(0, str(ROOT / "tools" / "dev"))
 from canvas_probe import Cdp, find_chrome, free_port  # noqa: E402
 
-SOURCE_TREE = Path(os.environ.get("DIAGRAMON_SOURCE_TREE") or (ROOT.parent / "client"))
+# 只有显式设了 DIAGRAMON_SOURCE_TREE 才用它（从别处的备份汇出/验收）；默认用本仓库根。
+SOURCE_TREE = Path(os.environ["DIAGRAMON_SOURCE_TREE"]) if os.environ.get("DIAGRAMON_SOURCE_TREE") else ROOT
 
 
-def _mount(own: tuple, legacy: tuple) -> Path:
-    """与 canvas_probe.py 同一套口径：显式环境变量优先，否则本仓库 tools/ 先、旧 client/ 兜底。"""
-    if os.environ.get("DIAGRAMON_SOURCE_TREE"):
-        return SOURCE_TREE.joinpath(*legacy)
-    own_path = ROOT.joinpath(*own)
-    return own_path if own_path.is_dir() else SOURCE_TREE.joinpath(*legacy)
+def _mount(sub: tuple) -> Path:
+    """挂载点目录：显式 DIAGRAMON_SOURCE_TREE 一票优先，否则就是本仓库 `tools/<挂载点>`。
+
+    2026-10-17 起取资产脚本与运行时就只在本仓库了，旧工作树 `../client` **已删除、不再回退** ——
+    宁可让下面的"资产不在位"报出来，也不要静默测到上一份停更的副本（与承载页两份同一个坑）。
+    """
+    base = SOURCE_TREE if os.environ.get("DIAGRAMON_SOURCE_TREE") else ROOT
+    return base.joinpath(*sub)
 
 
 MOUNTS = {
-    "drawio": _mount(("tools", "drawio"), ("tools", "drawio")),
-    "excalidraw": _mount(("tools", "excalidraw"), ("tools", "excalidraw")),
-    "graphviz": _mount(("tools", "graphviz"), ("tools", "graphviz")),
-    "mermaid": _mount(("tools", "mermaid"), ("Assets",)),
+    "drawio": _mount(("tools", "drawio")),
+    "excalidraw": _mount(("tools", "excalidraw")),
+    "graphviz": _mount(("tools", "graphviz")),
+    "mermaid": _mount(("tools", "mermaid")),
 }
 
 WIDTH, HEIGHT = 1440, 900

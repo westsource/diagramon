@@ -30,7 +30,7 @@ Tauri 侧的协议注册由 `tools/dev/check.mjs` 的「承载面已挂载 / 同
    否则连本机端口都会走代理然后失败 —— 看起来像「端口没开」。
 
 依赖：本机 Chrome / Edge；`websocket-client`；drawio 资产在 `tools/drawio`（2026-10-17 起取资产脚本
-已迁进本仓库，旧位置 `../client/tools/drawio` 只作兜底）。
+与运行时就只在本仓库，旧的 `../client` 已删除）。
 """
 
 from __future__ import annotations
@@ -59,27 +59,25 @@ CHROME_CANDIDATES = [
     r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
 ]
 
-SOURCE_TREE = Path(os.environ.get("DIAGRAMON_SOURCE_TREE") or (ROOT.parent / "client"))
+# 只有显式设了 DIAGRAMON_SOURCE_TREE 才用它（从别处的备份汇出/验收）；默认用本仓库根。
+SOURCE_TREE = Path(os.environ["DIAGRAMON_SOURCE_TREE"]) if os.environ.get("DIAGRAMON_SOURCE_TREE") else ROOT
 
 
-def _mount(own: tuple, legacy: tuple) -> Path:
-    """挂载点目录：显式 DIAGRAMON_SOURCE_TREE 一票优先；否则**本仓库 tools/ 先，旧的 client/ 兜底**。
+def _mount(sub: tuple) -> Path:
+    """挂载点目录：显式 DIAGRAMON_SOURCE_TREE 一票优先，否则就是本仓库 `tools/<挂载点>`。
 
-    2026-10-17 起取资产脚本迁进了本仓库，产物落在 `tools/<挂载点>/`；还按旧树找会测到
-    停更的那一份（与"承载页两份"同一个坑）。mermaid 是例外：本仓库没有 `tools/mermaid`，
-    仍从旧树的 `Assets/` 取。
+    2026-10-17 起取资产脚本与运行时就只在本仓库了，旧工作树 `../client` **已删除、不再回退** ——
+    宁可让下面的"资产不在位"报出来，也不要静默测到上一份停更的副本（与承载页两份同一个坑）。
     """
-    if os.environ.get("DIAGRAMON_SOURCE_TREE"):
-        return SOURCE_TREE.joinpath(*legacy)
-    own_path = ROOT.joinpath(*own)
-    return own_path if own_path.is_dir() else SOURCE_TREE.joinpath(*legacy)
+    base = SOURCE_TREE if os.environ.get("DIAGRAMON_SOURCE_TREE") else ROOT
+    return base.joinpath(*sub)
 
 
 MOUNTS = {
-    "drawio": _mount(("tools", "drawio"), ("tools", "drawio")),
-    "excalidraw": _mount(("tools", "excalidraw"), ("tools", "excalidraw")),
-    "graphviz": _mount(("tools", "graphviz"), ("tools", "graphviz")),
-    "mermaid": _mount(("tools", "mermaid"), ("Assets",)),
+    "drawio": _mount(("tools", "drawio")),
+    "excalidraw": _mount(("tools", "excalidraw")),
+    "graphviz": _mount(("tools", "graphviz")),
+    "mermaid": _mount(("tools", "mermaid")),
 }
 
 MIME = {
