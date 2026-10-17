@@ -58,6 +58,10 @@ Version **3.5.0** · Official website <https://www.diagramon.com>
 - **Layout engine picker** — DOT offers `dot` / `neato` / `fdp` / `sfdp` / `twopi` / `circo`, switched
   incrementally without reloading the WASM engine; D2 offers `dagre` / `elk` / `tala`, recompiled for the
   new layout while the engine instance is reused (`tala` is slow — pick it deliberately)
+- **The D2 engine warms up on demand** — D2's runtime is an 11 MB **offline** wasm build: the first `.d2`
+  document waits a few seconds (the UI says "initializing the D2 engine") and later renders take tens of
+  milliseconds. Warm-up only happens **if you recently opened a `.d2` file**, so people who don't use D2
+  never carry that resident memory around
 - **Export** — save an image (PNG, selectable scale) or copy it to the clipboard; text formats go
   `SVG → canvas → PNG` with zero subprocesses
 
@@ -114,6 +118,21 @@ Version **3.5.0** · Official website <https://www.diagramon.com>
   ≤1568px in memory and never written to disk
 - **Usage is labelled with its source** — only tokens the provider actually reports are accumulated;
   anything unreported shows `—` with an explanation, never `0` and never a local estimate
+- **It actually remembers the conversation** — previous turns are carried into the next request
+  (auto-trimmed, newest turn always kept), so you can keep refining the same diagram across messages
+  instead of starting from scratch every time
+- **Conversation history, persisted per document** — histories live locally, keyed by document, and
+  survive restarts; the History dialog shows real turns, and clearing affects only the current document
+  (images are never written to disk)
+- **Long-term memory (optional)** — the AI can propose to remember your preferences and terminology
+  (colour scheme, default flow direction, naming habits…). Proposals land as **pending** and only take
+  effect once you confirm them; you can also edit them by hand, and the whole thing can be switched off
+  or cleared — everything stays on this machine
+- **Controlled tool loop (experimental)** — when enabled, the AI may "read the document → check grammar
+  → validate" before answering, for at most 5 steps. The tools only operate on the in-memory document
+  model — they **never touch the filesystem, shell or network**. Enabling it switches to non-streaming
+  multi-step calls (no more word-by-word output) and every step counts toward usage — which is why it is
+  off by default
 - **Auto-fix on render error** — if generated code fails to render locally, the error text goes back to
   the model for one automatic repair (switchable off in settings)
 - **Cancellable**, and failures are reported as failures
@@ -185,7 +204,7 @@ belongs to the WebView.**
 |---|---|
 | Window / single instance / file associations / updater | All UI chrome, layout state machine, key dispatch |
 | File I/O (atomic writes), recent files, settings persistence | CodeMirror 6 editor |
-| Syntax checking / outline / scope / conversion (app-core, one source of truth) | mermaid and wasm-graphviz rendering |
+| Syntax checking / outline / scope / conversion (app-core, one source of truth) | in-page rendering: mermaid · wasm-graphviz · D2 (wasm) |
 | Workspace-wide search, file watching, autosave timing | drawio / Excalidraw canvas carriers |
 | AI networking (streaming), credentials (DPAPI), cloud gateway | AI streaming display, code cards, apply / revert |
 | Region screenshot (freeze frame), clipboard PNG, export to disk | Export serialization (SVG / canvas → bytes handed to Rust) |
@@ -195,13 +214,14 @@ belongs to the WebView.**
 ### Running the packaged build
 - Windows 10 / 11 64-bit (WebView2 runtime required; normally pre-installed on Windows 10/11)
 - **No** VC++ redistributable: the release build statically links the CRT
-- The canvas runtimes (about 98 MB) and the front-end `ui/` are inside the installer — nothing extra to
-  download
+- The canvas / rendering runtimes (about 105 MB, including D2's 11 MB wasm) and the front-end `ui/` are
+  inside the installer — nothing extra to download
 
 ### Development
 - A Rust toolchain (this machine uses `stable-x86_64-pc-windows-gnu`)
-- Canvas assets are not committed; during development `crates/assets` walks up to find the source tree,
-  but packaging requires exporting them first (see below)
+- Rendering / canvas runtimes are not committed (drawio · excalidraw · graphviz · mermaid · d2, about
+  105 MB in total): during development `crates/assets` walks up to find the source tree, but packaging
+  requires exporting them first (D2 is fetched automatically by `node tools/fetch-d2.mjs` — see below)
 
 ## Development and verification
 
