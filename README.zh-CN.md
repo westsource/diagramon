@@ -10,7 +10,7 @@ AI 是第一公民：既可用自有 Key 直连（BYOK），也可走会员云�
 D2 走随包的官方 wasm 构建，drawio 与 Excalidraw 走随包自带的运行时，**不起任何子进程、不发任何外部请求**。
 只有你主动使用 AI 时，相关代码或图片才会发往你选择的上游（BYOK 直连你的服务商，会员走 Diagramon 云网关）。
 
-版本 **3.3.1** · 官网 <https://www.diagramon.com>
+版本 **3.5.0** · 官网 <https://www.diagramon.com>
 
 ## 界面截图
 
