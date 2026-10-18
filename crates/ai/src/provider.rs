@@ -19,6 +19,9 @@ pub struct Resolved {
     /// 云网关必须用 `None`：服务端按"所选候选 × 档位"钳 `max_tokens`
     /// （`min(max(requested, MIN_OUTPUT_TOKENS), ceiling)`），客户端填一个数反而会把
     /// 用户档位允许的长回答截短 —— 它知道 ceiling，我们不知道。
+    /// 云网关那条路缺省 = **取满天花板**（`min(候选 max_output, 档位 maxOutputTokens)`）：
+    /// 曾经服务端把缺省再压到 4096，于是 member 档的 8192 只兑现一半、正文被切在半句上
+    /// （线上实录见 `Finish` 的注释）。
     pub max_tokens: Option<u32>,
     pub temperature: Option<f32>,
 }
@@ -46,6 +49,67 @@ pub struct Usage {
     /// 其中有多少是**思考**（reasoning）token。界面用它解释"没有正文"：
     /// 一整轮预算全花在推理上时，`completion_tokens` 很大而正文可以是空的。
     pub reasoning_tokens: Option<u32>,
+    /// 这条流**是怎么结束的**。界面据此决定要不要说"上面这句是半截的"（见 `Finish`）。
+    pub finish: Finish,
+}
+
+/// 流/响应的终态。
+///
+/// 为什么它不是"锦上添花的一个字段"：`length` 意味着正文**被输出上限切断了**，
+/// 而旧实现整包丢掉它 —— 于是"被截断"与"正常收尾"在界面上长得一模一样。
+/// 2026-10-18 线上实录（云网关 `mermaid-default`，member 档）：上游 `completion=4096`
+/// 里 2866 是思考，剩下 1230 token 的正文切在 `classDef device fill:#D`，客户端只有一个
+/// 「5906 tok」徽标，用户的原话是"输出 5906 字后突然中断了，没有任何提示"。
+/// 网关那边一直是原样转发 `finish_reason` 的（只改写 `model`），漏的是客户端这一层。
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum Finish {
+    /// 没拿到任何终态信号：既没见 `finish_reason`，也没见 `[DONE]`（也见 `Interrupted`）。
+    #[default]
+    Missing,
+    /// 上游明说 `stop`：这一轮正常收尾。
+    Stop,
+    /// 上游明说 `length`：撞上输出上限，**正文是被截断的**。
+    Length,
+    /// 别的终态（`tool_calls` / `content_filter` / …）：如实记"有终态"，但不替它编意思。
+    Other,
+    /// 已经收到内容之后连接就断了（读超时、上游掉线、代理掐断）。
+    Interrupted,
+}
+
+impl Finish {
+    /// 进 `ai://done`（事件里是字符串，前端只认已知值，别用 Debug 形态）。
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Finish::Missing => "missing",
+            Finish::Stop => "stop",
+            Finish::Length => "length",
+            Finish::Other => "other",
+            Finish::Interrupted => "interrupted",
+        }
+    }
+}
+
+/// 从一帧（或一个非流式响应体）里读出终态。
+///
+/// OpenAI 兼容：`choices[0].finish_reason`（最后一帧给，`null` 表示"还没结束"）；
+/// Ollama：`done` / `done_reason`（老版本只给 `done: true`，那就是正常收尾）。
+pub(crate) fn finish_of(v: &Value, ollama: bool) -> Finish {
+    if ollama {
+        if v.get("done").and_then(|d| d.as_bool()) != Some(true) {
+            return Finish::Missing;
+        }
+        return match v.get("done_reason").and_then(|r| r.as_str()) {
+            Some("length") => Finish::Length,
+            Some("stop") | None => Finish::Stop,
+            Some(_) => Finish::Other,
+        };
+    }
+    match v.pointer("/choices/0/finish_reason").and_then(|r| r.as_str()) {
+        None | Some("") => Finish::Missing,
+        Some("stop") => Finish::Stop,
+        Some("length") => Finish::Length,
+        Some(_) => Finish::Other,
+    }
 }
 
 impl Usage {
@@ -198,6 +262,7 @@ where
     let mut full = String::new();
     let mut reasoning = String::new();
     let mut usage = Usage::default();
+    let mut saw_done = false;
 
     loop {
         if cancel.load(Ordering::Relaxed) {
@@ -207,8 +272,12 @@ where
             Ok(Some(c)) => c,
             Ok(None) => break,
             Err(e) => {
-                // 已经收到正文后断开：不算失败，把已有的交出去
+                // 已经收到正文后断开：内容照旧交付，但**必须记下"这是断的"** ——
+                // 否则界面会把半句话当完整答案（这正是用户看到的"突然中断、没有任何提示"）。
                 if !full.is_empty() {
+                    if usage.finish == Finish::Missing {
+                        usage.finish = Finish::Interrupted;
+                    }
                     break;
                 }
                 // 思考已到、正文未生成：无声成功会让用户看到"想了半天什么都没有"，
@@ -232,6 +301,7 @@ where
             let payload = if let Some(d) = line.strip_prefix("data:") {
                 let d = d.trim();
                 if d == "[DONE]" {
+                    saw_done = true;
                     continue;
                 }
                 d.to_string()
@@ -258,6 +328,12 @@ where
 
     if cancel.load(Ordering::Relaxed) {
         return Err(ChatError::Cancelled);
+    }
+    // 给了 `[DONE]` 但整条流没出现过 `finish_reason`（有的网关省掉它）= 正常收尾。
+    // 两者都没有 = `Finish::Missing`：流就这么结束了，**没有说它结束了** —— 界面会提示
+    // 用户"可能是半截的"，而不是把这段内容当成完整答案。
+    if usage.finish == Finish::Missing && saw_done {
+        usage.finish = Finish::Stop;
     }
     Ok((full, reasoning, usage))
 }
@@ -335,6 +411,12 @@ fn extract_chunks(v: &Value, ollama: bool) -> Vec<Chunk> {
 }
 
 fn merge_usage(usage: &mut Usage, v: &Value, ollama: bool) {
+    // 终态每帧都试着读一次：它出现在**最后一帧**（OpenAI 兼容那一帧的 `delta` 是空的，
+    // 只有 `finish_reason`）。漏了它，"被截断"与"正常收尾"就没法区分（见 `Finish`）。
+    let finish = finish_of(v, ollama);
+    if finish != Finish::Missing {
+        usage.finish = finish;
+    }
     if ollama {
         if let Some(n) = v.get("prompt_eval_count").and_then(|x| x.as_u64()) {
             usage.prompt_tokens = Some(n as u32);
@@ -596,5 +678,149 @@ mod tests {
             .block_on(stream_chat(&client, &r, vec![], &cancel, |_| {}))
             .unwrap_err();
         assert!(matches!(err, ChatError::MissingKey), "{err:?}");
+    }
+
+    /// 终态解析：`length` 必须被认出来（它是"正文被截断"的唯一凭据）。
+    #[test]
+    fn finish_reason_is_read_from_the_terminal_frame() {
+        // 正常收尾
+        assert_eq!(finish_of(&json!({"choices":[{"delta":{},"finish_reason":"stop"}]}), false), Finish::Stop);
+        // **被输出上限截断** —— 2026-10-18 线上那次就是它
+        assert_eq!(finish_of(&json!({"choices":[{"delta":{},"finish_reason":"length"}]}), false), Finish::Length);
+        // 别的终态：如实记"有终态"，不替它编意思
+        assert_eq!(finish_of(&json!({"choices":[{"delta":{},"finish_reason":"content_filter"}]}), false), Finish::Other);
+        // 中途帧（`finish_reason: null`）与缺字段都不算终态
+        assert_eq!(finish_of(&json!({"choices":[{"delta":{"content":"你"},"finish_reason":null}]}), false), Finish::Missing);
+        assert_eq!(finish_of(&json!({"choices":[{"delta":{"content":"你"}}]}), false), Finish::Missing);
+        assert_eq!(finish_of(&json!({"usage":{"prompt_tokens":1}}), false), Finish::Missing);
+        // Ollama：`done:true` 才算收尾，`done_reason` 区分正常/截断
+        assert_eq!(finish_of(&json!({"message":{"content":"x"},"done":false}), true), Finish::Missing);
+        assert_eq!(finish_of(&json!({"done":true}), true), Finish::Stop);
+        assert_eq!(finish_of(&json!({"done":true,"done_reason":"length"}), true), Finish::Length);
+    }
+
+    /// 终态要**累积进 `Usage`**：界面拿到的 `ai://done.finish` 就是它。
+    #[test]
+    fn merge_usage_carries_the_finish_reason() {
+        let mut u = Usage::default();
+        merge_usage(&mut u, &json!({"choices":[{"delta":{"content":"半句"},"finish_reason":null}]}), false);
+        assert_eq!(u.finish, Finish::Missing, "中途帧不该被当成终态");
+        merge_usage(
+            &mut u,
+            &json!({"choices":[{"delta":{},"finish_reason":"length"}],
+                    "usage":{"prompt_tokens":1810,"completion_tokens":4096,
+                    "completion_tokens_details":{"reasoning_tokens":2866}}}),
+            false,
+        );
+        assert_eq!(u.finish, Finish::Length);
+        assert_eq!(u.completion_tokens, Some(4096));
+    }
+
+    /// 一个只回固定字节的极小 HTTP/1.1 服务端（标准库 TCP —— 不为测试引 tokio 的 net 特性）。
+    ///
+    /// 两种收场方式，对应真机上两种完全不同的现象：
+    /// - 不写 `Content-Length` + 关连接 = HTTP/1.1 的**正常 EOF**（"流结束了，但没说它结束了"）；
+    /// - 声明一个**大于实际发出的** `Content-Length` 再关连接 = 传输**错误**
+    ///   （上游/代理在响应中途把连接掐了，客户端会拿到 `error decoding response body`）。
+    /// `hold_ms` > 0 时先吐字节、停一会儿再关 —— 保证"断之前客户端已经收到了正文"。
+    fn sse_server(body: &'static str, hold_ms: u64) -> String {
+        sse_server_with(body, hold_ms, false)
+    }
+
+    fn sse_server_with(body: &'static str, hold_ms: u64, truncated: bool) -> String {
+        use std::io::Write;
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut s) = stream else { continue };
+                let mut buf = [0u8; 4096];
+                let _ = std::io::Read::read(&mut s, &mut buf); // 读完请求头就走
+                let head = if truncated {
+                    // 说了 64KB，实际只发这么多 —— 之后关连接就是"承诺没兑现"
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\n\r\n",
+                        body.len() + 65536
+                    )
+                } else {
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n".to_string()
+                };
+                let _ = s.write_all(head.as_bytes());
+                let _ = s.write_all(body.as_bytes());
+                let _ = s.flush();
+                if hold_ms > 0 {
+                    std::thread::sleep(std::time::Duration::from_millis(hold_ms));
+                }
+                drop(s); // 关连接
+            }
+        });
+        format!("http://{addr}/v1")
+    }
+
+    fn run_stream(base_url: String) -> Result<(String, Usage), ChatError> {
+        let r = Resolved { base_url, ..openai() };
+        // `enable_all`：reqwest 的连接超时走 tokio 的 timer，只有 "rt" 的运行时里没有它。
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        rt.block_on(stream_chat(&reqwest::Client::new(), &r, vec![], &AtomicBool::new(false), |_| {}))
+            .map(|(text, _reasoning, usage)| (text, usage))
+    }
+
+    /// 真流（真网络 + 真解析）：三种收尾必须**分得开** —— 这正是用户看不到差别的那三种。
+    #[test]
+    fn real_stream_distinguishes_stop_length_and_missing() {
+        // ① 正常收尾：`finish_reason=stop` + `[DONE]`
+        let url = sse_server(
+            "data: {\"choices\":[{\"delta\":{\"content\":\"完整正文\"},\"finish_reason\":null}]}\n\n\
+             data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":11,\"completion_tokens\":4}}\n\n\
+             data: [DONE]\n\n",
+            0,
+        );
+        let (text, u) = run_stream(url).unwrap();
+        assert_eq!(text, "完整正文");
+        assert_eq!(u.finish, Finish::Stop);
+        assert_eq!(u.prompt_tokens, Some(11));
+
+        // ② 撞输出上限：`finish_reason=length` —— 线上那次的原形
+        let url = sse_server(
+            "data: {\"choices\":[{\"delta\":{\"content\":\"classDef device fill:#D\"},\"finish_reason\":null}]}\n\n\
+             data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"length\"}],\"usage\":{\"prompt_tokens\":1810,\"completion_tokens\":4096,\"completion_tokens_details\":{\"reasoning_tokens\":2866}}}\n\n\
+             data: [DONE]\n\n",
+            0,
+        );
+        let (text, u) = run_stream(url).unwrap();
+        assert_eq!(text, "classDef device fill:#D");
+        assert_eq!(u.finish, Finish::Length);
+        assert_eq!(u.reasoning_tokens, Some(2866));
+
+        // ③ 流**就这么结束了**：既没 `finish_reason` 也没 `[DONE]`（网关在上游超时后就是这样
+        //    收场的：不补 [DONE]、不发错误帧）。必须记成"没有结束标记"，不能当正常收尾。
+        let url = sse_server("data: {\"choices\":[{\"delta\":{\"content\":\"突然没了\"},\"finish_reason\":null}]}\n\n", 0);
+        let (text, u) = run_stream(url).unwrap();
+        assert_eq!(text, "突然没了");
+        assert_eq!(u.finish, Finish::Missing);
+
+        // ④ 只给 `[DONE]`、没给 `finish_reason`（有的网关省掉它）：那是正常收尾
+        let url = sse_server(
+            "data: {\"choices\":[{\"delta\":{\"content\":\"好\"},\"finish_reason\":null}]}\n\n\
+             data: [DONE]\n\n",
+            0,
+        );
+        let (text, u) = run_stream(url).unwrap();
+        assert_eq!(text, "好");
+        assert_eq!(u.finish, Finish::Stop);
+    }
+
+    /// 收到正文之后连接断掉：内容照旧交付，但**必须标成 `interrupted`** ——
+    /// 以前这一路是 `break`（当成成功），界面因此把半句话当完整答案。
+    #[test]
+    fn a_connection_that_dies_mid_answer_is_marked_interrupted() {
+        let url = sse_server_with(
+            "data: {\"choices\":[{\"delta\":{\"content\":\"前半句\"},\"finish_reason\":null}]}\n\n",
+            300,
+            true,
+        );
+        let (text, u) = run_stream(url).unwrap();
+        assert_eq!(text, "前半句", "已经收到的正文不能丢");
+        assert_eq!(u.finish, Finish::Interrupted);
     }
 }

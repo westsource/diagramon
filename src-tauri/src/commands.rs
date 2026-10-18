@@ -532,6 +532,9 @@ pub async fn ai_chat(
                         completion_tokens: usage.completion_tokens,
                         reasoning_tokens: usage.reasoning_tokens,
                         usage_source: if usage.reported() { "server" } else { "none" }.to_string(),
+                        // 流是怎么结束的：`length` = 被输出上限截断，`interrupted` = 中途断流。
+                        // 前端据此把"半句话"说清楚（以前这两个状态在界面上看不见）。
+                        finish: usage.finish.as_str().to_string(),
                     },
                 );
             }
@@ -685,6 +688,9 @@ pub async fn ai_agent_run(
                         completion_tokens: None,
                         reasoning_tokens: None,
                         usage_source: "none".to_string(),
+                        // 工具循环是**非流式多步**，没有"流结束"这回事：终态留给上游解析，
+                        // 这里如实报"这条路不给终态"（界面只对已知值动作，见 `AiDone.finish`）。
+                        finish: String::new(),
                     },
                 );
             }

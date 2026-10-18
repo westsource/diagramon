@@ -240,6 +240,11 @@ DIAGRAMON_SELFTEST=1 ./target/debug/diagramon.exe                         # 真�
   读回尺寸供自检比对。`copyImageDataUrl` 优先原生，失败才落回 `navigator.clipboard`。
 - **用量口径（P3 落地）**：`AiDone.usage_source` = `server` / `none`；token **只累计供应商  
   实报的调用**，没回报的显示 `—` 并给 title 说明，绝不显示 0，也不掺本地估算。
+- **流终态（`AiDone.finish`，2026-10-18 补）**：`stop` / `length` / `other` / `missing` /  
+  `interrupted`（`ai::Finish`），空串 = 该路径不报终态（工具循环那条非流式路径）。  
+  界面只对已知值动作：`length` = 正文被输出上限截断、`interrupted` = 中途断流、  
+  `missing` = 流结束了但没给结束标记 —— 三种都在气泡上给一句说明。  
+  起因见下方第 5 步「AI 对话」的线上实录（正文切在半句上而界面一声不吭）。
 - **重试 / 取消**：沿用既有 `ai_cancel`；顺带修了 `ai_cancel` 的参数命名（见第 4 步）。
 
 **验证**：自检新增 4 条断言（显示器枚举、剪贴板写图、读回尺寸、工作区残留）；  

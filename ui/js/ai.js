@@ -20,6 +20,19 @@ window.DGM = window.DGM || {};
 
   const MAX_EDGE = 1568;
 
+  /** 流**不是正常收尾**时的提示文案（值的真源：Rust 侧 `ai::Finish::as_str`）。
+   *
+   *  三种已知值都意味着"上面那段正文是不完整的"，而旧界面在这种时候一声不吭 ——
+   *  2026-10-18 线上实录就是这么发生的（正文被 `finish_reason=length` 切在半句上，
+   *  用户只看到一个 token 徽标，原话"没有任何提示"）。
+   *  表里没有的值（含 `stop` / `other` / 空串）一律不提示：提示要有据可依。
+   */
+  const CUT_NOTICE = {
+    length: "ai.cut.length",
+    interrupted: "ai.cut.interrupted",
+    missing: "ai.cut.missing",
+  };
+
   /** 对话**按文档**分开：会话就是按文档身份持久化的（`conversations/`）。
    *
    *  曾经只有一份 `msgs`、三个页签共用 —— 那样切文档会把上一份的对话带过来，
@@ -672,6 +685,15 @@ window.DGM = window.DGM || {};
         chars > 0 || reasoningTokens > 0
           ? t("ai.noContent.thinking", { tokens: reasoningTokens || m.used.tokens, chars })
           : t("ai.noContent", { tokens: m.used.tokens });
+    } else if (CUT_NOTICE[ev.finish]) {
+      // 有正文、但这条流**不是正常收尾的**：必须说出来。
+      //
+      // 2026-10-18 线上实录（云网关 `mermaid-default`，member 档）：上游把 4096 的
+      // completion 预算里 2866 花在思考，剩下 1230 token 的正文切在 `classDef … :#D`，
+      // `finish_reason=length` 一路转发到客户端 —— 而界面只看正文空不空，于是用户
+      // 看到的是一个「5906 tok」徽标和半张图，原话是"突然中断了，没有任何提示"。
+      // 只对**已知值**动作：空串（工具循环那条非流式路径）什么都不提示。
+      m.notice = t(CUT_NOTICE[ev.finish]);
     }
     // 面板收起、或回复落在**别的页签**里（用户正看着当前页签）——两种情况都要给未读角标，
     // 否则就是"花了钱、界面上什么都没有"。

@@ -1287,6 +1287,38 @@ digraph Pipeline {
         return { request_id };
       }
 
+      // 探针夹具：prompt 带 `[cut]` 时模拟**被输出上限截断**的那条流。
+      //
+      // 这是 2026-10-18 用户真机报的形态（云网关 mermaid-default / member 档）：
+      // 上游 `completion=4096` 里 2866 是思考，剩下 1230 token 的正文切在半句上，
+      // `finish_reason=length` 一路转发到客户端 —— 而界面只看"正文空不空"，于是用户
+      // 只看到一个 token 徽标、半张图，没有任何提示。真机走真流，这里只为可断言。
+      if (String(req.prompt || "").includes("[cut]")) {
+        const parts = ["```mermaid\nflowchart LR\n", "    A[企业专网] --> B[智控平台]\n", "    classDef device fill:#FFFBE6,stroke:#D"];
+        let k = 0;
+        const tickCut = () => {
+          if (job.aborted) return;
+          if (k < parts.length) {
+            emitLocal("ai://delta", { request_id, delta: parts[k++] });
+            job.timer = setTimeout(tickCut, 40);
+            return;
+          }
+          this._ai.delete(request_id);
+          emitLocal("ai://done", {
+            request_id,
+            text: parts.join(""),
+            model: modelName,
+            prompt_tokens: 1810,
+            completion_tokens: 4096,
+            reasoning_tokens: 2866,
+            usage_source: "server",
+            finish: "length",
+          });
+        };
+        job.timer = setTimeout(tickCut, 80);
+        return { request_id };
+      }
+
       // 按片段流式吐出（每 45ms 一段），最后 done
       const chunks = chunkText(text);
       let i = 0;
@@ -1300,6 +1332,7 @@ digraph Pipeline {
             model: modelName,
             prompt_tokens: 380 + Math.floor(Math.random() * 120),
             completion_tokens: 220 + Math.floor(Math.random() * 160),
+            finish: "stop",
           });
           return;
         }

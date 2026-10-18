@@ -432,6 +432,15 @@ pub struct AiDone {
     /// **界面据此标注来源**（P3 拍板：两种都留，但别混成一个数，更别把"没有"当 0）。
     #[serde(default)]
     pub usage_source: String,
+    /// 这条流**是怎么结束的**：`stop` / `length` / `other` / `missing` / `interrupted`
+    /// （见 `ai::Finish`）。
+    ///
+    /// 空串 = **这条路径不报终态**（工具循环走的是非流式多步，没有"流结束"这回事）。
+    /// 界面只对已知值动作：`length` 是"正文被输出上限切断了"，`interrupted` 是"连接中途断了"，
+    /// `missing` 是"流结束了但没给结束标记" —— 三种都要如实告诉用户，否则用户看到的是
+    /// "输出到一半突然没有下文，也没有任何提示"（2026-10-18 线上实录）。
+    #[serde(default)]
+    pub finish: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

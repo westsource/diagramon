@@ -1805,6 +1805,50 @@ def main() -> int:
             log(f"（断言 30 解析失败：{e}）")
             fails.append("断言 30 拿不到结果（PNG 导出链路可能整个没接上）")
 
+        # ---- 断言 31：被输出上限截断的正文必须说出来 ----
+        # 2026-10-18 用户真机实录：让 AI 按业务优化样式，界面走到「5906 tok」就没了下文，
+        # 正文切在 `classDef device fill:#D` 半句上，**没有任何提示**。查线上 `ai_usage`：
+        # status=ok / finish_reason=length / completion=4096（其中 2866 是思考）—— 上游说清
+        # "我撞上限了"，网关也原样转发了，是客户端整包丢掉了 `finish_reason`。
+        # 这条断言钉住：有正文但流不是正常收尾时，界面必须给一句说明。
+        # mock 夹具见 ipc.js `_aiChat` 的 `[cut]` 分支（正文半句 + finish:"length"）。
+        # 正文气泡取**最后一条**（前面的断言在同一个 AI 流里也留过气泡，取第一条会看错对象）。
+        cut = ev(
+            "(async () => {"
+            "  const before = DGM.state.usage.completion;"
+            "  DGM.ai.focus('chat');"
+            "  await new Promise(r => setTimeout(r, 150));"
+            "  const ta = document.querySelector('#ai-input');"
+            "  ta.value = '[cut] 帮我根据业务优化样式、图标';"
+            "  ta.dispatchEvent(new Event('input', { bubbles: true }));"
+            "  document.querySelector('#ai-send').click();"
+            "  await new Promise(r => setTimeout(r, 2200));"
+            "  const s = document.querySelector('#ai-stream');"
+            "  const notice = s.querySelector('.bubble.notice');"
+            "  const bodies = s.querySelectorAll('.bubble[data-req]:not(.notice)');"
+            "  const body = bodies[bodies.length - 1];"
+            "  return JSON.stringify({"
+            "    text: body ? body.textContent.slice(-80) : '',"
+            "    notice: notice ? notice.textContent : '',"
+            "    tokens: DGM.state.usage.completion - before"
+            "  });"
+            "})()"
+        )
+        log(f"被输出上限截断: {cut}")
+        try:
+            c = json.loads(cut or "{}")
+            if "classDef device" not in (c.get("text") or ""):
+                fails.append(f"截断那轮的正文没落到气泡里：{c.get('text')!r}")
+            if not c.get("notice"):
+                fails.append("正文被截断了，界面一个字都没说（用户报的 bug 原形）")
+            elif "输出上限" not in c.get("notice", ""):
+                fails.append(f"截断说明没点明是输出上限：{c.get('notice')}")
+            if not (c.get("tokens") or 0) > 0:
+                fails.append(f"截断这一轮的用量没记上：{c.get('tokens')}")
+        except Exception as e:
+            log(f"（断言 31 解析失败：{e}）")
+            fails.append("断言 31 拿不到结果（截断提示链路没接上）")
+
         # 汇总启动期间的 console error / 异常
         for params in cdp.seen("Runtime.exceptionThrown"):
             d = params.get("exceptionDetails", {})

@@ -15,5 +15,5 @@ pub use prompt::{
 };
 pub use provider::{
     build_body, build_body_with_tools, chat_once, normalize_base_url, stream_chat, ChatError, Chunk,
-    Resolved, Usage,
+    Finish, Resolved, Usage,
 };
