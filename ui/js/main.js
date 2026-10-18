@@ -495,6 +495,40 @@ window.DGM = window.DGM || {};
       const scope = await invoke("doc_scope", { id: doc.id });
       ok("状态栏作用域 = 风控", scope === "风控", scope);
 
+      // ── mermaid 解析错误：结构化行列 → 报错面板 → 行内标记与跳转（2026-10-18）──
+      //  故意把第 2 行的 `}` 拆掉。错误落在哪一行由解析器说了算（可能是 2，也可能是
+      //  报到文末），断言只钉**链路本身**：报错事件带行号、跳转后光标落在报错行。
+      {
+        const bad = clean.replace("B{判断}", "B{判断");
+        let renderErr = null;
+        DGM.bus.on("doc:render-error", (p) => {
+          if (p && p.docId === doc.id && p.format === "mermaid" && !renderErr) renderErr = p;
+        });
+        if (st && st.setBodyNow) await st.setBodyNow(doc.id, bad);
+        else {
+          await invoke("doc_set_body", { id: doc.id, body: bad });
+          if (DGM.preview && DGM.preview.schedule) DGM.preview.schedule();
+        }
+        for (let i = 0; i < 80 && !renderErr; i++) await new Promise((r) => setTimeout(r, 50));
+        ok("坏源码触发渲染错误", !!renderErr, renderErr && JSON.stringify(renderErr).slice(0, 160));
+        ok("报错带行号定位", !!(renderErr && renderErr.line >= 1), renderErr && (renderErr.line + ":" + renderErr.col));
+        if (renderErr && DGM.editor && DGM.editor.jumpTo && !DGM.editor.isFallback()) {
+          // 编辑器实例只在 loadActive 时挂载（boot 时还没有文档 → 实例是 null）。
+          // 这里显式调一次，并轮询等它就绪（分屏下源码面板可见，坐标才有意义）。
+          if (st && st.setViewMode) await st.setViewMode(doc.id, "split");
+          DGM.editor.loadActive();
+          let c = null;
+          for (let i = 0; i < 40; i++) {
+            DGM.editor.jumpTo(renderErr.line, renderErr.col || 1);
+            c = DGM.editor.caret && DGM.editor.caret();
+            if (c) break;
+            await new Promise((r) => setTimeout(r, 50));
+          }
+          ok("跳转后光标落在报错行", !!c && c.line === renderErr.line, c ? c.line + ":" + c.col + " vs 报错 " + renderErr.line : "编辑器未挂载");
+        }
+        if (st && st.setBodyNow) await st.setBodyNow(doc.id, withGe); // 还原后面的断言要用的正文
+      }
+
       // ── 画布型拒绝分屏 ──
       const cv = st && st.newDoc ? await st.newDoc("drawio") : await invoke("doc_new", { format: "drawio" });
       let rejected = false;

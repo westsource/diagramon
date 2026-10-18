@@ -183,6 +183,7 @@ window.DGM = window.DGM || {};
     });
     watchCaret();
     watchTab();
+    watchErrMark();
     // 面板可能在创建时就已存在（search({top:true}) 预先建好、藏着），先翻一次并盯住重建
     localizeSearchPanel();
     watchSearchPanel();
@@ -212,6 +213,7 @@ window.DGM = window.DGM || {};
   function loadActive() {
     const d = state.activeDoc();
     applyFontSize();
+    clearError(); // 换文档：上一份的错误标记坐标不再有效
     const langLbl = $("#src-lang");
     if (!d) {
       currentId = null;
@@ -253,6 +255,118 @@ window.DGM = window.DGM || {};
     } catch (e) {
       /* 忽略越界行 */
     }
+  }
+
+  /** 精确跳转：光标落到 line:col（均 1 基），滚动进入视口并聚焦。
+   *
+   *  与 `gotoLine` 的差别：vendor 的 revealLine 只有行号没有列，也不保证把光标
+   *  真正落到目标位置。这里用公开 API（dispatch + scrollIntoView）做精确落点，
+   *  渲染失败时的「跳到出错处」按钮吃的是它。
+   *  vendor 缺失时退到 textarea：按行列算字符偏移设选区。 */
+  function jumpTo(line, col) {
+    if (!hasVendor()) {
+      if (!fallback) return;
+      const lines = (fallback.value || "").split("\n");
+      const idx = Math.min(Math.max(1, line), lines.length) - 1;
+      let pos = 0;
+      for (let i = 0; i < idx; i++) pos += lines[i].length + 1;
+      pos += Math.max(0, (col || 1) - 1);
+      fallback.focus();
+      try {
+        fallback.setSelectionRange(pos, pos);
+      } catch (e) {
+        /* 忽略 */
+      }
+      return;
+    }
+    if (!inst || !inst.view) return;
+    const v = inst.view;
+    const doc = v.state.doc;
+    const ln = doc.line(Math.min(Math.max(1, line), doc.lines));
+    const pos = Math.min(ln.from + Math.max(0, (col || 1) - 1), ln.to);
+    v.dispatch({ selection: { anchor: pos }, scrollIntoView: true });
+    v.focus();
+    scheduleCaret();
+    scheduleErrDraw(); // scrollIntoView 触发的滚动事件可能晚于本次绘制，主动补一次
+  }
+
+  /* ------------------------------------------------------------------ 行内错误标记（DOM 覆盖层）
+
+   *  渲染失败时在出错的那一行下面画一条红波浪线。vendor 只对外暴露
+   *  {create, LANGUAGES} —— CM6 的 StateEffect / StateField / @codemirror/lint
+   *  全拿不到，所以不走 diagnostics 管线，改用零依赖的 DOM 覆盖层：
+   *
+   *  - 位置用公开 API 算：view.coordsAtPos（视口坐标）减宿主矩形 → 覆盖层坐标；
+   *  - 覆盖层不随内容滚动，滚动/输入/窗口缩放/字号变化时按当前标记**重画**；
+   *  - 出错行被滚出视口时 coordsAtPos 拿不到坐标 → 本轮不画，等下一次滚动补上；
+   *  - markError 记住的标记在文档切换 / 正文替换时由 loadActive / setValue 清掉，
+   *    渲染成功时由 preview 调 clearError 清掉。
+   */
+
+  let errLayer = null; // 覆盖层节点（懒建）
+  let errMark = null; // { line, col }（1 基）；null = 无错误
+  let errDrawTimer = 0;
+
+  function ensureErrLayer() {
+    const box = host();
+    if (!box) return null;
+    if (!errLayer || !errLayer.isConnected) {
+      errLayer = h("div", "editor-err-layer");
+      box.appendChild(errLayer);
+    }
+    return errLayer;
+  }
+
+  function drawErrMark() {
+    if (!errMark || !inst || !inst.view) return;
+    const layer = ensureErrLayer();
+    if (!layer) return;
+    layer.innerHTML = "";
+    const v = inst.view;
+    const doc = v.state.doc;
+    const ln = doc.line(Math.min(Math.max(1, errMark.line), doc.lines));
+    const box = host();
+    const hostRect = box.getBoundingClientRect();
+    const from = Math.min(ln.from + Math.max(0, (errMark.col || 1) - 1), ln.to);
+    const a = v.coordsAtPos(from);
+    const b = v.coordsAtPos(ln.to);
+    if (!a || !b) return; // 目标行不在已渲染范围里：等滚动事件重画
+    const left = Math.min(a.left, b.left) - hostRect.left;
+    const right = Math.max(a.right || a.left, b.right || b.left) - hostRect.left;
+    const top = Math.max(a.top, b.top) - hostRect.top;
+    if (right <= left) return;
+    const sq = h("div", "editor-err-squiggle");
+    sq.style.left = left + "px";
+    sq.style.top = top + "px";
+    sq.style.width = right - left + "px";
+    layer.appendChild(sq);
+  }
+
+  function scheduleErrDraw() {
+    if (!errMark) return;
+    clearTimeout(errDrawTimer);
+    errDrawTimer = setTimeout(drawErrMark, 60);
+  }
+
+  /** 在 line:col（1 基）那一行画错误波浪线。重复调用覆盖上一次。 */
+  function markError(line, col) {
+    errMark = { line: line, col: col || 1 };
+    scheduleErrDraw();
+  }
+
+  /** 清掉错误标记（渲染成功 / 换文档 / 换正文时调）。 */
+  function clearError() {
+    errMark = null;
+    if (errLayer) errLayer.innerHTML = "";
+  }
+
+  /** 覆盖层的重画时机：滚动、键鼠（行高会变）、窗口缩放。字号变化走
+   *  settings:changed 里那条（applyFontSize 之后补一次）。 */
+  function watchErrMark() {
+    if (!inst || !inst.view) return;
+    inst.view.scrollDOM.addEventListener("scroll", scheduleErrDraw, { passive: true });
+    ["keyup", "mouseup"].forEach((ev) => inst.view.dom.addEventListener(ev, scheduleErrDraw));
+    window.addEventListener("resize", scheduleErrDraw);
   }
 
   /* ------------------------------------------------------------------ 查找面板本地化 */
@@ -356,6 +470,7 @@ window.DGM = window.DGM || {};
   function setValue(text) {
     if (inst) inst.setValue(text || "");
     else if (fallback) fallback.value = text || "";
+    clearError(); // 正文被整块替换：旧标记的坐标全部作废
   }
 
   /** 整块替换正文：落盘 + 刷新编辑器与派生数据（AI 应用 / 格式化用）。 */
@@ -413,12 +528,18 @@ window.DGM = window.DGM || {};
   }
 
   /* 设置变化里字号/默认视图可能变 → 重新应用字号；文档切换交给 main/shell 调 loadActive。 */
-  DGM.bus.on("settings:changed", applyFontSize);
+  DGM.bus.on("settings:changed", () => {
+    applyFontSize();
+    scheduleErrDraw(); // 字号变了行高就变，错误标记要按新几何重画
+  });
 
   DGM.editor = {
     loadActive,
     reload: loadActive,
     gotoLine,
+    jumpTo,
+    markError,
+    clearError,
     openSearch,
     focus,
     getValue,

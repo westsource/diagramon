@@ -214,9 +214,21 @@ window.DGM = window.DGM || {};
     showNode(h("div", "preview-note", esc(text)));
   }
 
-  function errorBox(text) {
+  function errorBox(text, jump) {
     lastSvg = "";
-    showNode(h("div", "preview-error", esc(text)));
+    const node = h("div", "preview-error", esc(text));
+    // 有行列定位时给一个「跳到出错处」：切到源码视图并把光标钉到出错行列。
+    // 按钮只在编辑器侧真的能跳时出现（vendor 缺失的 textarea 回退也能跳）。
+    if (jump && jump.line && DGM.editor && (DGM.editor.jumpTo || DGM.editor.gotoLine)) {
+      const btn = h("button", "mini-btn pv-jump", esc(t("src.jumpToError")));
+      btn.addEventListener("click", () => {
+        if (DGM.shell && DGM.shell.setMode) DGM.shell.setMode("source");
+        if (DGM.editor.jumpTo) DGM.editor.jumpTo(jump.line, jump.col || 1);
+        else DGM.editor.gotoLine(jump.line);
+      });
+      node.appendChild(btn);
+    }
+    showNode(node);
   }
 
   function showLoading() {
@@ -231,6 +243,41 @@ window.DGM = window.DGM || {};
     const line = m ? Number(m[1]) : 0;
     const first = text.split("\n").map((s) => s.trim()).find((s) => s.length) || text;
     return line ? { line, text: t("preview.noRender", { msg: t("common.line") + " " + line + "：" + first }) } : { line: 0, text: first };
+  }
+
+  /** mermaid 的解析错误：优先读 err.hash 里的结构化行列，读不到再退化到
+   *  describeError 的正则文本扫描（走 err.message，比如 "Parse error on line N"）。
+   *
+   *  mermaid 12 实测的 hash 形态有三种（解析器来源不同）：
+   *  ① hash.loc = { start:{line,column}, end:{...} }        —— 新版 parser；
+   *  ② hash.loc = { first_line, first_column, ... }         —— jison 原生（1 基）；
+   *  ③ hash.line（**0 基**）+ hash.first_column             —— git 图等手写 throw。
+   *  所以下面 ①② 直接用、③ 要 +1。都取不到时行号记 0（调用方按无定位处理）。
+   */
+  function describeMermaid(err) {
+    const h = err && err.hash;
+    let line = 0;
+    let col = 0;
+    if (h && h.loc) {
+      if (h.loc.start && Number.isFinite(h.loc.start.line)) {
+        line = h.loc.start.line;
+        col = h.loc.start.column;
+      } else if (Number.isFinite(h.loc.first_line)) {
+        line = h.loc.first_line;
+        col = h.loc.first_column;
+      }
+    } else if (h && Number.isFinite(h.line)) {
+      line = h.line + 1;
+      col = Number.isFinite(h.first_column) ? h.first_column + 1 : 0;
+    }
+    const msg = String((err && err.message) || err || "");
+    if (!line) {
+      const d = describeError(msg);
+      return { line: d.line, col: 0, text: d.text };
+    }
+    const first = msg.split("\n").map((s) => s.trim()).find((s) => s.length) || msg;
+    const where = t("common.line") + " " + line + (col ? " " + t("common.col") + " " + col : "");
+    return { line, col: col || 1, text: t("preview.noRender", { msg: where + "：" + first }) };
   }
 
   /* ------------------------------------------------------------------ 尺寸 / 归一化 */
@@ -366,16 +413,24 @@ window.DGM = window.DGM || {};
       }
       if (mine !== renderToken) return;
       mountSvg(svgText, d);
+      // 渲染成功 → 清掉上一轮可能留下的源码行内错误标记
+      if (DGM.editor && DGM.editor.clearError) DGM.editor.clearError();
     } catch (err) {
       if (mine !== renderToken) return;
-      // D2 抛的是 JSON 数组串（行列号在 errmsg 里），通用解析认不出来，先单独试一次
+      // D2 抛的是 JSON 数组串（行列号在 errmsg 里），通用解析认不出来，先单独试一次；
+      // mermaid 优先读错误对象上的结构化行列（hash.loc / hash.line），比正则扫文本可靠。
       const d2err = d.format === "d2" ? DGM.d2.describeError(err && err.message ? err.message : err) : null;
-      const described = d2err ? describeD2(d2err) : describeError(err && err.message ? err.message : err);
-      errorBox(described.text);
+      const described =
+        d2err ? describeD2(d2err)
+        : d.format === "mermaid" ? describeMermaid(err)
+        : describeError(err && err.message ? err.message : err);
+      errorBox(described.text, described.line ? { line: described.line, col: described.col || 1 } : null);
       toolsVisible(false);
       if (DGM.status) DGM.status(described.text, "err");
       if (described.line) {
         state.refreshIssues(d.id);
+        // 源码窗口行内标记（M3）：编辑器在就画，不在（预览模式）就留给 jump 按钮的跳转
+        if (DGM.editor && DGM.editor.markError) DGM.editor.markError(described.line, described.col || 1);
       }
       emitRenderError(d, described, err);
     }
@@ -393,6 +448,7 @@ window.DGM = window.DGM || {};
       docId: d.id,
       format: d.format,
       line: described.line || 0,
+      col: described.col || 0,
       // 个别引擎抛的是非 Error 对象，退化成字符串；截断避免把整篇栈塞进请求
       raw: String((err && err.message) || err || "").slice(0, 800),
     });
@@ -822,6 +878,7 @@ window.DGM = window.DGM || {};
     canvasMode: () => canvasMode,
     toPngDataUrl,
     describeError,
+    describeMermaid,
     exportPng,
     exportSvg,
     copyImage,
