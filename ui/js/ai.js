@@ -117,6 +117,78 @@ window.DGM = window.DGM || {};
     return "mermaid";
   }
 
+  /* ------------------------------------------------------------------ 思考块（可折叠） */
+
+  /** 思考原文的展示片段。
+   *
+   *  流式期间**只留尾部**：每一帧都要重写这一整块，而用户关心的是"现在想到哪"，
+   *  留尾部就不必反复重排几万个字符。收尾后文本不再增长 —— 那时给**完整原文**：
+   *  折叠的意义就是"想读的时候读得到"，只给尾部等于没给。
+   */
+  function thinkHtml(text, streaming) {
+    const shown = streaming && text.length > 800 ? "…" + text.slice(-800) : text;
+    return esc(shown).replace(/\n/g, "<br>");
+  }
+
+  /** 思考块是否展开。三处状态按优先级合起来决定：
+   *  1. 用户点过（`thinkTouched`）—— 他说了算，之后的自动行为都不再改他的选择；
+   *  2. 流式期间 —— 展开：正文最后才来，这段推理是"它在干活"的唯一证据；
+   *  3. 收尾之后 —— 有正文就收起（要读的是正文），**没有正文就留着**：那一轮推理是
+   *     唯一的产出（见 `ai.noContent.thinking`）。
+   */
+  function thinkOpen(m, hasText) {
+    if (m.thinkTouched) return m.thinkOpen !== false;
+    return m.streaming ? true : !hasText;
+  }
+
+  /** 思考块 = 一行摘要（可点、可键盘操作的折叠开关）+ 原文块。
+   *
+   *  原文块**始终留在 DOM 里**、收尾只是把它收起来：以前有正文的那一轮收尾会把原文
+   *  整个丢掉，用户事后永远读不到推理过程（那是花了 token 换来的）。展开状态挂在消息上
+   *  （`m.thinkTouched` / `m.thinkOpen`），所以整栏重排、切页签、切文档回来都还在。
+   *  切换**就地改 DOM、不整栏重排** —— 重排会把长对话滚到底，用户刚点开的那块就跑掉了。
+   */
+  function thinkNodes(m, thinking) {
+    if (!thinking) {
+      // 一帧还没到：只有一行"正在等待模型…"，没有可折叠的东西
+      const wait = h("div", "think");
+      wait.dataset.req = m.req || "";
+      wait.innerHTML = `${icon("refresh", "ico-sm")}<span>${esc(t("ai.waiting"))}</span>`;
+      return [wait];
+    }
+    const open = thinkOpen(m, !!(m.text || "").trim());
+    const line = h("div", "think");
+    line.dataset.req = m.req || "";
+    line.setAttribute("role", "button");
+    line.tabIndex = 0;
+    line.setAttribute("aria-expanded", open ? "true" : "false");
+    line.title = t(open ? "ai.think.collapse" : "ai.think.expand");
+    line.innerHTML =
+      `${icon("chevD", "ico-sm chev")}${icon("sparkles", "ico-sm")}` +
+      `<span>${esc(t(m.streaming ? "ai.think.live" : "ai.think.done", { n: thinking.length }))}</span>`;
+    const tb = h("div", "think-body");
+    tb.dataset.req = m.req || "";
+    tb.innerHTML = thinkHtml(thinking, m.streaming);
+    tb.hidden = !open;
+    const flip = (e) => {
+      if (e) {
+        e.preventDefault();
+        e.stopPropagation();
+      }
+      const next = line.getAttribute("aria-expanded") !== "true";
+      m.thinkTouched = true; // 之后 render() / ai://done 不再自动改
+      m.thinkOpen = next;
+      line.setAttribute("aria-expanded", next ? "true" : "false");
+      line.title = t(next ? "ai.think.collapse" : "ai.think.expand");
+      tb.hidden = !next;
+    };
+    line.addEventListener("click", flip);
+    line.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") flip(e);
+    });
+    return [line, tb];
+  }
+
   /* ------------------------------------------------------------------ 渲染 */
 
   /** 一条消息 = 微信式的「头像 + 气泡」：用户在右（绿气泡），AI 在左（白气泡）。
@@ -149,24 +221,12 @@ window.DGM = window.DGM || {};
       body.appendChild(th);
     }
 
-    // 思考块：思考型模型（GLM/DeepSeek/Qwen）在正文之前会连推几十上百帧 reasoning —
-    // 没有这一块，用户就只能对着空气等（2026-10-14 的 bug：token 记了 2000+，一个字没显示）。
-    // 流式期间摆思考原文（看得到在干活）；结束后缩成一行摘要；**没有正文**时原文留着给人读。
+    // 思考块（可折叠，见 thinkNodes）：思考型模型（GLM/DeepSeek/Qwen）在正文之前会连推
+    // 几十上百帧 reasoning — 没有这一块，用户就只能对着空气等（2026-10-14 的 bug：
+    // token 记了 2000+，一个字没显示）。
     const thinking = (m.thinking || "").trim();
-    const hasText = !!(m.text || "").trim();
     if (m.role !== "user" && (thinking || m.streaming)) {
-      const line = h("div", "think");
-      line.dataset.req = m.req || "";
-      line.innerHTML = thinking
-        ? `${icon("sparkles", "ico-sm")}<span>${esc(t("ai.think.live", { n: thinking.length }))}</span>`
-        : `${icon("refresh", "ico-sm")}<span>${esc(t("ai.waiting"))}</span>`;
-      body.appendChild(line);
-      if (thinking && (m.streaming || !hasText)) {
-        const tb = h("div", "think-body");
-        tb.dataset.req = m.req || "";
-        tb.innerHTML = esc(thinking.length > 800 ? "…" + thinking.slice(-800) : thinking).replace(/\n/g, "<br>");
-        body.appendChild(tb);
-      }
+      body.append(...thinkNodes(m, thinking));
     }
 
     // 工具活动行：每一条就是一次真实的工具执行。失败的也要如实显示 ——
@@ -655,7 +715,7 @@ window.DGM = window.DGM || {};
     }
     line.textContent = t("ai.think.live", { n: txt.length });
     const body = $(`#ai-stream .think-body[data-req="${ev.request_id}"]`);
-    if (body) body.innerHTML = esc(txt.length > 800 ? "…" + txt.slice(-800) : txt).replace(/\n/g, "<br>");
+    if (body) body.innerHTML = thinkHtml(txt, true);
     if (!before && m.m === tab()) render(); // 摘要行 + 原文块一起出现
   }
 

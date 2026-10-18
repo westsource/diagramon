@@ -1849,6 +1849,99 @@ def main() -> int:
             log(f"（断言 31 解析失败：{e}）")
             fails.append("断言 31 拿不到结果（截断提示链路没接上）")
 
+        # ---- 断言 32：思考块能折叠 / 展开，且用户的选择不被重排冲掉 ----
+        # 3.2.0 起思考原文会显示，但**收尾时被整块丢掉**：有正文的那一轮，用户事后
+        # 再也读不到推理过程（那是花了 token 换来的）。这条钉四件事：
+        #   ① 有正文的收尾**自动收起**（要读的是正文），但原文仍在 DOM 里、可展开；
+        #   ② 点摘要行展开（原文可读）、再按 Enter 收起；
+        #   ③ 用户点过之后，整栏重排（切页签/切文档）不再改他的选择；
+        #   ④ 没有正文的那一轮**默认展开** —— 推理是那一轮唯一的产出。
+        # mock 夹具 `[thinktext]` 复现"先思考、后正文"的真机次序（见 ipc.js）。
+        collapse = ev(
+            "(async () => {"
+            "  const out = {};"
+            "  const waitIdle = async () => {"
+            "    for (let i = 0; i < 40 && DGM.state.ui.aiBusy; i++) await new Promise(r => setTimeout(r, 150));"
+            "  };"
+            "  const rows = () => [...document.querySelectorAll('#ai-stream .think[role=\"button\"]')];"
+            "  const row = () => rows()[rows().length - 1] || null;"
+            "  const snap = () => {"
+            "    const r = row();"
+            "    const b = r ? r.nextElementSibling : null;"  # 原文块就是摘要行的下一个兄弟
+            "    const isBody = !!(b && b.classList.contains('think-body'));"
+            "    return {"
+            "      expanded: r ? r.getAttribute('aria-expanded') : 'no-row',"
+            "      hidden: isBody ? b.hidden : 'no-body',"
+            "      chars: isBody ? (b.textContent || '').length : 0"
+            "    };"
+            "  };"
+            "  await DGM.state.patchSettings({ ai: { memory_auto: false, tools_enabled: false } });"
+            "  DGM.ai.focus('chat');"
+            "  await new Promise(r => setTimeout(r, 200));"
+            "  DGM.ai.clear();"
+            "  await new Promise(r => setTimeout(r, 250));"
+            "  const ta = document.querySelector('#ai-input');"
+            "  const send = async (v) => {"
+            "    ta.value = v;"
+            "    ta.dispatchEvent(new Event('input', { bubbles: true }));"
+            "    document.querySelector('#ai-send').click();"
+            "    await waitIdle();"
+            "    await new Promise(r => setTimeout(r, 300));"
+            "  };"
+            # ① 先思考、后正文 → 收尾自动收起，但原文还在
+            "  await send('[thinktext] 把配色改成暗色');"
+            "  out.afterDone = snap();"
+            "  out.label = row() ? row().textContent.trim() : '';"
+            # ② 点开 → 原文可读；键盘 Enter 收起
+            "  row().click();"
+            "  await new Promise(r => setTimeout(r, 80));"
+            "  out.opened = snap();"
+            # ③ 整栏重排（focus 会 render）不该改用户的选择
+            "  DGM.ai.focus('chat');"
+            "  await new Promise(r => setTimeout(r, 150));"
+            "  out.afterRerender = snap();"
+            "  row().dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));"
+            "  await new Promise(r => setTimeout(r, 80));"
+            "  out.closedByKey = snap();"
+            # ④ 没有正文的那一轮：默认展开
+            "  await send('[think] 只看不画');"
+            "  out.noText = snap();"
+            "  await DGM.state.patchSettings({ ai: { memory_auto: true } });"
+            "  return JSON.stringify(out);"
+            "})()"
+        )
+        log(f"思考块折叠: {collapse}")
+        try:
+            r = json.loads(collapse or "{}")
+            after, opened, rerender, closed, no_text = (
+                r.get("afterDone") or {},
+                r.get("opened") or {},
+                r.get("afterRerender") or {},
+                r.get("closedByKey") or {},
+                r.get("noText") or {},
+            )
+            if after.get("expanded") != "false":
+                fails.append(f"有正文的收尾没有自动收起思考块（aria-expanded={after.get('expanded')}）")
+            if after.get("chars") in (0, None):
+                fails.append(f"收尾后思考原文被丢掉了（{after.get('chars')} 字）—— 用户再也读不到推理过程")
+            elif after.get("hidden") is not True:
+                fails.append(f"收起状态的原文块没藏起来（hidden={after.get('hidden')}）")
+            if opened.get("expanded") != "true":
+                fails.append(f"点摘要行没能展开（aria-expanded={opened.get('expanded')}）")
+            elif opened.get("hidden") is not False:
+                fails.append(f"展开后原文块仍然藏着（hidden={opened.get('hidden')}）")
+            if not (opened.get("chars") or 0) > 0:
+                fails.append("展开后没读到思考原文")
+            if rerender.get("expanded") != "true":
+                fails.append(f"整栏重排把用户的展开状态冲掉了（aria-expanded={rerender.get('expanded')}）")
+            if closed.get("expanded") != "false" or closed.get("hidden") is not True:
+                fails.append(f"键盘 Enter 没能收起（aria-expanded={closed.get('expanded')} / hidden={closed.get('hidden')}）")
+            if no_text.get("expanded") != "true":
+                fails.append(f"没有正文的那一轮思考块该默认展开（aria-expanded={no_text.get('expanded')}）")
+        except Exception as e:
+            log(f"（断言 32 解析失败：{e}）")
+            fails.append("断言 32 拿不到结果（思考块折叠链路可能整个没接上）")
+
         # 汇总启动期间的 console error / 异常
         for params in cdp.seen("Runtime.exceptionThrown"):
             d = params.get("exceptionDetails", {})

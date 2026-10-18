@@ -1319,6 +1319,41 @@ digraph Pipeline {
         return { request_id };
       }
 
+      // 探针夹具：prompt 带 `[thinktext]` 时，走"思考型模型**有正文**"的次序 ——
+      // 先连推几帧 `ai://thinking`，正文才来。界面据此断言：收尾自动收起原文、
+      // 但原文仍在 DOM 里可展开（以前有正文的那一轮收尾会把原文整块丢掉）。
+      // 与 `[think]` 的差别只有"最后有没有正文"，别的都对齐真机形态。
+      if (String(req.prompt || "").includes("[thinktext]")) {
+        const reason = ["先读一遍这张图，", "把节点与边理清楚……"];
+        const job2 = { aborted: false, timer: 0, text: "" };
+        this._ai.set(request_id, job2);
+        let k = 0;
+        const tickThink = () => {
+          if (job2.aborted) return;
+          if (k < reason.length) {
+            emitLocal("ai://thinking", { request_id, delta: reason[k++] });
+            job2.timer = setTimeout(tickThink, 40);
+            return;
+          }
+          job2.timer = setTimeout(() => {
+            if (job2.aborted) return;
+            this._ai.delete(request_id);
+            emitLocal("ai://done", {
+              request_id,
+              text: "配色已按暗色重排，节点与连线都换成了低饱和的对比色。",
+              model: modelName,
+              prompt_tokens: 137,
+              completion_tokens: 640,
+              reasoning_tokens: 512,
+              usage_source: "server",
+              finish: "stop",
+            });
+          }, 60);
+        };
+        job2.timer = setTimeout(tickThink, 80);
+        return { request_id };
+      }
+
       // 按片段流式吐出（每 45ms 一段），最后 done
       const chunks = chunkText(text);
       let i = 0;
