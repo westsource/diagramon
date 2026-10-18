@@ -1942,6 +1942,52 @@ def main() -> int:
             log(f"（断言 32 解析失败：{e}）")
             fails.append("断言 32 拿不到结果（思考块折叠链路可能整个没接上）")
 
+        # ---- 断言 33：模型的「空闲超时」存得下、读得回、留空即自动 ----
+        # BYOK 直连的对面不发心跳，而本地 Ollama 冷启动加载权重常 >90s 才吐第一个字节 ——
+        # 这一格就是让用户按模型把"空闲多久算死"调开（Rust 侧 `ai::provider::idle_timeout_for`：
+        # 留空 = ollama 300s / 其它 90s，填了钳到 15–1800）。
+        # 钉的是**设置这条链路**：填 45 → 保存 → 重开还是 45；清空 → 保存 → 重开是空（null）。
+        idle = ev(
+            "(async () => {"
+            "  const open = async () => { DGM.dialogs.settings('ai'); await new Promise(r => setTimeout(r, 200)); };"
+            "  const box = () => { const rows = document.querySelectorAll('#model-list .model-row');"
+            "    return rows.length ? rows[rows.length - 1].querySelector('[data-f=\"idle_timeout_s\"]') : null; };"
+            "  const put = (v) => { const b = box(); if (!b) return 'missing'; b.value = v; return b.value; };"
+            "  const save = async () => { [...document.querySelectorAll('[data-act]')].find(b => b.dataset.act === 'save').click();"
+            "    await new Promise(r => setTimeout(r, 260)); };"
+            "  const stored = () => { const ms = DGM.state.settings.ai.models || [];"
+            "    return ms.length ? (ms[ms.length - 1].idle_timeout_s === undefined ? 'undefined' : ms[ms.length - 1].idle_timeout_s) : 'no-model'; };"
+            "  await open();"
+            "  const initial = put('45');"
+            "  await save();"
+            "  const afterSave = stored();"
+            "  await open();"
+            "  const savedShown = box() ? box().value : 'missing';"
+            "  put('');"
+            "  await save();"
+            "  const afterClear = stored();"
+            "  await open();"
+            "  const clearedShown = box() ? box().value : 'missing';"
+            "  DGM.dialogs.close();"
+            "  await new Promise(r => setTimeout(r, 120));"
+            "  return JSON.stringify({ initial, afterSave, savedShown, afterClear, clearedShown });"
+            "})()"
+        )
+        log(f"空闲超时字段: {idle}")
+        try:
+            r = json.loads(idle or "{}")
+            if r.get("afterSave") != 45:
+                fails.append(f"填了 45 保存后没落到 settings（idle_timeout_s={r.get('afterSave')!r}）")
+            if r.get("savedShown") != "45":
+                fails.append(f"重开设置后那一格没回显 45（{r.get('savedShown')!r}）")
+            if r.get("afterClear") not in (None, "undefined"):
+                fails.append(f"清空后应落成 null（留空 = 自动），实际 {r.get('afterClear')!r}")
+            if r.get("clearedShown") != "":
+                fails.append(f"清空保存后那一格不是空的（{r.get('clearedShown')!r}）")
+        except Exception as e:
+            log(f"（断言 33 解析失败：{e}）")
+            fails.append("断言 33 拿不到结果（空闲超时那一格没接上）")
+
         # 汇总启动期间的 console error / 异常
         for params in cdp.seen("Runtime.exceptionThrown"):
             d = params.get("exceptionDetails", {})

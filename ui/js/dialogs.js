@@ -543,6 +543,7 @@ window.DGM = window.DGM || {};
           <label>${esc(t("set.ai.modelId"))}<input type="text" data-f="model" value="${esc(m.model)}" placeholder="${esc(t("set.ai.modelIdPh"))}"></label>
           <label>${esc(t("set.ai.maxTokens"))}<input type="number" data-f="max_tokens" value="${m.max_tokens}"></label>
           <label>${esc(t("set.ai.temperature"))}<input type="number" step="0.1" data-f="temperature" value="${m.temperature}"></label>
+          <label title="${esc(t("set.ai.idleTimeoutHint"))}">${esc(t("set.ai.idleTimeout"))}<input type="number" min="15" max="1800" step="5" data-f="idle_timeout_s" value="${m.idle_timeout_s == null ? "" : m.idle_timeout_s}" placeholder="${esc(t("set.ai.idleTimeoutAuto"))}"></label>
           <label class="wide">${esc(t("set.ai.apiKey"))}<input type="password" data-f="__key" placeholder="${m.has_key ? esc(t("set.ai.keyStored", { hint: m.key_hint })) : esc(t("set.ai.keyMissing"))}"></label>
         </div>
       </div>`,
@@ -724,7 +725,7 @@ window.DGM = window.DGM || {};
     if (!draftAi) draftAi = JSON.parse(JSON.stringify(state.ai()));
     const id = "m" + Date.now().toString(36);
     draftAi.models = draftAi.models || [];
-    draftAi.models.push({ id, name: t("common.new") + " " + (draftAi.models.length + 1), provider: "openai", base_url: "", model: "", max_tokens: 4096, temperature: 0.2, has_key: false, key_hint: "" });
+    draftAi.models.push({ id, name: t("common.new") + " " + (draftAi.models.length + 1), provider: "openai", base_url: "", model: "", max_tokens: 4096, temperature: 0.2, idle_timeout_s: null, has_key: false, key_hint: "" });
     if (!draftAi.default_model) draftAi.default_model = id;
     renderSettings("ai"); // 原地重画：draftAi 带着新模型，绝不能走 settings()（会重置草稿）
     // 重新渲染后滚动到新条目
@@ -761,6 +762,13 @@ window.DGM = window.DGM || {};
           }
           if (f === "max_tokens") m.max_tokens = Number(inp.value) || m.max_tokens;
           else if (f === "temperature") m.temperature = Number(inp.value) || 0;
+          // 留空 = 自动（Rust 侧 `ai::provider::idle_timeout_for` 决定：ollama 300s / 其它 90s）。
+          // 这里只做"空 vs 数字"的翻译，范围由 Rust 钳（15..=1800）—— 前端不藏第二份口径。
+          else if (f === "idle_timeout_s") {
+            const v = String(inp.value || "").trim();
+            const n = Math.round(Number(v));
+            m.idle_timeout_s = v && Number.isFinite(n) && n > 0 ? n : null;
+          }
           else m[f] = inp.value;
         });
       });

@@ -4,8 +4,39 @@
 //! 前端拿不到它，也就无从泄漏（见 design/ui-proto/index.html §9.1）。
 
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 
 use serde_json::{json, Value};
+
+/// 用户填的空闲超时（秒）的下限：更小会把正常的长思考流当成卡死掐掉。
+const IDLE_MIN_S: u32 = 15;
+/// 上限：半小时。再大就等于没有"卡死检测"了（真卡死也永远等不到结论）。
+const IDLE_MAX_S: u32 = 1800;
+/// 自动档：Ollama 是本地进程，冷启动加载权重常常 >90s 才吐第一个字节。
+const IDLE_AUTO_OLLAMA_S: u64 = 300;
+/// 自动档：其余（openai 兼容 / 自定义）——沿用既有的 90s。
+const IDLE_AUTO_DEFAULT_S: u64 = 90;
+
+/// 空闲多久算死（客户端侧）：`configured` 是用户在 AI 设置里给这个模型填的秒数（None = 自动）。
+///
+/// 为什么必须有它：BYOK 直连的用户自己的上游**不发 SSE 心跳**，而常见的合法静默就会超过
+/// 旧的固定 90s（本地 Ollama 冷启动加载权重、自建网关排队、长推理模型首帧慢）——
+/// 客户端于是先于服务端放弃，且"真卡死"与"只是慢"在 90s 内分不出来。
+///
+/// 为什么只能在客户端：reqwest 的 `read_timeout` 只能设在 `ClientBuilder` 上、不能按请求
+/// 覆盖，所以它决定的是"这次对话用哪个客户端实例"（`AppState::http_for_idle`）。
+/// 云网关那条路不归它管：服务端自己发心跳，`gateway_resolved` 解析出的就是默认档。
+///
+/// 自动档按 provider 分：Ollama 是本地进程，冷启动加载权重常常 >90s 才吐第一个字节（300s）；
+/// 其余（openai 兼容 / 自定义）保持既有的 90s。用户填的值钳到 `15..=1800`（超范围也照此
+/// 收窄，而不是丢弃整份配置）。
+pub fn idle_timeout_for(provider: &str, configured: Option<u32>) -> Duration {
+    match configured {
+        Some(secs) => Duration::from_secs(secs.clamp(IDLE_MIN_S, IDLE_MAX_S) as u64),
+        None if provider == "ollama" => Duration::from_secs(IDLE_AUTO_OLLAMA_S),
+        None => Duration::from_secs(IDLE_AUTO_DEFAULT_S),
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct Resolved {
@@ -24,6 +55,14 @@ pub struct Resolved {
     /// （线上实录见 `Finish` 的注释）。
     pub max_tokens: Option<u32>,
     pub temperature: Option<f32>,
+    /// **客户端**侧的空闲上限：多久收不到一个字节就判定这条流死了（与网关无关 ——
+    /// 网关自己的上限是服务端的事）。
+    ///
+    /// 它存在的唯一理由是 reqwest 的 `read_timeout` **只能**建在 `ClientBuilder` 上、
+    /// 不能按请求覆盖，所以它决定"这次对话用哪个客户端实例"：调用方先按这个值取客户端
+    /// （`AppState::http_for_idle`），再把它连同客户端一起交给 `stream_chat` / `chat_once`。
+    /// 值由 [`idle_timeout_for`] 从模型配置解析而来。
+    pub idle_timeout: Duration,
 }
 
 impl Resolved {
@@ -220,6 +259,10 @@ pub fn build_body_with_tools(r: &Resolved, messages: &[Value], tools: &[Value], 
 ///
 /// 返回 `(正文, 思考, 用量)` —— 思考单独返回，界面据此在"还没有正文"的那段时间里显示进度，
 /// 而不是让用户对着空气等（见 `Chunk` 的说明）。
+///
+/// `client` 必须与 `r.idle_timeout` 配套：reqwest 的 `read_timeout` 只能在 `ClientBuilder` 上
+/// 设，所以"多久没字节算死"这件事是**客户端实例**的属性，调用方要先用
+/// `AppState::http_for_idle(r.idle_timeout)` 取到对应实例再进来（见 `Resolved.idle_timeout`）。
 pub async fn stream_chat<F>(
     client: &reqwest::Client,
     r: &Resolved,
@@ -240,8 +283,9 @@ where
     // 流式请求**不能继承**客户端的 300s 总超时：思考型模型一条流跑 5 分钟+很正常，
     // 撞上它会被硬掐成"error decoding response body"（真机实录 2026-10-16：改图流
     // 恰在 300s 整断掉，服务端 ai_usage 记 299.9s cancelled）。这里放宽成 30 分钟
-    // 兜底——真正的卡死由客户端的 read_timeout（90s 无字节即断）负责检测，
-    // 上游持续吐 SSE 心跳注释帧（不算内容但保活连接）的长思考流也能活下来。
+    // 兜底——真正的卡死由**按模型解析出的空闲上限**（`Resolved.idle_timeout`，落在调用方
+    // 选好的客户端实例上）负责检测，上游持续吐 SSE 心跳注释帧（不算内容但保活连接）的
+    // 长思考流也照样能活下来。
     let mut req = req.timeout(std::time::Duration::from_secs(30 * 60));
     if let Some(key) = r.api_key.as_deref() {
         if !key.trim().is_empty() {
@@ -509,7 +553,24 @@ mod tests {
             api_key: Some("sk-x".into()),
             max_tokens: Some(4096),
             temperature: Some(0.7),
+            idle_timeout: idle_timeout_for("openai", None),
         }
+    }
+
+    #[test]
+    fn idle_timeout_auto_depends_on_provider() {
+        // 自动档：本地 Ollama 冷启动常常 >90s 才出第一个字节，其余沿用既有的 90s
+        assert_eq!(idle_timeout_for("ollama", None), Duration::from_secs(300));
+        assert_eq!(idle_timeout_for("openai", None), Duration::from_secs(90));
+        // 用户填了就用他的（在范围内原样）
+        assert_eq!(idle_timeout_for("ollama", Some(45)), Duration::from_secs(45));
+    }
+
+    #[test]
+    fn idle_timeout_clamps_out_of_range_values() {
+        assert_eq!(idle_timeout_for("openai", Some(1)), Duration::from_secs(15));
+        assert_eq!(idle_timeout_for("openai", Some(99_999)), Duration::from_secs(1800));
+        assert_eq!(idle_timeout_for("custom", Some(0)), Duration::from_secs(15));
     }
 
     #[test]

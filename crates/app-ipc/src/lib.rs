@@ -233,6 +233,13 @@ pub struct AiModel {
     pub model: String,
     pub max_tokens: u32,
     pub temperature: f32,
+    /// 空闲超时（秒）：多久收不到一个字节就判定这条流死了。
+    ///
+    /// **留空 = 自动**：本地 `ollama` 300s，`openai` / `custom` 90s（见
+    /// `ai::provider::idle_timeout_for`）。只对 BYOK 有意义 —— 云网关那条路不读它
+    /// （服务端自己发心跳），单位秒，填了会被钳到 `15..=1800`。
+    #[serde(default)]
+    pub idle_timeout_s: Option<u32>,
     /// 由 Rust 依凭据库**现算**后下发；前端回传时允许省略
     #[serde(default)]
     pub has_key: bool,

@@ -85,6 +85,7 @@ mod tests {
             model: "qwen".into(),
             max_tokens: 4096,
             temperature: 0.7,
+            idle_timeout_s: None,
             has_key: false,
             key_hint: String::new(),
         });

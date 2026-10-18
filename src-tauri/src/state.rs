@@ -31,6 +31,9 @@ pub struct AppState {
     pub paths: AppPaths,
     pub creds: Arc<dyn CredentialStore>,
     pub http: reqwest::Client,
+    /// 按"空闲多久算死"（秒）分档缓存的 AI 客户端。`read_timeout` 只能设在客户端上，
+    /// 所以每个档位必须有自己的实例 —— 见 `http_for_idle`。
+    http_idle: Mutex<HashMap<u64, reqwest::Client>>,
     /// 正在跑的 AI 请求：request_id → 取消标志
     pub cancels: Mutex<HashMap<String, Arc<AtomicBool>>>,
     /// 正在跑的工作区搜索：request_id → 取消标志
@@ -47,19 +50,9 @@ pub struct AppState {
 impl AppState {
     pub fn new(paths: AppPaths, creds: Arc<dyn CredentialStore>) -> Self {
         let settings = app_core::settings::load(&paths.settings_file());
-        let http = reqwest::Client::builder()
-            .connect_timeout(std::time::Duration::from_secs(20))
-            // 总超时（整请求一刀切）：普通请求的兜底。
-            // **流式 AI 请求不能吃这个值** —— 思考型模型一条流跑 5 分钟+很正常，
-            // 撞上它就是"网络请求失败：error decoding response body"（真机实录
-            // 2026-10-16：改图流恰好在 300s 整被掐死，ai_usage 记 299.9s cancelled，
-            // 连续两天两笔）。stream_chat 里已按请求把总超时放宽到 30 分钟。
-            .timeout(std::time::Duration::from_secs(300))
-            // 每次读单独计时、读到就重置：连接卡死（收不到任何字节）90 秒即报错，
-            // 流式慢但活着的连接不受影响。这是"卡死检测"，与上面的总 deadline 互补。
-            .read_timeout(std::time::Duration::from_secs(90))
-            .build()
-            .unwrap_or_default();
+        // 默认池的空闲档 = BYOK 的默认档（90s，见 `ai::provider::idle_timeout_for`）：
+        // 云网关、以及没填空闲超时的 openai / custom 模型都落到这一档。
+        let http = http_client(ai::provider::idle_timeout_for("openai", None));
         let recovery_dir = app_core::recovery::dir_for(&paths.data_dir);
         Self {
             session: Mutex::new(Session::default()),
@@ -67,6 +60,7 @@ impl AppState {
             paths,
             creds,
             http,
+            http_idle: Mutex::new(HashMap::new()),
             cancels: Mutex::new(HashMap::new()),
             search_cancels: Mutex::new(HashMap::new()),
             workspace: Mutex::new(WorkspaceState::default()),
@@ -82,6 +76,24 @@ impl AppState {
 
     pub fn settings(&self) -> MutexGuard<'_, Settings> {
         lock(&self.settings)
+    }
+
+    /// 取一个"空闲上限 = `idle`"的 AI HTTP 客户端。
+    ///
+    /// 为什么要有"每个空闲档一个实例"这回事：reqwest 的 `read_timeout` **只能在
+    /// `ClientBuilder` 上设**（不能按请求覆盖），所以"多久收不到字节算死"是**客户端实例**
+    /// 的属性 —— 每个模型的空闲上限不同，就只能落到不同实例上。
+    ///
+    /// 缓存是必须的，不是优化：不缓存就是每轮对话新建一个连接池（TLS 会话、socket 全作废）。
+    /// 默认档（90s：云网关 + 没填空闲超时的 BYOK 模型）直接复用 `http`，不另建池。
+    pub fn http_for_idle(&self, idle: std::time::Duration) -> reqwest::Client {
+        if idle == ai::provider::idle_timeout_for("openai", None) {
+            return self.http.clone(); // `Client` 内部是 Arc，clone 很便宜
+        }
+        lock(&self.http_idle)
+            .entry(idle.as_secs())
+            .or_insert_with(|| http_client(idle))
+            .clone()
     }
 
     pub fn cancels(&self) -> MutexGuard<'_, HashMap<String, Arc<AtomicBool>>> {
@@ -188,6 +200,24 @@ impl AppState {
             path.display()
         ))
     }
+}
+
+/// 按"空闲多久算死"造一个 HTTP 客户端。
+///
+/// `idle` 落在 `read_timeout` 上：**每次读单独计时、读到就重置** —— 连接卡死（收不到任何字节）
+/// 到这个上限即报错，而"慢但活着"的流不受影响。它与下面的总 deadline 互补。
+fn http_client(idle: std::time::Duration) -> reqwest::Client {
+    reqwest::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(20))
+        // 总超时（整请求一刀切）：普通请求的兜底。
+        // **流式 AI 请求不能吃这个值** —— 思考型模型一条流跑 5 分钟+很正常，
+        // 撞上它就是"网络请求失败：error decoding response body"（真机实录
+        // 2026-10-16：改图流恰好在 300s 整被掐死，ai_usage 记 299.9s cancelled，
+        // 连续两天两笔）。stream_chat 里已按请求把总超时放宽到 30 分钟。
+        .timeout(std::time::Duration::from_secs(300))
+        .read_timeout(idle)
+        .build()
+        .unwrap_or_default()
 }
 
 /// 一个模型对应一条凭据记录（键名固定，便于删除时清理）。

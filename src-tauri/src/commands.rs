@@ -408,6 +408,9 @@ async fn resolve_target(state: &AppState, model_id: &str) -> R<ai::Resolved> {
         // BYOK 这两个值是用户自己配的，必须原样下发（网关那条相反：交给服务端钳）
         max_tokens: Some(model.max_tokens),
         temperature: Some(model.temperature),
+        // 空闲上限按**这个模型**解析（留空 = 自动：ollama 300s / 其它 90s）——
+        // 它决定 `ai_chat` 用哪个客户端实例（reqwest 的 read_timeout 只能建在客户端上）
+        idle_timeout: ai::provider::idle_timeout_for(&model.provider, model.idle_timeout_s),
     })
 }
 
@@ -481,9 +484,12 @@ pub async fn ai_chat(
     tauri::async_runtime::spawn(async move {
         let on_delta = delta_forwarder(app.clone(), request_id.clone());
 
+        // 空闲档决定用哪个客户端实例（reqwest 的 read_timeout 只能在 ClientBuilder 上设）；
+        // 云网关解析出的就是默认档，取回的是同一个默认池。
+        let http = st.http_for_idle(resolved.idle_timeout);
         // messages 先 clone 进第一次调用：401 重试要用原来的再发一遍
         let mut result =
-            ai::stream_chat(&st.http, &resolved, messages.clone(), &cancel, on_delta).await;
+            ai::stream_chat(&http, &resolved, messages.clone(), &cancel, on_delta).await;
 
         // 网络类失败（请求没送达 / 一帧未到就断）**自动重试一次**。走到 `Network` 就
         // 意味着用户一个字都没收到 —— 收到正文后断流会原样交付（Ok），收到思考后断流
@@ -494,7 +500,7 @@ pub async fn ai_chat(
         if matches!(result, Err(ai::ChatError::Network(_))) && !cancel.load(Ordering::Relaxed) {
             let on_delta_retry = delta_forwarder(app.clone(), request_id.clone());
             result =
-                ai::stream_chat(&st.http, &resolved, messages.clone(), &cancel, on_delta_retry)
+                ai::stream_chat(&http, &resolved, messages.clone(), &cancel, on_delta_retry)
                     .await;
         }
 
@@ -506,7 +512,8 @@ pub async fn ai_chat(
                     Ok(_) => {
                         if let Ok(resolved2) = resolve_target(&st, &model_id).await {
                             let on_delta2 = delta_forwarder(app.clone(), request_id.clone());
-                            result = ai::stream_chat(&st.http, &resolved2, messages, &cancel, on_delta2).await;
+                            let http2 = st.http_for_idle(resolved2.idle_timeout);
+                            result = ai::stream_chat(&http2, &resolved2, messages, &cancel, on_delta2).await;
                         }
                     }
                     Err(e) if !crate::cloud::is_network_failure(&e) => {
@@ -660,7 +667,8 @@ pub async fn ai_agent_run(
 
     let used_model = resolved.model.clone();
     tauri::async_runtime::spawn(async move {
-        let completer = ai::HttpCompleter { client: &st.http, resolved: &resolved };
+        let http = st.http_for_idle(resolved.idle_timeout);
+        let completer = ai::HttpCompleter { client: &http, resolved: &resolved };
         let step = Arc::new(AtomicU32::new(0));
         let wrapped: Vec<Box<dyn ai::Tool>> = tools
             .into_iter()
@@ -916,7 +924,7 @@ pub async fn ai_memory_extract(
         serde_json::json!({ "role": "system", "content": ai::MEMORY_EXTRACT_SYSTEM }),
         serde_json::json!({ "role": "user", "content": ai::memory_extract_user(&prompt, &reply) }),
     ];
-    let Ok((text, _usage)) = ai::chat_once(&st.http, &resolved, messages).await else {
+    let Ok((text, _usage)) = ai::chat_once(&st.http_for_idle(resolved.idle_timeout), &resolved, messages).await else {
         return Ok(memory_list(&st, &id));
     };
 

@@ -245,6 +245,15 @@ DIAGRAMON_SELFTEST=1 ./target/debug/diagramon.exe                         # 真�
   界面只对已知值动作：`length` = 正文被输出上限截断、`interrupted` = 中途断流、  
   `missing` = 流结束了但没给结束标记 —— 三种都在气泡上给一句说明。  
   起因见下方第 5 步「AI 对话」的线上实录（正文切在半句上而界面一声不吭）。
+- **每个模型的空闲超时（`AiModel.idle_timeout_s`，2026-10-18 补）**：留空 = 自动
+  （`ollama` 300s / `openai`、`custom` 90s，见 `ai::provider::idle_timeout_for`），
+  填了钳到 15–1800s。**为什么必须在客户端**：BYOK 直连的对面不是我们的服务端，
+  它**不会**发心跳，而常见的合法静默（本地 Ollama 冷启动加载权重、自建网关排队）
+  就会超过旧的固定 90s —— 客户端于是先于服务端放弃，且"真卡死"与"只是慢"分不出来。
+  云网关那条路不读它（服务端自己发心跳，`gateway_resolved` 落在默认档）。
+  实现上它决定的是**用哪个 HTTP 客户端实例**：reqwest 的 `read_timeout` 只能建在
+  `ClientBuilder` 上、不能按请求覆盖，所以 `AppState::http_for_idle` 按秒数缓存客户端
+  （不缓存就是每轮对话新建一个连接池）。
 - **重试 / 取消**：沿用既有 `ai_cancel`；顺带修了 `ai_cancel` 的参数命名（见第 4 步）。
 
 **验证**：自检新增 4 条断言（显示器枚举、剪贴板写图、读回尺寸、工作区残留）；  

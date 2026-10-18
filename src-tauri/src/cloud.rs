@@ -614,5 +614,8 @@ pub async fn gateway_resolved(state: &AppState, alias: &str) -> R<ai::Resolved> 
         api_key: Some(token),
         max_tokens: None,
         temperature: None,
+        // 云网关那条不由模型配置决定：服务端自己发心跳（`ai_stream_heartbeat_s`），
+        // 客户端保持默认档即可 —— 别写死数字，走同一个解析器。
+        idle_timeout: ai::provider::idle_timeout_for("openai", None),
     })
 }
