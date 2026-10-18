@@ -14,7 +14,7 @@ no external request is ever made**.
 Code or images reach a model only when you actively use AI, and then only the endpoint you chose
 (BYOK talks straight to your own provider, membership goes through the Diagramon cloud gateway).
 
-Version **3.5.6** · Official website <https://www.diagramon.com>
+Version **3.6.1** · Official website <https://www.diagramon.com>
 
 ## Screenshots
 
