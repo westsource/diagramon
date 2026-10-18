@@ -1988,6 +1988,159 @@ def main() -> int:
             log(f"（断言 33 解析失败：{e}）")
             fails.append("断言 33 拿不到结果（空闲超时那一格没接上）")
 
+        # ---- 断言 34：思考原文随会话落盘，下次启动能加载回来 ----
+        # 3.5.3 起思考块可折叠，但推理只活在内存里 —— 重启后还原的轮次连块都没有，
+        # "随时点开重读"就成了空话（而推理是真实计费的产出）。这条钉四件事：
+        #   ① 有正文的那一轮，思考原文真的写进了磁盘（`conversation_load` 读回来带着它）；
+        #   ② **只有思考、没有正文**的那一轮也会落盘（推理是那一轮唯一的产出）；
+        #   ③ 以磁盘为准重载后，思考块在界面上重新出现（渲染路径真的接上了）；
+        #   ④ 界面条数与磁盘条数一致（`persistConversation` / `turnsFor` 共用同一判据）。
+        persist_think = ev(
+            "(async () => {"
+            "  const out = {};"
+            "  const waitIdle = async () => {"
+            "    for (let i = 0; i < 40 && DGM.state.ui.aiBusy; i++) await new Promise(r => setTimeout(r, 150));"
+            "  };"
+            "  await DGM.state.patchSettings({ ai: { memory_auto: false, tools_enabled: false } });"
+            "  DGM.ai.focus('chat');"
+            "  await new Promise(r => setTimeout(r, 200));"
+            "  DGM.ai.clear();"
+            "  await new Promise(r => setTimeout(r, 250));"
+            "  const d = DGM.state.activeDoc();"
+            "  if (!d) return 'no-doc';"
+            "  const ta = document.querySelector('#ai-input');"
+            "  const send = async (v) => {"
+            "    ta.value = v;"
+            "    ta.dispatchEvent(new Event('input', { bubbles: true }));"
+            "    document.querySelector('#ai-send').click();"
+            "    await waitIdle();"
+            "    await new Promise(r => setTimeout(r, 300));"
+            "  };"
+            "  await send('[thinktext] 把配色改成暗色');"  # 先思考、后正文
+            "  await send('[think] 只看不画');"  # 只有思考、没有正文
+            "  const saved = await DGM.ipc.invoke('conversation_load', { id: d.id });"
+            "  const turns = (saved && saved.turns) || [];"
+            "  const bots = turns.filter(t => t.role === 'assistant');"
+            "  out.n = turns.length;"
+            "  out.bots = bots.length;"
+            "  out.withThink = bots.filter(t => (t.thinking || '').includes('先读一遍这张图')).length;"
+            "  out.thinkOnly = bots.filter(t => !(t.text || '').trim() && (t.thinking || '').trim()).length;"
+            "  out.memTurns = DGM.ai.turnCount();"
+            "  out.memWithThink = DGM.ai.turnsFor().filter(t => (t.thinking || '').trim()).length;"
+            "  await DGM.ai.ensureConversation(d.id, true);"  # 以磁盘为准重载
+            "  await new Promise(r => setTimeout(r, 400));"
+            "  out.afterTurns = DGM.ai.turnCount();"
+            "  out.restoredRows = document.querySelectorAll('#ai-stream .think[role=\"button\"]').length;"
+            "  out.restoredBodies = [...document.querySelectorAll('#ai-stream .think-body')]"
+            "    .filter(b => (b.textContent || '').includes('先读一遍这张图')).length;"
+            "  return JSON.stringify(out);"
+            "})()"
+        )
+        log(f"思考原文持久化: {persist_think}")
+        try:
+            r = json.loads(persist_think or "{}")
+            if (r.get("withThink") or 0) < 2:
+                fails.append(f"落盘的轮次没带上思考原文（只有 {r.get('withThink')} 条带）")
+            if (r.get("thinkOnly") or 0) < 1:
+                fails.append("只有思考、没有正文的那一轮没落盘 —— 推理是那一轮唯一的产出")
+            if r.get("memTurns") != r.get("n"):
+                fails.append(f"界面条数与落盘条数对不上：内存 {r.get('memTurns')} / 磁盘 {r.get('n')}")
+            if (r.get("memWithThink") or 0) < 2:
+                fails.append(f"turnsFor 没把思考原文带给（历史会话）对话框：{r.get('memWithThink')} 条带")
+            if r.get("afterTurns") != r.get("n"):
+                fails.append(f"以磁盘为准重载后条数对不上：{r.get('afterTurns')} / {r.get('n')}")
+            if (r.get("restoredRows") or 0) < 2:
+                fails.append(f"重载后思考块没回来（界面上只有 {r.get('restoredRows')} 个折叠块）")
+            if (r.get("restoredBodies") or 0) < 2:
+                fails.append(f"重载后思考原文没渲染出来（{r.get('restoredBodies')} 块带原文）")
+        except Exception as e:
+            log(f"（断言 34 解析失败：{e}）")
+            fails.append("断言 34 拿不到结果（思考原文的落盘/加载链路可能没接上）")
+
+        # ---- 断言 35：欢迎页最近 5 条 +「更多」→ 文件打开历史 ----
+        # 用户 2026-10-18 提的两件事：
+        #   ① 欢迎页的「最近」只留 5 条，并多一个「更多」按钮，点开**文件打开历史**窗口；
+        #   ② 文件菜单「最近打开文件 → 更多」以前打开的是 **AI 会话历史**（`dialogs.history`），
+        #      与"最近文件"四个字对不上 —— 必须开同一个文件历史窗口。
+        # 这条还钉住：窗口里点一行**真的打开文件**（走 `DGM.shell.openPath`，与欢迎页/侧栏同一入口）。
+        recent = ev(
+            "(async () => {"
+            "  const out = {};"
+            "  const seed = Array.from({ length: 7 }, (_, i) => ({"
+            "    path: 'E:/tmp/probe-recent-' + (i + 1) + '.mmd',"
+            "    name: 'probe-recent-' + (i + 1) + '.mmd',"
+            "    format: 'mermaid',"
+            "    opened_at: Date.now() - i * 60000"
+            "  }));"
+            "  const before = (DGM.state.settings.recent || []).slice();"
+            "  await DGM.state.patchSettings({ recent: seed });"
+            "  out.seeded = (DGM.state.settings.recent || []).length;"
+            "  for (const doc of [...DGM.state.docs]) await DGM.state.closeDoc(doc.id);"  # 无文档 = 欢迎页
+            "  await new Promise(r => setTimeout(r, 400));"
+            "  const w = document.querySelector('#welcome');"
+            "  out.welcomeShown = !!w && !w.hidden;"
+            "  out.rowCount = w ? w.querySelectorAll('[data-recent]').length : 0;"
+            "  const more = document.querySelector('#w-recent-more');"
+            "  out.hasMore = !!more;"
+            "  more.click();"
+            "  await new Promise(r => setTimeout(r, 150));"
+            "  const dlg = document.querySelector('#dialog');"
+            "  out.title = ((dlg && dlg.querySelector('h2')) || {}).textContent || '';"
+            "  out.rows = dlg ? dlg.querySelectorAll('#recent-rows .hist-row').length : 0;"
+            "  const f = document.querySelector('#recent-filter');"
+            "  out.hasFilter = !!f;"
+            "  f.value = 'probe-recent-3';"
+            "  f.dispatchEvent(new Event('input', { bubbles: true }));"
+            "  await new Promise(r => setTimeout(r, 100));"
+            "  const kept = dlg.querySelectorAll('#recent-rows .hist-row');"
+            "  out.filtered = kept.length;"
+            "  out.filterKeepsFocus = document.activeElement === f;"
+            "  kept[0].click();"
+            "  await new Promise(r => setTimeout(r, 600));"
+            "  out.openedPath = ((DGM.state.docs.find(x => x.path === 'E:/tmp/probe-recent-3.mmd')) || {}).path || '';"
+            "  out.dialogClosed = document.querySelector('#overlay-dialog').hidden;"
+            "  DGM.shell.runCommand('file.recent');"  # 菜单「更多」走的就是这条命令
+            "  await new Promise(r => setTimeout(r, 200));"
+            "  const dlg2 = document.querySelector('#dialog');"
+            "  out.cmdTitle = ((dlg2 && dlg2.querySelector('h2')) || {}).textContent || '';"
+            "  out.aiTitle = DGM.i18n.t('dlg.history.title');"
+            "  DGM.dialogs.close();"
+            "  await DGM.state.patchSettings({ recent: before });"
+            "  await DGM.state.newDoc(['mermaid']);"  # 收尾留一份文档（后面的截图不该拍到欢迎页）
+            "  return JSON.stringify(out);"
+            "})()"
+        )
+        log(f"最近文件 / 打开历史窗口: {recent}")
+        try:
+            r = json.loads(recent or "{}")
+            if r.get("seeded") != 7:
+                fails.append(f"recent 没按预期落成 7 条（拿到 {r.get('seeded')}）—— 后面的断言不可信")
+            if not r.get("welcomeShown"):
+                fails.append("关掉所有文档后欢迎页没显示出来")
+            if r.get("rowCount") != 5:
+                fails.append(f"欢迎页「最近」应只列 5 条（拿到 {r.get('rowCount')}）")
+            if not r.get("hasMore"):
+                fails.append("欢迎页「最近」没有「更多」按钮")
+            if r.get("title") != "文件打开历史":
+                fails.append(f"「更多」打开的窗口标题不是「文件打开历史」：{r.get('title')!r}")
+            if r.get("rows") != 7:
+                fails.append(f"文件打开历史窗口没列出全部 7 条（拿到 {r.get('rows')}）")
+            if not r.get("hasFilter") or r.get("filtered") != 1:
+                fails.append(f"过滤框没起作用（过滤后 {r.get('filtered')} 条）")
+            if not r.get("filterKeepsFocus"):
+                fails.append("过滤时输入框丢了焦点（列表重绘把输入框也重画了？）")
+            if r.get("openedPath") != "E:/tmp/probe-recent-3.mmd":
+                fails.append(f"点窗口里的一行没打开那份文件（拿到 {r.get('openedPath')!r}）")
+            if not r.get("dialogClosed"):
+                fails.append("点了行之后窗口没关")
+            if not r.get("cmdTitle") or r.get("cmdTitle") == r.get("aiTitle"):
+                fails.append(f"菜单里的「更多」仍然打开 AI 会话历史（标题 {r.get('cmdTitle')!r}）")
+            elif r.get("cmdTitle") != "文件打开历史":
+                fails.append(f"菜单里的「更多」没打开文件打开历史窗口：{r.get('cmdTitle')!r}")
+        except Exception as e:
+            log(f"（断言 35 解析失败：{e}）")
+            fails.append("断言 35 拿不到结果（欢迎页/最近文件链路可能没接上）")
+
         # 汇总启动期间的 console error / 异常
         for params in cdp.seen("Runtime.exceptionThrown"):
             d = params.get("exceptionDetails", {})

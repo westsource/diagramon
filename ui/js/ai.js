@@ -1048,6 +1048,9 @@ window.DGM = window.DGM || {};
         id: newId(),
         role: assistant ? "assistant" : "user",
         text: tn.text || "",
+        // 思考原文一起还原（3.5.3 起思考块可折叠，但推理以前只在内存里 —— 重启后
+        // 那一轮连块都没有，"随时点开重读"就成了空话）。收不到就是空串（旧文件）。
+        thinking: tn.thinking || "",
         at: tn.at || 0,
         // 还原 assistant 的用量徽标（没有模型名就不挂 used，别显示一个空徽标）
         used: assistant && tn.model ? { model: tn.model, tokens: tn.tokens | 0, reasoning: 0 } : undefined,
@@ -1057,9 +1060,24 @@ window.DGM = window.DGM || {};
     render();
   }
 
+  /** 该轮的**落盘口径**：正文或思考原文有一项非空就值得存。
+   *
+   *  为什么把"只有思考、没有正文"的轮次也存上：那正是真机上最需要留档的一轮
+   *  （思考型模型把整轮预算花在推理上，正文一个字都没有 —— 推理是唯一的产出，
+   *  见 `ai.noContent.thinking`）。以前这种轮次整轮不落盘，重启后连"它想过什么"都没了。
+   *  `persistConversation` 与 `turnsFor` 必须共用这一个判据：两处口径一旦分家，
+   *  就会出现"对话框里的条数和落盘条数对不上"。
+   */
+  function turnKeep(m) {
+    if (m.role !== "user" && m.role !== "assistant") return false;
+    if (m.err) return false;
+    return !!((m.text || "").trim() || (m.thinking || "").trim());
+  }
+
   /** 把该文档的会话落盘。`docId` 为未保存文档时 Rust 侧回 false，界面据此如实标注。
    *
-   *  只交**文本**：图片是 dataURL、只在内存，永不落盘（对外承诺的"图片不落盘"）。
+   *  只交**文本**：图片是 dataURL、只在内存，永不落盘（对外承诺的"图片不落盘"）；
+   *  思考原文是文本，跟着一起存（见 `ConversationTurn::thinking`）。
    */
   async function persistConversation() {
     const d = state.activeDoc();
@@ -1068,17 +1086,15 @@ window.DGM = window.DGM || {};
     const turns = [];
     for (const which of ["chat", "vision", "review"]) {
       for (const m of b[which]) {
-        if (m.role !== "user" && m.role !== "assistant") continue;
-        if (m.err) continue;
-        const text = (m.text || "").trim();
-        if (!text) continue;
+        if (!turnKeep(m)) continue;
         turns.push({
           role: m.role,
-          text,
+          text: (m.text || "").trim(),
           at: m.at || 0,
           model: m.role === "assistant" && m.used ? m.used.model || "" : "",
           tokens: m.role === "assistant" && m.used ? m.used.tokens | 0 : 0,
           tab: which,
+          thinking: m.role === "assistant" ? (m.thinking || "").trim() : "",
         });
       }
     }
@@ -1106,9 +1122,8 @@ window.DGM = window.DGM || {};
 
   /** 当前文档的轮次（**按时间序、跨页签**），供「历史会话」对话框渲染。
    *
-   *  与 `persistConversation` 口径一致（同样只取有正文的 user/assistant），
-   *  区别只是这里返回给界面、那边落盘。两处口径必须一样，否则会出现
-   *  "对话框里的条数和落盘条数对不上"这种看着像 bug 的东西。
+   *  与 `persistConversation` 共用 `turnKeep` 判据（正文或思考原文有一项非空）——
+   *  两处口径必须一样，否则会出现"对话框里的条数和落盘条数对不上"这种看着像 bug 的东西。
    */
   function turnsFor() {
     const d = state.activeDoc();
@@ -1117,11 +1132,15 @@ window.DGM = window.DGM || {};
     const out = [];
     for (const which of ["chat", "vision", "review"]) {
       for (const m of b[which]) {
-        if (m.role !== "user" && m.role !== "assistant") continue;
-        if (m.err) continue;
-        const text = (m.text || "").trim();
-        if (!text) continue;
-        out.push({ role: m.role, text, at: m.at || 0, tab: which, model: m.used ? m.used.model || "" : "" });
+        if (!turnKeep(m)) continue;
+        out.push({
+          role: m.role,
+          text: (m.text || "").trim(),
+          thinking: m.role === "assistant" ? (m.thinking || "").trim() : "",
+          at: m.at || 0,
+          tab: which,
+          model: m.used ? m.used.model || "" : "",
+        });
       }
     }
     out.sort((a, b2) => a.at - b2.at);

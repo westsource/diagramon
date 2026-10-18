@@ -25,7 +25,8 @@ window.DGM = window.DGM || {};
     const recent = (state.settings && state.settings.recent) || [];
     const recentRows = recent.length
       ? recent
-          .slice(0, 4)
+          // 短名单只给 5 条（用户 2026-10-18 定），剩下的去「文件打开历史」窗口看
+          .slice(0, 5)
           .map((r) => `<button class="lnk" data-recent="${esc(r.path)}"><span class="fmt-dot" style="background:var(--fmt-${r.format})"></span>${esc(r.name)}</button>`)
           .join("")
       : `<div class="hint">${esc(t("side.recentEmpty"))}</div>`;
@@ -45,6 +46,11 @@ window.DGM = window.DGM || {};
         <div>
           <h4>${esc(t("welcome.recent"))}</h4>
           ${recentRows}
+          ${
+            recent.length
+              ? `<button class="lnk" id="w-recent-more"><span>${esc(t("welcome.recentMore"))}</span><span class="kbd">${DGM.icon("chevR", "ico-sm")}</span></button>`
+              : ""
+          }
         </div>
       </div>
       <div class="fmts mt">
@@ -55,6 +61,9 @@ window.DGM = window.DGM || {};
     if (ai) ai.addEventListener("click", () => DGM.ai.focus("chat"));
     $$("[data-new]", w).forEach((b) => b.addEventListener("click", () => DGM.dialogs.newDoc(b.dataset.new)));
     $$("[data-recent]", w).forEach((b) => b.addEventListener("click", () => DGM.shell.openPath(b.dataset.recent)));
+    // 「更多」→ 文件打开历史（短名单只有 5 条，更早的去那里看）
+    const more = $("#w-recent-more", w);
+    if (more) more.addEventListener("click", () => DGM.dialogs.fileHistory());
   }
 
   function updateShellVisibility() {

@@ -245,6 +245,11 @@ DIAGRAMON_SELFTEST=1 ./target/debug/diagramon.exe                         # 真�
   界面只对已知值动作：`length` = 正文被输出上限截断、`interrupted` = 中途断流、  
   `missing` = 流结束了但没给结束标记 —— 三种都在气泡上给一句说明。  
   起因见下方第 5 步「AI 对话」的线上实录（正文切在半句上而界面一声不吭）。
+- **思考原文随会话落盘（`ConversationTurn.thinking`，2026-10-18 补）**：思考型模型的
+  `reasoning_content` 以前只活在内存里（3.5.3 的折叠块重启后就没了）。现在它跟轮次一起落盘，
+  「只有思考、没有正文」的那一轮也存（推理是那一轮唯一的产出）。落盘判据由前端一个
+  `turnKeep`（正文或思考有一项非空）同时喂给 `persistConversation` 与 `turnsFor` ——
+  两处口径分家就会出现"对话框里的条数和落盘条数对不上"。旧文件没有该字段 → 空串。
 - **每个模型的空闲超时（`AiModel.idle_timeout_s`，2026-10-18 补）**：留空 = 自动
   （`ollama` 300s / `openai`、`custom` 90s，见 `ai::provider::idle_timeout_for`），
   填了钳到 15–1800s。**为什么必须在客户端**：BYOK 直连的对面不是我们的服务端，

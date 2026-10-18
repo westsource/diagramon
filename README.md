@@ -129,7 +129,12 @@ Version **3.5.1** · Official website <https://www.diagramon.com>
 - **The reasoning is visible — and collapsible** — thinking models (GLM / DeepSeek / Qwen family)
   stream their chain of thought above the bubble; it folds away automatically when the turn ends, and a
   click on the summary row (or Enter / Space) opens it again for the full transcript. A turn that
-  produced only reasoning says why and keeps it there
+  produced only reasoning says why and keeps it there. The reasoning is **stored with the
+  conversation** (it is billed output), so after a restart expanding the block shows the same text
+- **File open history** — the welcome page lists 5 recent files and its **More…** button opens the
+  complete history (up to 50 entries kept locally, filterable by name or path; click a row to open it —
+  a file already in a tab is focused instead). `Ctrl+R` and **File → Open recent → More…** open this
+  same window
 - **Long-term memory (optional)** — the AI can propose to remember your preferences and terminology
   (colour scheme, default flow direction, naming habits…). Proposals land as **pending** and only take
   effect once you confirm them; you can also edit them by hand, and the whole thing can be switched off

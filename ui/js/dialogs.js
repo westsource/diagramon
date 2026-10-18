@@ -873,10 +873,15 @@ window.DGM = window.DGM || {};
             const tabKey = tn.tab === "vision" ? "ai.tab.vision" : tn.tab === "review" ? "ai.tab.review" : "ai.tab.chat";
             const meta = [t(tabKey), tn.model, tn.at ? new Date(tn.at).toLocaleTimeString() : ""].filter(Boolean).join(" · ");
             const shown = tn.text.length > 160 ? tn.text.slice(0, 160) + "…" : tn.text;
+            // 只有思考、没有正文的那一轮（思考型模型把整轮预算花在推理上）：正文格子空着
+            // 会像一条坏记录，如实标出"这一轮只有思考"比留白清楚。
+            const cell = shown
+              ? esc(shown)
+              : `<i>${esc(t("dlg.history.thinkOnly", { n: (tn.thinking || "").length }))}</i>`;
             return (
               `<div class="hist-row hist-turn ${tn.role === "assistant" ? "bot" : "user"}">` +
               `<span class="who">${esc(who)}</span>` +
-              `<span class="txt">${esc(shown)}</span>` +
+              `<span class="txt">${cell}</span>` +
               `<span class="meta">${esc(meta)}</span></div>`
             );
           })
@@ -898,6 +903,77 @@ window.DGM = window.DGM || {};
         close();
       }
     });
+  }
+
+  /**
+   * 「文件打开历史」：`settings.recent` 的**完整列表**（打开时间倒序 + 过滤框）。
+   *
+   * 为什么单开一个窗口：欢迎页（5 条）、「打开最近文件」子菜单（6 条）、侧栏（8 条）都是
+   * **短名单**，想看更早的得有地方可去。而这个入口以前是错的 —— 菜单里的
+   * 「更多…（含搜索过滤）」与 Ctrl+R 打开的是 `history()`，那是 **AI 会话历史**
+   * （用户 2026-10-18 报的）。
+   *
+   * 行的点击复用 `DGM.shell.openPath`（欢迎页 / 侧栏同一个入口）：已在标签页里的文档会
+   * 切过去，没打开的从磁盘读进来 —— 不另开第二条打开路径。
+   */
+  function fileHistory() {
+    const all = ((state.settings && state.settings.recent) || []).slice();
+    const rowsHtml = (list) =>
+      list.length
+        ? list
+            .map((r) => {
+              const fmt = (r.format || "").toString();
+              return (
+                `<button class="hist-row" data-act="open" data-path="${esc(r.path)}" title="${esc(r.path)}">` +
+                `<span class="fmt-dot" style="background:var(--fmt-${esc(fmt)})"></span>` +
+                `<span class="hr-main"><b>${esc(r.name)}</b><span>${esc(r.path)}</span></span>` +
+                `<span class="hr-side">${esc(openedWhen(r.opened_at))}</span></button>`
+              );
+            })
+            .join("")
+        : `<div class="callout">${icon("clock")}<span>${esc(t("mi.recentEmpty"))}</span></div>`;
+    openDialog(
+      head(t("dlg.recent.title"), "clock") +
+        `<div class="dialog-body">` +
+        `<div class="field"><input type="text" id="recent-filter" placeholder="${esc(t("dlg.recent.search"))}"></div>` +
+        `<div class="hist-list" id="recent-rows">${rowsHtml(all)}</div>` +
+        `</div>` +
+        foot(t("dlg.recent.note"), `<button class="btn ghost" data-close>${esc(t("common.close"))}</button>`),
+      true,
+    );
+    const box = $("#recent-filter");
+    const rows = $("#recent-rows");
+    if (box && rows) {
+      box.addEventListener("input", () => {
+        const q = box.value.trim().toLowerCase();
+        // 只换列表、不重绘输入框：整块重绘会把光标踢出过滤框
+        rows.innerHTML = rowsHtml(
+          q
+            ? all.filter(
+                (r) => (r.name || "").toLowerCase().includes(q) || (r.path || "").toLowerCase().includes(q),
+              )
+            : all,
+        );
+      });
+      box.focus();
+    }
+    wire((act, el) => {
+      if (act !== "open" || !el.dataset.path) return;
+      const path = el.dataset.path;
+      close();
+      DGM.shell.openPath(path);
+    });
+  }
+
+  /** 「多久以前打开」——与侧栏最近列表同一套说法（`common.*Ago`），日期本身不显示。 */
+  function openedWhen(ts) {
+    if (!ts) return "";
+    const m = Math.round((Date.now() - ts) / 60000);
+    if (m < 1) return t("common.justNow");
+    if (m < 60) return t("common.minutesAgo", { n: m });
+    const hh = Math.round(m / 60);
+    if (hh < 24) return t("common.hoursAgo", { n: hh });
+    return t("common.daysAgo", { n: Math.round(hh / 24) });
   }
 
   /* ================================================================== 记忆 */
@@ -1386,6 +1462,7 @@ window.DGM = window.DGM || {};
     guide,
     about,
     history,
+    fileHistory,
     memory,
     unsaved,
     quit,

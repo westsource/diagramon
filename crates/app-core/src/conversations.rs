@@ -122,6 +122,7 @@ mod tests {
                     model: String::new(),
                     tokens: 0,
                     tab: "chat".into(),
+                    thinking: String::new(),
                 },
                 ConversationTurn {
                     role: "assistant".into(),
@@ -130,6 +131,7 @@ mod tests {
                     model: "GLM-5.2".into(),
                     tokens: 822,
                     tab: "chat".into(),
+                    thinking: "先读一遍这张图，把节点与边理清楚……".into(),
                 },
             ],
             updated_at: 2,
@@ -142,6 +144,32 @@ mod tests {
         assert_eq!(back.turns[1].role, "assistant");
         assert_eq!(back.turns[1].tokens, 822);
         assert_eq!(back.turns[1].model, "GLM-5.2");
+        // 思考原文必须跟着回得来：界面上"点开重读推理"全靠它（2026-10-18 前它只活在内存里）
+        assert_eq!(back.turns[1].thinking, "先读一遍这张图，把节点与边理清楚……");
+        assert!(back.turns[0].thinking.is_empty(), "用户轮不该带思考");
+    }
+
+    /// 旧版本写的会话文件里没有 `thinking` 字段 —— 升级后必须照样读得出来（空串），
+    /// 否则用户一升级就"历史会话全空了"。
+    #[test]
+    fn legacy_turn_without_thinking_field_still_loads() {
+        let dir = temp_dir("legacy");
+        std::fs::create_dir_all(&dir).unwrap();
+        let key = doc_key("E:/x/legacy.mmd");
+        std::fs::write(
+            file_for(&dir, &key),
+            format!(
+                r#"{{"doc_key":"{key}","path":"E:/x/legacy.mmd","updated_at":2,"turns":[
+                    {{"role":"user","text":"问","at":1,"model":"","tokens":0,"tab":"chat"}},
+                    {{"role":"assistant","text":"答","at":2,"model":"GLM-5.2","tokens":10,"tab":"chat"}}]}}"#
+            ),
+        )
+        .unwrap();
+
+        let back = load(&dir, &key);
+        assert_eq!(back.turns.len(), 2);
+        assert!(back.turns[1].thinking.is_empty());
+        assert_eq!(back.turns[1].text, "答");
     }
 
     /// 目录还不存在时 `save` 要自己建（首次运行不该要求目录先被建好）。

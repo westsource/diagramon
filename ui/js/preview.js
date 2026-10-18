@@ -769,8 +769,6 @@ window.DGM = window.DGM || {};
     if (zo) zo.addEventListener("click", () => zoomBy(1 / 1.2));
     if (zi) zi.addEventListener("click", () => zoomBy(1.2));
     if (zf) zf.addEventListener("click", fit);
-    const bf = $("#btn-fit");
-    if (bf) bf.addEventListener("click", fit);
     const bs = $("#btn-show-source");
     if (bs) bs.addEventListener("click", () => DGM.shell.setMode("source"));
     // 「转换」入口已收编到标签条（#tab-convert）与状态栏格式项，顶栏不再放

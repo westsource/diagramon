@@ -1244,7 +1244,9 @@ window.DGM = window.DGM || {};
     if (mod && k === "-") { e.preventDefault(); return DGM.preview.zoomOut(); }
     if (mod && ["1", "2", "3"].includes(k)) { e.preventDefault(); return setMode(["source", "split", "preview"][+k - 1]); }
     if (mod && k === "t") { e.preventDefault(); return toggleTheme(); }
-    if (mod && k === "r" && !e.shiftKey) { e.preventDefault(); return DGM.dialogs.history(); }
+    // Ctrl+R = 「打开最近文件」= 文件打开历史窗口（与菜单里那条命令同一个落点）。
+    // AI 的会话历史在 AI 面板的「历史会话」按钮与 AI 菜单里，不占这个键。
+    if (mod && k === "r" && !e.shiftKey) { e.preventDefault(); return DGM.dialogs.fileHistory(); }
     if (mod && e.shiftKey && k === "c") { e.preventDefault(); return DGM.preview.copyImage(); }
     // Alt+Shift+C：转换为（弹目标选择对话框；鼠标近入口在标签条与状态栏格式项）
     if (e.altKey && e.shiftKey && k === "c") { e.preventDefault(); return DGM.dialogs.convertTo(); }
@@ -1353,7 +1355,7 @@ window.DGM = window.DGM || {};
     cmd({ id: "file.open", group: "file", icon: "folderOpen", kbd: "Ctrl+O", run: () => openFile() });
     cmd({ id: "file.save", group: "file", icon: "save", kbd: "Ctrl+S", run: () => saveActive(false), avail: () => (state.activeDoc() ? true : { why: t("status.noDoc") }) });
     cmd({ id: "file.saveAs", group: "file", icon: "save", kbd: "Ctrl+Shift+S", run: () => saveActive(true), avail: () => (state.activeDoc() ? true : { why: t("status.noDoc") }) });
-    cmd({ id: "file.recent", group: "file", icon: "clock", kbd: "Ctrl+R", run: () => DGM.dialogs.history() });
+    cmd({ id: "file.recent", group: "file", icon: "clock", kbd: "Ctrl+R", run: () => DGM.dialogs.fileHistory() });
     cmd({ id: "file.cloud", group: "file", icon: "cloud", run: () => setSidebarView("cloud") });
     cmd({
       id: "file.cloudSave", group: "file", icon: "cloud",
@@ -1391,7 +1393,9 @@ window.DGM = window.DGM || {};
     cmd({ id: "view.activitybar", group: "view", icon: "layers", run: () => togglePanel("activitybar") });
     cmd({ id: "view.fullscreen", group: "view", icon: "maximize", kbd: "Ctrl+Shift+F", run: () => zenMode() });
     cmd({ id: "view.theme", group: "view", icon: "moon", kbd: "Ctrl+K Ctrl+T", run: () => toggleTheme() });
-    // 「适应视图」= 按画布大小适应（与工具条 #btn-fit / 双击画布 同一条路）。
+    // 「适应视图」= 按画布大小适应（与画布浮动工具条的适应按钮 / 双击画布 同一条路）。
+    // 顶栏那颗按钮已按用户要求移除（与浮动工具里的那颗重复）；这条路仍是 View 菜单、
+    // Ctrl+0 与命令面板的落点，别一起删。
     // 状态栏那个「点击回到 100%」是另一回事，仍走 resetZoom。
     cmd({ id: "view.zoom.fit", group: "view", icon: "fit", kbd: "Ctrl+0", run: () => DGM.preview.fit() });
     cmd({ id: "view.zoom.in", group: "view", icon: "zoomIn", kbd: "Ctrl+=", run: () => DGM.preview.zoomIn() });

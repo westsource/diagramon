@@ -799,6 +799,15 @@ pub struct ConversationTurn {
     /// 来自哪个页签：`chat` | `vision` | `review`
     #[serde(default)]
     pub tab: String,
+    /// 这一轮的**思考原文**（思考型模型的 `reasoning_content`；没有就是空串）。
+    ///
+    /// 落盘的理由：3.5.3 起思考块可折叠（`ai.think.*`），但推理只活在内存里 ——
+    /// 重启后还原的轮次连块都没有，"随时点开重读"就成了空话，而推理是**真实计费**的产出。
+    /// 只落文本这条规矩（图片 dataURL 永不落盘）不涉及思考：它是文本。
+    ///
+    /// 旧文件没有这个字段 → 空串（`serde(default)`），所以升级不会让历史会话读不出来。
+    #[serde(default)]
+    pub thinking: String,
 }
 
 /// 一份文档的会话。`doc_key` 是**路径的 SHA256 前 16 位**（见 `app-core::conversations`）。
