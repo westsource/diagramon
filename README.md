@@ -14,7 +14,7 @@ no external request is ever made**.
 Code or images reach a model only when you actively use AI, and then only the endpoint you chose
 (BYOK talks straight to your own provider, membership goes through the Diagramon cloud gateway).
 
-Version **3.5.1** · Official website <https://www.diagramon.com>
+Version **3.5.6** · Official website <https://www.diagramon.com>
 
 ## Screenshots
 
@@ -47,6 +47,9 @@ Version **3.5.1** · Official website <https://www.diagramon.com>
   from the body; the status bar shows the enclosing subgraph/cluster/container next to the caret
   position (and nowhere else, so no information is duplicated)
 - **Find & replace**, undo/redo, context menu, command palette (`Ctrl+Shift+P` or `F1`)
+- **Tab behaves like mainstream editors** — with an empty selection Tab fills spaces to the next tab stop
+  **at the caret** (at the line start it still inserts a full 4-space unit), a selection is indented as a
+  block and `Shift+Tab` outdents; one key press is still one undo step
 - **Large-document guard rail** — past a line/byte threshold the preview asks "render anyway?" instead of
   silently dragging the engine down (the threshold lives in exactly one place, pushed down from Rust)
 
@@ -55,6 +58,9 @@ Version **3.5.1** · Official website <https://www.diagramon.com>
 - **One gesture vocabulary for every surface** — wheel to pan, `Shift+wheel` to pan horizontally,
   `Ctrl+wheel` to zoom anchored at the cursor, drag to pan, double-click to fit; `Ctrl+0` / `Ctrl+=` /
   `Ctrl+-` are forwarded by the shell to whichever surface is active
+- **"Fit" means content, not page** — fitting uses the diagram's own bounding box in both dimensions and
+  centres it (drawio's page frame is deliberately ignored, so cells outside it are no longer clipped),
+  clamped to the same 0.2×–30× range as the other surfaces
 - **Status-bar zoom readout** — shows the zoom of the *active* view only (each canvas's own readout is
   hidden so two numbers can never disagree on screen)
 - **Layout engine picker** — DOT offers `dot` / `neato` / `fdp` / `sfdp` / `twopi` / `circo`, switched
@@ -66,6 +72,9 @@ Version **3.5.1** · Official website <https://www.diagramon.com>
   never carry that resident memory around
 - **Export** — save an image (PNG, selectable scale) or copy it to the clipboard; text formats go
   `SVG → canvas → PNG` with zero subprocesses
+- **Render output is sanitized before it is mounted** — the engine's SVG is stripped of scripts, embedded
+  objects and event attributes in an inert container first (a second line of defence behind each engine's
+  own escaping), and the shell document ships a CSP that allows no inline script
 
 ### Canvas editing (drawio / Excalidraw)
 - **The canvas *is* the editor** — rather than hiding controls, the UI says so: neither format offers the
@@ -92,6 +101,11 @@ Version **3.5.1** · Official website <https://www.diagramon.com>
 - **Lossy conversions say so** — the result carries `notes` listing exactly what did not migrate
   (e.g. `subgraph → cluster` drops styling); the dialog shows them, nothing is dropped silently
 - **Unavailable directions are still listed, with a stated reason**, rather than hidden for you to guess
+- **The Mermaid details that used to break the output are handled** — edge endpoint markers are honoured
+  (`<-->` becomes DOT's `dir=both` / D2's `<->`), markers the target format has no shape for
+  (`o--o` / `x--x`) degrade to a plain edge and are recorded in `notes`, names that collide with DOT
+  keywords (`EDGE`, `node`) are quoted so graphviz accepts them, and D2's `stroke-width` is rounded and
+  clamped to its 0–15 range with the original value recorded in `notes`
 
 ### Workspace and files
 - **Open a folder** — explorer tree (only extensions this app knows; `.git` / `node_modules` / `target`
@@ -204,7 +218,9 @@ the canvas ↔ body round trip works by reading and writing `__hostQueue` / `__a
 
 So the whole application is loaded through `dgm`: `http://dgm.localhost/` on Windows and
 `dgm://localhost/` elsewhere. `/drawio/`, `/excalidraw/`, `/graphviz/`, `/mermaid/` and `/d2/` are mount
-points; everything else resolves into `ui/`.
+points; everything else resolves into `ui/`. The protocol never serves anything outside its roots: the
+path is percent-decoded first, and a backslash, a `..` segment or an absolute/rooted form is refused
+(a real traversal hole existed here before 3.5.2; the regression tests live in `crates/assets`).
 
 ### Runtime split (in one line)
 
