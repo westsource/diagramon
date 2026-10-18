@@ -473,7 +473,14 @@ window.DGM = window.DGM || {};
         }
       }
     }
-    if (!window.DGMGraphviz) throw new Error(t("preview.graphviz.unavailable"));
+    // 报错必须带上**真实原因**：这句文案以前是写死的「ES 模块在 file:// 下被拦截」，
+    // 于是「加载器把 vendor 路径解析错了」这种完全无关的故障也被讲成 file:// 问题 ——
+    // 诊断被文案带跑（3.5.2–3.6.0 的 DOT 预览就是这么误导的）。
+    if (!window.DGMGraphviz) {
+      throw new Error(
+        t("preview.graphviz.unavailable", { msg: window.DGMGraphvizError || t("preview.graphviz.noLoader") })
+      );
+    }
     return window.DGMGraphviz.layout(body, "svg", engine, {});
   }
 

@@ -245,6 +245,42 @@ def main() -> int:
         except Exception as e:
             log(f"（比例断言解析失败：{e}）")
 
+        # ---- 断言 4b：DOT 预览真的出图（graphviz 加载器 / vendor 资产路径的回归门）----
+        # 3.5.2–3.6.0 的实况：graphviz-loader.js 从 index.html 内联外置成 js/ 下的文件后，
+        # `import("./vendor/graphviz.js")` 被按**模块自身**的 URL 解析成 `/js/vendor/graphviz.js`
+        # （不存在）⇒ 加载器当场 catch、只留一条 console.warn ⇒ 探针全绿、而 DOT 预览全砖，
+        # 报错文案还把原因写成「file:// 拦截 ES 模块」（用户先发现的）。
+        # 两条正面证据钉住它：舞台的 `data-engine` 必须是 dot，SVG 里必须有 graphviz 自己的
+        # `#graph0` / `g.node` —— 只看 `#canvas-stage svg` 会被上一个文档残留的 SVG 骗过。
+        dot_check = ev(
+            "(async () => {"
+            "  await window.DGMGraphvizReady;"
+            "  const d = await DGM.state.newDoc('dot');"
+            "  if (DGM.state.active !== d.id) await DGM.state.activateDoc(d.id);"
+            "  DGM.editor.loadActive();"
+            "  await DGM.preview.render();"
+            "  const stage = document.querySelector('#canvas-stage');"
+            "  const svg = stage ? stage.querySelector('svg') : null;"
+            "  return JSON.stringify({"
+            "    engine: stage ? stage.dataset.engine : null,"
+            "    hasSvg: !!svg,"
+            "    graph0: !!svg && !!svg.querySelector('#graph0'),"
+            "    nodes: svg ? svg.querySelectorAll('g.node').length : 0,"
+            "    gv: typeof window.DGMGraphviz,"
+            "    loadErr: window.DGMGraphvizError || null"
+            "  });"
+            "})()"
+        )
+        log(f"DOT 预览: {dot_check}")
+        try:
+            dc = json.loads(dot_check or "{}")
+            if dc.get("gv") != "object":
+                fails.append(f"graphviz 模块没加载（DGMGraphviz={dc.get('gv')}）：{dc.get('loadErr')}")
+            elif dc.get("engine") != "dot" or not dc.get("graph0") or not dc.get("nodes"):
+                fails.append(f"DOT 文档没渲染出 graphviz 的图：{dot_check}")
+        except Exception as e:
+            fails.append(f"DOT 预览断言解析失败：{e} / {dot_check}")
+
         # ---- 断言 5：标签压测 —— 标签过多时 tabbar 必须保持单行 ----
         stress = ev(
             "(async () => {"
