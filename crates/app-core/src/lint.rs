@@ -26,7 +26,40 @@ fn warn(line: u32, message: impl Into<String>, hint: impl Into<String>) -> Issue
     Issue { severity: Severity::Warning, line, message: message.into(), hint: hint.into() }
 }
 
-/// 去掉行内注释（`%%`）与字符串字面量，避免把注释里的括号算进去。
+/// 去掉 mermaid 的注释（`%%` 到行尾）与**引号内容**，避免把文本里的括号算进配对。
+///
+/// 与 `strip_noise` 的关键差别：这里只丢*引号里的内容*，`"` 之后的代码照旧保留 ——
+/// 旧实现以第二个 `"` 截断**整行**，于是 `A["文本"] --> B` 的 `]` 和后半句一起消失，
+/// 每个带引号的标签都会凭空多报一条"括号没有闭合"（2026-10-17 真机：一张图 35 条）。
+///
+/// `in_string` 由调用方**跨行**持有：mermaid 10.x 起 `A["` + 换行 + `"]` 合法，
+/// 引号内的行不参与配对（那些行往往含 `()` 等自由文本）。
+fn strip_mermaid_line(line: &str, in_string: &mut bool) -> String {
+    let mut out = String::with_capacity(line.len());
+    let mut chars = line.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if *in_string {
+            if ch == '"' {
+                *in_string = false;
+                out.push(ch);
+            }
+            continue;
+        }
+        if ch == '"' {
+            // 未闭合的引号（跨行标签）在这里开栈，内容由后续行继续丢弃
+            *in_string = true;
+            out.push(ch);
+            continue;
+        }
+        if ch == '%' && chars.peek() == Some(&'%') {
+            break; // 注释到行尾
+        }
+        out.push(ch);
+    }
+    out
+}
+
+/// 去掉行内注释（`#` / `%%`）与字符串字面量，避免把注释里的括号算进去。
 fn strip_noise(line: &str, comment: &str) -> String {
     let mut s = match line.find(comment) {
         Some(i) => &line[..i],
@@ -46,12 +79,13 @@ fn mermaid(body: &str) -> Vec<Issue> {
     let mut out = Vec::new();
     // 未闭合的 subgraph 栈（记住它出现在哪一行）
     let mut subgraph_stack: Vec<u32> = Vec::new();
-    // 括号深度按"行内成对"检查：mermaid 的节点标签不跨行
+    // 括号深度按"行内成对"检查；引号内容跨行丢弃（见 strip_mermaid_line）
     let mut bracket_stack: Vec<(char, u32)> = Vec::new();
+    let mut in_string = false;
 
     for (idx, raw) in body.lines().enumerate() {
         let line = idx as u32 + 1;
-        let text = strip_noise(raw, "%%").trim().to_string();
+        let text = strip_mermaid_line(raw, &mut in_string).trim().to_string();
         if text.is_empty() {
             continue;
         }
@@ -351,6 +385,30 @@ mod tests {
     fn mermaid_ignores_brackets_inside_comments() {
         let v = issues(FormatId::Mermaid, "%% 这里有个 [ 不算\nflowchart TD\n    A-->B\n");
         assert!(v.is_empty(), "注释里的括号不该触发校验：{v:?}");
+    }
+
+    /// 引号标签是**常态**（`A["文本"]`），不该被报成"括号没有闭合"。
+    ///
+    /// 旧实现 `strip_noise` 在第二个 `"` 处**截断整行**，于是引号后的 `]` 与后半句
+    /// 一起消失 —— 每个带引号的标签凭空多一条错误（真机实测：一张 20+ 节点的图报 35 条，
+    /// 问题面板变成噪音）。现在只丢引号**内容**，`"` 之后的源码照旧参与配对。
+    #[test]
+    fn mermaid_quoted_labels_are_not_reported() {
+        for src in [
+            "flowchart TD\n    A[\"文本\"] --> B\n",
+            "flowchart TD\n    A[\"<b>粗体</b>\"] --> B[\"另一个\"]\n",
+            // 引号里的括号是自由文本，不参与配对
+            "flowchart TD\n    A[\"含 ( [ { 与 </b> 的文本\"]\n",
+            // 跨行引号（10.x 起合法）：引号内的行不参与配对
+            "flowchart LR\n    EMQX[\"\n        <b>EMQX 集群</b>\n        MQTT：1883\n    \"]\n",
+        ] {
+            let v = issues(FormatId::Mermaid, src);
+            assert!(v.is_empty(), "带引号的标签不该报问题：{src:?} → {v:?}");
+        }
+
+        // 反例：引号**外**的括号照样要报
+        let v = issues(FormatId::Mermaid, "flowchart TD\n    A[\"文本\" --> B\n");
+        assert!(has_error(&v, "括号没有闭合"), "{v:?}");
     }
 
     #[test]
