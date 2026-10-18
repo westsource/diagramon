@@ -11,9 +11,10 @@
 //! `notes` 里逐条写明「丢了什么」，界面照它展示（转换记录里注明「样式未迁移」，不静默丢）。
 //! 这是路线图里的 P2 决策。
 //!
-//! 支持的是 Mermaid flowchart 的**常用子集**：节点四类形状、带/不带标签的六种边、
-//! subgraph、classDef/class/style、direction、`%%` 注释。序列图 / 状态图 / 甘特等
-//! 不在范围内 —— 遇到不认识的头部会明确报错，不猜。
+//! 支持的是 Mermaid flowchart 的**常用子集**：节点四类形状、带/不带标签的六种边
+//! （含两端端点标记 `<-->` / `o--o` / `x--x`）、subgraph、classDef/class/style、
+//! direction、`%%` 注释。序列图 / 状态图 / 甘特等不在范围内 ——
+//! 遇到不认识的头部会明确报错，不猜。
 
 use std::collections::HashMap;
 use std::fmt::Write as _;
@@ -38,11 +39,30 @@ enum Family {
     Thick,
 }
 
+/// 边某一端的端点标记（Mermaid 的 `[xo<]` / `[-xo>]`）。
+///
+/// 取值照 Mermaid 自己的分类器（`flowDb.destructLink` → `IUt`）：**末位字符**决定端点，
+/// 首位只有在「与末位同款」时才是「两端都有」的 `double_*` —— 所以 `x--o`、`<--`
+/// 这类写法 Mermaid 也只按末位画端点、首位直接丢掉，这里照抄它的判定（`link_ends`）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum End {
+    /// 没有标记（`---`）
+    None,
+    /// 箭头 `-->`
+    Point,
+    /// 圆圈 `--o`
+    Circle,
+    /// 叉 `--x`
+    Cross,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Link {
     family: Family,
-    /// 带箭头（`-->`）还是不带（`---`）
-    arrow: bool,
+    /// 起点端：只有两端同款（`<-->` / `o--o` / `x--x`）时才不是 `End::None`
+    source: End,
+    /// 目标端
+    target: End,
     label: Option<String>,
 }
 
@@ -459,44 +479,64 @@ fn char_to_byte(text: &str, ci: usize) -> usize {
 
 /// 连接件：`-->` / `---` / `-.->` / `-.-` / `==>` / `===`，以及带内联标签的
 /// `-- 是 -->` / `-. 是 .->` / `== 是 ==>`，还有 `-->|是|`。
+///
+/// 两端端点标记（Mermaid 的 `[xo<]` / `[-xo>]`）在这里一并吃掉：
+/// `<-->`（双向箭头）、`o--o` / `x--x`、单端点的 `--o` / `--x`、以及 `<-- 文本 -->`。
 fn parse_link(text: &str, start: usize) -> Option<(Link, usize)> {
     let rest = &text[start..];
+
+    // 起点端的标记：`o` / `x` / `<` 后面紧跟连接件本体才算（否则 `A o B` 里的 `o` 是节点名，
+    // 那种情况压根不会走到这里 —— 操作数先被 `parse_operand` 吃掉）。
+    let (marked, body_start) = match rest.as_bytes().first() {
+        Some(&c @ (b'o' | b'x' | b'<'))
+            if rest[1..].starts_with('-') || rest[1..].starts_with('=') =>
+        {
+            (Some(c as char), start + 1)
+        }
+        _ => (None, start),
+    };
+    let rest = &text[body_start..];
     if !rest.starts_with('-') && !rest.starts_with('=') {
         return None;
     }
 
     // 1) 先试无标签的整token（长的优先，否则 `-->` 会被 `--` 抢走）
-    for (tok, family, arrow) in [
-        ("-.->", Family::Dotted, true),
-        ("-.-", Family::Dotted, false),
-        ("-->", Family::Solid, true),
-        ("---", Family::Solid, false),
-        ("==>", Family::Thick, true),
-        ("===", Family::Thick, false),
+    for (tok, family) in [
+        ("-.->", Family::Dotted),
+        ("-.-", Family::Dotted),
+        ("-->", Family::Solid),
+        ("---", Family::Solid),
+        ("--o", Family::Solid),
+        ("--x", Family::Solid),
+        ("==>", Family::Thick),
+        ("===", Family::Thick),
+        ("==o", Family::Thick),
+        ("==x", Family::Thick),
     ] {
         if let Some(after) = rest.strip_prefix(tok) {
             // 后面可能跟 `|标签|`
             let (label, used) = parse_pipe_label(after);
+            let (source, target) = link_ends(marked, end_marker(tok));
             return Some((
-                Link { family, arrow, label },
-                start + tok.len() + used,
+                Link { family, source, target, label },
+                body_start + tok.len() + used,
             ));
         }
     }
 
     // 2) 带内联标签：`-- text -->` / `-. text .->` / `== text ==>`（也允许无箭头的收尾）
-    let (lead, family, closers): (&str, Family, [&str; 2]) = if rest.starts_with("-.") {
-        ("-.", Family::Dotted, [".->", ".-"])
+    let (lead, family, closers): (&str, Family, &[&str]) = if rest.starts_with("-.") {
+        ("-.", Family::Dotted, &[".->", ".-"])
     } else if rest.starts_with("==") {
-        ("==", Family::Thick, ["==>", "=="])
+        ("==", Family::Thick, &["==>", "==o", "==x", "=="])
     } else if rest.starts_with("--") {
-        ("--", Family::Solid, ["-->", "--"])
+        ("--", Family::Solid, &["-->", "--o", "--x", "--"])
     } else {
         return None;
     };
 
     let body = &rest[lead.len()..];
-    // 取最早出现的收尾符（有箭头的那个优先，避免 `-->` 里的 `--` 抢先）
+    // 取最早出现的收尾符（有端点的那个优先，避免 `-->` 里的 `--` 抢先）
     let mut best: Option<(usize, &str)> = None;
     for c in closers {
         if let Some(at) = body.find(c) {
@@ -509,14 +549,40 @@ fn parse_link(text: &str, start: usize) -> Option<(Link, usize)> {
     let (at, closer) = best?;
     let label = body[..at].trim().trim_matches('"').trim_matches('\'').trim();
     let used = lead.len() + at + closer.len();
+    let (source, target) = link_ends(marked, end_marker(closer));
     Some((
         Link {
             family,
-            arrow: closer.ends_with('>'),
+            source,
+            target,
             label: (!label.is_empty()).then(|| label.to_string()),
         },
-        start + used,
+        body_start + used,
     ))
+}
+
+/// 连接件 token 的末位字符 → 目标端的端点标记。
+fn end_marker(tok: &str) -> End {
+    match tok.as_bytes().last() {
+        Some(b'>') => End::Point,
+        Some(b'o') => End::Circle,
+        Some(b'x') => End::Cross,
+        _ => End::None,
+    }
+}
+
+/// 起点的标记字符 + 目标端端点 → 两端的端点。
+///
+/// 判据照 `IUt`：末位是 `>` / `o` / `x` 时，首位必须是 `<` / `o` / `x` **同款**才升级成
+/// `double_*`（两端都有）；否则首位不算标记（`x--o` 就只画目标端的圈，`<--` 更是连端点都没有）。
+fn link_ends(marked: Option<char>, target: End) -> (End, End) {
+    let doubled = match target {
+        End::Point => marked == Some('<'),
+        End::Circle => marked == Some('o'),
+        End::Cross => marked == Some('x'),
+        End::None => false,
+    };
+    (if doubled { target } else { End::None }, target)
 }
 
 /// `|标签|` → (标签, 消耗的字节数)
@@ -607,10 +673,16 @@ fn to_dot_label(s: &str) -> String {
         .replace("<br>", "\\n")
 }
 
+/// DOT 的关键字（**大小写无关**）。裸写会被当成语句关键字，必须加引号：
+/// `AI1 -> EDGE` 在 graphviz 里是语法错误，得写 `AI1 -> "EDGE"`。
+const DOT_KEYWORDS: [&str; 6] = ["node", "edge", "graph", "digraph", "subgraph", "strict"];
+
 fn dot_id(id: &str) -> String {
+    let lower = id.to_ascii_lowercase();
     let bare = !id.is_empty()
         && id.chars().next().is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
-        && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
+        && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+        && !DOT_KEYWORDS.contains(&lower.as_str());
     if bare {
         id.to_string()
     } else {
@@ -645,6 +717,8 @@ pub fn mermaid_to_dot(src: &str) -> Result<Conversion, String> {
     let mut node_styles: HashMap<String, Vec<String>> = HashMap::new();
     let mut dropped_keys: Vec<String> = Vec::new();
     let mut used_shapes: Vec<Shape> = Vec::new();
+    // 用到的圆圈 / 叉端点（DOT 没有对应形状，要记进 notes）
+    let mut used_ends: Vec<End> = Vec::new();
     let mut nested_direction = false;
     let mut ignored_directive = false;
 
@@ -717,7 +791,13 @@ pub fn mermaid_to_dot(src: &str) -> Result<Conversion, String> {
                     }
                     if i > 0 {
                         let prev = &operands[i - 1].id;
-                        edges.push((prev.clone(), op.id.clone(), links[i - 1].clone()));
+                        let link = &links[i - 1];
+                        for e in [link.source, link.target] {
+                            if matches!(e, End::Circle | End::Cross) && !used_ends.contains(&e) {
+                                used_ends.push(e);
+                            }
+                        }
+                        edges.push((prev.clone(), op.id.clone(), link.clone()));
                     }
                 }
             }
@@ -771,6 +851,13 @@ pub fn mermaid_to_dot(src: &str) -> Result<Conversion, String> {
             Shape::Subroutine => {
                 notes.push("`[[文本]]` 映射为 box3d（子程序框），外观与 Mermaid 略有差异".to_string())
             }
+            _ => {}
+        }
+    }
+    for e in &used_ends {
+        match e {
+            End::Circle => notes.push("`o`（圆圈）端点标记在 DOT 里没有对应形状，退化为不带端点".to_string()),
+            End::Cross => notes.push("`x`（叉）端点标记在 DOT 里没有对应形状，退化为不带端点".to_string()),
             _ => {}
         }
     }
@@ -860,8 +947,12 @@ fn emit_edge(out: &mut String, from: &str, to: &str, link: &Link, indent: usize)
         Family::Dotted => attrs.push("style=\"dotted\"".into()),
         Family::Thick => attrs.push("penwidth=2".into()),
     }
-    if !link.arrow {
-        attrs.push("dir=none".into());
+    match (link.source, link.target) {
+        // DOT 的默认正好是「目标端一个箭头」
+        (End::None, End::Point) => {}
+        (End::Point, End::Point) => attrs.push("dir=both".into()),
+        // 无端点，以及圆圈 / 叉（DOT 没有这两种端点形状）—— 都退化成不带端点
+        _ => attrs.push("dir=none".into()),
     }
     let suffix = if attrs.is_empty() {
         String::new()
@@ -891,10 +982,12 @@ fn d2_value(v: &str) -> String {
 
 /// Mermaid 的样式串（`fill:#f00,stroke:#333`）→ D2 的 `style.*` 键值对。
 ///
-/// 返回 `(保留的键值对, 丢弃的键)` —— 丢掉的键由 `notes` 逐条说明（不静默丢）。
-fn style_to_d2(style: &str) -> (Vec<(String, String)>, Vec<String>) {
+/// 返回 `(保留的键值对, 丢弃的键, 被截断的 stroke-width 原值)` —— 丢掉的键与截断
+/// 都由 `notes` 逐条说明（不静默丢）。
+fn style_to_d2(style: &str) -> (Vec<(String, String)>, Vec<String>, Vec<String>) {
     let mut kept: Vec<(String, String)> = Vec::new();
     let mut dropped: Vec<String> = Vec::new();
+    let mut clamped: Vec<String> = Vec::new();
 
     for part in style.split(',') {
         let part = part.trim();
@@ -917,10 +1010,25 @@ fn style_to_d2(style: &str) -> (Vec<(String, String)>, Vec<String>) {
             }
             continue;
         }
+        // `stroke-width` 在 mermaid 里带单位（`2px`），D2 要的是 **0–15 的整数**
+        // （上游报错：`expected "stroke-width" to be a number between 0 and 15`，
+        // 小数同样被挡下来）—— 取整并按上限截断，别产出一份编译不过的正文。
+        if k == "stroke-width" {
+            match v.trim_end_matches("px").trim().parse::<f32>() {
+                Ok(n) if n.is_finite() => {
+                    let capped = n.round().clamp(0.0, 15.0);
+                    if capped != n {
+                        clamped.push(v.to_string());
+                    }
+                    kept.push(("stroke-width".into(), capped.to_string()));
+                }
+                _ => dropped.push(k.to_string()),
+            }
+            continue;
+        }
         let key = match k {
             "fill" => "fill",
             "stroke" => "stroke",
-            "stroke-width" => "stroke-width",
             "color" => "font-color",
             _ => {
                 dropped.push(k.to_string());
@@ -929,7 +1037,7 @@ fn style_to_d2(style: &str) -> (Vec<(String, String)>, Vec<String>) {
         };
         kept.push((key.to_string(), d2_value(v)));
     }
-    (kept, dropped)
+    (kept, dropped, clamped)
 }
 
 /// Mermaid flowchart → D2。
@@ -946,13 +1054,16 @@ pub fn mermaid_to_d2(src: &str) -> Result<Conversion, String> {
     /* ---------- 第一遍：classDef ---------- */
     let mut class_styles: HashMap<String, Vec<(String, String)>> = HashMap::new();
     let mut dropped_keys: Vec<String> = Vec::new();
+    // `stroke-width` 被 D2 上限截断过的原值（进 notes）
+    let mut clamped_widths: Vec<String> = Vec::new();
     let mut ignored_directive = false;
     for st in &stmts {
         match st {
             Stmt::ClassDef { name, style } => {
-                let (kv, dropped) = style_to_d2(style);
+                let (kv, dropped, clamped) = style_to_d2(style);
                 class_styles.insert(name.clone(), kv);
                 dropped_keys.extend(dropped);
+                clamped_widths.extend(clamped);
             }
             Stmt::Ignored => ignored_directive = true,
             _ => {}
@@ -971,6 +1082,8 @@ pub fn mermaid_to_d2(src: &str) -> Result<Conversion, String> {
     let mut container_direction: HashMap<usize, String> = HashMap::new();
     let mut used_shapes: Vec<Shape> = Vec::new();
     let mut used_families: Vec<Family> = Vec::new();
+    // 用到的圆圈 / 叉端点（D2 的箭头语法里没有对应写法，要记进 notes）
+    let mut used_ends: Vec<End> = Vec::new();
 
     for st in &stmts {
         match st {
@@ -1001,9 +1114,10 @@ pub fn mermaid_to_d2(src: &str) -> Result<Conversion, String> {
                 }
             }
             Stmt::StyleAssign { id, style } => {
-                let (kv, dropped) = style_to_d2(style);
+                let (kv, dropped, clamped) = style_to_d2(style);
                 node_styles.entry(id.clone()).or_default().extend(kv);
                 dropped_keys.extend(dropped);
+                clamped_widths.extend(clamped);
             }
             Stmt::Chain { operands, links } => {
                 for (i, op) in operands.iter().enumerate() {
@@ -1025,10 +1139,16 @@ pub fn mermaid_to_d2(src: &str) -> Result<Conversion, String> {
                         used_shapes.push(op.shape);
                     }
                     if i > 0 {
-                        if links[i - 1].family != Family::Solid && !used_families.contains(&links[i - 1].family) {
-                            used_families.push(links[i - 1].family);
+                        let link = &links[i - 1];
+                        if link.family != Family::Solid && !used_families.contains(&link.family) {
+                            used_families.push(link.family);
                         }
-                        edges.push((operands[i - 1].id.clone(), op.id.clone(), links[i - 1].clone()));
+                        for e in [link.source, link.target] {
+                            if matches!(e, End::Circle | End::Cross) && !used_ends.contains(&e) {
+                                used_ends.push(e);
+                            }
+                        }
+                        edges.push((operands[i - 1].id.clone(), op.id.clone(), link.clone()));
                     }
                 }
             }
@@ -1115,12 +1235,31 @@ pub fn mermaid_to_d2(src: &str) -> Result<Conversion, String> {
             Family::Solid => {}
         }
     }
+    for e in &used_ends {
+        match e {
+            End::Circle => {
+                notes.push("`o`（圆圈）端点标记在 D2 的箭头语法里没有对应写法，退化为不带端点".to_string())
+            }
+            End::Cross => {
+                notes.push("`x`（叉）端点标记在 D2 的箭头语法里没有对应写法，退化为不带端点".to_string())
+            }
+            _ => {}
+        }
+    }
     if !dropped_keys.is_empty() {
         dropped_keys.sort();
         dropped_keys.dedup();
         notes.push(format!(
             "样式只迁移 fill / stroke / stroke-width / color / stroke-dasharray；其余键未迁移：{}",
             dropped_keys.join(" / ")
+        ));
+    }
+    if !clamped_widths.is_empty() {
+        clamped_widths.sort();
+        clamped_widths.dedup();
+        notes.push(format!(
+            "`stroke-width` 在 D2 里只接受 0–15 的整数，以下原值已取整（并受上限约束）：{}",
+            clamped_widths.join(" / ")
         ));
     }
     if !comments.is_empty() {
@@ -1145,7 +1284,12 @@ fn d2_style_inline(kv: &[(String, String)]) -> String {
 
 fn emit_d2_edge(out: &mut String, from: &str, to: &str, link: &Link, indent: usize) {
     let pad = "    ".repeat(indent);
-    let arrow = if link.arrow { "->" } else { "--" };
+    let arrow = match (link.source, link.target) {
+        (End::None, End::Point) => "->",
+        (End::Point, End::Point) => "<->",
+        // 无端点，以及圆圈 / 叉（`o` / `x` 在 D2 的箭头语法里没有对应写法）
+        _ => "--",
+    };
     let mut line = format!("{pad}{from} {arrow} {to}");
     if let Some(label) = &link.label {
         line.push_str(&format!(": {}", d2_str(label)));
@@ -1462,6 +1606,67 @@ mod tests {
         assert!(c.body.contains("E -> F [dir=none];"), "{}", c.body);
     }
 
+    /// 双向边 `<-->`：DOT 是 `dir=both`，D2 是 `<->`。以前这一整条语句会被判成
+    /// 「尾部有没解析完的内容」—— 端点标记压根没进词法。
+    #[test]
+    fn bidirectional_arrows_survive_both_emitters() {
+        let src = "flowchart LR\n    EDGE <-->|跨网 MQTT 通道| EMQX\n";
+        let c = mermaid_to_dot(src).unwrap();
+        // `EDGE` 是 DOT 关键字，必须加引号（见 dot_keyword_ids_are_quoted）
+        assert!(
+            c.body.contains("\"EDGE\" -> EMQX [label=\"跨网 MQTT 通道\", dir=both];"),
+            "{}",
+            c.body
+        );
+
+        let c = mermaid_to_d2(src).unwrap();
+        assert!(c.body.contains("EDGE <-> EMQX: \"跨网 MQTT 通道\""), "{}", c.body);
+    }
+
+    /// 带内联标签的双向边（Mermaid 文档里的 `<-- 文本 -->`）。
+    #[test]
+    fn inline_labelled_bidirectional_arrow() {
+        let c = mermaid_to_dot("flowchart TD\n    C <-- 是 --> D\n").unwrap();
+        assert!(c.body.contains("C -> D [label=\"是\", dir=both];"), "{}", c.body);
+        assert!(mermaid_to_d2("flowchart TD\n    C <-- 是 --> D\n").unwrap().body.contains("C <-> D: \"是\""));
+    }
+
+    /// `o--o` / `x--x`：两端分别是圆圈与叉，DOT / D2 都没有对应端点形状 ——
+    /// 退化成不带端点，并逐条记进 notes（不静默丢）。
+    #[test]
+    fn circle_and_cross_ends_degrade_and_are_noted() {
+        let c = mermaid_to_dot("flowchart LR\n    A o--o B\n    C x--x D\n").unwrap();
+        assert!(c.body.contains("A -> B [dir=none];"), "{}", c.body);
+        assert!(c.body.contains("C -> D [dir=none];"), "{}", c.body);
+        assert!(c.notes.iter().any(|n| n.contains("圆圈")), "{:?}", c.notes);
+        assert!(c.notes.iter().any(|n| n.contains("叉")), "{:?}", c.notes);
+
+        let c = mermaid_to_d2("flowchart LR\n    A o--o B\n    C x--x D\n").unwrap();
+        assert!(c.body.contains("A -- B"), "{}", c.body);
+        assert!(c.body.contains("C -- D"), "{}", c.body);
+        assert!(c.notes.iter().any(|n| n.contains("圆圈")), "{:?}", c.notes);
+    }
+
+    /// 单端点的 `--o` / `--x`（Mermaid 的末位字符判定）。
+    #[test]
+    fn single_sided_end_marker() {
+        let c = mermaid_to_dot("flowchart LR\n    A --o B\n    C --x D\n").unwrap();
+        assert!(c.body.contains("A -> B [dir=none];"), "{}", c.body);
+        assert!(c.body.contains("C -> D [dir=none];"), "{}", c.body);
+    }
+
+    /// 首尾不同款时按 Mermaid 自己的判定走（`IUt`：只有首位 `<` / `o` / `x` 与末位同款
+    /// 才算「两端都有」）—— `x--o` 就只认目标端的圆圈，首位丢掉；`<--` 连端点都没有
+    /// （Mermaid 也把它画成一条没有箭头的线）。
+    #[test]
+    fn mismatched_end_markers_follow_mermaid() {
+        let c = mermaid_to_dot("flowchart LR\n    A x--o B\n").unwrap();
+        assert!(c.body.contains("A -> B [dir=none];"), "{}", c.body);
+        // `<--` 的 `<` 在 Mermaid 里不产生端点，但两个字符的 `--` 我们的词法不认 ⇒ 明确报错
+        let e = mermaid_to_dot("flowchart LR\n    A <-- B\n").unwrap_err();
+        assert!(e.contains("第 2 行"), "{e}");
+    }
+
     #[test]
     fn shapes_map_and_unmappable_ones_are_noted() {
         let c = mermaid_to_dot("flowchart TD\n    A([开始]) --> B{判断}\n    B --> C((圆))\n").unwrap();
@@ -1698,5 +1903,39 @@ mod tests {
             }
             assert!(t.ends_with(';'), "语句缺分号：{t}");
         }
+    }
+
+    /// DOT 的关键字**大小写无关**，裸写会被当成语句关键字 —— `AI1 -> EDGE` 是语法错
+    /// （graphviz：`syntax error near 'EDGE'`）。叫 `EDGE` / `graph` 的节点必须加引号。
+    #[test]
+    fn dot_keyword_ids_are_quoted() {
+        let c = mermaid_to_dot("flowchart LR\n    AI1 --> EDGE\n    graph --> strict\n").unwrap();
+        assert!(c.body.contains("AI1 -> \"EDGE\";"), "{}", c.body);
+        assert!(c.body.contains("\"graph\" -> \"strict\";"), "{}", c.body);
+        // 只是前缀像关键字的照旧裸写
+        let c = mermaid_to_dot("flowchart LR\n    graph1 --> edge2\n").unwrap();
+        assert!(c.body.contains("graph1 -> edge2;"), "{}", c.body);
+    }
+
+    /// D2 的 `stroke-width` 只吃 **0–15 的整数**，而 mermaid 写的是 `2px` / `1.5px` ——
+    /// 直接搬过去（带 px 的字符串、或小数）D2 编译不过。
+    #[test]
+    fn d2_stroke_width_is_stripped_and_rounded() {
+        let c = mermaid_to_d2("flowchart LR\n    classDef a stroke-width:1.5px\n    A --> B\n")
+            .unwrap();
+        assert!(c.body.contains("stroke-width: 2"), "{}", c.body);
+        assert!(c.notes.iter().any(|n| n.contains("1.5px")), "{:?}", c.notes);
+
+        // 超过 D2 上限的按上限收，且照样写进 notes
+        let c = mermaid_to_d2("flowchart LR\n    classDef a stroke-width:20px\n    A --> B\n")
+            .unwrap();
+        assert!(c.body.contains("stroke-width: 15"), "{}", c.body);
+        assert!(c.notes.iter().any(|n| n.contains("20px")), "{:?}", c.notes);
+
+        // 整数原样带走，不产生多余的 notes
+        let c = mermaid_to_d2("flowchart LR\n    classDef a stroke-width:2px\n    A --> B\n")
+            .unwrap();
+        assert!(c.body.contains("stroke-width: 2"), "{}", c.body);
+        assert!(!c.notes.iter().any(|n| n.contains("stroke-width")), "{:?}", c.notes);
     }
 }
