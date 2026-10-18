@@ -8,7 +8,9 @@
  * 承载页的契约写在 `tools/drawio-host/host.html` 的注释里（那是它的真源）：
  *   画布 → 本站 : window.__hostQueue.push(str)
  *   本站 → 画布 : frame.contentWindow.__apply(str)
- * 外加三个可选钩子：`__hostZoom()` / `__hostFit()` / `__hostZoomBy(factor)`。
+ * 外加三个可选钩子：`__hostZoom()`（当前缩放读数）/ `__hostFit()` / `__hostZoomBy(factor)`。
+ * 三者的真源都在各自承载页里；`__hostFit` 返回**是否真的适配了**（false = 没内容可适配 /
+ * 画布还没起来），别把它当"命令已发出"。
  *
  * 职责边界：本模块只管「画布 ↔ 正文」的搬运与协议翻译；文件读写仍在 state/shell。
  */
@@ -507,13 +509,20 @@ window.DGM = window.DGM || {};
     }
   }
 
+  /**
+   * 应用级「适应视图」。
+   *
+   * 返回**承载面是否真的适配了**：承载页的钩子对"没东西可适配"（空文档、画布还没起来、
+   * 图/场景还没建）如实回 false。这个裁决必须传出去 —— 否则调用方会把一次什么都没做的
+   * 动作记成"已适配"，下次不再重试（见 preview.js::fit 的 fittedFor 记账）。
+   */
   function hostFit(format) {
     const win = format && winFor(format);
-    if (!win || typeof win.__hostFit !== "function") return;
+    if (!win || typeof win.__hostFit !== "function") return false;
     try {
-      win.__hostFit();
+      return win.__hostFit() === true;
     } catch (err) {
-      /* 画布还没起来：忽略 */
+      return false; // 画布还没起来：当成"没适配"，不要骗调用方
     }
   }
 

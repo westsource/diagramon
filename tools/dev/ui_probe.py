@@ -1216,12 +1216,14 @@ def main() -> int:
         )
         log(f"关闭按钮存在: {close_alive}")
 
-        # ---- 断言 22：源码窗口的 Tab 缩进 / Shift+Tab 反缩进 / 当前行高亮 ----
+        # ---- 断言 22：源码窗口的 Tab（光标处补到制表位）/ Shift+Tab 反缩进 / 当前行高亮 ----
         # vendor 的 basic setup 带行号与当前行高亮，但**没带 indentWithTab**：修之前按
         # Tab 走的是浏览器默认行为（焦点挪出编辑器），源码窗口里根本缩不了行。
-        # 这里用真实按键 + 真实点击钉四件事：缩进落在行首、焦点不跑、反缩进对称、
-        # 撤销是一步；顺带钉住「当前行高亮」的装饰确实挂在光标行上（vendor 换包时
-        # 最容易悄悄丢掉的就是它 —— 它是随包资产，不在本仓库构建）。
+        # 这里用真实按键 + 真实点击钉五件事：**空选区按 Tab 在光标处补到下一个制表位**
+        # （2026-10-18 起；旧实现一律插在行首，于是"光标在句子中间按 Tab 整行右移"）、
+        # 行首仍整档 4 空格、有选区整块缩进、焦点不跑、撤销是一步；顺带钉住
+        # 「当前行高亮」的装饰确实挂在光标行上（vendor 换包时最容易悄悄丢掉的就是它 ——
+        # 它是随包资产，不在本仓库构建）。
         def press(key: str, code: str, vk: int, modifiers: int = 0, times: int = 1) -> None:
             for _ in range(times):
                 for t in ("keyDown", "keyUp"):
@@ -1282,32 +1284,61 @@ def main() -> int:
                                  {"type": t, "x": cx, "y": cy, "button": "left", "clickCount": 1}, timeout=15)
                     drain(0.25)
                     base = ev("DGM.editor.getValue()") or ""
+                    line_no = int(ev("(DGM.editor.caret() || {}).line || 1") or 1)
+
+                    def lead(s: str) -> str:
+                        return s[: len(s) - len(s.lstrip(" \t"))]
+
+                    # ① 光标处插入（2026-10-18 起：补空格对齐到下一个 tab stop —— VS Code 口径）。
+                    #    Home → 行首，再右移 6 个字符 ⇒ 光标偏移 6，4 的倍数差 2 ⇒ 必须**在光标处**
+                    #    补 2 个空格。旧实现会把整行右移 4 格，所以"行首空白不变"就是判别式。
+                    press("Home", "Home", 36)
+                    press("ArrowRight", "ArrowRight", 39, times=6)
+                    pre = (ev("DGM.editor.getValue()") or "").split("\n")
                     press("Tab", "Tab", 9)
-                    tabbed = ev(
-                        "JSON.stringify({doc: DGM.editor.getValue(),"
-                        " focus: document.activeElement.className,"
-                        " activeLine: document.querySelectorAll('.cm-activeLine').length,"
-                        " activeText: (document.querySelector('.cm-activeLine') || {}).textContent || ''})"
+                    ts = json.loads(
+                        ev(
+                            "JSON.stringify({doc: DGM.editor.getValue(),"
+                            " col: (DGM.editor.caret() || {}).col || 0,"
+                            " focus: document.activeElement.className,"
+                            " activeLine: document.querySelectorAll('.cm-activeLine').length})"
+                        )
+                        or "{}"
                     )
-                    tb = json.loads(tabbed or "{}")
-                    b_lines = base.split("\n")
-                    a_lines = (tb.get("doc") or "").split("\n")
-                    diff = [i for i in range(min(len(b_lines), len(a_lines))) if b_lines[i] != a_lines[i]]
-                    log(f"Tab 缩进: 变更行 {[i + 1 for i in diff]} | 焦点 {tb.get('focus')}"
-                        f" | 当前行高亮 {tb.get('activeLine')} 「{tb.get('activeText')}」")
-                    if len(diff) != 1 or a_lines[diff[0]] != "    " + b_lines[diff[0]]:
-                        bad = [f"{b_lines[i]!r}→{a_lines[i]!r}" for i in diff[:3]]
-                        fails.append(f"Tab 没把光标所在行缩进 4 空格（变更行 {[i + 1 for i in diff]} {bad}）")
-                    if "cm-content" not in str(tb.get("focus")):
-                        fails.append(f"按 Tab 后焦点跑出了编辑器：{tb.get('focus')}")
-                    if tb.get("activeLine") != 1:
-                        fails.append(f"缩进后当前行高亮没了：{tb.get('activeLine')}")
-                    # 撤销：Tab 缩进必须是一步（userEvent=input.indent）
+                    post = (ts.get("doc") or "").split("\n")
+                    changed = [i for i in range(min(len(pre), len(post))) if pre[i] != post[i]]
+                    log(f"Tab 光标处插入: 行 {line_no} | 变更行 {[i + 1 for i in changed]} | 光标列 {ts.get('col')}"
+                        f" | 焦点 {ts.get('focus')}")
+                    want = pre[line_no - 1][:6] + "  " + pre[line_no - 1][6:]
+                    if changed != [line_no - 1] or post[line_no - 1] != want:
+                        fails.append(f"Tab 没在光标处补到下一个制表位（期望 {want!r}，实得 {post[line_no - 1]!r}）")
+                    if lead(post[line_no - 1]) != lead(pre[line_no - 1]):
+                        fails.append("Tab 把整行右移了（行首空白变了）—— 光标处插入没生效")
+                    if ts.get("col") != 9:
+                        fails.append(f"插入后光标没停在补进去的空格之后（列 {ts.get('col')}，应 9）")
+                    if "cm-content" not in str(ts.get("focus")):
+                        fails.append(f"按 Tab 后焦点跑出了编辑器：{ts.get('focus')}")
+                    if ts.get("activeLine") != 1:
+                        fails.append(f"缩进后当前行高亮没了：{ts.get('activeLine')}")
+                    # 撤销：Tab 插入必须是一步（userEvent=input.indent）
                     press("z", "KeyZ", 90, modifiers=2)
                     if (ev("DGM.editor.getValue()") or "") != base:
-                        fails.append("Ctrl+Z 没把 Tab 缩进整步撤掉")
-                    # 反缩进：Tab 再 Shift+Tab 必须回到原样
+                        fails.append("Ctrl+Z 没把 Tab 插入整步撤掉")
+                    # ② 行首按 Tab 仍是整档 4 空格（与旧行为一致，肌肉记忆不废）；Shift+Tab 对称
+                    press("Home", "Home", 36)
                     press("Tab", "Tab", 9)
+                    hs = json.loads(
+                        ev(
+                            "JSON.stringify({doc: DGM.editor.getValue(),"
+                            " col: (DGM.editor.caret() || {}).col || 0})"
+                        )
+                        or "{}"
+                    )
+                    h_lines = (hs.get("doc") or "").split("\n")
+                    if h_lines[line_no - 1] != "    " + pre[line_no - 1]:
+                        fails.append(f"行首按 Tab 没插入一档 4 空格：{h_lines[line_no - 1]!r}")
+                    if hs.get("col") != 5:
+                        fails.append(f"行首缩进后光标位置不对（列 {hs.get('col')}，应 5）")
                     press("Tab", "Tab", 9, modifiers=8)
                     if (ev("DGM.editor.getValue()") or "") != base:
                         fails.append("Shift+Tab 与 Tab 不对称（没回到缩进前的样子）")

@@ -37,6 +37,8 @@
 //   2) 把画布变更（onChange）压进 window.__hostQueue，由 C# 侧轮询取走 —— 与 drawio 那条通道
 //      形状一致（宿主只要能执行脚本就能工作，不依赖 WebView 包装层的事件）；
 //   3) 暴露 window.__apply 供 C# 侧下发指令：setScene / loadMermaid / fit / getScene / export。
+// 视口钩子另有一组（宿主执行自己的脚本调）：__hostZoom（当前缩放读数）/ __hostZoomBy（放大缩小
+// 一档）/ __hostFit（应用级「适应视图」—— 把内容整体放进视口）。
 // 内容真相始终是标签页里的 JSON 文本；本页只负责视图与事件。
 //
 // **`files` 必须在场（2026-10-17 修）**：Excalidraw 的图片元素只存一个 `fileId`，真正的字节在
@@ -147,6 +149,42 @@
   window.__hostZoomBy = applyZoom;
 
   // --------------------------------------------------------------------------
+  // 应用级"适应视图"：把**所有**元素整体缩放到可见范围内（与 drawio 承载页同一个语义：
+  // 两维都放进视口、尽量放大、居中 —— `scrollToContent({fitToContent:true})` 就是它自己的
+  // Ctrl+Shift+H / "Zoom to fit" 在做的事）。
+  //
+  // 返回**是否真的适配了**：这条裁决必须传出去 —— `ui/js/canvas.js::hostFit` 原本把返回值
+  // 吞掉，于是 `ui/js/preview.js::fit()` 在承载面压根没起来（或这份文档是空的时候）也照报成功。
+  // 空文档没有内容可适配 ⇒ `false`，并且**不动视图**；视口的归一由 ensureViewportVisible
+  // 负责（标签页激活 / 载入文档时都会走它），"适应视图"不该和它抢这件事。
+  //
+  // 之所以要有这个钩子：承载页里那套 `msg.action === 'fit'` 在仓库里**从来没有发送方**
+  // （没有任何界面在调它），而应用的两个"适应视图"入口（Ctrl+0 的画布分支、工具条 / 双击画布）
+  // 都只认 `window.__hostFit` —— 缺了它，Excalidraw 画布上的"适应视图"是静默无效的。
+  // --------------------------------------------------------------------------
+  function fitToContent(options) {
+    const api = out.api;
+    if (!api) {
+      return false;
+    }
+
+    const elements = visibleElements();
+    if (elements.length === 0) {
+      if (options && options.normalizeEmpty) {
+        api.updateScene({ appState: { zoom: { value: 1 }, scrollX: 0, scrollY: 0 } });
+      }
+      return false;
+    }
+
+    api.scrollToContent(elements, { fitToContent: true, animate: false });
+    return true;
+  }
+
+  window.__hostFit = function () {
+    return fitToContent();
+  };
+
+  // --------------------------------------------------------------------------
   // 画布内的应用级快捷键转发（与 drawio 承载页同一张词汇表）。
   // 画布持有焦点时 Avalonia 窗口的 KeyBindings 收不到键；这里在捕获阶段截住命中的组合键，
   // 顺带拦住 Excalidraw 自己的同名绑定（它的 Ctrl+S 会把场景当文件下载）。
@@ -219,15 +257,11 @@
     }
 
     if (msg.action === 'fit') {
-      // 应用级"适应视图"：把内容整体缩放到可见范围内（空文档则回到 100% + 原点，与 fitToViewport 同语义）
-      const elements = visibleElements();
-      if (elements.length === 0) {
-        out.api.updateScene({ appState: { zoom: { value: 1 }, scrollX: 0, scrollY: 0 } });
-        return true;
-      }
-
-      out.api.scrollToContent(elements, { fitToContent: true, animate: false });
-      return true;
+      // 应用级"适应视图"：把内容整体缩放到可见范围内。
+      // 空文档这里**仍**归一到 100% + 原点（与 ensureViewportVisible 同语义）——
+      // 这条是 embed 动作原有行为，照旧保留；`window.__hostFit` 走同一个函数但不做归一
+      //（见 fitToContent 的说明）。
+      return fitToContent({ normalizeEmpty: true });
     }
 
     if (msg.action === 'loadMermaid') {

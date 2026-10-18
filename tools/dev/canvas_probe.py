@@ -310,6 +310,171 @@ function doBegin(w, done) {
         else say("承载页未暴露 __hostFit", true);
       })
       .then(function () {
+        // ── 「适应视图」的语义（应用级 Ctrl+0 / 工具条 / 双击画布）──
+        //
+        // 旧实现是合成 drawio 自己的 Ctrl+Shift+J —— 那是 `fitTwoPages`：铺**两页宽的页面框**，
+        // 内容远小于页面时缩得太小，页面框之外的单元格则被切掉。新实现走运行时桥（承载页拦
+        // `mxGraph.prototype.getGraphBounds` 抓 graph 实例）调 `mxGraph.fit`：两维都适配、
+        // 按 [0.2, 30] 夹取（与 SVG 预览模式同口径）、再自己居中。下面把四条硬要求钉住。
+        var dlWin = h.contentDocument.getElementById("dl").contentWindow;
+        var dlDoc = dlWin.document;
+        var hostWin = h.contentWindow;
+        var pause = function () { return new Promise(function (r) { setTimeout(r, 700); }); };
+
+        function fitXml(cells) {
+          return '<mxfile host="Diagramon" type="device"><diagram id="dgm-fit" name="Page-1">' +
+            '<mxGraphModel dx="800" dy="600" page="1" pageScale="1" pageWidth="850" pageHeight="1100" ' +
+            'math="0" shadow="0"><root><mxCell id="0"/><mxCell id="1" parent="0"/>' + cells +
+            "</root></mxGraphModel></diagram></mxfile>";
+        }
+        // 标签一律留空：形状节点的包围盒会把溢出的标签算进去（30× 时一个字的标签比框本身还大），
+        // 几何断言会被标签带偏 —— 测的是"内容放进视口"，就该只看几何。
+        function fitVertex(id, x, y, vw, vh) {
+          return '<mxCell id="' + id + '" value="" style="rounded=1;" vertex="1" parent="1">' +
+            '<mxGeometry x="' + x + '" y="' + y + '" width="' + vw + '" height="' + vh +
+            '" as="geometry"/></mxCell>';
+        }
+
+        var FIX = {
+          small: fitXml(fitVertex(2, 120, 140, 260, 70)),                             // 内容远小于页面
+          outside: fitXml(fitVertex(2, 120, 140, 260, 70) + fitVertex(3, 900, 1200, 200, 80)),
+          tiny: fitXml(fitVertex(2, 100, 100, 10, 10)),                               // 顶到 30× 夹取
+          huge: fitXml(fitVertex(2, 0, 0, 20000, 20000)),                             // 底到 0.2× 夹取
+          empty: fitXml(""),
+        };
+
+        function fitLoad(xml) {
+          seen.length = 0;
+          hostWin.__apply(JSON.stringify({ action: "load", xml: xml, autosave: 1 }));
+          return waitFor(function () {
+            return dlDoc.querySelector(".geDiagramContainer") ? true : null;
+          }, 8000, "画布容器").then(function () {
+            return new Promise(function (r) { setTimeout(r, 1500); });
+          });
+        }
+
+        function fitScale() {
+          var g = dlWin.__diagramonGraph;
+          return g ? g.view.scale : 0;
+        }
+
+        // 每个单元格渲染出来的包围盒 vs 画布容器：四边都在里面 = 没被切掉。
+        function fitGeometry() {
+          var g = dlWin.__diagramonGraph;
+          if (!g) return null;
+          var cont = dlDoc.querySelector(".geDiagramContainer");
+          var cr = cont.getBoundingClientRect();
+          var boxes = [];
+          var model = g.model, root = model.getRoot();
+          (function walk(c) {
+            for (var i = 0; i < model.getChildCount(c); i++) {
+              var ch = model.getChildAt(c, i);
+              var st = g.view.getState(ch);
+              if (st && st.shape && st.shape.node && st.shape.node.getBoundingClientRect) {
+                boxes.push(st.shape.node.getBoundingClientRect());
+              }
+              walk(ch);
+            }
+          })(root);
+          if (!boxes.length) return { cells: 0 };
+          var l = Math.min.apply(null, boxes.map(function (r) { return r.left; }));
+          var t = Math.min.apply(null, boxes.map(function (r) { return r.top; }));
+          var rr = Math.max.apply(null, boxes.map(function (r) { return r.right; }));
+          var bb = Math.max.apply(null, boxes.map(function (r) { return r.bottom; }));
+          return {
+            cells: boxes.length,
+            left: l - cr.left, right: cr.right - rr, top: t - cr.top, bottom: cr.bottom - bb,
+            centerDx: ((l - cr.left) - (cr.right - rr)) / 2,
+            centerDy: ((t - cr.top) - (cr.bottom - bb)) / 2,
+          };
+        }
+
+        function fitInside(geo, tol) {
+          return !!geo && geo.cells > 0 && geo.left >= -tol && geo.right >= -tol
+            && geo.top >= -tol && geo.bottom >= -tol;
+        }
+        function fitGaps(geo) {
+          if (!geo) return "读不到几何";
+          return "单元格 " + geo.cells + " 个，留白 左/右/上/下=" + Math.round(geo.left) + "/"
+            + Math.round(geo.right) + "/" + Math.round(geo.top) + "/" + Math.round(geo.bottom);
+        }
+        function fitCentered(geo, tol) {
+          return !!geo && Math.abs(geo.centerDx) <= tol && Math.abs(geo.centerDy) <= tol;
+        }
+
+        // 对照：drawio 自己的 Fit Page（旧实现合成的那一组键）= fitTwoPages
+        function legacyPageFit() {
+          var target = dlDoc.querySelector(".geDiagramContainer") || dlDoc.body;
+          target.dispatchEvent(new dlWin.KeyboardEvent("keydown", {
+            key: "J", code: "KeyJ", keyCode: 74, ctrlKey: true, shiftKey: true,
+            bubbles: true, cancelable: true,
+          }));
+        }
+
+        say("运行时桥抓到了 editor graph 句柄（__diagramonGraph）", !dlWin.__diagramonGraph);
+
+        return fitLoad(FIX.small)
+          .then(function () { legacyPageFit(); return pause(); })
+          .then(function () {
+            var pageScale = fitScale();
+            var ok = hostWin.__hostFit() === true;
+            return pause().then(function () {
+              var geo = fitGeometry();
+              var contentScale = fitScale();
+              say("内容远小于页面：页面框适配 " + Math.round(pageScale * 100) + "% → 内容适配 "
+                + Math.round(contentScale * 100) + "%（" + fitGaps(geo) + "）",
+                !(ok && contentScale > pageScale * 2));
+              say("适应视图：所有单元格都在容器里（两维都适配）", !fitInside(geo, 4));
+              say("适应视图：内容居中（偏移 " + Math.round(geo ? geo.centerDx : 0) + "/"
+                + Math.round(geo ? geo.centerDy : 0) + "px）", !fitCentered(geo, 3));
+            });
+          })
+          .then(function () { return fitLoad(FIX.outside); })
+          .then(function () {
+            var ok = hostWin.__hostFit() === true;
+            return pause().then(function () {
+              var geo = fitGeometry();
+              say("页面框之外的单元格也一起进视口（" + fitGaps(geo) + "）", !(ok && fitInside(geo, 4)));
+              say("页面框之外的单元格：同样居中", !fitCentered(geo, 3));
+            });
+          })
+          .then(function () { return fitLoad(FIX.tiny); })
+          .then(function () {
+            var ok = hostWin.__hostFit() === true;
+            return pause().then(function () {
+              var s = fitScale();
+              say("极小内容停在上限 30×（实测 " + Math.round(s * 100) + "%）", !(ok && s <= 30.001 && s > 29));
+            });
+          })
+          .then(function () { return fitLoad(FIX.huge); })
+          .then(function () {
+            var ok = hostWin.__hostFit() === true;
+            return pause().then(function () {
+              var s = fitScale();
+              // 不夹取时它本该 ≈3%（725 高 / 20000 宽），下限把结果抬到 0.2×
+              say("超大内容停在下限 0.2×（实测 " + Math.round(s * 100) + "%）",
+                !(ok && s >= 0.1999 && s <= 0.2001));
+            });
+          })
+          .then(function () { return fitLoad(FIX.empty); })
+          .then(function () {
+            var g0 = dlWin.__diagramonGraph;
+            var cont0 = dlDoc.querySelector(".geDiagramContainer");
+            var before = g0 ? { scale: g0.view.scale, sl: cont0.scrollLeft, st: cont0.scrollTop } : null;
+            var verdict = hostWin.__hostFit();
+            return pause().then(function () {
+              var g1 = dlWin.__diagramonGraph;
+              var cont1 = dlDoc.querySelector(".geDiagramContainer");
+              var after = g1 ? { scale: g1.view.scale, sl: cont1.scrollLeft, st: cont1.scrollTop } : null;
+              var untouched = !!before && !!after && before.scale === after.scale
+                && before.sl === after.sl && before.st === after.st;
+              say("空图：__hostFit() 回 false（拿到 " + verdict + "）", verdict !== false);
+              say("空图：视图一动没动（缩放 " + Math.round((after ? after.scale : 0) * 100) + "%，scroll "
+                + (after ? after.sl + "," + after.st : "n/a") + "）", !untouched);
+            });
+          });
+      })
+      .then(function () {
         // ── 顶栏：drawio 自己那组缩放（Fit / Zoom In / Zoom Out）应当被藏掉 ──
         // 本应用右下角已有缩放条、Ctrl+0 / ± 也都通向承载页的 __hostFit / __hostZoomBy，
         // 画布内不该有第二份缩放入口。定位靠**快捷键后缀**（`(Ctrl -)`）而不是标题正文 ——

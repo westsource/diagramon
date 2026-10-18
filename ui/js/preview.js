@@ -119,9 +119,12 @@ window.DGM = window.DGM || {};
    * （mountSvg）据此决定要不要把这份文档记成「已初始化」，好在下次重渲染时重试。
    */
   function fit() {
-    // 画布型：缩放归承载页管（它暴露 __hostFit，用的是 drawio 自己的 Fit Page）
+    // 画布型：缩放归承载页管（它暴露 __hostFit，把所有内容整体放进视口并居中）
     if (canvasMode) {
-      DGM.canvas.hostFit(lastFormat);
+      // 承载页的裁决要如实用起来：它没内容可适配（空文档 / 画布还没起来）时回 false，
+      // 那就**不记 markFitted** —— 记账的语义是"这份文档这一次目标里已经适应过了"，
+      // 没适应成就不该记账（否则以后再没有重试的机会）。
+      if (!DGM.canvas.hostFit(lastFormat)) return false;
       markFitted();
       return true;
     }

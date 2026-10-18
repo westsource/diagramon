@@ -6,6 +6,7 @@
  *   state.selection，经节流后写 state.setCaret（→ doc_set_caret）。
  * - 字体大小读 settings.editor.font_size，经 --editor-fs 下发。
  * - Tab / Shift+Tab 的缩进由这里接管：vendor 没带 indentWithTab（见下方 watchTab）。
+ *   语义（2026-10-18 起）：空选区 Tab = 光标处补空格到下一个 tab stop；有选区 = 整行缩进。
  * - vendor 缺失时回退到 <textarea>，功能降级但可编辑。
  */
 window.DGM = window.DGM || {};
@@ -56,16 +57,39 @@ window.DGM = window.DGM || {};
   /* ------------------------------------------------------------------ Tab 缩进 */
 
   /* vendor 的 basic setup 里有行号、当前行高亮（highlightActiveLine + 行号槽）、
-   * 括号匹配、历史，但**没有 indentWithTab** —— 源码窗口里按 Tab 走的是浏览器
-   * 默认行为（焦点跳到下一个可聚焦元素），缩进根本用不了。vendor 是随包资产
-   * （不当普通源码改），所以这里在应用层补上，语义与 CodeMirror 的
-   * indentWithTab（indentMore / indentLess）一致：
-   *   Tab        → 行首插入一个缩进单位；跨行选区时整块缩进
-   *   Shift+Tab  → 每行去掉至多一个缩进单位的前导空白
-   * 缩进插在**行首**而不是光标处：空选区按 Tab 就是"整行右移一格"，光标跟着走
-   * （与 indentMore 同款事务：userEvent=input.indent，撤销栈里是一步）。
+   * 括号匹配、历史，但**没有 indentWithTab / insertTab**（命令都被 tree-shake 掉了，
+   * 见下面 INDENT 的说明）—— 源码窗口里按 Tab 走的是浏览器默认行为（焦点跳到下一个
+   * 可聚焦元素），缩进根本用不了。vendor 是随包资产（不当普通源码改），所以这里在
+   * 应用层实现，语义对齐主流编辑器（VS Code / JetBrains / Sublime 的习惯，
+   * 用户 2026-10-18 拍板）：
+   *   Tab        → 空选区：**在光标处**补空格到下一个 tab stop（1..4 个）
+   *                非空选区：选区覆盖到的行整行缩进
+   *   Shift+Tab  → 空选区：当前行反缩进
+   *                非空选区：整块反缩进
+   * 光标处而不是行首：旧实现把缩进一律插在行首（照抄 CodeMirror 的 indentWithTab =
+   * indentMore 的语义），于是"光标在句子中间按 Tab，整行右移" —— 与所有主流编辑器
+   * 都不同。行首按 Tab 仍是整档 4 空格，与旧行为一致，肌肉记忆不废。
+   * 一次按键 = 一个事务（userEvent=input.indent），撤销栈里是一步。
    * 只在可编辑区（contentDOM）里接管 —— 查找面板的输入框该有自己的 Tab 行为。 */
-  const INDENT = "    "; // 一个缩进单位：与格式注册表的默认正文一致（mermaid / dot 都缩 4 空格）
+  const INDENT = "    "; // 一个缩进单位：与格式注册表的默认正文一致（mermaid / dot 都缩 4 空格）；
+  // 也与 vendor 的 tabSize:4 对齐（bundle 里 `tabSize:4`，Tab 档位与显示宽度因此是同一个 4）
+
+  /** 行内位置 `col`（0 基字符下标）对应的**可视列**：制表符展开到下一个 tab stop。
+   *
+   *  正文里几乎不会出现制表符（编辑器只写空格），所以没有制表符时直接返回 `col`，
+   *  省掉逐字符扫描 —— 按 Tab 不该是 O(行长)。 */
+  function visualCol(text, col) {
+    const seg = text.slice(0, col);
+    if (!seg.includes("\t")) return col;
+    let vis = 0;
+    for (const ch of seg) vis += ch === "\t" ? INDENT.length - (vis % INDENT.length) : 1;
+    return vis;
+  }
+
+  /** 光标处要补几个空格才落到下一个 tab stop（1..INDENT.length）。 */
+  function toNextStop(text, col) {
+    return INDENT.length - (visualCol(text, col) % INDENT.length);
+  }
 
   /** 反缩进一行：砍掉至多一个缩进单位的前导空白；没有前导空白 → null（这行不改）。 */
   function outdentChange(line) {
@@ -76,7 +100,12 @@ window.DGM = window.DGM || {};
     return { from: line.from, to: line.from + cut, insert: "" };
   }
 
-  /** 按 Tab / Shift+Tab 重排各选区覆盖到的行。 */
+  /** 按 Tab / Shift+Tab 重排各选区。
+   *
+   *  空选区（Tab）走**光标处插入**这条分支：补几个空格由光标所在的可视列决定
+   *  （见 `toNextStop`），多光标各按自己的列插 —— 这正是"与主流编辑器一致"的那条。
+   *  其余情况（有选区 / 反缩进）按行处理：与 CodeMirror 的 changeByLine 同规则，
+   *  光标所在行总在内；选区正好停在某行行首时，那一行不算被选中。 */
   function reindent(outdent) {
     const view = inst && inst.view;
     if (!view || view.state.readOnly) return;
@@ -84,6 +113,11 @@ window.DGM = window.DGM || {};
     const changes = [];
     let lastLine = -1;
     for (const r of state.selection.ranges) {
+      if (r.empty && !outdent) {
+        const line = state.doc.lineAt(r.head);
+        changes.push({ from: r.head, insert: " ".repeat(toNextStop(line.text, r.head - line.from)) });
+        continue;
+      }
       for (let pos = r.from; pos <= r.to; ) {
         const line = state.doc.lineAt(pos);
         // 与 CodeMirror 的 changeByLine 同规则：光标所在行总在内；
@@ -346,6 +380,15 @@ window.DGM = window.DGM || {};
     return c ? c.line : 1;
   }
 
+  /** 光标位置 `{line, col}`（1 基；行/列与状态栏同一口径）。
+   *
+   *  与 `caretLine()` 同源，区别是这里连列一起给 —— 状态栏读到的是 `state.setCaret`
+   *  的**节流**结果（60ms，且由 keyup/mouseup 触发），拿它判"刚按完键光标在哪"会读到
+   *  上一个动作的值（探针 2026-10-18 就被它骗过一次）。 */
+  function caret() {
+    return readCaret();
+  }
+
   /* ------------------------------------------------------------------ 绑定 */
 
   function bind() {
@@ -383,6 +426,7 @@ window.DGM = window.DGM || {};
     applyBody,
     selectionText,
     caretLine,
+    caret,
     bind,
     isFallback: () => !hasVendor(),
   };

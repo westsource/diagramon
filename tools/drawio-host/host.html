@@ -213,6 +213,7 @@
       }
 
       forwardHotkeys(win);
+      installGraphHook();
     } catch (e) {
       // iframe 还没建文档 / 已跨源：下一次 load 再试
     }
@@ -241,35 +242,134 @@
   // ==========================================================================
   // 应用级"适应视图"的落点（宿主执行 EmbeddedProtocol.FitScript）。
   //
-  // 用的是 drawio 自带的 **Fit Page**（Ctrl+Shift+J），**不是** embed 协议的 `{"action":"fit"}`：
-  // 后者 fit 的是 `graph.getGraphBounds()`（内容框），页面里只有一个小图形时会把内容放大到几十倍
-  // （实测 160×60 的图形 → 606%），看起来就是"第一个元素充满整个屏幕"；
-  // 而 Fit Page 把整页铺进视口（实测 850×1100 页在 1010×620 视口 → 55%），
-  // 与另外三个模式"Caps 看清整幅图"的语义一致 —— drawio 的"整幅图"就是它的页面。
+  // 语义：**把所有单元格在横竖两个方向上都放进视口，尽量放大，并居中** ——
+  // 与另外三个模式的"Caps / SVG 预览看清整幅图"同口径（"整幅图"= 内容，不是 drawio 的页面框）。
   //
-  // 合成按键而不是调动作：embed 协议里没有 fitPage/viewbox 这类动作（`viewbox` 实测是空操作），
-  // drawio 的 Fit Page 只挂在快捷键上。合成 keydown 走它自己的 action（含它的页边距与缩放级别对齐）。
-  // 组合键 Ctrl+Shift+J 不在上面的应用级快捷键转发表里，因此不会被我们自己截走。
+  // 路线选择：**运行时桥（monkey-patch 抓 graph 实例）**。实测（真 drawio v31.4.6 + 本文凭页，
+  // 1280×900 视口 / 画布容器 1274×725，页 850×1100，border 16）：
+  //   · 旧的合成按键 Ctrl+Shift+J = `fitTwoPages`（见 js/app.min.js 的绑定表
+  //     `bindAction(74,!0,"fitTwoPages",!0)`），它铺的是**两页宽**的页面框：同一份 260×70 的内容
+  //     实测只有 **65%**，而且内容在页面框之外时**会被切掉**（实测 900,1200 处的单元格底边超出容器
+  //     107px）。页面框与"Caps 看清整幅图"是两种语义，这里按后者。
+  //   · embed 的 `{"action":"fit"}`（`fit(border,null,null,null,null,/*ignoreHeight*/!0)`）只按宽度适配：
+  //     有竖方向上靠外的内容时底边仍旧切掉（实测超出 717px，即便 maxScale 给到 30）。
+  //   · embed 的 `{"action":"viewbox"}` 实测**确实有效**（不是空操作），且会**居中**（实测居中偏移
+  //     0.9/0.2px）、两维都适配（实测内容 1248×336 落在 1274×725 里，四周留白 13.9/12.1/194.7/194.3），
+  //     但它走 `fitWindow`：**没有夹取**（实测 10×10 的单格 → 7090%），且它要求承载页先知道内容框
+  //     —— 那个框只在 load/autosave 消息的 `modelBounds` 里，最长落后 1.5s。**夹取到 [0.2, 30] 这条
+  //     硬要求它做不到**（rect 会被它与 graphBounds 的交集吃掉，缩小 rect 也抬不动缩放），因此不用它。
+  //   · `mxGraph.prototype.fit(border, keepOrigin, margin, enabled, ignoreWidth, ignoreHeight)`
+  //     （js/app.min.js:1304）是唯一的"两维都适配 + 无上限"的现成原语，并且**认
+  //     `graph.minFitScale` / `graph.maxFitScale`**（实测 10×10 的单格正好停在 30×，即 3000%）；
+  //     但它只适配缩放，**不带居中**（实测带滚动条的容器里它把内容顶到左上角：内容左/上留白 2.6/2.5px，
+  //     右/下 36/390px），所以居中由我们按滚动量补（见 centerContent）。
+  //   · 空图（内容框 0×0）：`fit()` 直接返回当前缩放、**不动视图**（实测缩放 1.0 → 1.0），
+  //     所以是否"真的适配过"必须由我们先看内容框再回 true/false —— 这也是宿主唯一能分辨的凭据。
+  //
+  // 选它之后的实测结果（同一套场景，上面那份视口）：
+  //   260×70 的内容 → **475%**（旧的页面框适配只有 65%），居中偏移 0.2/0.3px、四边都在容器里；
+  //   单元格在页面框之外的那份（900,1200 处 200×80）→ 两维都在容器里（留白 340/340/18/16px），
+  //   旧路线会把底边切掉 107px；10×10 的单格 → 正好停在 **30×**；20000×20000 → 正好停在 **0.2×**；
+  //   空图 → 回 false 且视图一动没动。`tools/dev/canvas_probe.py` 把这四条钉成了断言。
+  //
+  // 为什么能拿到 graph 实例：承载页里没有 `window.editor` / `geEditor` / `ui`（grep = 0），
+  // 容器元素上也没有反向引用（`container.graph` 从未赋值）。唯一的入口是**拦原型方法**，等 drawio
+  // 自己调一次时把 `this` 记下来 —— 选 `getGraphBounds` 是因为它在**任何**文档载入/尺寸变化时都会
+  // 被调到（`createLoadMessage` 与 `sizeDidChange` 都走它），所以"有文档就有句柄"；而它又是我们
+  // 需要的那个读数本身。抓住之后立刻**卸钩**，热路径回到原样（只剩一次属性读取的代价）。
+  // 这是我们自己承载页的运行时补丁，不去改 drawio 的资产（tools/drawio/** 是从钉住的源取来的）。
   // ==========================================================================
-  window.__hostFit = () => {
+  const FIT_BORDER = 16;       // 与 drawio embed `{"action":"fit"}` 的默认 border 同值
+  const FIT_MIN_SCALE = 0.2;   // 与 SVG 预览模式同口径（ui/js/preview.js 的 MIN_SCALE / MAX_SCALE）
+  const FIT_MAX_SCALE = 30;
+
+  function isEditorGraph(graph) {
+    const container = graph && graph.container;
+    return !!(container && container.classList
+      && container.classList.contains('geDiagramContainer') && container.offsetWidth > 0);
+  }
+
+  // 抓 live graph 句柄（见上面的路线说明）。幂等：钩子只在没抓到之前挂着。
+  function installGraphHook() {
     try {
       const win = frame();
-      const doc = win.document;
-      const target = doc.querySelector('.geDiagramContainer') || doc.body;
-      if (!target) {
+      const proto = win.mxGraph && win.mxGraph.prototype;
+      if (!proto || proto.getGraphBounds.__diagramonHook) {
+        return;
+      }
+
+      const original = proto.getGraphBounds;
+      const hooked = function () {
+        const bounds = original.apply(this, arguments);
+        if (!win.__diagramonGraph && isEditorGraph(this)) {
+          win.__diagramonGraph = this;
+          proto.getGraphBounds = original;   // 抓到手就卸钩
+        }
+        return bounds;
+      };
+      hooked.__diagramonHook = true;
+      proto.getGraphBounds = hooked;
+    } catch (e) {
+      // iframe 还没建文档 / 已跨源：下一次 load 或下一次 __hostFit 再试
+    }
+  }
+
+  function liveGraph() {
+    installGraphHook();
+    try {
+      const win = frame();
+      const graph = win.__diagramonGraph;
+      // isConnected：drawio 内部 reload（语言/主题切换）后旧实例会从文档里掉出来，
+      // 这时宁可这一次适配失败（宿主如实报"没适配"），也不要对死实例操作。
+      return graph && graph.container && graph.container.isConnected ? graph : null;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  // fit() 只定缩放、不定位置：带滚动条的容器里它把内容顶到左上角（实测理由见上）。
+  // 这里按滚动量把它摆到正中（内容比视口大时退回左上角 —— 那是夹取后必然的结果）。
+  function centerContent(graph) {
+    const container = graph.container;
+    const bounds = graph.getGraphBounds();
+    const freeX = Math.max(0, container.clientWidth - bounds.width);
+    const freeY = Math.max(0, container.clientHeight - bounds.height);
+    const maxLeft = Math.max(0, container.scrollWidth - container.clientWidth);
+    const maxTop = Math.max(0, container.scrollHeight - container.clientHeight);
+
+    container.scrollLeft = Math.max(0, Math.min(maxLeft, Math.round(bounds.x - freeX / 2)));
+    container.scrollTop = Math.max(0, Math.min(maxTop, Math.round(bounds.y - freeY / 2)));
+  }
+
+  window.__hostFit = () => {
+    try {
+      const graph = liveGraph();
+      if (!graph) {
         return false;
       }
 
-      target.dispatchEvent(new KeyboardEvent('keydown', {
-        key: 'J',
-        code: 'KeyJ',
-        keyCode: 74,
-        ctrlKey: true,
-        shiftKey: true,
-        bubbles: true,
-        cancelable: true,
-      }));
-      return true;
+      const bounds = graph.getGraphBounds();
+      // 空图：fit() 会原样返回、视图一动不动，别把它报成"适配成功"。
+      if (!(bounds.width > 0 && bounds.height > 0)) {
+        return false;
+      }
+
+      // 夹取用的是 graph 上的两个字段，用完还回去 —— 别把 drawio 自己的 fit 路径（lightbox 等）
+      // 一起夹到我们的范围里。
+      const previousMin = graph.minFitScale;
+      const previousMax = graph.maxFitScale;
+      let scale;
+      try {
+        graph.minFitScale = FIT_MIN_SCALE;
+        graph.maxFitScale = FIT_MAX_SCALE;
+        scale = graph.fit(FIT_BORDER, false, 0, true, false, false);
+      } finally {
+        graph.minFitScale = previousMin;
+        graph.maxFitScale = previousMax;
+      }
+
+      centerContent(graph);
+      return Number.isFinite(scale) && scale > 0;
     } catch (e) {
       return false;
     }

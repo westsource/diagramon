@@ -204,6 +204,85 @@ EXPR = """
   d.name = 'D setScene 无附件 · 不泄漏';
   out.cases.push(d);
 
+  // ---- E：window.__hostFit（应用级「适应视图」的落点）----
+  // 承载页只暴露 __hostZoom / __hostZoomBy 时，应用的两个「适应视图」入口
+  // （Ctrl+0 的画布分支、工具条 / 双击画布）都是**静默无效**的。这里把新加的钩子钉住：
+  // 有内容 ⇒ true 且视口真把内容全包进来（居中）；空文档 ⇒ false 且视口一动不动。
+  const sleep = function (ms) { return new Promise(function (r) { setTimeout(r, ms); }); };
+
+  function viewState() {
+    const st = (window.__excalidrawApi && window.__excalidrawApi.getAppState()) || {};
+    return {
+      zoom: st.zoom && Number(st.zoom.value) > 0 ? Number(st.zoom.value) : 1,
+      scrollX: Number(st.scrollX) || 0,
+      scrollY: Number(st.scrollY) || 0,
+      width: Number(st.width) || 0,
+      height: Number(st.height) || 0,
+    };
+  }
+
+  // 元素在**视口像素坐标**里的包围盒：screen = (scene + scroll) * zoom（Excalidraw 自己的换算式）。
+  function contentBoxes() {
+    const view = viewState();
+    const els = (window.__excalidrawApi.getSceneElements() || [])
+      .filter(function (e) { return e && !e.isDeleted; });
+    const boxes = els.map(function (e) {
+      return {
+        l: (e.x + view.scrollX) * view.zoom, t: (e.y + view.scrollY) * view.zoom,
+        r: (e.x + e.width + view.scrollX) * view.zoom,
+        b: (e.y + e.height + view.scrollY) * view.zoom,
+      };
+    });
+    if (!boxes.length) { return null; }
+    const l = Math.min.apply(null, boxes.map(function (b) { return b.l; }));
+    const t = Math.min.apply(null, boxes.map(function (b) { return b.t; }));
+    const r = Math.max.apply(null, boxes.map(function (b) { return b.r; }));
+    const b = Math.max.apply(null, boxes.map(function (b2) { return b2.b; }));
+    return {
+      count: boxes.length, view: view,
+      left: l, right: view.width - r, top: t, bottom: view.height - b,
+      centerDx: (l - (view.width - r)) / 2, centerDy: (t - (view.height - b)) / 2,
+    };
+  }
+
+  const fit = { hasHostFit: typeof window.__hostFit === 'function' };
+  {
+    function elt(id, x, y, w, h) {
+      return {
+        id: id, type: 'rectangle', x: x, y: y, width: w, height: h, angle: 0,
+        strokeColor: '#1e1e1e', backgroundColor: 'transparent', fillStyle: 'solid',
+        strokeWidth: 1, strokeStyle: 'solid', roughness: 1, opacity: 100, groupIds: [],
+        frameId: null, roundness: null, seed: 1, version: 1, versionNonce: 1,
+        isDeleted: false, boundElements: null, updated: 1, link: null, locked: false,
+      };
+    }
+    const spread = [elt('f1', 0, 0, 200, 100), elt('f2', 1400, 0, 200, 100),
+                    elt('f3', 0, 900, 200, 100), elt('f4', 1400, 900, 200, 100)];
+    apply({ action: 'setScene', scene: JSON.stringify({ type: 'excalidraw', version: 2, elements: spread, appState: {}, files: {} }) });
+    await sleep(1600);
+    // 先把视口踢到一个看不到内容的地方 —— 这样"适应之后都进来了"才是真的动了视口
+    window.__excalidrawApi.updateScene({ appState: { zoom: { value: 0.2 }, scrollX: 0, scrollY: 0 } });
+    await sleep(500);
+    fit.before = viewState();
+    fit.beforeBoxes = contentBoxes();
+    fit.contentVerdict = window.__hostFit();
+    await sleep(800);
+    fit.after = viewState();
+    fit.content = contentBoxes();
+    fit.moved = JSON.stringify(fit.before) !== JSON.stringify(fit.after);
+
+    // 空文档：没有内容可适配 ⇒ false，且视图不动（归一由 ensureViewportVisible 负责）
+    apply({ action: 'setScene', scene: JSON.stringify({ type: 'excalidraw', version: 2, elements: [], appState: {}, files: {} }) });
+    await sleep(1600);
+    const e0 = viewState();
+    fit.emptyVerdict = window.__hostFit();
+    await sleep(400);
+    const e1 = viewState();
+    fit.emptyView = e1;
+    fit.emptyUntouched = JSON.stringify(e0) === JSON.stringify(e1);
+  }
+  out.fit = fit;
+
   return JSON.stringify(out);
 })().catch(function (e) {
   return JSON.stringify({ fatal: String((e && e.stack) || e) });
@@ -434,7 +513,46 @@ def main() -> int:
         if not d or d["fileIds"]:
             failures.append(f"D：换文档后 files 没清空（files={d and d['fileIds']}）")
 
+        # ── E：应用级「适应视图」的落点（window.__hostFit）──
+        fit = data.get("fit") or {}
+
+        def round1(v):
+            try:
+                return round(float(v), 1)
+            except Exception:
+                return v
+
+        if not fit.get("hasHostFit"):
+            failures.append("E：承载页没暴露 __hostFit（画布上的「适应视图」会静默无效）")
+        else:
+            if fit.get("contentVerdict") is not True:
+                failures.append(f"E：有内容时 __hostFit() 应回 true，实际 {fit.get('contentVerdict')!r}")
+            if not fit.get("moved"):
+                failures.append(f"E：__hostFit() 没改动视口（前 {fit.get('before')} 后 {fit.get('after')}）")
+            boxes = fit.get("content") or None
+            if not boxes or boxes.get("count", 0) < 4:
+                failures.append(f"E：适应之后读不到内容包围盒（{boxes}）")
+            else:
+                tol = 2
+                gaps = {k: boxes[k] for k in ("left", "right", "top", "bottom")}
+                if any(float(v) < -tol for v in gaps.values()):
+                    failures.append(f"E：适应之后还有内容在视口外（留白 {gaps}，视口 {boxes.get('view')}）")
+                if abs(boxes["centerDx"]) > 3 or abs(boxes["centerDy"]) > 3:
+                    failures.append(f"E：内容没居中（偏移 {round1(boxes['centerDx'])}/{round1(boxes['centerDy'])}px）")
+            if fit.get("emptyVerdict") is not False:
+                failures.append(f"E：空文档时 __hostFit() 应回 false，实际 {fit.get('emptyVerdict')!r}")
+            if not fit.get("emptyUntouched"):
+                failures.append(f"E：空文档时视图被动了（{fit.get('emptyView')}）")
+
         log("=" * 66)
+        if fit:
+            boxes = fit.get("content") or {}
+            log(f"E 适应视图 | __hostFit: {fit.get('hasHostFit')} | 有内容裁决 {fit.get('contentVerdict')}"
+                f" | 视口 {fit.get('before')} → {fit.get('after')}")
+            log(f"   内容包围盒（视口坐标系）: 左={round1(boxes.get('left'))} 右={round1(boxes.get('right'))}"
+                f" 上={round1(boxes.get('top'))} 下={round1(boxes.get('bottom'))}"
+                f" 居中偏移={round1(boxes.get('centerDx'))}/{round1(boxes.get('centerDy'))}")
+            log(f"   空文档裁决 {fit.get('emptyVerdict')} | 视图未动 {fit.get('emptyUntouched')}")
         if failures:
             for f in failures:
                 log("FAIL: " + f)
