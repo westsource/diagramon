@@ -681,6 +681,43 @@ window.DGM = window.DGM || {};
     return root;
   }
 
+  /** 在 outline 里按候选名（id / title / 可见文本）找源码行；先精确、再包含。 */
+  function findOutlineLine(docId, candidates) {
+    const groups = state.outlineByDoc[docId] || [];
+    const names = candidates.map((c) => String(c || "").trim()).filter(Boolean);
+    if (!names.length) return 0;
+    for (const g of groups) {
+      for (const row of g.rows || []) {
+        if (names.includes(row.name)) return row.line;
+      }
+    }
+    for (const g of groups) {
+      for (const row of g.rows || []) {
+        if (names.some((n) => n.length >= 2 && (row.name.includes(n) || n.includes(row.name)))) return row.line;
+      }
+    }
+    return 0;
+  }
+
+  /** 预览里点一个节点 → 跳到源码对应行，并把它作为 AI 上下文。 */
+  function previewNodeClick(e, d) {
+    if (!d || (d.format !== "mermaid" && d.format !== "dot")) return;
+    const el = e.target.closest("[data-id], .node, .edge, g.node");
+    if (!el) return;
+    const title = el.querySelector ? el.querySelector("title") : null;
+    const candidates = [
+      el.getAttribute && el.getAttribute("data-id"),
+      title && title.textContent,
+      (el.textContent || "").trim().split("\n")[0],
+    ];
+    const line = findOutlineLine(d.id, candidates);
+    if (!line) return;
+    DGM.editor.loadActive();
+    if (DGM.editor.gotoLine) DGM.editor.gotoLine(line);
+    const src = String(d.body || "").split("\n")[line - 1] || "";
+    if (DGM.ai && DGM.ai.attachSelection && src.trim()) DGM.ai.attachSelection(src.trim());
+  }
+
   function mountSvg(svgText, d) {
     const { stage } = nodes();
     if (!stage) return;
@@ -694,7 +731,11 @@ window.DGM = window.DGM || {};
     stage.innerHTML = "";
     stage.appendChild(sanitized);
     const svg = stage.querySelector("svg");
-    if (svg) normalizeSvg(svg);
+    if (svg) {
+      normalizeSvg(svg);
+      svg.style.cursor = d.format === "mermaid" || d.format === "dot" ? "pointer" : "";
+      svg.addEventListener("click", (e) => previewNodeClick(e, d));
+    }
     // 导出（SVG 文件 / 位图栅格化的兜底）拿的是消毒后的这份；没挂上图就清空，别把上一份的留给人导出
     lastSvg = svg ? new XMLSerializer().serializeToString(svg) : "";
     mountedDoc = d.id;
@@ -1079,6 +1120,7 @@ window.DGM = window.DGM || {};
   DGM.preview = {
     render: renderActive,
     schedule,
+    _findOutlineLine: findOutlineLine,
     fit,
     zoomIn: () => zoomBy(1.2),
     zoomOut: () => zoomBy(1 / 1.2),

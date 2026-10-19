@@ -839,6 +839,9 @@ window.DGM = window.DGM || {};
       const srcDoc = sess.docs.find((d) => d.format === "mermaid");
       const srcBody = "flowchart TD\n    A([开始]) --> B{判断}\n    B -- 是 --> C([结束])\n    subgraph 风控\n        L --> M\n    end\n    classDef danger fill:#f8e9e6,stroke:#b0554a;\n    class L danger;\n";
       await invoke("doc_set_body", { id: srcDoc.id, body: srcBody });
+      if (st && st.refreshOutline) await st.refreshOutline(srcDoc.id);
+      const outlineHit = DGM.preview._findOutlineLine(srcDoc.id, ["风控", "L", "开始"]);
+      ok("预览节点能反查到源码行（选区即上下文）", outlineHit > 0, `line ${outlineHit}`);
 
       const toDot = await invoke("convert_text", { req: { from: "mermaid", to: "dot", source: srcBody } });
       ok("mermaid → dot 由 Rust 完成", toDot.engine === "rust" && toDot.body.includes("digraph G"), toDot.engine);
