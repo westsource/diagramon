@@ -266,6 +266,84 @@ window.DGM = window.DGM || {};
     return n;
   }
 
+  /** 哪种格式的产物能落到哪个画布格式（读 `FormatInfo.ai_via`，不另立表）。 */
+  function canvasTargetFor(fmt) {
+    const list = state.formatList.filter((f) => (f.ai_via || []).includes(fmt));
+    return list.find((f) => f.id === "drawio") || list[0] || null;
+  }
+
+  /** 把一段 AI 产物转成画布（复用 `dialogs.runConvert`，不复制转换逻辑）。 */
+  async function applyAsCanvas(blk, m) {
+    const fmt = langToFormat(blk.lang);
+    const target = canvasTargetFor(fmt);
+    if (!target) {
+      DGM.toast({ icon: "info", title: t("ai.toCanvas.failed", { reason: t("ai.toCanvas.noTarget", { fmt }) }), warn: true });
+      return;
+    }
+    const dir = DGM.directionFor ? DGM.directionFor(fmt, target.id) : null;
+    if (!dir) {
+      DGM.toast({ icon: "alert", title: t("ai.toCanvas.failed", { reason: `${fmt} → ${target.id}` }), warn: true });
+      return;
+    }
+    const d = state.activeDoc();
+    // 合成的“源文档”：转换器只需要 format/body/name/layout/look
+    const src = {
+      id: "ai-artifact",
+      name: t("ai.artifactName", { fmt: state.fmtById(fmt).name }),
+      format: fmt,
+      body: blk.code,
+      layout: d && d.layout,
+      look: d && d.look,
+    };
+    m.converting = true;
+    m.convertError = "";
+    render();
+    let res = null;
+    try {
+      res = await DGM.dialogs.runConvert(src, dir, null, {
+        layout: (d && d.layout) || null,
+        look: (d && d.look) || null,
+        theme: document.documentElement.dataset.theme || null,
+        // AI 落地要稳定 id（后续元素级操作能回指）；手动转换保持默认关
+        normalize: true,
+        cluster_as_container: true,
+      });
+    } catch (e) {
+      res = { ok: false, error: (e && e.message) || String(e) };
+    }
+    m.converting = false;
+    if (res && res.ok) {
+      m.landed = (res.doc && res.doc.name) || true;
+      m.convertTried = false;
+      DGM.toast({ icon: "check", title: t("ai.toCanvas.done"), sub: m.landed === true ? "" : m.landed });
+    } else {
+      m.convertError = (res && res.error) || t("ai.toCanvas.failed", { reason: "" });
+    }
+    render();
+  }
+
+  /** 转换失败后的“让 AI 修一次”：**每块产物只允许一次**（防死循环与烧钱）。 */
+  function fixConvert(blk, m) {
+    if (m.convertTried) return;
+    m.convertTried = true;
+    const fmt = langToFormat(blk.lang);
+    const d = state.activeDoc();
+    const req = {
+      request_id: newId(),
+      model_id: state.currentModel() ? state.currentModel().id : "",
+      intent: "review",
+      prompt: t("ai.fixConvert.prompt", { err: m.convertError || "" }),
+      format: fmt,
+      context: blk.code,
+      files: ctxFiles().map((f) => ({ path: f.path, name: f.name, text: f.text, truncated: !!f.truncated })),
+      image_data_url: null,
+      history: historyFor(tab(), d && d.id),
+      // 场景口径：服务端按它归因（`convert.retry` 是一次真实计费的修复调用）
+      scene: "convert.retry",
+    };
+    dispatch(req, tab(), { id: newId(), role: "sys", text: t("ai.fixConvert.sys") }, undefined, "editor");
+  }
+
   function codeCard(blk, m) {
     const fmt = langToFormat(blk.lang);
     const lines = blk.code.split("\n").length;
@@ -282,7 +360,31 @@ window.DGM = window.DGM || {};
     const revertBtn = h("button", "btn sm ghost", `${icon("undo")}${esc(t("common.revert"))}`);
     revertBtn.addEventListener("click", () => DGM.ai.revertLast());
     acts.append(applyBtn, revertBtn);
+    const target = canvasTargetFor(fmt);
+    if (target && m.intent !== "explain") {
+      const toCanvas = h(
+        "button",
+        "btn sm" + (m.landed ? " ghost" : " ai"),
+        m.converting
+          ? `${icon("swap")}${esc(t("ai.toCanvas.busy"))}`
+          : m.landed
+            ? `${icon("check")}${esc(t("ai.toCanvas.landed"))}`
+            : `${icon("swap")}${esc(t("ai.toCanvas"))}`,
+      );
+      toCanvas.disabled = !!m.converting || !!m.landed;
+      toCanvas.addEventListener("click", () => applyAsCanvas(blk, m));
+      acts.append(toCanvas);
+    }
     card.appendChild(acts);
+    if (m.convertError) {
+      const err = h("div", "code-card-err");
+      err.innerHTML = `${icon("alert", "ico-sm")}<span>${esc(m.convertError)}</span>`;
+      card.appendChild(err);
+      const fix = h("button", "btn sm ghost", `${icon("sparkles")}${esc(t("ai.fixConvert"))}`);
+      fix.disabled = !!m.convertTried;
+      fix.addEventListener("click", () => fixConvert(blk, m));
+      card.appendChild(fix);
+    }
     card.addEventListener("click", (e) => {
       if (e.target.closest('[data-a="copy"]')) copyText(blk.code);
     });
@@ -366,6 +468,65 @@ window.DGM = window.DGM || {};
     return $("#ai-input");
   }
 
+  /** 「产物 / 落点」段控：按文档记忆（`state.ui.aiDeliver[docId]`）。 */
+  const ARTIFACTS = [
+    ["mermaid", "Mermaid"],
+    ["dot", "DOT"],
+    ["d2", "D2"],
+  ];
+
+  function deliverOf(d) {
+    if (!state.ui.aiDeliver) state.ui.aiDeliver = {};
+    const key = (d && d.id) || "_";
+    const saved = state.ui.aiDeliver[key] || {};
+    const fallback = d && ARTIFACTS.some(([id]) => id === d.format) ? d.format : "mermaid";
+    return { artifact: saved.artifact || fallback, landing: saved.landing || "editor" };
+  }
+
+  function setDeliver(key, value) {
+    const d = state.activeDoc();
+    if (!state.ui.aiDeliver) state.ui.aiDeliver = {};
+    const id = (d && d.id) || "_";
+    state.ui.aiDeliver[id] = Object.assign({}, deliverOf(d), { [key]: value });
+    render();
+  }
+
+  function renderDeliver() {
+    const box = $("#ai-deliver");
+    if (!box) return;
+    const d = state.activeDoc();
+    if (!d) {
+      box.hidden = true;
+      return;
+    }
+    box.hidden = false;
+    const cur = deliverOf(d);
+    const seg = (kind, items) =>
+      `<div class="seg" data-kind="${kind}">` +
+      items
+        .map(
+          ([id, label]) =>
+            `<button class="seg-btn${cur[kind] === id ? " on" : ""}" data-deliver="${kind}:${id}">${esc(label)}</button>`,
+        )
+        .join("") +
+      `</div>`;
+    box.innerHTML =
+      `<span class="seg-lb">${esc(t("ai.artifact"))}</span>` +
+      seg("artifact", ARTIFACTS) +
+      `<span class="seg-lb">${esc(t("ai.landing"))}</span>` +
+      seg("landing", [
+        ["editor", t("ai.landing.editor")],
+        ["canvas", t("ai.landing.canvas")],
+      ]);
+  }
+
+  function deliverClick(e) {
+    const b = e.target.closest("[data-deliver]");
+    if (!b) return;
+    const [kind, value] = b.dataset.deliver.split(":");
+    setDeliver(kind, value);
+  }
+
   function render() {
     const cur = tab();
     state.ui.aiTab = cur;
@@ -374,6 +535,7 @@ window.DGM = window.DGM || {};
 
     $$("#ai-tabs .ai-tab").forEach((b) => b.classList.toggle("on", b.dataset.ai === cur));
     renderMemoryBar();
+    renderDeliver();
 
     stream.innerHTML = "";
     if (!state.hasModels()) {
@@ -703,7 +865,9 @@ window.DGM = window.DGM || {};
     }
     const cur = tab();
     const d = curDocForReq();
-    const fmtId = d ? d.format : "mermaid";
+    const deliver = deliverOf(d);
+    // 改图必须产出当前文档的格式；其余两种页签服从「产物」段控。
+    const fmtId = cur === "review" ? (d ? d.format : "mermaid") : deliver.artifact;
     const att = state.ui.aiAttachment;
 
     if (cur === "vision" && !att) {
@@ -716,12 +880,14 @@ window.DGM = window.DGM || {};
       return;
     }
 
-    // 上下文：改图用整篇正文；选择区优先；对话按设置决定
+    // 上下文：改图用整篇正文；选择区优先；对话按设置决定。
+    // 产物与当前文档格式不同时**不把这份正文当上下文**（提示词会误以为要改它）。
     const ai = state.ai();
+    const sameFormat = !d || fmtId === d.format;
     let context = null;
-    if (selectionCtx) context = selectionCtx;
+    if (selectionCtx && sameFormat) context = selectionCtx;
     else if (cur === "review") context = d ? d.body : null;
-    else if (cur === "chat" && ai.context_from_doc && d && state.isTextDoc(d)) context = d.body;
+    else if (cur === "chat" && ai.context_from_doc && d && state.isTextDoc(d) && sameFormat) context = d.body;
 
     const req = {
       request_id: newId(),
@@ -742,7 +908,13 @@ window.DGM = window.DGM || {};
     if (cur === "vision" && att) state.ui.aiAttachment = null;
     selectionCtx = null;
 
-    await dispatch(req, cur, { id: newId(), role: "user", text, image: cur === "vision" && att ? att : null });
+    await dispatch(
+      req,
+      cur,
+      { id: newId(), role: "user", text, image: cur === "vision" && att ? att : null },
+      undefined,
+      deliver.landing,
+    );
   }
 
   /** 把一个请求挂进某个 tab 并发出去：用户消息 + 占位气泡 + busy 标记 + 调 `ai_chat`。
@@ -754,7 +926,7 @@ window.DGM = window.DGM || {};
    *  （见 `retryCtx.convDoc`）—— 用户中途切了标签页的话，回复必须落回原来的桶，
    *  否则落盘时（S3：按归属落盘）会写错文档、丢这一轮。
    */
-  async function dispatch(req, cur, userMsg, docId) {
+  async function dispatch(req, cur, userMsg, docId, landing) {
     const owner = docId || (state.activeDoc() || {}).id || "";
     // `at` 落在这条消息上：会话持久化要按它排跨页签的展示顺序，
     // 落盘时再取 `Date.now()` 会让所有历史轮次挤在同一毫秒上。
@@ -776,6 +948,7 @@ window.DGM = window.DGM || {};
       prompt: (userMsg && userMsg.text) || "",
       modelId: req.model_id || "",
       intent: req.intent || "",
+      landing: landing || "editor",
     };
     bucket(owner)[cur].push(bot);
     state.ui.aiBusy = true;
@@ -935,6 +1108,12 @@ window.DGM = window.DGM || {};
     if (state.ui.aiSendThenApply) {
       state.ui.aiSendThenApply = false;
       applyLast();
+    }
+    // 落点 = 转成画布：一轮结束就自动落地一次（用户已经明确选了落点）。
+    // 失败不自动重试；卡上会出现「让 AI 修」，那是**用户决定**的一次真实调用。
+    if (m.landing === "canvas" && m.intent !== "explain" && !m.applied && !m.landed && !m.converting) {
+      const { blocks } = splitFences(m.text || "");
+      if (blocks.length) setTimeout(() => applyAsCanvas(blocks[0], m), 0);
     }
     // 一轮结束就落盘（不 await：落盘失败不该挡住界面）。
     // **按归属落盘**（S3）：这一轮属于哪个文档是发送时定下的（`m.doc`），
@@ -1397,6 +1576,9 @@ window.DGM = window.DGM || {};
       }),
     );
 
+    const deliver = $("#ai-deliver");
+    if (deliver) deliver.addEventListener("click", deliverClick);
+
     const ta = input();
     if (ta) {
       ta.addEventListener("input", syncSend);
@@ -1504,6 +1686,7 @@ window.DGM = window.DGM || {};
     clear,
     send: sendNow,
     explain: explainCurrent,
+    applyAsCanvas,
     cancel,
     applyLast,
     revertLast,

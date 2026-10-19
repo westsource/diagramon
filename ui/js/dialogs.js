@@ -168,11 +168,13 @@ window.DGM = window.DGM || {};
     if (!report || !body || body.indexOf("<mxfile") < 0) return report;
     try {
       const counts = await DGM.ipc.invoke("mxfile_inspect", { xml: body });
+      const hadNone = !report.fidelity || report.fidelity.structure === "none";
       report.counts = counts;
-      // 能数清产物 ≠ 证明了与源一一对应：这里只能给 `partial`（诚实口径）
+      // 能数清产物 ≠ 证明了与源一一对应：**只有原本没有判定**时才降级为 `partial`。
+      // Rust 已经给出 `exact` 的方向（如 DOT → drawio）不要在这里被抹平。
       const has = counts.nodes > 0 || counts.edges > 0;
       report.fidelity = Object.assign({ structure: "none", geometry: "none", style: "none" }, report.fidelity || {});
-      report.fidelity.structure = has ? "partial" : "none";
+      if (hadNone) report.fidelity.structure = has ? "partial" : "none";
     } catch (e) {
       const msg = (e && e.message) || String(e);
       // 转换本身仍然成功；报告降级为 structure:none + 一条 issue（不让一次成功变失败）
@@ -196,7 +198,7 @@ window.DGM = window.DGM || {};
    * 返回值是 `{ doc, notes }`：`notes` 是**这次转换的保真度说明**（与 Rust 方向共用同一套展示），
    * 目前只有一条 —— 上游把整张图兜底成了一块位图（见 `bitmapFallbackNote`）。
    */
-  async function convertViaEngine(to, source, srcDoc, dir) {
+  async function convertViaEngine(to, source, srcDoc, dir, options) {
     const doc = await state.newDoc(to);
     if (!doc) return null;
     // 文档级外观（look）只对 Excalidraw 链有效：m2e 的 config 会平铺进内置 mermaid 的
@@ -207,7 +209,7 @@ window.DGM = window.DGM || {};
     const opts = to === "excalidraw" && look && look !== "auto" ? { mermaid: { look } } : null;
     DGM.canvas.setPendingConversion(to, source, opts);
     await DGM.preview.render(); // 触发 show → 把源码交给引擎
-    const body = await DGM.canvas.waitForBody(to, doc.body || "");
+    let body = await DGM.canvas.waitForStable(to, doc.body || "", 8000);
     if (!body) {
       // G19：取不到正文 = 这次转换没有产物。**关掉刚建的标签页**，
       // 记录一条失败（可追溯），并明确告诉用户——不留一张空画布让人猜。
@@ -228,12 +230,36 @@ window.DGM = window.DGM || {};
       });
       return null;
     }
+
+    let report = dir.report || null;
+    if (to === "drawio") {
+      // 归一化默认关（手动转换零风险）；AI 落地链会在 options 里显式打开。
+      try {
+        const fin = await DGM.ipc.invoke("drawio_finalize", {
+          xml: body,
+          options: Object.assign({}, options || {}, { normalize: !!(options && options.normalize) }),
+        });
+        body = fin.body || body;
+        if (fin.report) {
+          const oldIssues = ((report && report.issues) || []).filter((i) => i.code !== "inspect.only");
+          const newIssues = (fin.report.issues || []).filter((i) => i.code !== "inspect.only");
+          report = Object.assign({}, fin.report, {
+            issues: oldIssues.concat(newIssues),
+            // 源 hash 是**源 DLS** 的，不是 drawio XML 的；保留转换时算出的那个
+            source_hash: (report && report.source_hash) || fin.report.source_hash,
+          });
+        }
+      } catch (e) {
+        // 收尾失败不推翻转换：正文已经拿到了，如实把原因记进输出面板
+        state.pushOutput(t("conv.report.inspectFailed", { msg: (e && e.message) || String(e) }), "warn");
+      }
+    }
     await state.setBodyNow(doc.id, body);
     const note = bitmapFallbackNote(to, body);
     if (note) state.pushOutput(note, "warn");
     // 外观/布局的说明由 Rust 报告给出（`engine.look.*` / `engine.drawio.fixed_config`），
     // 这里只补上游兜底成位图这一条**只有界面能判**的说明。别再各写一套。
-    return { doc: doc, notes: note ? [note] : [] };
+    return { doc: doc, notes: note ? [note] : [], report };
   }
 
   /**
@@ -355,6 +381,7 @@ window.DGM = window.DGM || {};
       title: t("dlg.convert.done", { name: state.fmtById(dir.to).name }),
       sub: t("dlg.convert.doneSub", { file: live.name }),
     });
+    return { doc: live, report: full };
   }
 
   async function convertTo(presetTo) {
@@ -470,7 +497,7 @@ window.DGM = window.DGM || {};
     const p = plan || (await planOf(dir.from, dir.to, srcDoc.body, options));
     if (p.error) {
       DGM.toast({ icon: "alert", title: t("dlg.convert.notImpl"), sub: p.error, warn: true });
-      return;
+      return { ok: false, error: p.error };
     }
     // 失败路径也要能写报告（G19 的空标签页回滚会记一条带 report 的失败）
     const dirWithReport = Object.assign({}, dir, { report: p.report });
@@ -493,15 +520,19 @@ window.DGM = window.DGM || {};
       created = via && via.doc;
       extraNotes = (via && via.notes) || [];
     } else if (p.engine !== "none") {
-      const via = await convertViaEngine(dir.to, srcDoc.body, srcDoc, dirWithReport);
+      const via = await convertViaEngine(dir.to, srcDoc.body, srcDoc, dirWithReport, options);
       created = via && via.doc;
       extraNotes = (via && via.notes) || [];
+      viaReport = (via && via.report) || p.report;
     } else {
       DGM.toast({ icon: "alert", title: t("dlg.convert.notImpl"), sub: dir.how, warn: true });
-      return;
+      return { ok: false, error: dir.how };
     }
-    if (!created) return;
-    await finishConvert(created, dirWithReport, srcDoc, (p.notes || []).concat(extraNotes), viaReport);
+    if (!created) {
+      const last = state.logs.convert[0];
+      return { ok: false, error: (last && last.note) || t("conv.emptyRolledBack") };
+    }
+    return finishConvert(created, dirWithReport, srcDoc, (p.notes || []).concat(extraNotes), viaReport);
   }
 
   /* ================================================================== 识图 */

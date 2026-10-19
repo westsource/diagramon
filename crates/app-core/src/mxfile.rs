@@ -25,7 +25,7 @@ impl std::fmt::Display for ParseError {
 
 impl std::error::Error for ParseError {}
 
-fn err_at(xml: &str, at: usize, message: impl Into<String>) -> ParseError {
+pub(crate) fn err_at(xml: &str, at: usize, message: impl Into<String>) -> ParseError {
     let before = &xml[..at.min(xml.len())];
     let line = before.matches('\n').count() as u32 + 1;
     let col = before.rsplit('\n').next().map(|s| s.chars().count() as u32 + 1).unwrap_or(1);
@@ -76,22 +76,23 @@ fn decode_entities(raw: &str) -> String {
 }
 
 /// 一个标签的解析结果。
-struct Tag {
-    name: String,
-    closing: bool,
-    attrs: Vec<(String, String)>,
+pub(crate) struct Tag {
+    pub(crate) name: String,
+    pub(crate) closing: bool,
+    pub(crate) self_closing: bool,
+    pub(crate) attrs: Vec<(String, String)>,
     /// 标签结束后的字节位置。
-    end: usize,
+    pub(crate) end: usize,
 }
 
 impl Tag {
-    fn attr(&self, name: &str) -> Option<&str> {
+    pub(crate) fn attr(&self, name: &str) -> Option<&str> {
         self.attrs.iter().find(|(k, _)| k == name).map(|(_, v)| v.as_str())
     }
 }
 
 /// 从 `<` 开始读一个标签。属性值支持单/双引号或无引号。
-fn read_tag(xml: &str, start: usize) -> Result<Tag, ParseError> {
+pub(crate) fn read_tag(xml: &str, start: usize) -> Result<Tag, ParseError> {
     let b = xml.as_bytes();
     let mut i = start + 1; // 跳过 '<'
     let closing = b.get(i) == Some(&b'/');
@@ -120,11 +121,11 @@ fn read_tag(xml: &str, start: usize) -> Result<Tag, ParseError> {
             return Err(err_at(xml, start, format!("<{name}> 没有闭合的 `>`")));
         }
         if b[i] == b'>' {
-            return Ok(Tag { name, closing, attrs, end: i + 1 });
+            return Ok(Tag { name, closing, self_closing: false, attrs, end: i + 1 });
         }
         if b[i] == b'/' {
             if b.get(i + 1) == Some(&b'>') {
-                return Ok(Tag { name, closing, attrs, end: i + 2 });
+                return Ok(Tag { name, closing, self_closing: true, attrs, end: i + 2 });
             }
             i += 1;
             continue;
@@ -193,6 +194,9 @@ fn is_container(style: &str) -> bool {
 fn non_empty(value: Option<&str>) -> bool {
     value.map(|v| !v.trim().is_empty()).unwrap_or(false)
 }
+
+/// 解析一段 mxfile（实现见 `mxfile_parse`，与扫描/输出分开以免单文件过长）。
+pub use crate::mxfile_parse::{normalize, parse};
 
 /// 只数不建树。
 ///

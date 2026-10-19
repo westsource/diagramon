@@ -16,6 +16,7 @@ pub mod guard;
 pub mod lint;
 pub mod memory;
 pub mod mxfile;
+mod mxfile_parse;
 pub mod outline;
 pub mod pixels;
 pub mod plan;

@@ -870,6 +870,34 @@ window.DGM = window.DGM || {};
       const inspectErr = await invoke("mxfile_inspect", { xml: "not xml at all" }).then(() => "", (e) => (e && e.message) || String(e));
       ok("mxfile_inspect 对非 mxfile 如实报错", inspectErr.includes("mxfile"), inspectErr.slice(0, 60));
 
+      // 3.11.0：drawio_finalize（inspectOnly / normalize）与 AI 一键落地
+      const sampleXml =
+        '<mxfile><diagram name="p"><mxGraphModel><root><mxCell id="0"/><mxCell id="1" parent="0"/>' +
+        '<mxCell id="box" value="组" style="container=1;fillColor=none;strokeColor=#cfd4d3;" vertex="1" parent="1"><mxGeometry x="40" y="40" width="200" height="120" as="geometry"/></mxCell>' +
+        '<mxCell id="a" value="A" style="rounded=1;fillColor=#e4efec;strokeColor=#3d7d72;" vertex="1" parent="box"><mxGeometry x="20" y="20" width="60" height="40" as="geometry"/></mxCell>' +
+        '<mxCell id="e" value="" style="endArrow=block;" edge="1" parent="1" source="a" target="a"><mxGeometry relative="1" as="geometry"/></mxCell>' +
+        "</root></mxGraphModel></diagram></mxfile>";
+      const only = await invoke("drawio_finalize", { xml: sampleXml, options: { normalize: false } });
+      ok("drawio_finalize inspectOnly 原样返回并给计数", only.body === sampleXml && only.report.counts.nodes === 2, JSON.stringify(only.report.counts));
+      const norm = await invoke("drawio_finalize", { xml: sampleXml, options: { normalize: true } });
+      ok(
+        "drawio_finalize normalize 加稳定 id 且引用一致",
+        norm.body.includes('id="mm-a"') && norm.body.includes('parent="mm-box"') && norm.body.includes('source="mm-a"'),
+        (norm.report.issues || []).map((i) => i.code).join(","),
+      );
+      const normInspected = await invoke("mxfile_inspect", { xml: norm.body });
+      ok("归一化产物自检计数与报告一致", normInspected.nodes === norm.report.counts.nodes && normInspected.containers === 1, JSON.stringify(normInspected));
+
+      // AI 一键落地：真实的引擎转换（drawio 承载页）+ 归一化 + 新标签页
+      const block = { lang: "mermaid", code: "flowchart LR\n    A([开始]) --> B{判断}\n    B --> C([结束])\n" };
+      await DGM.ai.applyAsCanvas(block, {});
+      const viaAi = st.convLast("mermaid", "drawio");
+      ok(
+        "AI 产物一键转成画布（含归一化报告）",
+        !!viaAi && viaAi.report.fidelity.geometry === "exact" && (viaAi.report.issues || []).some((i) => i.code === "normalize.applied"),
+        viaAi ? JSON.stringify(viaAi.report.fidelity) : "没有记录",
+      );
+
       const toDrawio = await invoke("convert_text", { req: { from: "mermaid", to: "drawio", source: srcBody } });
       ok("mermaid → drawio 交给引擎（不是 Rust）", toDrawio.engine === "drawio" && toDrawio.body === "", toDrawio.engine);
       ok("引擎方向给出原因", (toDrawio.notes[0] || "").includes("drawio"), toDrawio.notes[0]);
@@ -928,8 +956,9 @@ window.DGM = window.DGM || {};
         const made = st.activeDoc();
         ok(
           "从「转换」入口走完 DOT → drawio（新标签页 + 报告入账）",
-          !!conv && !!made && made.format === "drawio" && made.body.includes("<mxfile"),
-          conv ? conv.report.engine : "没有记录",
+          !!conv && !!made && made.format === "drawio" && made.body.includes("<mxfile") &&
+            conv.report.fidelity.structure === "exact",
+          conv ? `${conv.report.engine} / ${conv.report.fidelity.structure}` : "没有记录",
         );
       } catch (e) {
         ok("DOT → drawio 全链路", false, (e && e.message) || String(e));

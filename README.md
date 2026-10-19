@@ -14,7 +14,7 @@ no external request is ever made**.
 Code or images reach a model only when you actively use AI, and then only the endpoint you chose
 (BYOK talks straight to your own provider, membership goes through the Diagramon cloud gateway).
 
-Version **3.10.0** · Official website <https://www.diagramon.com>
+Version **3.11.0** · Official website <https://www.diagramon.com>
 
 ## Screenshots
 
@@ -161,6 +161,10 @@ Version **3.10.0** · Official website <https://www.diagramon.com>
   (image → code) and review (ask for changes to the current document)
 - **“Explain the current diagram” really explains** — the empty-state button sends a dedicated explain
   request (3–8 sentences, no code fence, no Apply button) instead of just focusing the input
+- **Artifact + landing** — pick what the model should produce (Mermaid / DOT / D2) and where it should
+  land (keep in editor / to canvas); the choice is remembered per document, and “to canvas” converts
+  the finished turn automatically (canvas output is normalized to stable ids, failures offer a
+  one-shot “Ask AI to fix”)
 - **Two kinds of credentials, kept visually separate** — the cloud gateway (membership; the credential is
   the current login token, so you fill in nothing) and local BYOK (OpenAI-compatible / Ollama / custom,
   where you supply the key) are shown as groups, never mixed

@@ -495,6 +495,66 @@ pub fn mxfile_inspect(xml: String) -> Result<app_ipc::Counts, String> {
     app_core::mxfile::inspect(&xml).map_err(|e| e.to_string())
 }
 
+/// drawio 产物的收尾：`inspectOnly`（只数结构）或 `normalize`（parse→前缀→emit）。
+///
+/// **归一化默认关**：手动转换走原样（零风险），只有 AI 落地链需要稳定 id。
+/// 入参只有字符串与 options —— 不收路径、不碰网络。
+#[tauri::command]
+pub fn drawio_finalize(
+    xml: String,
+    options: app_ipc::ConvertOptions,
+) -> Result<ConvertOutcome, String> {
+    use app_ipc::{ConvIssue, ConvReport, Fidelity, Grade, Level};
+
+    let started = std::time::Instant::now();
+    let source_hash = app_core::report::source_hash(&xml);
+    let theme = options.theme.clone().unwrap_or_default();
+
+    if options.normalize {
+        let mut plan = app_core::mxfile::parse(&xml).map_err(|e| format!("mxfile 解析失败：{e}"))?;
+        let mut issues = plan.issues.clone();
+        issues.extend(app_core::mxfile::normalize(&mut plan, "mm-"));
+        let body = app_core::mxfile::emit(&plan);
+        let counts = app_core::mxfile::inspect(&body)
+            .map_err(|e| format!("归一化产物自检失败：{e}"))?;
+        let notes = issues.iter().map(app_core::report::issue_note).collect::<Vec<_>>();
+        let report = ConvReport {
+            engine: "drawio".into(),
+            counts,
+            // 几何逐值保留；结构无法证明与源 DLS 一一对应；颜色映射到角色 ⇒ 近似
+            fidelity: Fidelity { structure: Grade::Partial, geometry: Grade::Exact, style: Grade::Approx },
+            issues,
+            elapsed_us: started.elapsed().as_micros() as u64,
+            source_hash,
+            layout: "drawio".into(),
+            look: "n/a".into(),
+            theme,
+        };
+        return Ok(ConvertOutcome { engine: "drawio".into(), body, notes, report });
+    }
+
+    let counts = app_core::mxfile::inspect(&xml).map_err(|e| format!("mxfile 解析失败：{e}"))?;
+    let issues = vec![ConvIssue {
+        level: Level::Info,
+        code: "inspect.only".into(),
+        params: Default::default(),
+        at: None,
+    }];
+    let notes = issues.iter().map(app_core::report::issue_note).collect::<Vec<_>>();
+    let report = ConvReport {
+        engine: "drawio".into(),
+        counts,
+        fidelity: Fidelity { structure: Grade::Partial, geometry: Grade::None, style: Grade::None },
+        issues,
+        elapsed_us: started.elapsed().as_micros() as u64,
+        source_hash,
+        layout: "drawio".into(),
+        look: "n/a".into(),
+        theme,
+    };
+    Ok(ConvertOutcome { engine: "drawio".into(), body: xml, notes, report })
+}
+
 /// DOT → drawio：Graphviz 的 `json` 布局 → `CanvasPlan` → mxfile。
 ///
 /// **入参只有字符串**（json / 源 DOT）与 options —— 不收路径、不碰网络。
@@ -686,14 +746,19 @@ pub async fn ai_chat(
     let request_id = req.request_id.clone();
     // 场景口径只在客户端定义（服务端只做短串校验）。重试来源随头一起发，
     // 运营侧据此统计重试率；两边都不解析对方的字符串。
-    let scene = match req.intent {
+    let intent_scene = match req.intent {
         app_ipc::AiIntent::Generate => "generate",
         app_ipc::AiIntent::Vision => "vision",
         app_ipc::AiIntent::Review => "review",
         app_ipc::AiIntent::Explain => "explain",
     };
-    let meta = ai::RequestMeta::new(scene, req.retry_of.as_deref());
-    let scene = scene.to_string();
+    // 显式 `scene` 优先（如 convert.retry / patch）：口径由调用方定义，服务端只校验形状。
+    let scene = if req.scene.trim().is_empty() {
+        intent_scene.to_string()
+    } else {
+        req.scene.clone()
+    };
+    let meta = ai::RequestMeta::new(&scene, req.retry_of.as_deref());
     let cancel = Arc::new(AtomicBool::new(false));
     st.cancels().insert(request_id.clone(), cancel.clone());
 

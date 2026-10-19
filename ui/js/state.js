@@ -121,6 +121,8 @@ window.DGM = window.DGM || {};
       aiDragDrop: false,
       aiBusy: false,
       aiRequestId: null,
+      // 「产物 / 落点」段控按文档记忆（键 = doc.id；画布文档也有一个默认值）
+      aiDeliver: {},
       zen: false,
       zenPrev: null,
       status: { text: "", kind: "" },

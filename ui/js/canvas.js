@@ -478,6 +478,38 @@ window.DGM = window.DGM || {};
     });
   }
 
+  /**
+   * 等画布产出**与 `before` 不同、且连续两次相同**的正文（3.11.0 的转换链用它）。
+   *
+   * 为什么不能只看“变化了一次”：drawio 的导入是异步的，早取会拿到**半张图**
+   * （第一帧可能只有部分 cell）。连续两次相同 = 引擎已经停手。8s 是硬上限：
+   * 到点仍没稳定就返回最后那次（调用方按 `""` 处理失败），绝不无限等。
+   */
+  function waitForStable(format, before, budgetMs) {
+    const budget = budgetMs || 8000;
+    const step = 300;
+    const started = Date.now();
+    return new Promise((resolve) => {
+      let last = "";
+      const tick = () => {
+        flush(format)
+          .then((body) => {
+            const text = typeof body === "string" ? body : "";
+            if (text.trim() && text !== before) {
+              if (text === last) return resolve(text);
+              last = text;
+            }
+            if (Date.now() - started >= budget) {
+              return resolve(text !== before && text.trim() ? text : "");
+            }
+            setTimeout(tick, step);
+          })
+          .catch(() => resolve(""));
+      };
+      tick();
+    });
+  }
+
   /** 页内导出位图（返回 data URI）。 */
   function exportPng(format, scale, transparent) {
     const e = hosts[format];
@@ -555,6 +587,7 @@ window.DGM = window.DGM || {};
     teardown,
     flush,
     waitForBody,
+    waitForStable,
     exportPng,
     loadMermaid,
     setPendingConversion,

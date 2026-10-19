@@ -107,6 +107,13 @@ pub fn issue_note(issue: &ConvIssue) -> String {
     match issue.code.as_str() {
         "engine.delegated" => format!("由 {} 引擎完成（经画布承载页）", p("engine")),
         "engine.dotjson" => "Graphviz 出布局，Rust 映射成 drawio（保几何）".to_string(),
+        "normalize.applied" => format!(
+            "产物已归一化（id 前缀 {}，{} 个 id）",
+            p("prefix"),
+            p("n")
+        ),
+        "inspect.only" => "仅统计结构（未归一化）".to_string(),
+        "userobject.flattened" => format!("{} 个 UserObject 包装被拍平（label/id 保留，自定义字段未回写）", p("n")),
         "engine.look.carried" => format!(
             "转换沿用文档外观：look = {}（布局不参与转换，按引擎默认）",
             p("look")

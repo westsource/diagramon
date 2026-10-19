@@ -790,6 +790,15 @@ body.no-ai #ai-gutter { display: none; }
   user-select: text;
 }
 .code-card-actions { display: flex; gap: 6px; padding: 7px 8px; border-top: 1px solid var(--border); background: var(--surface-inset); }
+.code-card-err { display: flex; gap: 6px; align-items: flex-start; padding: 6px 8px; color: var(--warn); background: var(--warn-soft); border-top: 1px solid var(--border); font-size: var(--fs-xs); }
+.code-card > .btn.sm { margin: 0 8px 8px; }
+.ai-deliver { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; padding: 0 0 7px; font-size: var(--fs-xs); color: var(--muted); }
+.ai-deliver[hidden] { display: none; }
+.ai-deliver .seg { display: inline-flex; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; background: var(--surface); }
+.ai-deliver .seg-btn { border: 0; background: transparent; color: var(--ink-2); font: inherit; padding: 3px 8px; cursor: pointer; }
+.ai-deliver .seg-btn + .seg-btn { border-left: 1px solid var(--border); }
+.ai-deliver .seg-btn.on { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+.ai-deliver .seg-lb { color: var(--faint); }
 
 .thumb {
   display: flex; gap: 9px; align-items: center;
