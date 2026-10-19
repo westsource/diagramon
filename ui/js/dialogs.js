@@ -1092,7 +1092,8 @@ window.DGM = window.DGM || {};
 
   function histRow(m) {
     const kind = histKind(m);
-    const name = m.name || (m.format ? t("dlg.history.draftName", { fmt: histFmt(m) }) : m.key);
+    const base = m.path ? String(m.path).split(/[\\/]/).pop() : "";
+    const name = m.name || base || (m.format ? t("dlg.history.draftName", { fmt: histFmt(m) }) : m.key);
     const sub = m.path
       ? `<span class="path" title="${esc(m.path)}">${esc(m.path)}</span>`
       : `<span>${esc(kind === "draft" ? t("dlg.history.draftHint") : t("dlg.history.orphanHint"))}</span>`;

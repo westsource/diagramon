@@ -2513,6 +2513,17 @@ def main() -> int:
             "    out.primaryLines = rg.getClientRects().length;"
             "    out.primaryBtnW = Math.round(rb.getBoundingClientRect().width);"
             "  }"
+            # 「更多操作」必须完整可见：裁剪 + elementFromPoint 两条都要过（它曾被 .n-list 的 overflow:hidden 裁掉）
+            "  const actEl = qa('#hist-all-list .n-row .act')[0];"
+            "  const mbtn = actEl ? actEl.querySelector('[data-act^=more]') : null;"
+            "  if (mbtn) {"
+            "    const mr = mbtn.getBoundingClientRect();"
+            "    const lr = q('#hist-all-list').getBoundingClientRect();"
+            "    const hit = document.elementFromPoint(mr.left + mr.width / 2, mr.top + mr.height / 2);"
+            "    out.moreVisible = hit === mbtn || mbtn.contains(hit);"
+            "    out.moreClipped = mr.right > lr.right - 1 || mr.left < lr.left;"
+            "    out.actW = Math.round(actEl.getBoundingClientRect().width);"
+            "  }"
             # 搜索：按首问命中
             "  const inp = q('#hist-q');"
             "  inp.value = '支付';"
@@ -2570,6 +2581,10 @@ def main() -> int:
                 fails.append("「全部」顶栏缺少「清理 30 天前的已失联」")
             if r.get("searchRows") != 1:
                 fails.append(f"搜索没按首条提问过滤（拿到 {r.get('searchRows')} 行）")
+            if r.get("moreVisible") is False or r.get("moreClipped"):
+                fails.append(
+                    f"「更多操作」按钮被裁掉/点不到（act 宽 {r.get('actW')}px，clipped={r.get('moreClipped')}）"
+                )
             if r.get("primaryLines") not in (None, 1):
                 fails.append(f"「恢复」按钮的文字折行了（{r.get('primaryLines')} 行，宽 {r.get('primaryBtnW')}px）")
             if len(r.get("moreItems") or []) < 3:

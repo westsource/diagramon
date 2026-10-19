@@ -1583,7 +1583,10 @@ table.kv td .chip { vertical-align: middle; }
 .n-row .t2 { grid-column: 2; grid-row: 2; font-size: var(--fs-xs); color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; line-height: 1.5; }
 .n-row .t2 .path { color: var(--faint); font-family: var(--font-mono); }
 .n-row .t2 .q { color: var(--ink-2); }
-.n-row .act { grid-column: 3; grid-row: 1 / span 2; display: flex; flex: none; gap: 5px; align-items: center; white-space: nowrap; opacity: .6; transition: opacity .12s; }
+/* `width: max-content` 不能省：不给它定宽时，Chromium 把这个 flex 容器的**固有宽度**算成
+   只有第一颗按钮（实测 38px），第二颗（⋯）整颗溢出到 `.n-list` 的 `overflow: hidden` 外面被裁掉
+   —— 用户报的「更多操作按钮被遮住」就是它。定宽后 act=72px、⋯ 完整可见。 */
+.n-row .act { grid-column: 3; grid-row: 1 / span 2; display: flex; width: max-content; gap: 5px; align-items: center; white-space: nowrap; opacity: .6; transition: opacity .12s; }
 .n-row:hover .act { opacity: 1; }
 .mini-btn.primary { color: var(--accent-ink); background: var(--accent); border-color: var(--accent); }
 .mini-btn.primary:hover { background: var(--accent); color: var(--accent-ink); filter: brightness(1.06); }

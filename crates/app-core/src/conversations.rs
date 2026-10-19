@@ -184,9 +184,21 @@ pub fn list(dir: &Path, recovery_dir: &Path) -> Vec<ConvMeta> {
         if key.is_empty() || key.ends_with(".meta") {
             continue;
         }
+        // 只认**我们自己**的会话文件：doc_key 必须与文件名一致。
+        // 会话目录里可能躺着历史遗留物 —— 旧 C# 客户端的 `default.json`（PascalCase 的
+        // Id/Messages）、以及原型期的 `{key, messages}`。它们解析不成 `Conversation`，
+        // 既不该列出来（会变成一堆「已失联 · 0 轮」），也**不能被这里改名/补写 meta**
+        // （列表是只读操作，动别人的文件更不行 —— 2026-10-19 实测本机就有 11 个这种文件）。
+        let Some(conv) = read_entity(dir, &key) else {
+            continue;
+        };
+        // 空会话（0 轮）没有可看的内容：不列。会话文件本身留着（删了也回不来，但它没用）
+        if conv.turns.is_empty() {
+            continue;
+        }
         let mut meta = match read_meta(dir, &key) {
             Some(m) if m.key == key => m,
-            _ => backfill_meta(dir, &key),
+            _ => backfill_meta(dir, &key, &conv),
         };
         // 归属现算：文档 / 草稿（还活着）/ 已失联（见 ui 的三种徽章）
         meta.missing = !meta.path.is_empty() && !Path::new(&meta.path).exists();
@@ -204,10 +216,18 @@ fn read_meta(dir: &Path, key: &str) -> Option<ConvMeta> {
     serde_json::from_str::<ConvMeta>(&text).ok()
 }
 
-/// 旧会话没有 meta：现读一次实体补出来，并**就地补写**（下次列表就不用再解析正文）。
-fn backfill_meta(dir: &Path, key: &str) -> ConvMeta {
-    let conv = load(dir, key);
-    let meta = build_meta(&conv, "", "");
+/// **严格**读一份实体：必须能解析成 `Conversation`、且 `doc_key` 就是文件名。
+/// 读不动/形状不对（外来文件）→ `None`。**不重命名、不写盘**（列表是只读操作）。
+fn read_entity(dir: &Path, key: &str) -> Option<Conversation> {
+    let text = std::fs::read_to_string(file_for(dir, key)).ok()?;
+    let conv: Conversation = serde_json::from_str(&text).ok()?;
+    (conv.doc_key == key).then_some(conv)
+}
+
+/// 旧会话没有 meta：用已经读出来的实体补一份，并**就地补写**（下次列表就不用再解析正文）。
+/// 名字/格式拿不到（列表只有 meta 和实体），留空；该文档下次再存一轮就补齐了。
+fn backfill_meta(dir: &Path, key: &str, conv: &Conversation) -> ConvMeta {
+    let meta = build_meta(conv, "", "");
     if let Ok(text) = serde_json::to_string_pretty(&meta) {
         let _ = atomic_write(&meta_file_for(dir, key), &text, false);
     }
@@ -516,6 +536,43 @@ mod tests {
         // 现算的标记**不落盘**：磁盘上的 meta 里不该出现它们
         let text = std::fs::read_to_string(meta_file_for(&dir, &dkey)).unwrap();
         assert!(!text.contains("\"live_draft\": true"), "{text}");
+    }
+
+    /// 会话目录里可能躺着**不是我们的** JSON（旧 C# 客户端的 `default.json`、原型期的
+    /// `{key, messages}`）。它们不能被列出来，更不能被列表改名或补写 meta（列表是只读操作）。
+    #[test]
+    fn list_ignores_foreign_files_and_never_mutates_them() {
+        let dir = temp_dir("list-foreign");
+        let rec = temp_dir("list-foreign-recovery");
+        std::fs::create_dir_all(&dir).unwrap();
+        // ① 旧 C# 客户端：PascalCase
+        let legacy = dir.join("default.json");
+        std::fs::write(&legacy, r#"{"Id":"x","FilePath":null,"Messages":[{"Role":0,"Content":"hi"}]}"#).unwrap();
+        // ② 原型期：{key, messages}
+        let proto = dir.join("1111111111111111.json");
+        std::fs::write(&proto, r#"{"key":"1111111111111111","messages":[{"role":"user","text":"hi"}]}"#).unwrap();
+        // ③ 一份**合法但 0 轮**的会话（空对话没有可看的内容，不列）
+        let empty_key = doc_key("E:/x/empty.mmd");
+        let empty = Conversation { doc_key: empty_key.clone(), path: "E:/x/empty.mmd".into(), turns: vec![], updated_at: 5 };
+        save_doc(&dir, &empty, "空.mmd", "mermaid").unwrap();
+        // ④ 一份正常会话
+        let ok_key = doc_key("E:/x/ok.mmd");
+        let ok = Conversation {
+            doc_key: ok_key.clone(),
+            path: "E:/x/ok.mmd".into(),
+            turns: vec![turn("user", "问一句", 9)],
+            updated_at: 9,
+        };
+        save_doc(&dir, &ok, "ok.mmd", "mermaid").unwrap();
+
+        let got = list(&dir, &rec);
+        assert_eq!(got.len(), 1, "只该列出那份正常会话：{got:?}");
+        assert_eq!(got[0].key, ok_key);
+        // 外来文件原样保留，且没有被补写 meta
+        assert!(legacy.exists());
+        assert!(!dir.join("default.meta.json").exists(), "不该给外来的 default.json 写 meta");
+        assert!(proto.exists());
+        assert!(!dir.join("1111111111111111.meta.json").exists());
     }
 
     #[test]

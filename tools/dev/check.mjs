@@ -24,7 +24,7 @@
  */
 
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -170,6 +170,31 @@ function dumpDiagnostics() {
 }
 
 /**
+ * 把当前 `ui/` 同步到 `target/debug/ui/`。
+ *
+ * 为什么必须有这一步：`tauri-build` 会把 `build.frontendDist` 拷一份到 `target/debug/ui`，
+ * 而 **`ui/**` 改动不会触发 cargo 重跑 build.rs** —— 于是本地 exe 一直serve 旧副本。
+ * 真机自检跑的就是这个 exe：不同步的话，"自检全绿"验的是上一版界面（2026-10-19 实测：
+ * 只改了 app.css，自检里仍是旧样式，用户先看到的也是旧样式）。
+ * `.shots/` 是开发产物（自检报告/截图），不进这个副本。
+ */
+function syncDebugUi() {
+  const src = join(ROOT, "ui");
+  const dst = join(ROOT, "target", "debug", "ui");
+  if (!existsSync(dst)) {
+    // 还没有 debug 产物时应用会直接读源码树的 ui/（见 src-tauri::ui_dir），本来就最新
+    return;
+  }
+  const sep = process.platform === "win32" ? "\\" : "/";
+  cpSync(src, dst, {
+    recursive: true,
+    force: true,
+    filter: (p) => !String(p).split(sep).includes(".shots"),
+  });
+  log(C.dim("  已把 ui/ 同步到 target/debug/ui（构建产物副本会过期）"));
+}
+
+/**
  * 构建。
  *
  * **失败要重试一次，而且第二次先 `cargo clean -p`**：本机（rustc 1.99.0 · x86_64-pc-windows-gnu）
@@ -180,12 +205,16 @@ function dumpDiagnostics() {
  */
 function build() {
   const argv = ["build", "-p", "diagramon", "--message-format", "short"];
-  if (run("cargo", argv) === 0) return true;
+  if (run("cargo", argv) === 0) {
+    syncDebugUi();
+    return true;
+  }
   log(C.yellow("  构建失败，第二次先清掉该 crate 的增量产物再试（本机偶发 rustc ICE，通常与代码无关）"));
   run("cargo", ["clean", "-p", "diagramon"]);
   if (run("cargo", argv) === 0) {
     log(C.yellow("  重试成功 —— 刚才那次是编译器抖动，不是代码问题"));
     skipped.push("第一次构建（rustc ICE，重试后通过）");
+    syncDebugUi();
     return true;
   }
   return false;
@@ -370,6 +399,8 @@ async function main() {
   }
 
   step("真机自检（启动客户端 → 前端跑真实 IPC 断言 → 落盘报告）");
+  // `--skip-test` 不建构建：这时也要保证 exe 读到的是当前 ui/（见 syncDebugUi 的注释）
+  syncDebugUi();
   mkdirSync(SHOTS, { recursive: true });
   for (const f of ["enter", "phase", "timeout", "err", "fallback"]) {
     rmSync(join(SHOTS, `selftest-report.${f}.json`), { force: true });
