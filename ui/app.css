@@ -1686,6 +1686,13 @@ html.full .doc-page { height: auto; overflow: visible; }
    原型用 <pre> 画假高亮；真实实现走 CodeMirror 6，宿主必须撑满且自己管滚动。 */
 .code-scroll { overflow: hidden; }
 .code-host { height: 100%; min-height: 0; font-size: var(--editor-fs, 13px); position: relative; }
+/* CodeMirror 给**内部**面板自带的 z-index 是"整页最上层"的量级：`.cm-panels`（搜索/替换）300、
+   `.cm-tooltip`（自动补全）500 —— 而本仓的弹出菜单是 `.pop`(210)、模态遮罩是 `.overlay`(200)。
+   于是开着搜索框点菜单，面板会浮在菜单上面把菜单挡住（2026-10-19 用户报的遮挡）。
+   编辑器的面板/提示只需要在自己这一块里靠上，`isolation` 让宿主形成层叠上下文，把里面的
+   层级全部收口 —— 顺带把"以后再冒出别的内部元素跑到整页最上层"这条路也堵上。
+   （画布承载页那几个浮层在 iframe 里，天然隔离，不受此影响。） */
+.code-host { isolation: isolate; }
 /* 行内错误标记（M3）：覆盖层不接管鼠标，只负责把波浪线画在出错行底下。
    层坐标 = view.coordsAtPos（视口坐标）- 宿主矩形，所以必须以 .code-host 为定位上下文。 */
 .editor-err-layer { position: absolute; inset: 0; overflow: hidden; pointer-events: none; z-index: 6; }

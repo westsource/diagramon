@@ -1396,6 +1396,58 @@ def main() -> int:
         except Exception as e:
             log(f"（断言 22 解析失败：{e}）")
 
+        # ---- 断言 22.5：编辑器内部的面板（搜索/替换）不得浮在弹出菜单之上 ----
+        # 用户报（2026-10-19）：开着源码窗口的搜索/替换面板点菜单，面板浮在菜单上面把菜单挡住。
+        # 成因：CodeMirror 给 `.cm-panels` 自带 `z-index:300` —— 那是"整页最上层"的量级，
+        # 而本仓的弹出菜单是 `.pop`（z-index:210）、模态遮罩是 `.overlay`（200）。
+        # 这里用 elementFromPoint 直接问"叠在一起时谁在最上面"，不靠读 CSS 数字。
+        # 画布承载页（drawio/Excalidraw）的浮层在 iframe 里天然隔离，只有编辑器是同文档的。
+        stack = ev(
+            "(async () => {"
+            "  DGM.editor.openSearch();"
+            "  await new Promise(r => setTimeout(r, 250));"
+            "  const panel = document.querySelector('.cm-panels');"
+            "  const host = document.querySelector('.code-host');"
+            "  if (!panel) return JSON.stringify({noPanel: true});"
+            "  const pr = panel.getBoundingClientRect();"
+            # 把弹出菜单**精确**摆到面板上方（不依赖真实菜单的几何），再问谁在上层
+            "  DGM.pop.show([{ label: '层叠测试' }], { x: pr.left + 30, y: pr.top + 2 }, () => {});"
+            "  await new Promise(r => setTimeout(r, 200));"
+            "  const pop = document.querySelector('.pop:not([hidden])');"
+            "  const qr = pop ? pop.getBoundingClientRect() : null;"
+            "  const x = pr.left + 40, y = pr.top + 8;"
+            "  const el = document.elementFromPoint(x, y);"
+            "  const out = {"
+            "    panelTop: pr.top, panelZ: getComputedStyle(panel).zIndex,"
+            "    hostIsolation: host ? getComputedStyle(host).isolation : null,"
+            "    popZ: pop ? getComputedStyle(pop).zIndex : null,"
+            "    popCovers: !!(pop && qr && qr.top <= y && qr.bottom >= y && qr.left <= x && qr.right >= x),"
+            "    top: el ? (pop && pop.contains(el) ? 'pop' : (panel.contains(el) ? 'panel' : el.className || el.tagName)) : 'none'"
+            "  };"
+            "  DGM.pop.hide();"
+            "  const close = panel.querySelector('[name=close]');"
+            "  if (close) close.click();"
+            "  await new Promise(r => setTimeout(r, 150));"
+            "  return JSON.stringify(out);"
+            "})()"
+        )
+        log(f"搜索面板 / 弹出菜单层叠: {stack}")
+        try:
+            st2 = json.loads(stack or "{}")
+            if st2.get("noPanel"):
+                fails.append("打不开源码窗口的搜索面板（openSearch 没接上？）")
+            else:
+                if not st2.get("popCovers"):
+                    fails.append(f"弹出菜单没盖住搜索面板，断言失去意义：{stack}")
+                elif st2.get("top") != "pop":
+                    fails.append(
+                        f"搜索面板浮在弹出菜单之上（面板 z-index {st2.get('panelZ')} / 菜单 {st2.get('popZ')}，"
+                        f"该点最上层是 {st2.get('top')}）—— 菜单被遮挡"
+                    )
+        except Exception as e:
+            log(f"（断言 22.5 解析失败：{e}）")
+            fails.append("断言 22.5 拿不到结果（层叠关系可能整个没接上）")
+
         # ---- 断言 23：预览视口 —— 只有「初始化」与显式「适应视图」才自动适应 ----
         # 用户反馈（2026-10-14）：改之前每敲一个字/换一次主题都重新适应一次大小与位置，
         # 用户手动调过的缩放与平移会被抹掉。这里钉三件事：重渲染不动视口、显式适应仍然
@@ -1580,6 +1632,56 @@ def main() -> int:
                 "  return 1;"
                 "})()"
             )
+
+        # ---- 断言 25.5：用户自己改出来的渲染失败，AI 不许主动改 ----
+        # 用户报（2026-10-19）：不是 AI 造成的正文变更，AI 不该主动去改。
+        # 原先只看"布防状态"（retryCtx 由 `applyBlock` 布防），于是：AI 落一版 → 用户接着手写成
+        # 语法错 → 自动修正把用户的编辑整块覆盖掉。现在多一道：出错时正文必须**还是 AI 落的那
+        # 一版**才修（见 ai.js::onRenderError 的第 ③ 道闸）。
+        # 这里模拟"用户手改"：只走编辑器 + setBodyNow（**不**经过 applyBlock，所以不会重新布防）。
+        user_edit = ev(
+            "(async () => {"
+            "  DGM.ai.focus('chat');"
+            "  await new Promise(r => setTimeout(r, 200));"
+            "  const d = DGM.state.docs.find(x => x.format === 'mermaid');"
+            "  if (!d) return 'no-doc';"
+            "  await DGM.state.activateDoc(d.id);"
+            "  const s = document.querySelector('#ai-stream');"
+            "  const before = { msgs: s.querySelectorAll('.msg').length, body: DGM.editor.getValue() || '' };"
+            "  const bad = 'flowchart TD\\n    A([开始]) --> B{判断\\n';"   # 用户敲漏了花括号
+            "  DGM.editor.setValue(bad);"
+            "  await DGM.state.setBodyNow(d.id, bad);"
+            "  DGM.preview.schedule();"
+            "  await new Promise(r => setTimeout(r, 5000));"   # 自动修正若发生，这段时间足够跑完
+            "  const after = { msgs: s.querySelectorAll('.msg').length, body: DGM.editor.getValue() || '' };"
+            "  return JSON.stringify({"
+            "    dMsgs: after.msgs - before.msgs,"
+            "    kept: after.body.includes('B{判断') && !after.body.includes('B{判断}'),"
+            "    body: after.body.slice(0, 60)"
+            "  });"
+            "})()"
+        )
+        log(f"用户手改不被 AI 自动改: {user_edit}")
+        try:
+            r = json.loads(user_edit or "{}")
+            if r == "no-doc":
+                fails.append("没有 mermaid 文档，断言 25.5 无从下手")
+            else:
+                if (r.get("dMsgs") or 0) != 0:
+                    fails.append(f"用户自己改出的语法错触发了 AI 主动修改（多出 {r.get('dMsgs')} 条消息）")
+                if not r.get("kept"):
+                    fails.append(f"用户手写的正文被改掉了：{r.get('body')}")
+        except Exception as e:
+            log(f"（断言 25.5 解析失败：{e}）")
+            fails.append("断言 25.5 拿不到结果")
+        # 复原成可渲染的正文（后面的截图不该拍到错误面板）
+        ev(
+            "(async () => {"
+            "  await DGM.editor.applyBody('flowchart TD\\n    A([开始]) --> B[第一步]\\n    B --> C{判断}\\n    C --> D([结束])');"
+            "  await new Promise(r => setTimeout(r, 400));"
+            "  return 1;"
+            "})()"
+        )
 
         # ---- 断言 26：多轮消息真的把前序轮次带上了 ----
         # 阶段二之前这里是**单轮**：`build_messages` 每次只产出 system + 一条 user，

@@ -961,10 +961,12 @@ window.DGM = window.DGM || {};
    * 之前缺的只是"把这条链路接起来"——设置里那个开关因此一直是个空开关：UI 上是开的，
    * 行为上什么都不做。
    *
-   * 三道闸一个都不能少：
+   * 四道闸一个都不能少：
    *   1. 设置开关（第二次是**真实调用**，用户有权拒绝）；
    *   2. 只认本次刚应用的那份文档（见 `retryCtx`）；
-   *   3. 每轮最多一次（`tried`）——这是防死循环的唯一硬闸。
+   *   3. **只认 AI 刚落的这一版**（`sameBody(cur.body, ctx.code)`）—— 用户在这之后自己改过正文，
+   *      那次失败就不是 AI 的改动引起的；
+   *   4. 每轮最多一次（`tried`）——这是防死循环的唯一硬闸。
    */
   function onRenderError(ev) {
     const e = ev || {};
@@ -972,6 +974,12 @@ window.DGM = window.DGM || {};
     if (!ctx || ctx.tried) return;
     if (ctx.docId !== e.docId) return;
     if (!state.ai().render_retry) return;
+    // ③ 正文已经不是 AI 落的那一版 ⇒ 这是**用户自己改出来的**渲染失败（或者别人改的），
+    //    绝不能让 AI 主动去改用户正在写的东西。原先只看"布防状态"，于是：AI 落一版（布防）→
+    //    用户接着手写成语法错 → 自动修正把用户的编辑整块覆盖掉（2026-10-19 用户报的就是这个）。
+    //    布防不清，比较就够了：用户改回去（或者撤销回那一版）之后仍然算 AI 的版本。
+    const cur = state.doc(ctx.docId);
+    if (!cur || !sameBody(cur.body, ctx.code)) return;
     ctx.tried = true;
 
     const where = e.line ? t("ai.retry.line", { n: e.line }) : "";
@@ -997,6 +1005,14 @@ window.DGM = window.DGM || {};
   }
 
   /* ------------------------------------------------------------------ 应用 */
+
+  /** 两版正文算不算"同一版"。只给"这一版还是不是我刚落的那一版"用：
+   *  归一化行尾（CRLF）与**末尾空白**——编辑器与 Rust 的换行规整可能差一个尾换行，
+   *  那不该让判断失真（否则自动修正会静默失效）。 */
+  function sameBody(a, b) {
+    const norm = (s) => String(s == null ? "" : s).replace(/\r\n/g, "\n").trimEnd();
+    return norm(a) === norm(b);
+  }
 
   let lastApplied = null; // {id, body}
 

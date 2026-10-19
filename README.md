@@ -14,7 +14,7 @@ no external request is ever made**.
 Code or images reach a model only when you actively use AI, and then only the endpoint you chose
 (BYOK talks straight to your own provider, membership goes through the Diagramon cloud gateway).
 
-Version **3.8.1** · Official website <https://www.diagramon.com>
+Version **3.8.2** · Official website <https://www.diagramon.com>
 
 ## Screenshots
 
@@ -157,6 +157,9 @@ Version **3.8.1** · Official website <https://www.diagramon.com>
   on a character boundary and labelled), UTF-8 text only (binary or other encodings report a clear
   error). Reference files and "current diagram source" are worded separately in the prompt, so the
   model does not treat your reference as the document to rewrite
+- **The AI only fixes what the AI wrote** — the render-failure auto-fix fires only while the body is
+  still exactly the version the AI applied; syntax errors you introduce yourself are never rewritten
+  behind your back (they are still reported in the preview and the problems panel)
 - **Usage is labelled with its source** — only tokens the provider actually reports are accumulated;
   anything unreported shows `—` with an explanation, never `0` and never a local estimate
 - **It actually remembers the conversation** — previous turns are carried into the next request

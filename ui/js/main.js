@@ -631,6 +631,37 @@ window.DGM = window.DGM || {};
         if (st && st.setLayout) await st.setLayout(doc.id, "dagre");
         if (st && st.setLook) await st.setLook(doc.id, "auto");
 
+        // ── 层叠：源码窗口的搜索/替换面板不该盖住弹出菜单（2026-10-19 用户报的遮挡） ──
+        //  CodeMirror 自带 `.cm-panels{z-index:300}`（比 `.pop` 的 210 高），于是菜单被面板压住；
+        //  app.css 里给 `.code-host` 加了 `isolation: isolate` 收口。这里用 elementFromPoint
+        //  直接问"叠在一起时谁在上面"，不读 CSS 数字。
+        {
+          if (st && st.setViewMode) await st.setViewMode(doc.id, "split");
+          DGM.editor.loadActive();
+          DGM.editor.openSearch();
+          await new Promise((r) => setTimeout(r, 300));
+          const panel = document.querySelector(".cm-panels");
+          const host = document.querySelector(".code-host");
+          let verdict = { noPanel: !panel };
+          if (panel) {
+            const pr = panel.getBoundingClientRect();
+            DGM.pop.show([{ label: "层叠测试" }], { x: pr.left + 30, y: pr.top + 2 }, () => {});
+            await new Promise((r) => setTimeout(r, 200));
+            const pop = document.querySelector(".pop:not([hidden])");
+            const el = document.elementFromPoint(pr.left + 40, pr.top + 8);
+            verdict = {
+              panelZ: getComputedStyle(panel).zIndex,
+              hostIsolation: host ? getComputedStyle(host).isolation : null,
+              popZ: pop ? getComputedStyle(pop).zIndex : null,
+              top: el ? (pop && pop.contains(el) ? "pop" : panel.contains(el) ? "panel" : "other") : "none",
+            };
+            DGM.pop.hide();
+            const close = panel.querySelector("[name=close]");
+            if (close) close.click();
+          }
+          ok("搜索面板不浮在弹出菜单之上", !verdict.noPanel && verdict.top === "pop", JSON.stringify(verdict));
+        }
+
         // 外观口径（转换中心共用）：文档级 > 设置默认 > auto。
         // mermaid→Excalidraw 的 look 透传 e2e 在 tools/dev/excalidraw_probe.py 的 F 用例 ——
         // 自检启动场里加载 Excalidraw 引擎会把整场拖进看门狗（渲染进程被挂起），别搬回来。
