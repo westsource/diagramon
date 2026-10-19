@@ -28,7 +28,8 @@ window.DGM = window.DGM || {};
 
   function openDialog(html, wide) {
     const d = $("#dialog");
-    d.className = "dialog" + (wide ? " wide" : "");
+    // `wide` 可以是 true（.wide）或一个类名（如 "settings"：比 .wide 更宽的那一档）
+    d.className = "dialog" + (wide === true ? " wide" : wide ? ` ${wide}` : "");
     d.innerHTML = html;
     overlay().hidden = false;
     return d;
@@ -662,7 +663,7 @@ window.DGM = window.DGM || {};
         foot(t("dlg.settings.foot"),
           `<button class="btn ghost" data-close>${esc(t("common.close"))}</button>` +
           `<button class="btn primary" data-act="save">${icon("check")}${esc(t("common.save"))}</button>`),
-      true,
+      "settings",
     );
 
     const pane = $(".dlg-pane");

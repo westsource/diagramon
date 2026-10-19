@@ -734,6 +734,38 @@ def main() -> int:
         except Exception as e:
             log(f"（断言 13 解析失败：{e}）")
 
+        # ---- 断言 13b：设置 →「格式与转换」的注册表表格不用横向滚动就能看全 ----
+        # 用户反馈：那一列是 7 列 nowrap 的表格，.wide（720）只给得到 500px，必然出横向滚动条。
+        settings_width = ev(
+            "(async () => {"
+            "  DGM.dialogs.settings('convert');"
+            "  await new Promise(r => setTimeout(r, 300));"
+            "  const dlg = document.querySelector('#dialog');"
+            "  const wrap = document.querySelector('.reg-wrap');"
+            "  const tbl = document.querySelector('.reg-table');"
+            "  if (!wrap || !tbl) return 'missing';"
+            "  const out = {"
+            "    dialogW: Math.round(dlg.getBoundingClientRect().width),"
+            "    wrapW: wrap.clientWidth, tableW: Math.round(tbl.getBoundingClientRect().width),"
+            "    overflowX: wrap.scrollWidth > wrap.clientWidth + 1,"
+            "  };"
+            "  DGM.dialogs.close();"
+            "  return JSON.stringify(out);"
+            "})()"
+        )
+        log(f"设置窗口宽度（格式与转换）: {settings_width}")
+        try:
+            sw = json.loads(settings_width)
+            if sw == "missing":
+                fails.append("设置窗口的「格式与转换」页没渲染出注册表表格")
+            elif sw.get("overflowX"):
+                fails.append(
+                    f"格式与转换的表格仍要横向滚动（表 {sw.get('tableW')}px / 容器 {sw.get('wrapW')}px，"
+                    f"窗口 {sw.get('dialogW')}px）"
+                )
+        except Exception as e:
+            log(f"（断言 13b 解析失败：{e}）")
+
         # ---- 断言 14：账户入口存在且**独立**，并且不在菜单里 ----
         # 只查结构（这里还没登录，点下去会弹登录窗口 —— 那是断言 15 的事；
         # "切到账户视图"要等登录之后，见断言 16）。
@@ -2473,6 +2505,14 @@ def main() -> int:
             "  out.searchPh = (q('#hist-q') || {}).placeholder || '';"
             "  out.hasPrune = !!(q('#hist-sum a[data-act=prune]'));"
             "  out.primary = qa('#hist-all-list .n-row [data-act^=open]').map(b => b.textContent);"
+            # 恢复按钮的文字必须只占一行：Range.getClientRects() 数出来就是真实行数
+            "  const rb = qa('#hist-all-list .n-row [data-act^=open]')[0];"
+            "  if (rb && rb.firstChild) {"
+            "    const rg = document.createRange();"
+            "    rg.selectNodeContents(rb);"
+            "    out.primaryLines = rg.getClientRects().length;"
+            "    out.primaryBtnW = Math.round(rb.getBoundingClientRect().width);"
+            "  }"
             # 搜索：按首问命中
             "  const inp = q('#hist-q');"
             "  inp.value = '支付';"
@@ -2530,6 +2570,8 @@ def main() -> int:
                 fails.append("「全部」顶栏缺少「清理 30 天前的已失联」")
             if r.get("searchRows") != 1:
                 fails.append(f"搜索没按首条提问过滤（拿到 {r.get('searchRows')} 行）")
+            if r.get("primaryLines") not in (None, 1):
+                fails.append(f"「恢复」按钮的文字折行了（{r.get('primaryLines')} 行，宽 {r.get('primaryBtnW')}px）")
             if len(r.get("moreItems") or []) < 3:
                 fails.append(f"⋯ 菜单缺动作：{r.get('moreItems')}")
             if not r.get("dialogClosed"):

@@ -551,6 +551,8 @@ body.no-ai #ai-gutter { display: none; }
 .pv-opt:hover .pv-opt-val, .pv-opt.open .pv-opt-val { color: var(--accent); }
 .mini-btn {
   display: inline-flex; align-items: center; gap: 4px;
+  /* 按钮文字不换行：网格 auto 轨在空间紧张时会压到 min-content，`恢复` 会被拆成两行 */
+  white-space: nowrap;
   padding: 1px 7px;
   font-size: var(--fs-xs);
   color: var(--muted);
@@ -1024,6 +1026,9 @@ button.st:hover { background: var(--surface-3); }
   overflow: hidden;
 }
 .dialog.wide { width: min(720px, 94vw); }
+/* 设置窗口比 .wide 再宽一档：`格式与转换` 的注册表表格是 7 列 nowrap，实测内容宽约 582px，
+   .wide 的 720 只能给到 500 ⇒ 必然出横向滚动条。880 留出余量（含不同字号/语言）。 */
+.dialog.settings { width: min(880px, 96vw); }
 .dialog-head { display: flex; align-items: center; gap: 9px; padding: 13px 15px 11px; border-bottom: 1px solid var(--border); }
 .dialog-head h2 { font-size: var(--fs-md); font-weight: 600; }
 .dialog-head .sp { flex: 1; }
@@ -1568,7 +1573,7 @@ table.kv td .chip { vertical-align: middle; }
 .sumline a { color: var(--accent); text-decoration: none; }
 .sumline a:hover { text-decoration: underline; }
 .n-list { display: flex; flex-direction: column; border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
-.n-row { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; grid-template-rows: auto auto; gap: 2px 10px; padding: 9px 11px; border-top: 1px solid var(--border); align-items: center; background: var(--surface); }
+.n-row { display: grid; grid-template-columns: max-content minmax(0, 1fr) max-content; grid-template-rows: auto auto; gap: 2px 10px; padding: 9px 11px; border-top: 1px solid var(--border); align-items: center; background: var(--surface); }
 .n-row:first-child { border-top: 0; }
 .n-row:hover { background: var(--surface-2); }
 .n-row .b { grid-column: 1; grid-row: 1 / span 2; align-self: center; }
@@ -1578,7 +1583,7 @@ table.kv td .chip { vertical-align: middle; }
 .n-row .t2 { grid-column: 2; grid-row: 2; font-size: var(--fs-xs); color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; line-height: 1.5; }
 .n-row .t2 .path { color: var(--faint); font-family: var(--font-mono); }
 .n-row .t2 .q { color: var(--ink-2); }
-.n-row .act { grid-column: 3; grid-row: 1 / span 2; display: flex; gap: 5px; align-items: center; opacity: .6; transition: opacity .12s; }
+.n-row .act { grid-column: 3; grid-row: 1 / span 2; display: flex; flex: none; gap: 5px; align-items: center; white-space: nowrap; opacity: .6; transition: opacity .12s; }
 .n-row:hover .act { opacity: 1; }
 .mini-btn.primary { color: var(--accent-ink); background: var(--accent); border-color: var(--accent); }
 .mini-btn.primary:hover { background: var(--accent); color: var(--accent-ink); filter: brightness(1.06); }
