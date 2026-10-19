@@ -40,8 +40,12 @@ window.DGM = window.DGM || {};
     $("#dialog").onclick = null;
   }
 
-  function head(title, ic) {
-    return `<div class="dialog-head">${icon(ic || "info")}<h2>${esc(title)}</h2><span class="sp"></span><button class="icon-btn" data-close>${icon("close", "ico-sm")}</button></div>`;
+  function head(title, ic, sub) {
+    return (
+      `<div class="dialog-head">${icon(ic || "info")}<h2>${esc(title)}</h2>` +
+      (sub ? `<small>${esc(sub)}</small>` : "") +
+      `<span class="sp"></span><button class="icon-btn" data-close>${icon("close", "ico-sm")}</button></div>`
+    );
   }
 
   function foot(note, buttons) {
@@ -54,7 +58,9 @@ window.DGM = window.DGM || {};
     d.onclick = (e) => {
       if (e.target.closest("[data-close]")) return close();
       const b = e.target.closest("[data-act]");
-      if (b && !b.disabled && onPick) onPick(b.dataset.act, b, d);
+      // 第 4 个参数是事件本身：**弹菜单**的动作要在回调里 stopPropagation()，
+      // 否则文档级"点外面就关"会在同一次点击里把它刚弹出的菜单关掉（showPop 的约定）。
+      if (b && !b.disabled && onPick) onPick(b.dataset.act, b, d, e);
     };
     overlay().onclick = (e) => {
       if (e.target === overlay()) close();
@@ -884,20 +890,137 @@ window.DGM = window.DGM || {};
 
   /* ================================================================== 历史 */
 
+  /* 「对话历史」的两个页签：doc = 本文档（现有心智），all = 全部（按《AI会话找回方案》§4） */
+  let histTab = "doc";
+  let histQuery = "";
+  let histCache = null; // 最近一次 conversation_list（搜索在本地过滤，不再打 IPC）
+
+  /** 一行会话属于哪一类：文档 / 草稿（还活着）/ 已失联。判定与 Rust 的 list() 一致。 */
+  function histKind(m) {
+    if (m.path) return m.missing ? "orphan" : "doc";
+    return m.live_draft ? "draft" : "orphan";
+  }
+
+  function histKindLabel(kind) {
+    return kind === "doc" ? t("dlg.history.kindDoc") : kind === "draft" ? t("dlg.history.kindDraft") : t("dlg.history.kindOrphan");
+  }
+
+  function histBadge(kind) {
+    const ic = kind === "doc" ? "file" : kind === "draft" ? "clock" : "alert";
+    return `<span class="badge ${kind}">${icon(ic, "ico-sm")}${esc(histKindLabel(kind))}</span>`;
+  }
+
+  function histFmt(m) {
+    const f = state.fmtById(m.format || "");
+    return (f && f.name) || m.format || "";
+  }
+
+  /** 相对时间（复用文件历史的同一套措辞：刚刚 / N 分钟前 / N 小时前 / N 天前）。 */
+  function histWhen(ts) {
+    return openedWhen(ts);
+  }
+
   /**
-   * 「历史会话」：**当前文档的真实对话轮次**。
+   * 「对话历史」：**两个页签**。
    *
-   * 改之前这个对话框其实是"最近文档"列表 + 一句宣称已持久化、实际没做的说明
-   * （`dlg.history.note` 原文写着"按文档稳定身份持久化（真实实现里路径 SHA256）"，
-   * 而 `conversations_dir()` 当时全仓零读写）。现在持久化是真的了，这里也就
-   * 名副其实：显示该文档的轮次，清空只清这份文档。
+   * - 本文档：当前文档的真实轮次（原有内容，未保存文档给"已按草稿保存"的说明）；
+   * - 全部：本机所有会话（文档 / 草稿 / 已失联），按更新时间倒序 —— 数据来自
+   *   `conversation_list`（只读 meta，不解析全文）。三种归属三种主动作：
+   *   打开（文档）/ 恢复（草稿 → 那个标签页）/ 恢复为新标签页（已失联）。
    *
-   * "最近文档"另有入口（侧栏的「最近」分区 + 欢迎页），不必在这里重复。
+   * 入口沿用 AI 面板标题栏那颗时钟（`#ai-history`）与 Ctrl+R —— 不新增入口，
+   * 否则"我该点哪个"会变成新问题（方案 §4.1）。
    */
-  function history() {
+  async function history(openTab) {
+    if (openTab && openTab !== histTab) {
+      histTab = openTab;
+      histQuery = "";
+    }
+    if (histTab === "all") {
+      try {
+        histCache = await DGM.ipc.invoke("conversation_list");
+      } catch (e) {
+        histCache = null;
+        DGM.toast({ icon: "alert", title: t("dlg.history.title"), sub: String((e && e.message) || e), warn: true });
+      }
+    }
+    renderHistory();
+  }
+
+  function renderHistory() {
+    const seg =
+      `<div class="seg">` +
+      `<button data-act="tab:doc" class="${histTab === "doc" ? "on" : ""}">${esc(t("dlg.history.tabDoc"))}</button>` +
+      `<button data-act="tab:all" class="${histTab === "all" ? "on" : ""}">${esc(t("dlg.history.tabAll"))}</button>` +
+      `</div>`;
+
+    const body = histTab === "doc" ? histDocBody() : histAllBody();
+    const footHtml =
+      histTab === "doc"
+        ? foot("", `<button class="btn ghost" data-close>${esc(t("common.close"))}</button><button class="btn ghost" data-act="clear">${icon("trash")}${esc(t("dlg.history.clear"))}</button>`)
+        : foot(t("dlg.history.footHint"), `<button class="btn ghost" data-close>${esc(t("common.close"))}</button>`);
+
+    openDialog(
+      head(t("dlg.history.title"), "history", t("dlg.history.subtitle")) +
+        `<div class="dialog-body">${seg}${body}</div>` +
+        footHtml,
+      true,
+    );
+
+    wire(async (act, _btn, _dlg, e) => {
+      if (act === "tab:doc" || act === "tab:all") {
+        histTab = act.slice(4);
+        histQuery = "";
+        await history();
+        return;
+      }
+      if (act === "clear") {
+        await DGM.ai.clear();
+        close();
+        return;
+      }
+      if (act === "prune") {
+        const yes = await confirm({
+          title: t("dlg.history.prune"),
+          body: t("dlg.history.pruneConfirm"),
+          ok: t("dlg.history.prune"),
+          danger: true,
+        });
+        if (!yes) return history();
+        let n = 0;
+        try {
+          n = await DGM.ipc.invoke("conversation_prune", { days: 30 });
+        } catch (e) {
+          DGM.toast({ icon: "alert", title: t("dlg.history.prune"), sub: String((e && e.message) || e), warn: true });
+        }
+        DGM.toast({ icon: "trash", title: t("dlg.history.pruned", { n }) });
+        await history();
+        return;
+      }
+      if (act.startsWith("open:")) return histOpen(act.slice(5));
+      if (act.startsWith("more:")) {
+        // 锚点点击不能进文档级"点外面就关"（见 showPop 的约定），否则菜单刚开就被关掉
+        if (e && e.stopPropagation) e.stopPropagation();
+        return histMore(act.slice(5), _btn);
+      }
+    });
+
+    // 「全部」页签的搜索：本地过滤（名称 / 路径 / 首条提问），不打 IPC
+    const q = $("#hist-q");
+    if (q) {
+      q.value = histQuery;
+      q.addEventListener("input", () => {
+        histQuery = q.value;
+        renderHistList();
+      });
+    }
+    if (histTab === "all") renderHistList();
+  }
+
+  /** 「本文档」页签的正文：原有轮次列表 + 未保存说明。 */
+  function histDocBody() {
     const d = state.activeDoc();
     const turns = DGM.ai && DGM.ai.turnsFor ? DGM.ai.turnsFor() : [];
-    // 未保存文档没有稳定身份 ⇒ Rust 侧拒绝落盘，如实说明而不是假装存上了
     const persisted = !!(d && d.path);
     const rows = turns.length
       ? turns
@@ -920,22 +1043,174 @@ window.DGM = window.DGM || {};
           })
           .join("")
       : `<div class="callout">${icon("clock")}<span>${esc(t("dlg.history.empty"))}</span></div>`;
-    const body = `
+    return `
       <div class="callout${persisted ? "" : " warn"}">${icon("info")}<span>${esc(persisted ? t("dlg.history.note") : t("dlg.history.unsaved"))}</span></div>
-      <h4>${esc(d ? d.name : t("common.none"))} <span class="meta">${esc(t("dlg.history.rounds", { n: turns.length }))}</span></h4>
+      <h4>${esc(d ? d.name : t("common.none"))} ${persisted ? "" : histBadge("draft")} <span class="meta">${esc(t("dlg.history.rounds", { n: turns.length }))}</span></h4>
       <div class="hist-list">${rows}</div>`;
-    openDialog(
-      head(t("dlg.history.title"), "history") +
-        `<div class="dialog-body">${body}</div>` +
-        foot("", `<button class="btn ghost" data-close>${esc(t("common.close"))}</button><button class="btn ghost" data-act="clear">${icon("trash")}${esc(t("dlg.history.clear"))}</button>`),
-      true,
+  }
+
+  /** 「全部」页签的骨架：搜索 + 汇总 + 列表容器 + 隐私说明。列表本体由 `renderHistList` 填。 */
+  function histAllBody() {
+    return `
+      <div class="hist-toolbar">
+        <div class="hist-search">${icon("search", "ico-sm")}<input id="hist-q" type="text" spellcheck="false"
+          data-i18n-placeholder="dlg.history.searchPh" placeholder="${esc(t("dlg.history.searchPh"))}"></div>
+      </div>
+      <div class="sumline" id="hist-sum"></div>
+      <div class="n-list" id="hist-all-list"></div>
+      <div class="callout" style="margin-top:10px">${icon("info", "ico-sm")}<span>${esc(t("dlg.history.privacy"))}</span></div>`;
+  }
+
+  /** 重新渲染「全部」的列表与汇总（搜索只走到这里，不重开对话框）。 */
+  function renderHistList() {
+    const box = $("#hist-all-list");
+    const sum = $("#hist-sum");
+    if (!box) return;
+    if (histCache === null) {
+      box.innerHTML = `<div class="callout warn">${icon("alert")}<span>${esc(t("dlg.history.listFailed"))}</span></div>`;
+      return;
+    }
+    const q = histQuery.trim().toLowerCase();
+    const hit = (m) =>
+      !q ||
+      String(m.name || "").toLowerCase().includes(q) ||
+      String(m.path || "").toLowerCase().includes(q) ||
+      String(m.first_prompt || "").toLowerCase().includes(q);
+    const rows = histCache.filter(hit);
+    const drafts = histCache.filter((m) => histKind(m) === "draft").length;
+    const orphan = histCache.filter((m) => histKind(m) === "orphan").length;
+    if (sum) {
+      sum.innerHTML =
+        `<span>${esc(t("dlg.history.summary", { n: histCache.length, draft: drafts, orphan }))}</span>` +
+        `<span class="sp"></span><a href="#" data-act="prune">${esc(t("dlg.history.prune"))}</a>`;
+    }
+    box.innerHTML = rows.length
+      ? rows.map(histRow).join("")
+      : `<div class="callout">${icon("clock")}<span>${esc(q ? t("dlg.history.noMatch") : t("dlg.history.allEmpty"))}</span></div>`;
+  }
+
+  function histRow(m) {
+    const kind = histKind(m);
+    const name = m.name || (m.format ? t("dlg.history.draftName", { fmt: histFmt(m) }) : m.key);
+    const sub = m.path
+      ? `<span class="path" title="${esc(m.path)}">${esc(m.path)}</span>`
+      : `<span>${esc(kind === "draft" ? t("dlg.history.draftHint") : t("dlg.history.orphanHint"))}</span>`;
+    const q = m.first_prompt ? `<span class="q"> · 「${esc(m.first_prompt)}」</span>` : "";
+    const primary = kind === "doc" ? t("dlg.history.actionOpen") : t("dlg.history.actionRestore");
+    return (
+      `<div class="n-row">` +
+      `<span class="b">${histBadge(kind)}</span>` +
+      `<div class="t1"><span class="nm">${esc(name)}</span>` +
+      `<span class="meta">${esc(t("dlg.history.rounds", { n: m.turns }))} · ${esc(histWhen(m.updated_at))}</span></div>` +
+      `<div class="t2">${sub}${q}</div>` +
+      `<div class="act">` +
+      `<button class="mini-btn primary" data-act="open:${esc(m.key)}">${esc(primary)}</button>` +
+      `<button class="mini-btn" data-act="more:${esc(m.key)}" title="${esc(t("dlg.history.actionMore"))}">${icon("more", "ico-sm")}</button>` +
+      `</div></div>`
     );
-    wire(async (act) => {
-      if (act === "clear") {
-        await DGM.ai.clear();
-        close();
+  }
+
+  /** 打开 / 恢复：文档 → 打开文件；草稿 → 那个标签页；已失联 → 新标签页 + 搬会话。 */
+  async function histOpen(key) {
+    let doc = null;
+    try {
+      doc = await DGM.ipc.invoke("conversation_open", { key });
+    } catch (e) {
+      DGM.toast({ icon: "alert", title: t("dlg.history.title"), sub: String((e && e.message) || e), warn: true });
+      return history();
+    }
+    if (!doc || !doc.id) return history();
+    const payload = await DGM.ipc.invoke("doc_activate", { id: doc.id });
+    state.applyResult(payload);
+    if (DGM.editor && DGM.editor.loadActive) DGM.editor.loadActive();
+    if (DGM.preview && DGM.preview.schedule) DGM.preview.schedule();
+    DGM.ai.ensureConversation(doc.id, true);
+    close();
+    DGM.toast({
+      icon: "history",
+      title: t("dlg.history.opened", { name: doc.name || "" }),
+      sub: doc.path ? "" : t("dlg.history.restored"),
+    });
+  }
+
+  /** 行尾的「⋯」：在文件夹显示 / 导出 Markdown / 删除（原型 §4.4 动作矩阵）。 */
+  function histMore(key, anchor) {
+    const m = (histCache || []).find((x) => x.key === key);
+    if (!m) return;
+    const kind = histKind(m);
+    const items = [];
+    if (kind === "doc") items.push({ label: t("dlg.history.actionReveal"), icon: "folder", act: "reveal" });
+    items.push({ label: t("dlg.history.actionExportMd"), icon: "download", act: "export" });
+    items.push({ sep: true }, { label: t("dlg.history.actionDelete"), icon: "trash", act: "delete" });
+    const r = (anchor || $("#dialog")).getBoundingClientRect();
+    DGM.pop.show(items, { x: Math.max(8, r.right - 200), y: r.bottom + 4 }, async (it) => {
+      DGM.pop.hide();
+      if (it.act === "reveal") {
+        const ok = await state.revealPath(m.path);
+        if (!ok) DGM.toast({ icon: "alert", title: t("dlg.history.actionReveal"), sub: t("common.notWired"), warn: true });
+        return;
+      }
+      if (it.act === "export") {
+        await histExport(m);
+        return;
+      }
+      if (it.act === "delete") {
+        const yes = await confirm({
+          title: t("dlg.history.actionDelete"),
+          body: t("dlg.history.deleteConfirm"),
+          ok: t("dlg.history.actionDelete"),
+          danger: true,
+        });
+        if (!yes) return history();
+        try {
+          await DGM.ipc.invoke("conversation_delete", { key: m.key });
+        } catch (e) {
+          DGM.toast({ icon: "alert", title: t("dlg.history.actionDelete"), sub: String((e && e.message) || e), warn: true });
+        }
+        // 删掉的若正是当前文档的会话：让 AI 面板从磁盘重读（现在是空的）
+        const a = state.activeDoc();
+        if (a) DGM.ai.ensureConversation(a.id, true);
+        DGM.toast({ icon: "trash", title: t("dlg.history.deleted") });
+        histCache = null;
+        await history("all");
       }
     });
+  }
+
+  /** 导出这段会话为 Markdown（只含对话与生成内容；图片本来就不落盘）。 */
+  async function histExport(m) {
+    let conv = null;
+    try {
+      conv = await DGM.ipc.invoke("conversation_read", { key: m.key });
+    } catch (e) {
+      DGM.toast({ icon: "alert", title: t("dlg.history.actionExportMd"), sub: String((e && e.message) || e), warn: true });
+      return;
+    }
+    const stem = String(m.name || m.key).replace(/\.[^.]*$/, "") || "conversation";
+    const path = await DGM.ipc.dialog.pickSavePath({
+      defaultPath: stem + ".md",
+      filters: [{ name: "Markdown", extensions: ["md"] }],
+    });
+    if (!path) return;
+    const lines = [`# ${m.name || m.key}`, ""];
+    lines.push(m.path ? `\`${m.path}\`` : t("dlg.history.kindDraft") + (m.format ? ` · ${histFmt(m)}` : ""));
+    lines.push("");
+    for (const tn of (conv && conv.turns) || []) {
+      const who = tn.role === "assistant" ? tn.model || t("ai.assistant") : t("ai.you");
+      lines.push(`## ${who}${tn.at ? " · " + new Date(tn.at).toLocaleString() : ""}`);
+      lines.push("");
+      if (tn.thinking) {
+        lines.push(`> ${t("dlg.history.exportThinking", { n: (tn.thinking || "").length })}`, "");
+      }
+      lines.push(tn.text || "", "");
+    }
+    const b64 = btoa(unescape(encodeURIComponent(lines.join("\n"))));
+    try {
+      await state.exportWrite(path, b64);
+      DGM.toast({ icon: "download", title: t("dlg.history.actionExportMd"), sub: path });
+    } catch (e) {
+      DGM.toast({ icon: "alert", title: t("dlg.history.actionExportMd"), sub: String((e && e.message) || e), warn: true });
+    }
   }
 
   /**

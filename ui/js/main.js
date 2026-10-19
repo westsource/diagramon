@@ -1079,6 +1079,44 @@ window.DGM = window.DGM || {};
         }
       }
 
+      // ── 对话历史 →「全部」：未保存文档的会话也列出来，且能恢复/删除 ──
+      //  数据来自 `conversation_list`（只读 meta）。草稿的「活着」是现算的：草稿仓里还有
+      //  那份才叫草稿，否则就是「已失联」—— 所以这里等 autosave（5s）把草稿落下来。
+      {
+        const hd = await invoke("doc_new", { format: "mermaid" });
+        await invoke("doc_set_body", { id: hd.id, body: "flowchart TD\n    A([草稿]) --> B[未保存]\n" });
+        await invoke("conversation_save", {
+          id: hd.id,
+          turns: [
+            { role: "user", text: "草稿里的问题", at: Date.now() - 2000 },
+            { role: "assistant", text: "草稿里的回答", at: Date.now() - 1000, model: "GLM-5.2", tokens: 3 },
+          ],
+        });
+        let row = null;
+        for (let i = 0; i < 20; i++) {
+          const list = await invoke("conversation_list");
+          row = list.find((m) => !m.path && m.first_prompt === "草稿里的问题") || null;
+          if (row && row.live_draft) break;
+          await new Promise((r) => setTimeout(r, 400));
+        }
+        ok(
+          "未保存文档的会话出现在「全部」列表里",
+          !!row && row.turns === 2 && row.missing === false,
+          row && JSON.stringify({ turns: row.turns, missing: row.missing }),
+        );
+        ok("草稿被识别为「草稿」而不是「已失联」", !!row && row.live_draft === true, row && String(row.live_draft));
+        const reopened = row ? await invoke("conversation_open", { key: row.key }) : null;
+        ok("从列表恢复草稿 → 回到同一个未保存标签页", !!reopened && reopened.id === hd.id, reopened && reopened.id);
+        if (row) await invoke("conversation_delete", { key: row.key });
+        const after = await invoke("conversation_list");
+        ok("删除后列表里不再有这段会话", !after.some((m) => m.key === (row ? row.key : "-")), after.length);
+        try {
+          await invoke("doc_close", { id: hd.id });
+        } catch (e) {
+          /* 已关掉就算了 */
+        }
+      }
+
       // 多词命令参数的命名一致性（ai_cancel 曾在两侧各写一套，真机上才炸）
       let cancelErr = "";
       try {

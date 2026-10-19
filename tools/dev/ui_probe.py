@@ -2453,6 +2453,95 @@ def main() -> int:
             log(f"（断言 35 解析失败：{e}）")
             fails.append("断言 35 拿不到结果（欢迎页/最近文件链路可能没接上）")
 
+        # ---- 断言 36：对话历史 →「全部」（文档 / 草稿 / 已失联 三种归属 + 动作） ----
+        # 按原型 `AI会话找回原型.html` 第 2 屏：两个页签、搜索、汇总、三种徽章、
+        # 打开/恢复、⋯（导出 Markdown / 删除）、清理已失联。
+        hist = ev(
+            "(async () => {"
+            "  const sleep = (ms) => new Promise(r => setTimeout(r, ms));"
+            "  const q = (sel) => document.querySelector(sel);"
+            "  const qa = (sel) => [...document.querySelectorAll(sel)];"
+            "  const out = {};"
+            "  await DGM.dialogs.history();"
+            "  await sleep(350);"
+            "  out.defaultTab = (q('#dialog .seg button.on') || {}).textContent;"
+            "  qa('#dialog .seg button').find(b => (b.textContent||'').includes('全部')).click();"
+            "  await sleep(450);"
+            "  out.rows = qa('#hist-all-list .n-row').length;"
+            "  out.badges = qa('#hist-all-list .badge').map(b => (b.className||'').replace('badge','').trim());"
+            "  out.summary = (q('#hist-sum') || {}).textContent || '';"
+            "  out.searchPh = (q('#hist-q') || {}).placeholder || '';"
+            "  out.hasPrune = !!(q('#hist-sum a[data-act=prune]'));"
+            "  out.primary = qa('#hist-all-list .n-row [data-act^=open]').map(b => b.textContent);"
+            # 搜索：按首问命中
+            "  const inp = q('#hist-q');"
+            "  inp.value = '支付';"
+            "  inp.dispatchEvent(new Event('input', { bubbles: true }));"
+            "  await sleep(200);"
+            "  out.searchRows = qa('#hist-all-list .n-row').length;"
+            "  inp.value = '';"
+            "  inp.dispatchEvent(new Event('input', { bubbles: true }));"
+            "  await sleep(200);"
+            # ⋯：三个动作（文档行有「在文件夹显示」）
+            "  const moreBtns = qa('#hist-all-list .n-row [data-act^=more]');"
+            "  moreBtns[0].click();"
+            "  await sleep(250);"
+            "  const pop = q('.pop:not([hidden])');"
+            "  out.moreItems = pop ? [...pop.querySelectorAll('.pop-row .lbl')].map(x => x.textContent) : [];"
+            "  DGM.pop.hide();"
+            # 打开/恢复：文档行 → 打开；这里断言"点完有文档被激活且对话框关掉"
+            "  const beforeDocs = DGM.state.docs.length;"
+            "  qa('#hist-all-list .n-row [data-act^=open]')[0].click();"
+            "  await sleep(600);"
+            "  out.afterOpenDocs = DGM.state.docs.length;"
+            "  out.dialogClosed = !q('#dialog') || !q('#dialog').innerHTML || q('#overlay-dialog').hidden;"
+            # 删除：重开 → 全部 → ⋯ → 删除 → 确认
+            "  await DGM.dialogs.history('all');"
+            "  await sleep(450);"
+            "  qa('#hist-all-list .n-row [data-act^=more]')[0].click();"
+            "  await sleep(250);"
+            "  const del = [...document.querySelectorAll('.pop:not([hidden]) .pop-row')].find(r => (r.textContent||'').includes('删除'));"
+            "  if (del) del.click();"
+            "  await sleep(300);"
+            "  const yes = q('#dialog [data-act=yes]');"
+            "  out.confirmShown = !!yes;"
+            "  if (yes) yes.click();"
+            "  await sleep(500);"
+            "  out.rowsAfterDelete = qa('#hist-all-list .n-row').length;"
+            "  out.summaryAfterDelete = (q('#hist-sum') || {}).textContent || '';"
+            "  DGM.dialogs.close();"
+            "  return JSON.stringify(out);"
+            "})()"
+        )
+        log(f"对话历史（全部）: {hist}")
+        try:
+            r = json.loads(hist or "{}")
+            if not str(r.get("defaultTab") or "").startswith("本文档"):
+                fails.append(f"历史对话框默认没停在「本文档」：{r.get('defaultTab')!r}")
+            if r.get("rows") != 3:
+                fails.append(f"「全部」应列出 3 段（文档/草稿/已失联），拿到 {r.get('rows')}")
+            b = r.get("badges") or []
+            for k in ("doc", "draft", "orphan"):
+                if k not in b:
+                    fails.append(f"列表缺少「{k}」徽章：{b}")
+            if "共 3 段" not in (r.get("summary") or ""):
+                fails.append(f"汇总行不对：{r.get('summary')!r}")
+            if not r.get("hasPrune"):
+                fails.append("「全部」顶栏缺少「清理 30 天前的已失联」")
+            if r.get("searchRows") != 1:
+                fails.append(f"搜索没按首条提问过滤（拿到 {r.get('searchRows')} 行）")
+            if len(r.get("moreItems") or []) < 3:
+                fails.append(f"⋯ 菜单缺动作：{r.get('moreItems')}")
+            if not r.get("dialogClosed"):
+                fails.append("打开/恢复之后对话框没关")
+            if r.get("rowsAfterDelete") != 2:
+                fails.append(f"删除后列表应剩 2 段，拿到 {r.get('rowsAfterDelete')}")
+            elif "共 2 段" not in (r.get("summaryAfterDelete") or ""):
+                fails.append(f"删除后汇总没刷新：{r.get('summaryAfterDelete')!r}")
+        except Exception as e:
+            log(f"（断言 36 解析失败：{e}）")
+            fails.append("断言 36 拿不到结果（对话历史「全部」链路可能没接上）")
+
         # 汇总启动期间的 console error / 异常
         for params in cdp.seen("Runtime.exceptionThrown"):
             d = params.get("exceptionDetails", {})

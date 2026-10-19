@@ -171,6 +171,13 @@ Version **3.8.2** · Official website <https://www.diagramon.com>
 - **Conversation history, persisted per document** — histories live locally, keyed by document, and
   survive restarts; the History dialog shows real turns, and clearing affects only the current document
   (images are never written to disk)
+- **The History dialog has two tabs: "This document" / "All"** — All lists every conversation on this
+  machine under three ownerships (document / draft / unlinked), **including conversations in unsaved
+  documents**, with search and a "N conversations · M drafts · K unlinked" summary. The row's primary
+  action is Open (document) / Restore (draft → its tab) / Restore as a new tab (unlinked); the ⋯ menu
+  offers "Show in folder / Export Markdown / Delete", and unlinked conversations older than 30 days can
+  be pruned in one click (with confirmation). Drafts and unlinked conversations are **never removed
+  automatically**
 - **A conversation exists before the file does** — a brand-new document that was never saved keeps its
   conversation in a **draft** store, so it comes back after a restart; the draft moves under the file's
   identity at the moment you save / save-as, so conversations recorded before a rename or move are not

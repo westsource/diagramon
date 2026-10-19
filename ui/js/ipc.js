@@ -1088,6 +1088,63 @@ digraph Pipeline {
           return true;
         }
 
+        /* ---- 对话历史（全部）：夹具覆盖三种归属，供 ui_probe 断言徽章/动作/搜索 ---- */
+        case "conversation_list": {
+          if (this._convList) return this._convList.map((x) => ({ ...x }));
+          const now = Date.now();
+          const rows = [
+            { key: "aaaa1111bbbb2222", path: "E:/work/登录流程.mmd", name: "登录流程.mmd", format: "mermaid",
+              turns: 12, updated_at: now - 3 * 3600e3, first_prompt: "画一张登录流程图，包含失败重试",
+              last_model: "GLM-5.2", missing: false, live_draft: false },
+            { key: "draft-untitled-3", path: "", name: "未命名草稿 · Mermaid", format: "mermaid",
+              turns: 5, updated_at: now - 12 * 60e3, first_prompt: "把失败分支补上",
+              last_model: "GLM-5.2", missing: false, live_draft: true },
+            { key: "cccc3333dddd4444", path: "E:/work/old/支付时序.d2", name: "支付时序.d2", format: "d2",
+              turns: 21, updated_at: now - 26 * 3600e3, first_prompt: "改成异步回调的时序",
+              last_model: "GLM-5.2", missing: true, live_draft: false },
+          ];
+          this._convList = rows.map((x) => ({ ...x }));
+          return this._convList.map((x) => ({ ...x }));
+        }
+
+        case "conversation_read": {
+          // 导出 Markdown 用：只给形状，探针断言的是"落了 md 文件"这条链
+          return {
+            doc_key: args.key,
+            path: "",
+            updated_at: Date.now(),
+            turns: [
+              { role: "user", text: "画一张登录流程", at: Date.now() - 60000, model: "", tokens: 0, thinking: "" },
+              { role: "assistant", text: "flowchart TD\n    A --> B", at: Date.now(), model: "GLM-5.2", tokens: 12, thinking: "先想一下" },
+            ],
+          };
+        }
+
+        case "conversation_open": {
+          const key = String(args.key || "");
+          if (key.startsWith("draft-")) {
+            const d = this.docs.find((x) => "draft-" + x.id === key);
+            if (d) return this._clone(d);
+          }
+          const row = (this._convList || []).find((x) => x.key === key);
+          const existing = row && row.path ? this.docs.find((x) => x.path === row.path) : null;
+          if (existing) return this._clone(existing);
+          // 已失联：恢复成新标签页（mock 里就是新建一份对应格式的文档）
+          const fid = row && row.format ? row.format : "mermaid";
+          return this.invoke("doc_new", { format: fid });
+        }
+
+        case "conversation_delete": {
+          this._convList = (this._convList || []).filter((x) => x.key !== args.key);
+          return true;
+        }
+
+        case "conversation_prune": {
+          const before = (this._convList || []).length;
+          this._convList = (this._convList || []).filter((x) => !(x.missing || (!x.path && !x.live_draft)));
+          return before - this._convList.length;
+        }
+
         /* 长期记忆。真机落 `memory/` 下，mock 只存内存 —— 探针要断言的是
            "只有 confirmed 会注入、pending 不会"，落盘与体积上限由 app-core 的单测覆盖。 */
         case "ai_memory_list":

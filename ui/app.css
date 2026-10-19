@@ -1558,6 +1558,36 @@ table.kv td .chip { vertical-align: middle; }
 
 .seg-lg { flex-wrap: wrap; }
 .seg-lg button { padding: 5px 14px; font-size: var(--fs-sm); font-family: var(--font-mono); }
+
+/* §19.14 对话历史 →「全部」：搜索 / 汇总 / 三种归属的列表行（原型 §4.2–4.5 的落地）
+   行是两行网格：徽章 | 名称+时间 / 路径+首问 | 动作（hover 才完全显形，像原型那样不抢视线） */
+.hist-toolbar { display: flex; align-items: center; gap: 8px; margin: 10px 0 8px; }
+.hist-search { display: flex; align-items: center; gap: 6px; height: 26px; padding: 0 9px; border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--muted); background: var(--surface); flex: 1; min-width: 0; max-width: 320px; }
+.hist-search input { border: 0; outline: 0; font: inherit; font-size: var(--fs-xs); color: var(--ink); background: none; width: 100%; }
+.sumline { display: flex; align-items: center; gap: 8px; font-size: var(--fs-xs); color: var(--muted); padding: 0 2px 8px; }
+.sumline a { color: var(--accent); text-decoration: none; }
+.sumline a:hover { text-decoration: underline; }
+.n-list { display: flex; flex-direction: column; border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+.n-row { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; grid-template-rows: auto auto; gap: 2px 10px; padding: 9px 11px; border-top: 1px solid var(--border); align-items: center; background: var(--surface); }
+.n-row:first-child { border-top: 0; }
+.n-row:hover { background: var(--surface-2); }
+.n-row .b { grid-column: 1; grid-row: 1 / span 2; align-self: center; }
+.n-row .t1 { grid-column: 2; grid-row: 1; display: flex; align-items: center; gap: 7px; font-size: var(--fs-sm); color: var(--ink); min-width: 0; }
+.n-row .t1 .nm { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.n-row .t1 .meta { font-size: var(--fs-xs); color: var(--faint); white-space: nowrap; flex: none; }
+.n-row .t2 { grid-column: 2; grid-row: 2; font-size: var(--fs-xs); color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; line-height: 1.5; }
+.n-row .t2 .path { color: var(--faint); font-family: var(--font-mono); }
+.n-row .t2 .q { color: var(--ink-2); }
+.n-row .act { grid-column: 3; grid-row: 1 / span 2; display: flex; gap: 5px; align-items: center; opacity: .6; transition: opacity .12s; }
+.n-row:hover .act { opacity: 1; }
+.mini-btn.primary { color: var(--accent-ink); background: var(--accent); border-color: var(--accent); }
+.mini-btn.primary:hover { background: var(--accent); color: var(--accent-ink); filter: brightness(1.06); }
+/* 三种归属的徽章：文档（accent）/ 草稿（warn）/ 已失联（err）—— 形状一致，只换颜色与图标 */
+.badge { display: inline-flex; align-items: center; gap: 4px; padding: 2px 7px; font-size: var(--fs-xs); font-weight: 500; border-radius: 999px; border: 1px solid transparent; white-space: nowrap; }
+.badge .ico { width: 11px; height: 11px; }
+.badge.doc { color: var(--accent); background: var(--accent-soft); border-color: var(--accent-line); }
+.badge.draft { color: var(--warn); background: var(--warn-soft); border-color: color-mix(in srgb, var(--warn) 30%, transparent); }
+.badge.orphan { color: var(--err); background: var(--err-soft); border-color: color-mix(in srgb, var(--err) 28%, transparent); }
 .lay-note { font-size: var(--fs-sm); color: var(--muted); line-height: 1.65; margin: 11px 0 14px; }
 .lay-note b { color: var(--ink-2); }
 

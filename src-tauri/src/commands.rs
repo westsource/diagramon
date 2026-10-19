@@ -18,7 +18,7 @@ use std::sync::Arc;
 
 use app_ipc::{
     events, AiAgentStep, AiChatRequest, AiContextFile, AiDelta, AiDone, AiFailed, AiModel, AiThinking,
-    AppInfo, Conversation, ConversationTurn, ConvertOutcome, ConvertRequest, DevFlags, Doc, FormatId,
+    AppInfo, ConvMeta, Conversation, ConversationTurn, ConvertOutcome, ConvertRequest, DevFlags, Doc, FormatId,
     Issue, MemoryEntry, MemoryList, MemoryScope, MemoryState, OutlineGroup,
     Session as SessionPayload, Settings, ViewMode,
 };
@@ -367,7 +367,7 @@ fn save_to(state: &AppState, id: &str, path: &Path) -> R<Doc> {
 /// 万一 webview 侧被注入脚本（审计 F-2 的前提），不能让它借这里往磁盘投
 /// 可执行物（.exe/.bat/.ps1/.hta/…）。图片是用户导出；`.json` 是真机自检的
 /// 报告落盘；`.mmd` 是自检造工作区用的演示文件（见 `ui/js/main.js`）。
-const EXPORT_EXTS: &[&str] = &["png", "jpg", "jpeg", "svg", "webp", "json", "mmd"];
+const EXPORT_EXTS: &[&str] = &["png", "jpg", "jpeg", "svg", "webp", "json", "mmd", "md"];
 
 /// 导出：把前端渲染好的图片（base64）落到用户选的路径。
 #[tauri::command]
@@ -856,6 +856,101 @@ fn conversation_key(state: &AppState, doc_id: &str) -> R<(String, String)> {
         app_core::conversations::key_for(d.path.as_deref(), doc_id),
         d.path.clone().unwrap_or_default(),
     ))
+}
+
+/* ---------------- 对话历史（全部会话） ---------------- */
+
+/// 「对话历史 → 全部」：读出全部会话的元数据（按更新时间倒序，最多 `MAX_LIST` 条）。
+///
+/// 只读 meta（`<key>.meta.json`），**不解析会话全文**（思考原文落盘后单份可能上百 KB）。
+/// 旧会话没有 meta 时就地补写一次（见 `conversations::list`）。
+#[tauri::command]
+pub fn conversation_list(state: State<'_, Arc<AppState>>) -> R<Vec<ConvMeta>> {
+    Ok(app_core::conversations::list(
+        &state.paths.conversations_dir(),
+        &state.recovery_dir,
+    ))
+}
+
+/// 按**会话键**读回全文（列表的「导出 Markdown」用；`conversation_load` 是按文档 id 取）。
+#[tauri::command]
+pub fn conversation_read(state: State<'_, Arc<AppState>>, key: String) -> R<Conversation> {
+    Ok(app_core::conversations::load(&state.paths.conversations_dir(), &key))
+}
+
+/// 删掉一段会话（含 meta）。只动本机这一份，**不动用户的文件**。
+#[tauri::command]
+pub fn conversation_delete(state: State<'_, Arc<AppState>>, key: String) -> R<bool> {
+    app_core::conversations::clear(&state.paths.conversations_dir(), &key)?;
+    Ok(true)
+}
+
+/// 打开 / 恢复一段会话对应的文档（「对话历史 → 全部」的主动作）。
+///
+/// 三种归属三种做法（《AI会话找回方案》§4.4）：
+/// * **文档**（路径还在）→ 打开那个文件；已开着就切过去；
+/// * **草稿**（还没保存、草稿仓里还活着）→ 就是那个未保存的标签页，激活它；
+/// * **已失联**（文件没了 / 草稿也关了）→ **恢复成一张新标签页**：新建同格式文档，把会话
+///   搬到新身份下。恢复只带对话与生成的代码 —— 原文件里的手工改动回不来，界面要讲清楚。
+#[tauri::command]
+pub fn conversation_open(state: State<'_, Arc<AppState>>, key: String) -> R<Doc> {
+    let dir = state.paths.conversations_dir();
+    let meta = app_core::conversations::list(&dir, &state.recovery_dir)
+        .into_iter()
+        .find(|m| m.key == key)
+        .ok_or_else(|| format!("找不到这段会话：{key}"))?;
+
+    // ① 文档：打开磁盘上的那份（与 `doc_open_paths` 共用收尾：恢复渲染选项 + 最近打开）
+    if !meta.path.is_empty() && !meta.missing {
+        let (opened, failed) = state.session().open_paths(&[meta.path.clone()]);
+        let Some(id) = opened.first().cloned() else {
+            return Err(failed
+                .first()
+                .map(|(_, e)| e.clone())
+                .unwrap_or_else(|| "打开失败".to_string()));
+        };
+        after_open_file(state.inner(), &id);
+        return state.session().get(&id).cloned().ok_or_else(|| format!("文档不存在：{id}"));
+    }
+
+    // ② 草稿还活着：那个未保存的标签页就是它
+    if meta.live_draft {
+        if let Some(id) = key.strip_prefix("draft-") {
+            if state.session().activate(id) {
+                return state.session().get(id).cloned().ok_or_else(|| format!("文档不存在：{id}"));
+            }
+        }
+    }
+
+    // ③ 已失联：新开一张同格式标签页，把会话搬过去（迁移失败如实报错，别假装恢复成功）
+    let fmt = app_core::format::registry()
+        .into_iter()
+        .find(|f| f.id.as_str() == meta.format)
+        .map(|f| f.id)
+        .unwrap_or(FormatId::Mermaid);
+    let doc = state.session().new_doc(fmt);
+    let to = app_core::conversations::key_for(None, &doc.id);
+    app_core::conversations::migrate(&dir, &key, &to, None)?;
+    Ok(doc)
+}
+
+/// 清理 N 天前的**已失联**会话（「对话历史 → 全部」顶栏那个动作）。
+///
+/// 只清孤儿：文件还在的文档会话、草稿仓里还活着的草稿会话**永远不动** ——
+/// 会话删了就回不来，误删比留着更糟。返回清掉的条数。
+#[tauri::command]
+pub fn conversation_prune(state: State<'_, Arc<AppState>>, days: u32) -> R<u32> {
+    let dir = state.paths.conversations_dir();
+    let cutoff = now_ms() - (days.max(1) as i64) * 86_400_000;
+    let mut n = 0u32;
+    for m in app_core::conversations::list(&dir, &state.recovery_dir) {
+        let orphan = (!m.path.is_empty() && m.missing) || (m.path.is_empty() && !m.live_draft);
+        if orphan && m.updated_at < cutoff {
+            app_core::conversations::clear(&dir, &m.key)?;
+            n += 1;
+        }
+    }
+    Ok(n)
 }
 
 /// 读该文档的会话。没存过 → 空会话。

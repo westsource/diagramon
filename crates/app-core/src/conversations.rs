@@ -16,12 +16,12 @@
 //! * **原子写**（先 `.tmp` 再 rename），避免崩溃留下半截 JSON。
 //!
 //! 另有 `<key>.meta.json`：列表用的轻量元数据（轮数/时间/首问），与实体同目录同前缀，
-//! 删一个不会漏。批次一先"写"，`list()` 在批次二实现。
+//! 删一个不会漏。`list()` 只读 meta；**旧文件没有 meta 时就地补写一次**（幂等，见
+//! `list()`），所以从这里升级上来的用户也能立刻在「对话历史 → 全部」里看到历史。
 
 use std::path::{Path, PathBuf};
 
-use app_ipc::Conversation;
-use serde::{Deserialize, Serialize};
+use app_ipc::{ConvMeta, Conversation};
 use sha2::{Digest, Sha256};
 
 /// 文档身份：路径规范化 → SHA256 → 前 16 位十六进制。
@@ -73,29 +73,6 @@ fn meta_file_for(dir: &Path, key: &str) -> PathBuf {
     dir.join(format!("{key}.meta.json"))
 }
 
-/// 列表用的轻量元数据（批次二 `list()` 的数据源；批次一先随 save 写出）。
-///
-/// 故意与 `Conversation` 分离：列表不该解析几百份几十 KB 的全文（思考原文落盘之后
-/// 单份并不小）。meta 与实体同目录同前缀，手动删掉实体不会留下指不回去的索引。
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ConvMeta {
-    pub key: String,
-    /// 空 = 草稿（文档还没保存）
-    #[serde(default)]
-    pub path: String,
-    #[serde(default)]
-    pub name: String,
-    #[serde(default)]
-    pub format: String,
-    pub turns: u32,
-    pub updated_at: i64,
-    /// 首条用户提问的前 120 字（列表摘要用；不存全文，也不拿来检索正文）
-    #[serde(default)]
-    pub first_prompt: String,
-    #[serde(default)]
-    pub last_model: String,
-}
-
 /// 从会话推导 meta。`name` / `format` 由调用方（命令层）从文档补上 —— 纯函数层
 /// 不该反过来依赖会话状态。
 fn build_meta(conv: &Conversation, name: &str, format: &str) -> ConvMeta {
@@ -127,6 +104,9 @@ fn build_meta(conv: &Conversation, name: &str, format: &str) -> ConvMeta {
         updated_at: conv.updated_at,
         first_prompt,
         last_model,
+        // 归属标记由 `list()` 现算（落盘时还不知道文件/草稿之后在不在）
+        missing: false,
+        live_draft: false,
     }
 }
 
@@ -175,6 +155,63 @@ pub fn save_doc(dir: &Path, conv: &Conversation, name: &str, format: &str) -> Re
     let meta = build_meta(conv, name, format);
     let mtext = serde_json::to_string_pretty(&meta).map_err(|e| e.to_string())?;
     atomic_write(&meta_file_for(dir, &conv.doc_key), &mtext, false)
+}
+
+/// 列表上限。一条 meta <1KB，"全部"页面 500 段够用；更早的仍在磁盘上，只是不列出来。
+pub const MAX_LIST: usize = 500;
+
+/// 读出全部会话的**元数据**（`对话历史 → 全部` 的数据源）。
+///
+/// 四条约定：
+/// * 只认实体 `<key>.json`（跳过 `.meta.json` / `.bak` / 目录）—— meta 是附属物，
+///   实体没了就不该在列表里留一条指不回去的索引；
+/// * 旧文件没有 meta 时就地**补写一次**（`build_meta` 需要文档名/格式，这里拿不到，
+///   留空 —— 名字那一列会退化成 key 的形态，下次该文档再存一轮就补齐了）；
+/// * `missing` / `live_draft` 是 **现算**的，不落盘（文件在不在、草稿还活着吗，只有此刻知道）；
+/// * 按 `updated_at` 倒序，最多 [`MAX_LIST`] 条。
+pub fn list(dir: &Path, recovery_dir: &Path) -> Vec<ConvMeta> {
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut out = Vec::with_capacity(16);
+    for entry in rd.flatten() {
+        let path = entry.path();
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if !path.is_file() || !name.ends_with(".json") || name.ends_with(".meta.json") {
+            continue;
+        }
+        let key = name.trim_end_matches(".json").to_string();
+        if key.is_empty() || key.ends_with(".meta") {
+            continue;
+        }
+        let mut meta = match read_meta(dir, &key) {
+            Some(m) if m.key == key => m,
+            _ => backfill_meta(dir, &key),
+        };
+        // 归属现算：文档 / 草稿（还活着）/ 已失联（见 ui 的三种徽章）
+        meta.missing = !meta.path.is_empty() && !Path::new(&meta.path).exists();
+        meta.live_draft = meta.path.is_empty()
+            && crate::recovery::exists(recovery_dir, key.strip_prefix("draft-").unwrap_or(""));
+        out.push(meta);
+    }
+    out.sort_by(|a, b| b.updated_at.cmp(&a.updated_at).then_with(|| a.key.cmp(&b.key)));
+    out.truncate(MAX_LIST);
+    out
+}
+
+fn read_meta(dir: &Path, key: &str) -> Option<ConvMeta> {
+    let text = std::fs::read_to_string(meta_file_for(dir, key)).ok()?;
+    serde_json::from_str::<ConvMeta>(&text).ok()
+}
+
+/// 旧会话没有 meta：现读一次实体补出来，并**就地补写**（下次列表就不用再解析正文）。
+fn backfill_meta(dir: &Path, key: &str) -> ConvMeta {
+    let conv = load(dir, key);
+    let meta = build_meta(&conv, "", "");
+    if let Ok(text) = serde_json::to_string_pretty(&meta) {
+        let _ = atomic_write(&meta_file_for(dir, key), &text, false);
+    }
+    meta
 }
 
 /// 删掉一份会话（含 meta）；不存在也算成功（幂等）。
@@ -398,6 +435,95 @@ mod tests {
 
     /// save 要同步写 meta，clear 要连 meta 一起删 —— 批次二的列表只读 meta，
     /// 这两条不成立的话列表要么缺项要么指向已删除的会话。
+    /* ---------------- 列表（对话历史 → 全部） ---------------- */
+
+    #[test]
+    fn list_returns_every_conversation_newest_first() {
+        let dir = temp_dir("list-order");
+        let rec = temp_dir("list-order-recovery");
+        for (path, at) in [("E:/x/old.mmd", 1), ("E:/x/new.mmd", 9), ("E:/x/mid.dot", 5)] {
+            let key = doc_key(path);
+            let conv = Conversation {
+                doc_key: key,
+                path: path.into(),
+                turns: vec![turn("user", "画一张图", at)],
+                updated_at: at,
+            };
+            save_doc(&dir, &conv, "n", "mermaid").unwrap();
+        }
+        let got: Vec<i64> = list(&dir, &rec).iter().map(|m| m.updated_at).collect();
+        assert_eq!(got, vec![9, 5, 1], "按更新时间倒序");
+    }
+
+    #[test]
+    fn list_skips_meta_files_and_backfills_missing_meta() {
+        let dir = temp_dir("list-backfill");
+        let rec = temp_dir("list-backfill-recovery");
+        let key = doc_key("E:/x/legacy.mmd");
+        let conv = Conversation {
+            doc_key: key.clone(),
+            path: "E:/x/legacy.mmd".into(),
+            turns: vec![turn("user", "老会话里有这句", 7), turn("assistant", "好", 8)],
+            updated_at: 8,
+        };
+        // 模拟"批次一之前"的落盘：只有实体、没有 meta
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(file_for(&dir, &key), serde_json::to_string(&conv).unwrap()).unwrap();
+        assert!(!meta_file_for(&dir, &key).exists());
+
+        let got = list(&dir, &rec);
+        assert_eq!(got.len(), 1, "只列实体，不把 meta.json 当成第二条：{got:?}");
+        assert_eq!(got[0].turns, 2);
+        assert_eq!(got[0].first_prompt, "老会话里有这句");
+        assert!(meta_file_for(&dir, &key).exists(), "旧文件要就地补写一次 meta");
+    }
+
+    #[test]
+    fn list_computes_missing_and_live_draft_without_persisting_them() {
+        let dir = temp_dir("list-kinds");
+        let rec = temp_dir("list-kinds-recovery");
+        std::fs::create_dir_all(&rec).unwrap();
+        // ① 文档还在（真建一个文件）；② 文档已不在；③ 草稿仓里的草稿还活着
+        std::fs::create_dir_all(&dir).unwrap();
+        let alive_path = dir.join("alive.mmd");
+        std::fs::write(&alive_path, "flowchart TD\n").unwrap();
+        let alive = alive_path.to_string_lossy().replace('\\', "/");
+        let gone = dir.join("nope").join("gone-9f3.mmd").to_string_lossy().replace('\\', "/");
+        let dkey = draft_key("untitled-42");
+        std::fs::write(rec.join("untitled-42.dgm.json"), "{}").ok();
+        for (key, path, at) in [
+            (doc_key(&alive), alive.clone(), 3),
+            (doc_key(&gone), gone.clone(), 2),
+            (dkey.clone(), String::new(), 1),
+        ] {
+            let conv = Conversation {
+                doc_key: key,
+                path: path.into(),
+                turns: vec![turn("user", "问一句", at)],
+                updated_at: at,
+            };
+            save_doc(&dir, &conv, "n", "mermaid").unwrap();
+        }
+
+        let got = list(&dir, &rec);
+        assert_eq!(got.len(), 3);
+        let by_key = |k: &str| got.iter().find(|m| m.key == k).cloned().unwrap();
+        assert!(!by_key(&doc_key(&alive)).missing && !by_key(&doc_key(&alive)).live_draft);
+        assert!(by_key(&doc_key(&gone)).missing, "路径没了 → missing");
+        assert!(by_key(&dkey).live_draft, "草稿仓里还在 → live_draft");
+        assert!(!by_key(&dkey).missing, "草稿不该算已失联");
+
+        // 现算的标记**不落盘**：磁盘上的 meta 里不该出现它们
+        let text = std::fs::read_to_string(meta_file_for(&dir, &dkey)).unwrap();
+        assert!(!text.contains("\"live_draft\": true"), "{text}");
+    }
+
+    #[test]
+    fn list_of_missing_dir_is_empty_not_panic() {
+        let dir = temp_dir("list-missing");
+        assert!(list(&dir, &temp_dir("list-missing-recovery")).is_empty());
+    }
+
     #[test]
     fn save_writes_meta_and_clear_removes_it() {
         let dir = temp_dir("meta");

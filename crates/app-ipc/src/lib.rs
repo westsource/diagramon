@@ -877,6 +877,36 @@ pub struct Conversation {
     pub updated_at: i64,
 }
 
+/// 会话列表用的轻量元数据（`<key>.meta.json`）。与 `Conversation` 分离：列表只读它
+/// （思考原文落盘后单份会话可能几十上百 KB，列表不该解析全文）。
+///
+/// meta 与实体同目录、同前缀：手动删掉实体不会留下指不回去的索引。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConvMeta {
+    pub key: String,
+    /// 空 = 草稿（文档还没保存）
+    #[serde(default)]
+    pub path: String,
+    /// 文档名，或「未命名草稿」
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub format: String,
+    pub turns: u32,
+    pub updated_at: i64,
+    /// 首条用户提问的前 120 字（列表摘要用；不存全文，也不拿来检索正文）
+    #[serde(default)]
+    pub first_prompt: String,
+    #[serde(default)]
+    pub last_model: String,
+    /// **由 `conversation_list` 现算、不落盘**：path 非空但那个文件已经不在了
+    #[serde(default)]
+    pub missing: bool,
+    /// **由 `conversation_list` 现算、不落盘**：草稿还在草稿仓里（= 那个标签页还开着）
+    #[serde(default)]
+    pub live_draft: bool,
+}
+
 /* ---------------- AI 长期记忆 ---------------- */
 
 /// 记忆作用域。风格偏好多半是全局的；术语多半只对某一份文档有意义。

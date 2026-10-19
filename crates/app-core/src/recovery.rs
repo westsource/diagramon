@@ -42,7 +42,15 @@ pub fn save(dir: &Path, draft: &Draft) -> std::io::Result<()> {
 }
 
 pub fn remove(dir: &Path, id: &str) {
-    let _ = fs::remove_file(file_for(dir, id));
+    let _ = std::fs::remove_file(file_for(dir, id));
+}
+
+/// 草稿是否还在草稿仓里。
+///
+/// 会话列表要用它现算「草稿是否还活着」：草稿在 = 那个未保存的标签页还开着
+/// （关掉未保存标签页时 `remove` 会删掉草稿，会话本身留在会话仓里，就成了「已失联」）。
+pub fn exists(dir: &Path, id: &str) -> bool {
+    !id.is_empty() && file_for(dir, id).is_file()
 }
 
 /// 读出全部草稿。坏掉的单个文件跳过（并保持其他草稿可用）。
