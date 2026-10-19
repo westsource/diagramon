@@ -40,9 +40,25 @@ def log(msg: str = "") -> None:
 
 
 def serve_ui() -> tuple[ThreadingHTTPServer, int]:
+    # 原型按需用到的**随包资产**（在 ui/ 之外）。真实应用由 `dgm://` 协议按
+    # `crates/assets::resolve` 提供；这里只映射用得上的那几个 —— ELK 离线包是
+    # Mermaid 布局的依赖（`/mermaid-elk/mermaid-layout-elk.esm.js`），
+    # 启动预热与"切到 elk"两条路都要能真的 import 到它。
+    mounts = ("mermaid-elk",)
+    assets_root = (ROOT / "assets").resolve()
+
     class H(SimpleHTTPRequestHandler):
         def __init__(self, *a, **kw):
             super().__init__(*a, directory=str(UI), **kw)
+
+        def translate_path(self, path):
+            for m in mounts:
+                if path.startswith(f"/{m}/"):
+                    p = (ROOT / "assets" / path.lstrip("/")).resolve()
+                    # 只放行 assets/ 里面（`..` 之类不许越出去）
+                    if str(p).startswith(str(assets_root)):
+                        return str(p)
+            return super().translate_path(path)
 
         def log_message(self, *args):  # 静音
             pass
@@ -280,6 +296,32 @@ def main() -> int:
                 fails.append(f"DOT 文档没渲染出 graphviz 的图：{dot_check}")
         except Exception as e:
             fails.append(f"DOT 预览断言解析失败：{e} / {dot_check}")
+
+        # ---- 断言 4c：ELK 离线包的**启动按需预热**（mock 声明 warm_elk = true） ----
+        # 那份 2.4MB ESM 是一次性且常驻的成本（实测 JS 堆 +7.7MB、进程工作集 +16MB、加载约 0.5s），
+        # 所以只在"有依据"（以前把某个 Mermaid 文档的布局选成过 elk，由 Rust 下发 app_info.warm_elk）
+        # 时才在启动 3 秒后后台 import。反向（没依据就不加载）由 Rust 单测
+        # `render_opts::tests::elk_warmup_signal_only_comes_from_mermaid_layouts` 与真机自检钉住。
+        elk_warm = ev(
+            "(async () => {"
+            "  const out = { flag: (DGM.state.appInfo || {}).warm_elk };"
+            "  for (let i = 0; i < 60 && !out.loaded; i++) {"
+            "    out.loaded = !!(DGM.preview.elkLoaded && DGM.preview.elkLoaded());"
+            "    if (!out.loaded) await new Promise(r => setTimeout(r, 250));"
+            "  }"
+            "  return JSON.stringify(out);"
+            "})()"
+        )
+        log(f"ELK 启动预热（mock 有依据）: {elk_warm}")
+        try:
+            r = json.loads(elk_warm or "{}")
+            if r.get("flag") is not True:
+                fails.append(f"mock 的 app_info 没带 warm_elk=true：{r}")
+            if not r.get("loaded"):
+                fails.append("声明有依据却没在启动后台预热 ELK 离线包（main.js 的预热接线断了？）")
+        except Exception as e:
+            log(f"（断言 4c 解析失败：{e}）")
+            fails.append("断言 4c 拿不到结果")
 
         # ---- 断言 5：标签压测 —— 标签过多时 tabbar 必须保持单行 ----
         stress = ev(
@@ -1722,47 +1764,69 @@ def main() -> int:
             log(f"（断言 26 解析失败：{e}）")
             fails.append("断言 26 拿不到结果（多轮消息链路可能整个没接上）")
 
-        # ---- 断言 26.5：外部文件作为上下文（手填全路径 → 进请求） ----
-        # 「把某个文件给 AI 看」这条链在浏览器原型里能整条走通：手填路径（对话框里那一行）
-        # → `file_read_text` → chip → 请求体里的 `files`。mock 的 `[ctx]` 夹具把请求里的
-        # 附件原样回显（见 ipc.js `_aiText`），所以这里断言的是**请求真的带上了文件内容**，
-        # 不是"界面上多了个 chip"。
+        # ---- 断言 26.5：外部文件作为上下文（按钮选文件 → 进请求） ----
+        # 「把某个文件给 AI 看」这条链在浏览器原型里能整条走通：点输入框上方那颗文件按钮
+        # → 系统对话框（这里把 pickPaths 换成桩，其余全是真的）→ `file_read_text` → chip
+        # → 请求体里的 `files`。mock 的 `[ctx]` 夹具把请求里的附件原样回显（见 ipc.js `_aiText`），
+        # 所以这里断言的是**请求真的带上了文件内容**，不是"界面上多了个 chip"。
         ctxprobe = ev(
             "(async () => {"
             "  DGM.ai.focus('chat');"
             "  await new Promise(r => setTimeout(r, 200));"
             "  DGM.ai.clear();"
             "  await new Promise(r => setTimeout(r, 200));"
-            "  const inp = document.querySelector('#ai-file-path');"
-            "  const enter = (v) => {"
-            "    inp.value = v;"
-            "    inp.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));"
-            "  };"
-            "  enter('E:/ref/需求说明.md');"
+            "  const out = {};"
+            "  const btn = document.querySelector('#ai-file-pick');"
+            "  out.btnExists = !!btn;"
+            "  out.btnAfterContext = !!(btn && document.querySelector('#ai-context') &&"
+            "    (document.querySelector('#ai-context').compareDocumentPosition(btn) & Node.DOCUMENT_POSITION_FOLLOWING));"
+            # ① 取消选择：不该有任何副作用（chip 数不变）
+            "  const orig = DGM.ipc.dialog.pickPaths;"
+            "  DGM.ipc.dialog.pickPaths = async () => [];"
+            "  btn.click();"
+            "  await new Promise(r => setTimeout(r, 250));"
+            "  out.afterCancel = DGM.ai.contextFiles().length;"
+            # ② 选中一个文件：进上下文
+            "  DGM.ipc.dialog.pickPaths = async () => ['E:/ref/需求说明.md'];"
+            "  btn.click();"
+            "  await new Promise(r => setTimeout(r, 400));"
+            "  out.n1 = DGM.ai.contextFiles().length;"
+            "  out.chips = (document.querySelector('#ai-attachments').textContent) || '';"
+            # ③ 再选同一个：去重拒绝（数量不变）
+            "  btn.click();"
             "  await new Promise(r => setTimeout(r, 300));"
-            "  const n1 = DGM.ai.contextFiles().length;"
-            "  const chips = (document.querySelector('#ai-attachments').textContent) || '';"
-            "  enter('E:/ref/需求说明.md');"  # 重复：应被去重拒绝
-            "  await new Promise(r => setTimeout(r, 200));"
-            "  const n2 = DGM.ai.contextFiles().length;"
-            "  await DGM.ai.addContextFile('E:/ref/nope.md');"  # mock 对 nope 抛错
-            "  const n3 = DGM.ai.contextFiles().length;"
+            "  out.n2 = DGM.ai.contextFiles().length;"
+            # ④ 读不到的文件：如实拒绝、不进列表
+            "  DGM.ipc.dialog.pickPaths = async () => ['E:/ref/nope.md'];"
+            "  btn.click();"
+            "  await new Promise(r => setTimeout(r, 300));"
+            "  out.n3 = DGM.ai.contextFiles().length;"
+            "  DGM.ipc.dialog.pickPaths = orig;"
+            # ⑤ 发一轮：mock 的 [ctx] 夹具回显请求里的附件
             "  const ta = document.querySelector('#ai-input');"
             "  ta.value = '[ctx] 按这份需求画一张';"
             "  ta.dispatchEvent(new Event('input', { bubbles: true }));"
             "  document.querySelector('#ai-send').click();"
             "  await new Promise(r => setTimeout(r, 1800));"
             "  const txt = (document.querySelector('#ai-stream').textContent) || '';"
+            "  out.echo = txt.includes('附加文件 1 个') && txt.includes('第一行内容');"
+            "  out.tail = txt.slice(-140);"
             "  DGM.ai.removeContextFile('E:/ref/需求说明.md');"
-            "  const n4 = DGM.ai.contextFiles().length;"
-            "  return JSON.stringify({ n1, n2, n3, n4, chips: chips.slice(0, 60), echo: txt.includes('附加文件 1 个') && txt.includes('第一行内容'), tail: txt.slice(-140) });"
+            "  out.n4 = DGM.ai.contextFiles().length;"
+            "  return JSON.stringify(out);"
             "})()"
         )
         log(f"外部文件作为上下文: {ctxprobe}")
         try:
             r = json.loads(ctxprobe or "{}")
+            if not r.get("btnExists"):
+                fails.append("AI 输入框那排没有「选择文件」按钮")
+            if not r.get("btnAfterContext"):
+                fails.append("「选择文件」按钮没有排在「把当前图作为上下文」之后")
+            if r.get("afterCancel") != 0:
+                fails.append("取消选择（对话框返回空）却加进了上下文")
             if r.get("n1") != 1:
-                fails.append("手填路径后没进上下文（file_read_text 或 chip 链路断了）")
+                fails.append("点按钮选文件后没进上下文（file_read_text 或 chip 链路断了）")
             if "需求说明.md" not in (r.get("chips") or ""):
                 fails.append(f"chip 上没显示文件名：{r.get('chips')}")
             if r.get("n2") != 1:

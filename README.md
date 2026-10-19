@@ -73,7 +73,10 @@ Version **3.8.2** · Official website <https://www.diagramon.com>
   incrementally without reloading the WASM engine; D2 offers `dagre` / `elk` / `tala`, recompiled for the
   new layout while the engine instance is reused (`tala` is slow — pick it deliberately); Mermaid offers
   `dagre` and ELK, the latter shipping as an offline bundle (`@mermaid-js/layout-elk`) whose failed load
-  falls back to dagre instead of breaking the preview
+  falls back to dagre instead of breaking the preview. That bundle is a **one-off, permanently resident**
+  cost (measured: +7.7 MB JS heap, +16 MB process working set, ~0.5 s to load), so it is only pre-warmed
+  in the background **if you have used elk before**; everyone else loads it on the first switch and never
+  pays for it otherwise
 - **Render options live in the preview top bar** — Mermaid shows two (Look + Layout), DOT / D2 show one
   (Layout) and the canvas formats hide them entirely; the choice is **remembered per file** (close the
   tab or restart the app and reopening that file still uses it) and re-renders immediately (the
@@ -152,11 +155,11 @@ Version **3.8.2** · Official website <https://www.diagramon.com>
 - **Two ways into vision** — pick an image file, or **drag out a region of the screen** (freeze-frame plus
   a borderless overlay, so multi-monitor and DPI scaling never come into play); the image is compressed to
   ≤1568px in memory and never written to disk
-- **External files work as context too** — drop a file **onto the AI panel**, paste a full path into the
-  field under the composer, or use the folder button: up to 8 files, 256 KiB each (larger ones are cut
-  on a character boundary and labelled), UTF-8 text only (binary or other encodings report a clear
-  error). Reference files and "current diagram source" are worded separately in the prompt, so the
-  model does not treat your reference as the document to rewrite
+- **External files work as context too** — use the **folder button** in the row above the AI input
+  (multi-select), or drop a file **directly onto the AI panel**: up to 8 files, 256 KiB each (larger
+  ones are cut on a character boundary and labelled), UTF-8 text only (binary or other encodings
+  report a clear error). Reference files and "current diagram source" are worded separately in the
+  prompt, so the model does not treat your reference as the document to rewrite
 - **The AI only fixes what the AI wrote** — the render-failure auto-fix fires only while the body is
   still exactly the version the AI applied; syntax errors you introduce yourself are never rewritten
   behind your back (they are still reported in the preview and the problems panel)

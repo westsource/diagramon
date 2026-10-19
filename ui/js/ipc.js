@@ -669,7 +669,15 @@ digraph Pipeline {
       args = args || {};
       switch (cmd) {
         case "app_info":
-          return { version: "3.0.0-mock", platform: "mock", formats: this._clone(FORMATS), limits: { preview_max_lines: 5000, preview_max_bytes: 409600 } };
+          // `warm_elk: true` 是**故意的**：浏览器原型里要能断言"启动按需预热"这条链路
+          // （mock 声明有依据 → 启动 3 秒后 ELK 离线包应已加载，见 main.js 与 ui_probe 断言 2.5）。
+          return {
+            version: "3.0.0-mock",
+            platform: "mock",
+            formats: this._clone(FORMATS),
+            limits: { preview_max_lines: 5000, preview_max_bytes: 409600 },
+            warm_elk: true,
+          };
 
         // mock 下**故意不给转换结果**：转换器只有 Rust 侧一份实现
         // （`crates/app-core/src/convert.rs`），在浏览器里再写一份 best-effort

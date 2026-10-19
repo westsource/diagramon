@@ -182,6 +182,9 @@ impl AppState {
     /// `from` 是"这份文档原来的路径"（另存为 / 首次保存时给）：记录跟着文件走，
     /// 否则旧文件的记录会永远留着、新文件打开还是默认。
     ///
+    /// `format` 决定"布局用过 elk 吗"这个启动预热信号（只有 Mermaid + elk 算，见
+    /// `render_opts::Store::note_layout`）。
+    ///
     /// 与 `remember_recent` 一样**吞掉写失败**：这只是一份"记住上次选择"的缓存，
     /// 磁盘写不进去不该让用户的一次下拉选择报错。
     pub fn remember_render_opts(
@@ -189,6 +192,7 @@ impl AppState {
         from: Option<&str>,
         to: &str,
         opts: app_core::render_opts::DocOpts,
+        format: app_ipc::FormatId,
     ) {
         let mut store = self.render_opts();
         if let Some(old) = from {
@@ -196,6 +200,7 @@ impl AppState {
                 store.forget(old);
             }
         }
+        store.note_layout(format, opts.layout.as_deref());
         store.set(to, opts, now_ms());
         let snapshot = store.clone();
         drop(store);

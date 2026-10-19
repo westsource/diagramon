@@ -318,6 +318,16 @@ window.DGM = window.DGM || {};
     if (recentList.some((r) => r && r.format === "d2") && DGM.d2) {
       setTimeout(() => DGM.d2.warmup(), 3000);
     }
+
+    // Mermaid ELK 离线包预热：同样**按需**，依据由 Rust 下发（`app_info.warm_elk` = 以前把某个
+    // Mermaid 文档的布局选成过 elk，见 app-core::render_opts）。
+    //
+    // 那份包（2.4MB ESM）是一次性且**常驻**的成本：实测 JS 堆 +7.7MB、应用进程工作集 +16MB、
+    // 加载约 0.5 秒。没用过 elk 的人一分不该付 —— 他们首次把布局切到 elk 时才加载，
+    // 打开布局菜单也会顺手预热（见 preview.js::buildOptBtn）。失败必须静默。
+    if (state.appInfo && state.appInfo.warm_elk && DGM.preview && DGM.preview.warmElk) {
+      setTimeout(() => DGM.preview.warmElk(), 3000);
+    }
     note("boot:done");
   }
 
@@ -438,6 +448,21 @@ window.DGM = window.DGM || {};
       // 版本号**别硬编码** —— 真源在 Cargo.toml（workspace version），它随每次发版变。
       // 曾经这里写死 "3.0.0"，把「关于窗口永远显示 3.0.0」这个 bug 盖了三个版本。
       ok("app_info 版本号是合法 semver", !!info && /^\d+\.\d+\.\d+$/.test(info.version || ""), info && info.version);
+      // ELK 离线包的启动预热信号：Rust 只看"以前用过 elk 吗"（app_core::render_opts）。
+      // 有依据 → main.js boot 里 3 秒后**后台静默** import；没依据的人一分不付。
+      ok("app_info 带 ELK 预热信号", !!info && typeof info.warm_elk === "boolean", info && String(info.warm_elk));
+      {
+        let elkNow = DGM.preview.elkLoaded ? DGM.preview.elkLoaded() : null;
+        if (info && info.warm_elk) {
+          for (let i = 0; i < 60 && !elkNow; i++) {
+            await new Promise((r) => setTimeout(r, 250));
+            elkNow = DGM.preview.elkLoaded();
+          }
+          ok("有依据 → 启动后台预热了 ELK 离线包", elkNow === true, String(elkNow));
+        } else {
+          ok("没依据 → 启动不加载 ELK（省下常驻内存）", elkNow === false, String(elkNow));
+        }
+      }
       ok(
         "注册表五种格式",
         info && info.formats && info.formats.length === 5 && info.formats.map((f) => f.id).join(",") === "mermaid,dot,d2,drawio,excalidraw",
@@ -1033,10 +1058,15 @@ window.DGM = window.DGM || {};
         await DGM.ai.handleDrop({ type: "drop", paths: [bigPath], position: { x: 4, y: 4 } });
         ok("拖到面板之外不动上下文", DGM.ai.contextFiles().length === 1, DGM.ai.contextFiles().length);
 
-        // 手填全路径（对话框里那一行）：Enter 加入；重复路径按去重拒绝
-        const finp = document.querySelector("#ai-file-path");
-        finp.value = ctxPath;
-        finp.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+        // 输入框上方那颗「选择文件」按钮：排在「把当前图作为上下文」之后；再走一次去重
+        const fbtn = document.querySelector("#ai-file-pick");
+        const cbtn = document.querySelector("#ai-context");
+        ok(
+          "「选择文件」按钮排在「把当前图作为上下文」之后",
+          !!fbtn && !!cbtn && !!(cbtn.compareDocumentPosition(fbtn) & Node.DOCUMENT_POSITION_FOLLOWING),
+          !!fbtn,
+        );
+        await DGM.ai.addContextFile(ctxPath); // 同一路径：按去重拒绝
         ok("重复附加同一路径不重复入列", DGM.ai.contextFiles().length === 1, DGM.ai.contextFiles().length);
 
         DGM.ai.removeContextFile(ctxPath);

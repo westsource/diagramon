@@ -1398,18 +1398,7 @@ window.DGM = window.DGM || {};
         DGM.toast({ icon: "diagram", title: t("ai.ctxSet"), sub: d.name });
       });
     }
-    /* 附加文件（外部上下文）：手填全路径 / 选择文件 / 原生拖放三条入口 */
-    const fpath = $("#ai-file-path");
-    if (fpath) {
-      fpath.addEventListener("keydown", (e) => {
-        if (e.key !== "Enter") return;
-        e.preventDefault();
-        const v = fpath.value;
-        fpath.value = "";
-        addContextFile(v);
-      });
-      // 粘贴一整行路径后回车是最顺手的用法；输入框里贴进来的引号交给 normPath 处理
-    }
+    /* 选文件加入上下文（也可以把文件直接拖进面板，见 handleDrop） */
     const fpick = $("#ai-file-pick");
     if (fpick)
       fpick.addEventListener("click", async () => {

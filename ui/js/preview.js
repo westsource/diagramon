@@ -561,6 +561,12 @@ window.DGM = window.DGM || {};
     return elkPromise;
   }
 
+  /** 预热 Mermaid 的 ELK 离线包：只在"以前用过 elk"时由 main.js 调（依据见 `AppInfo.warm_elk`），
+   *  失败静默 —— 启动预热不该弹错（与 `DGM.d2.warmup` 同一套约定）。 */
+  function warmElk() {
+    loadElk().catch(() => {});
+  }
+
   async function renderMermaid(body, mine, d) {
     if (typeof window.mermaid === "undefined") throw new Error(t("preview.mermaidUnavailable"));
     const dark = document.documentElement.dataset.theme === "dark";
@@ -1078,6 +1084,7 @@ window.DGM = window.DGM || {};
     describeError,
     describeMermaid,
     elkLoaded,
+    warmElk,
     effectiveLook: optsCurLook,
     exportPng,
     exportSvg,

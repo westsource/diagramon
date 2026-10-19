@@ -537,6 +537,12 @@ pub struct AppInfo {
     pub formats: Vec<FormatInfo>,
     pub limits: Limits,
     pub dev: DevFlags,
+    /// 启动时要不要在后台**预热 Mermaid 的 ELK 离线包**。
+    ///
+    /// 只看"以前用过 elk 吗"（`app_core::render_opts::Store::wants_elk_warmup`）：那份包是一次性
+    /// 且常驻的成本（实测 JS 堆 +7.7MB、应用进程工作集 +16MB、加载约 0.5s），没依据的人一分
+    /// 不该付 —— 他们首次切换布局时才加载，那时布局菜单也会顺手预热。
+    pub warm_elk: bool,
 }
 
 /// 事件名常量（与前端 `ipc.on(...)` 逐字对应）。

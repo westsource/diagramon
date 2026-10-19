@@ -171,18 +171,12 @@
             <button class="icon-btn" id="ai-attach" data-i18n-title="ui.attachImage" title="添加图片（识图）"><svg class="ico ico-sm"><use href="#i-image"></use></svg></button>
             <button class="icon-btn" id="ai-screenshot" data-i18n-title="ui.capture" title="截取屏幕区域识别"><svg class="ico ico-sm"><use href="#i-scan"></use></svg></button>
             <button class="icon-btn" id="ai-context" data-i18n-title="ui.useDoc" title="把当前图作为上下文"><svg class="ico ico-sm"><use href="#i-diagram"></use></svg></button>
+            <!-- 选文件加入上下文（可多选）；也可以直接把文件**拖进这个面板**（原生拖放，见 ai.js::handleDrop） -->
+            <button class="icon-btn" id="ai-file-pick" data-i18n-title="ai.filePick" title="选择文件作为上下文"><svg class="ico ico-sm"><use href="#i-folder"></use></svg></button>
             <span class="sp"></span>
             <span class="ai-hint" id="ai-hint"></span>
             <button class="send-btn" id="ai-send" data-i18n-title="ui.send" title="发送  Enter"><svg class="ico ico-sm"><use href="#i-send"></use></svg></button>
           </div>
-        </div>
-        <!-- 外部文件作为上下文：手填/粘贴全路径（Enter 加入），或点右侧按钮选文件；
-             也可以直接把文件**拖进这个面板**（原生拖放，见 ai.js::handleDrop）。 -->
-        <div class="ai-file-row">
-          <svg class="ico ico-sm"><use href="#i-file"></use></svg>
-          <input id="ai-file-path" type="text" spellcheck="false" autocomplete="off"
-                 data-i18n-placeholder="ai.filePath.ph" placeholder="粘贴文件全路径（Enter 加入上下文）">
-          <button class="icon-btn" id="ai-file-pick" data-i18n-title="ai.filePick" title="选择文件作为上下文"><svg class="ico ico-sm"><use href="#i-folder"></use></svg></button>
         </div>
       </div>
     </aside>
