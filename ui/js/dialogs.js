@@ -1099,8 +1099,11 @@ window.DGM = window.DGM || {};
       : `<span>${esc(kind === "draft" ? t("dlg.history.draftHint") : t("dlg.history.orphanHint"))}</span>`;
     const q = m.first_prompt ? `<span class="q"> · 「${esc(m.first_prompt)}」</span>` : "";
     const primary = kind === "doc" ? t("dlg.history.actionOpen") : t("dlg.history.actionRestore");
+    // 整行可点：列表行看起来就是"一条可打开的历史"，只让右侧小按钮生效等于"点了没反应"
+    // （文件打开历史那边整行就是按钮）。行上的 data-act 与主动作同一个键，`wire()` 用
+    // closest 取动作，所以行内的 [打开]/[⋯] 仍然各走各的。
     return (
-      `<div class="n-row">` +
+      `<div class="n-row" data-act="open:${esc(m.key)}" title="${esc(primary)}">` +
       `<span class="b">${histBadge(kind)}</span>` +
       `<div class="t1"><span class="nm">${esc(name)}</span>` +
       `<span class="meta">${esc(t("dlg.history.rounds", { n: m.turns }))} · ${esc(histWhen(m.updated_at))}</span></div>` +

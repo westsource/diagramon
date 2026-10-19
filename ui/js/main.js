@@ -1117,6 +1117,96 @@ window.DGM = window.DGM || {};
         }
       }
 
+      // ── 已失联会话的恢复：**要带回最后生成的那张图** ──
+      //  一条只会"恢复对话"的恢复没有意义：新标签页必须是那段产物，而不是一张见面示例图。
+      //  造法：存文件 → 存一份带 ``` 围栏的会话 → 关标签页 → 删文件（= 已失联）。
+      {
+        const norm = (p) => String(p || "").replace(/\\/g, "/");
+        const orphanPath = wsDir + "/flows/orphan-restore.mmd";
+        const code = "graph TD\n    R([恢复]) --> OK[图还在]";
+        await invoke("export_write", { path: orphanPath, base64: encRaw("flowchart TD\n    A --> B\n") });
+        const opened = await invoke("doc_open_paths", { paths: [orphanPath] });
+        const od = (opened.docs || []).find((d) => norm(d.path) === norm(orphanPath)) || opened.docs[0];
+        await invoke("conversation_save", {
+          id: od.id,
+          turns: [
+            { role: "user", text: "画个恢复流程图", at: Date.now() - 2000 },
+            {
+              role: "assistant",
+              text: "```mermaid\n" + code + "\n```",
+              at: Date.now() - 1000,
+              model: "GLM-5.2",
+              tokens: 5,
+            },
+          ],
+        });
+        await invoke("doc_close", { id: od.id });
+        await invoke("workspace_delete", { path: orphanPath });
+        const listed = await invoke("conversation_list");
+        const orow = listed.find((m) => norm(m.path) === norm(orphanPath)) || null;
+        ok("删掉原文件后会话被识别为「已失联」", !!orow && orow.missing === true, orow && String(orow.missing));
+        const restored = orow ? await invoke("conversation_open", { key: orow.key }) : null;
+        ok(
+          "已失联会话恢复后正文就是最后生成的那张图",
+          !!restored && restored.body.trim() === code && restored.format === "mermaid" && !restored.path,
+          restored && JSON.stringify({ format: restored.format, body: (restored.body || "").slice(0, 40) }),
+        );
+        if (restored) {
+          try {
+            await invoke("conversation_delete", { key: "draft-" + restored.id });
+          } catch (e) {
+            /* 已搬走/已删就算了 */
+          }
+          try {
+            await invoke("doc_close", { id: restored.id });
+          } catch (e) {
+            /* 已关掉就算了 */
+          }
+        }
+      }
+
+      // ── 文档会话的「打开」：原文件还在时，打开的必须是**那个文件**（不是一张新标签页） ──
+      {
+        const norm = (p) => String(p || "").replace(/\\/g, "/");
+        const livePath = wsDir + "/flows/live-restore.mmd";
+        const liveBody = "flowchart TD\n    L([文件]) --> OK[打开]";
+        await invoke("export_write", { path: livePath, base64: encRaw(liveBody) });
+        const opened = await invoke("doc_open_paths", { paths: [livePath] });
+        const ld = (opened.docs || []).find((d) => norm(d.path) === norm(livePath)) || opened.docs[0];
+        await invoke("conversation_save", {
+          id: ld.id,
+          turns: [{ role: "user", text: "文档会话", at: Date.now() }],
+        });
+        await invoke("doc_close", { id: ld.id });
+        const listed = await invoke("conversation_list");
+        const drow = listed.find((m) => norm(m.path) === norm(livePath)) || null;
+        const reopenedDoc = drow ? await invoke("conversation_open", { key: drow.key }) : null;
+        ok(
+          "文档会话的「打开」打开的是磁盘上那个文件",
+          !!reopenedDoc && norm(reopenedDoc.path) === norm(livePath) && reopenedDoc.body.trim() === liveBody,
+          reopenedDoc && JSON.stringify({ path: reopenedDoc.path, body: (reopenedDoc.body || "").slice(0, 30) }),
+        );
+        if (reopenedDoc) {
+          try {
+            await invoke("doc_close", { id: reopenedDoc.id });
+          } catch (e) {
+            /* 已关掉就算了 */
+          }
+        }
+        if (drow) {
+          try {
+            await invoke("conversation_delete", { key: drow.key });
+          } catch (e) {
+            /* 已删就算了 */
+          }
+        }
+        try {
+          await invoke("workspace_delete", { path: livePath });
+        } catch (e) {
+          /* 已删就算了 */
+        }
+      }
+
       // 多词命令参数的命名一致性（ai_cancel 曾在两侧各写一套，真机上才炸）
       let cancelErr = "";
       try {

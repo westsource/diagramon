@@ -1573,7 +1573,7 @@ table.kv td .chip { vertical-align: middle; }
 .sumline a { color: var(--accent); text-decoration: none; }
 .sumline a:hover { text-decoration: underline; }
 .n-list { display: flex; flex-direction: column; border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
-.n-row { display: grid; grid-template-columns: max-content minmax(0, 1fr) max-content; grid-template-rows: auto auto; gap: 2px 10px; padding: 9px 11px; border-top: 1px solid var(--border); align-items: center; background: var(--surface); }
+.n-row { display: grid; grid-template-columns: max-content minmax(0, 1fr) max-content; grid-template-rows: auto auto; gap: 2px 10px; padding: 9px 11px; border-top: 1px solid var(--border); align-items: center; background: var(--surface); cursor: pointer; }
 .n-row:first-child { border-top: 0; }
 .n-row:hover { background: var(--surface-2); }
 .n-row .b { grid-column: 1; grid-row: 1 / span 2; align-self: center; }

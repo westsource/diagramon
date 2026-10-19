@@ -922,16 +922,24 @@ pub fn conversation_open(state: State<'_, Arc<AppState>>, key: String) -> R<Doc>
         }
     }
 
-    // ③ 已失联：新开一张同格式标签页，把会话搬过去（迁移失败如实报错，别假装恢复成功）
-    let fmt = app_core::format::registry()
-        .into_iter()
-        .find(|f| f.id.as_str() == meta.format)
-        .map(|f| f.id)
+    // ③ 已失联：新开一张同格式标签页，把会话搬过去，并**把最后生成的那张图放回正文**。
+    //    只搬对话等于恢复出一个见面示例图 —— "会话在、图没了"，这个恢复就没意义。
+    //    代码取自会话里最后一个匹配格式的 ``` 围栏；手工改动本来就不在会话里（界面文案已写明）。
+    let conv = app_core::conversations::load(&dir, &key);
+    let restored = app_core::conversations::last_generated_code(&conv.turns, &meta.format);
+    let fmt = FormatId::from_str_opt(&meta.format)
+        .or_else(|| restored.as_ref().map(|(f, _)| *f))
         .unwrap_or(FormatId::Mermaid);
     let doc = state.session().new_doc(fmt);
+    if let Some((_, code)) = restored {
+        state.session().set_body(&doc.id, code);
+    }
     let to = app_core::conversations::key_for(None, &doc.id);
     app_core::conversations::migrate(&dir, &key, &to, None)?;
-    Ok(doc)
+    state.session()
+        .get(&doc.id)
+        .cloned()
+        .ok_or_else(|| format!("文档不存在：{}", doc.id))
 }
 
 /// 清理 N 天前的**已失联**会话（「对话历史 → 全部」顶栏那个动作）。

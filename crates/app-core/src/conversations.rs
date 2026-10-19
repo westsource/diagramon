@@ -21,7 +21,7 @@
 
 use std::path::{Path, PathBuf};
 
-use app_ipc::{ConvMeta, Conversation};
+use app_ipc::{ConvMeta, Conversation, ConversationTurn, FormatId};
 use sha2::{Digest, Sha256};
 
 /// 文档身份：路径规范化 → SHA256 → 前 16 位十六进制。
@@ -285,6 +285,67 @@ pub fn migrate(dir: &Path, from: &str, to: &str, new_path: Option<&str>) -> Resu
     let _ = std::fs::remove_file(src_file.with_extension("json.bak"));
     let _ = std::fs::remove_file(meta_file_for(dir, from));
     Ok(true)
+}
+
+/// 从会话里找回**最后生成的那张图**（「对话历史 → 全部」恢复已失联会话时用）。
+///
+/// 只认 **assistant** 轮次里的 ``` 围栏（用户贴进来的代码不是产物）；同一格式有多个就往
+/// 后找最后一个 —— 它才是用户最后看到 / 应用的那一版。`format` 为空（旧会话没有 meta）
+/// 时不限格式，并**据围栏语言反推**，免得把 D2 的正文塞进一张 Mermaid 新标签页。
+///
+/// 返回值是 `(格式, 代码)`；没有可用围栏 → `None`（调用方保留新文档的默认正文）。
+pub fn last_generated_code(
+    turns: &[ConversationTurn],
+    format: &str,
+) -> Option<(FormatId, String)> {
+    let want = FormatId::from_str_opt(format);
+    for turn in turns.iter().rev().filter(|t| t.role == "assistant") {
+        for (lang, code) in code_blocks(&turn.text).into_iter().rev() {
+            if code.trim().is_empty() {
+                continue;
+            }
+            let Some(fid) = format_of_lang(&lang) else { continue };
+            if want.is_some_and(|w| w != fid) {
+                continue;
+            }
+            return Some((fid, code));
+        }
+    }
+    None
+}
+
+/// 拆出 ``` 围栏：返回 `(语言标签, 正文)`。围栏按**行**认（未闭合的那段直接丢掉 ——
+/// 流式被截断的半截代码不是一份能用的图）。
+fn code_blocks(text: &str) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    let mut cur: Option<(String, Vec<&str>)> = None;
+    for line in text.lines() {
+        let t = line.trim_start();
+        if let Some(rest) = t.strip_prefix("```") {
+            match cur.take() {
+                None => cur = Some((rest.trim().to_string(), Vec::new())),
+                Some((lang, body)) => out.push((lang, body.join("\n"))),
+            }
+            continue;
+        }
+        if let Some((_, body)) = cur.as_mut() {
+            body.push(line);
+        }
+    }
+    out
+}
+
+/// 代码围栏的语言标签 → 格式。与 `ui/js/ai.js::langToFormat` 同一张表（空标签 = Mermaid，
+/// 与 AI 产物落进文档时的判定一致）；认不出来 → `None`，**不猜**。
+fn format_of_lang(lang: &str) -> Option<FormatId> {
+    match lang.trim().to_ascii_lowercase().as_str() {
+        "" | "mermaid" => Some(FormatId::Mermaid),
+        "dot" | "graphviz" => Some(FormatId::Dot),
+        "d2" => Some(FormatId::D2),
+        "xml" | "drawio" => Some(FormatId::Drawio),
+        "json" | "excalidraw" => Some(FormatId::Excalidraw),
+        _ => None,
+    }
 }
 
 #[cfg(test)]
@@ -680,5 +741,46 @@ mod tests {
         save(&dir, &Conversation { doc_key: key.clone(), ..Default::default() }).unwrap();
         assert!(!migrate(&dir, &key, &key, None).unwrap());
         assert!(file_for(&dir, &key).exists());
+    }
+
+    /// 已失联恢复要带回"最后生成的那张图"：同一格式取最后一版，用户轮次里的围栏不算产物。
+    #[test]
+    fn last_generated_code_picks_the_latest_matching_fence() {
+        let turns = vec![
+            turn("user", "```mermaid\ngraph TD\n  U --> X\n```", 1),
+            turn("assistant", "先给一版：\n```mermaid\ngraph TD\n  A --> B\n```", 2),
+            turn("assistant", "改好了：\n```mermaid\ngraph TD\n  A --> C\n```", 3),
+        ];
+        let (fmt, code) = last_generated_code(&turns, "mermaid").expect("应找回最后一版");
+        assert_eq!(fmt, FormatId::Mermaid);
+        assert_eq!(code, "graph TD\n  A --> C");
+    }
+
+    /// 格式不匹配时**绝不**把别的格式塞进文档：只有 D2 围栏要 Mermaid → None。
+    #[test]
+    fn last_generated_code_never_crosses_formats() {
+        let turns = vec![turn("assistant", "```d2\na -> b\n```", 1)];
+        assert_eq!(last_generated_code(&turns, "mermaid"), None);
+        let (fmt, code) = last_generated_code(&turns, "d2").unwrap();
+        assert_eq!(fmt, FormatId::D2);
+        assert_eq!(code, "a -> b");
+    }
+
+    /// 旧会话没有 meta（format 空）→ 据围栏语言反推格式，别把 D2 装进 Mermaid 标签页。
+    #[test]
+    fn last_generated_code_infers_the_format_of_legacy_sessions() {
+        let turns = vec![turn("assistant", "```graphviz\ndigraph { A -> B }\n```", 1)];
+        let (fmt, code) = last_generated_code(&turns, "").unwrap();
+        assert_eq!(fmt, FormatId::Dot);
+        assert_eq!(code, "digraph { A -> B }");
+    }
+
+    /// 没有围栏（未成围栏的旧格式 / 纯文本回答）→ None，保留新文档默认正文。
+    #[test]
+    fn last_generated_code_is_none_without_a_fence() {
+        let turns = vec![turn("assistant", "graph TD\n  A --> B", 1)];
+        assert_eq!(last_generated_code(&turns, "mermaid"), None);
+        // 未闭合的围栏（流式被截断）也丢掉
+        assert_eq!(last_generated_code(&[turn("assistant", "```mermaid\ngraph TD", 1)], "mermaid"), None);
     }
 }

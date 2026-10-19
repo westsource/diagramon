@@ -2540,9 +2540,11 @@ def main() -> int:
             "  const pop = q('.pop:not([hidden])');"
             "  out.moreItems = pop ? [...pop.querySelectorAll('.pop-row .lbl')].map(x => x.textContent) : [];"
             "  DGM.pop.hide();"
-            # 打开/恢复：文档行 → 打开；这里断言"点完有文档被激活且对话框关掉"
+            # 打开/恢复：**点行本身**（不是右侧那颗按钮）也要打开 —— 文件打开历史那边
+            # 整行就是按钮，用户也会这样点；只有小按钮生效等于"点了没反应"。
             "  const beforeDocs = DGM.state.docs.length;"
-            "  qa('#hist-all-list .n-row [data-act^=open]')[0].click();"
+            "  out.beforeDocs = beforeDocs;"
+            "  qa('#hist-all-list .n-row .nm')[0].click();"
             "  await sleep(600);"
             "  out.afterOpenDocs = DGM.state.docs.length;"
             "  out.dialogClosed = !q('#dialog') || !q('#dialog').innerHTML || q('#overlay-dialog').hidden;"
@@ -2589,6 +2591,10 @@ def main() -> int:
                 fails.append(f"「恢复」按钮的文字折行了（{r.get('primaryLines')} 行，宽 {r.get('primaryBtnW')}px）")
             if len(r.get("moreItems") or []) < 3:
                 fails.append(f"⋯ 菜单缺动作：{r.get('moreItems')}")
+            if r.get("afterOpenDocs") != (r.get("beforeDocs") or 0) + 1:
+                fails.append(
+                    f"点历史列表的行没有打开对应文档（{r.get('beforeDocs')} → {r.get('afterOpenDocs')} 个标签页）"
+                )
             if not r.get("dialogClosed"):
                 fails.append("打开/恢复之后对话框没关")
             if r.get("rowsAfterDelete") != 2:
