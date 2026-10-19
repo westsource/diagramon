@@ -197,6 +197,108 @@ window.DGM = window.DGM || {};
    *  代码卡、思考块）整体对齐，气泡本身还得是让宽度跟着文字走的那个 flex 项 ——
    *  直接把头像塞进气泡行，代码卡就会被压成气泡那么窄，而 AI 的正文就是代码。
    */
+  function msgList(m) {
+    const docId = m.doc || (state.activeDoc() || {}).id || "";
+    return bucket(docId)[m.m || tab()];
+  }
+
+  function turnsBefore(list, upto) {
+    const out = [];
+    for (const x of list.slice(0, upto)) {
+      if (x.role !== "user" && x.role !== "assistant") continue;
+      if (x.err) continue;
+      const text = (x.text || "").trim();
+      if (text) out.push({ role: x.role, text });
+    }
+    return out;
+  }
+
+  function baseReq(intent, prompt, format, history, scene) {
+    return {
+      request_id: newId(),
+      model_id: state.currentModel() ? state.currentModel().id : "",
+      intent,
+      prompt,
+      format,
+      context: null,
+      files: ctxFiles().map((f) => ({ path: f.path, name: f.name, text: f.text, truncated: !!f.truncated })),
+      image_data_url: null,
+      history,
+      scene: scene || "",
+    };
+  }
+
+  /** 单条消息操作：重新生成 / 编辑重发 / 删除 / 派生（新标签页）。 */
+  async function messageMenu(m, rect) {
+    const list = msgList(m);
+    const i = list.findIndex((x) => x.id === m.id);
+    if (i < 0) return;
+    const items = [];
+    if (m.role === "assistant") items.push({ label: t("ai.op.regen"), v: "regen" });
+    if (m.role === "user") items.push({ label: t("ai.op.edit"), v: "edit" });
+    items.push({ label: t("ai.op.branch"), v: "branch" });
+    items.push({ sep: true }, { label: t("ai.op.delete"), v: "del" });
+    DGM.pop.show(items, { x: rect.left, y: rect.bottom + 4 }, async (it) => {
+      DGM.pop.hide();
+      const d = state.doc(m.doc) || state.activeDoc();
+      const fmt = m.format || (d && d.format) || "mermaid";
+      const history = turnsBefore(list, i);
+      if (it.v === "del") {
+        // 删用户消息时连同紧随其后的助手回复一起删（否则留下一条无主回复）
+        const take = m.role === "user" && list[i + 1] && list[i + 1].role === "assistant" ? 2 : 1;
+        list.splice(i, take);
+        render();
+        persistConversation(m.doc);
+        return;
+      }
+      if (it.v === "regen" || it.v === "edit") {
+        let prompt = m.role === "user" ? m.text : "";
+        let histEnd = i;
+        let userMsg = { id: newId(), role: "user", text: m.text || "" };
+        if (it.v === "edit") {
+          const v = await DGM.dialogs.input({
+            title: t("ai.op.edit"),
+            icon: "wand",
+            value: prompt,
+            label: t("ai.op.editLabel"),
+          });
+          if (!v) return;
+          prompt = v;
+          userMsg.text = v;
+        } else {
+          // 重新生成：保留前面的用户消息，只删这条回复及其之后的内容
+          let j = i - 1;
+          while (j >= 0 && list[j].role !== "user") j -= 1;
+          if (j < 0) return;
+          prompt = list[j].text;
+          histEnd = j;
+          userMsg = null;
+        }
+        const history = turnsBefore(list, histEnd);
+        list.splice(i);
+        const intent = m.m === "review" ? "review" : "generate";
+        const context = d && state.isTextDoc(d) && fmt === d.format ? d.body : null;
+        const req = baseReq(intent, prompt, fmt, history, "regenerate");
+        req.context = context;
+        dispatch(req, m.m || tab(), userMsg, m.doc, m.landing || "editor");
+        persistConversation(m.doc);
+        return;
+      }
+      if (it.v === "branch") {
+        if (!d) return;
+        const created = await state.newDoc(d.format);
+        if (!created) return;
+        await state.setBodyNow(created.id, d.body);
+        const copy = list.slice(0, i + 1).map((x) => Object.assign({}, x, { doc: created.id }));
+        bucket(created.id)[m.m || tab()] = copy;
+        await persistConversation(created.id);
+        await state.activateDoc(created.id);
+        if (DGM.editor && DGM.editor.loadActive) DGM.editor.loadActive();
+        DGM.toast({ icon: "plus", title: t("ai.op.branch"), sub: created.name });
+      }
+    });
+  }
+
   function bubbleNode(m) {
     const roleCls = m.role === "user" ? "user" : m.role === "sys" ? "sys" : m.err ? "err" : "bot";
     const n = h("div", "msg " + roleCls);
@@ -211,8 +313,15 @@ window.DGM = window.DGM || {};
     body.innerHTML =
       `<div class="msg-head"><span class="who">${esc(t(mine ? "ai.you" : "ai.assistant"))}</span>` +
       (!mine && m.used ? `<span class="badge-used">${esc(m.used.model)} · ${esc(m.used.tokens)} tok</span>` : "") +
+      (!m.streaming ? `<button class="mini-btn msg-ops" data-msg="${esc(m.id || "")}" title="${esc(t("ai.ops"))}">${icon("more", "ico-sm")}</button>` : "") +
       `</div>`;
     n.append(ava, body);
+    n.addEventListener("click", (e) => {
+      const b = e.target.closest("[data-msg]");
+      if (!b) return;
+      const r = b.getBoundingClientRect();
+      messageMenu(m, r);
+    });
     if (m.image) {
       const th = h("div", "thumb");
       th.innerHTML =
@@ -559,6 +668,17 @@ window.DGM = window.DGM || {};
             ? t("ai.hint.review", { name: d ? d.name : t("status.noDoc") })
             : t("ai.hint.chat", { name: d ? state.docFmt(d).name : t("status.noDoc") });
     }
+    // 上下文预算：上限由 Rust 的 `AiLimits` 推下来（前端不另写 8 / 6000）
+    const budget = $("#ai-budget");
+    if (budget) {
+      const lim = (state.appInfo && state.appInfo.ai_limits) || { history_turns: 8, history_chars: 6000 };
+      const hist = historyFor(cur, d && d.id);
+      const chars = hist.reduce((n, turn) => n + (turn.text || "").length, 0);
+      const capped = hist.length > lim.history_turns || chars > lim.history_chars;
+      budget.textContent = t("ai.budget", { turns: hist.length, chars, max: lim.history_chars });
+      budget.classList.toggle("capped", capped);
+      if (capped) budget.textContent += " · " + t("ai.budget.capped");
+    }
 
     // 建议词只在对话 tab
     const sug = $("#ai-suggest");
@@ -782,6 +902,49 @@ window.DGM = window.DGM || {};
       img.onerror = () => resolve(null);
       img.src = src;
     });
+  }
+
+  /** Ctrl+V 直接贴图进识图（WebView 的 paste 事件里 `items` 就是剪贴板图片）。 */
+  function onPaste(e) {
+    if (!state.panels().ai) return;
+    const tgt = e.target;
+    if (tgt && tgt.closest && (tgt.closest("#editor-col") || tgt.closest(".canvas-wrap"))) return;
+    const items = (e.clipboardData && e.clipboardData.items) || [];
+    for (const item of items) {
+      if (!item.type || !item.type.startsWith("image/")) continue;
+      const file = item.getAsFile();
+      if (!file) continue;
+      e.preventDefault();
+      const reader = new FileReader();
+      reader.onload = () => {
+        attachDataUrl(reader.result, "pasted.png").then(() => {
+          DGM.toast({ icon: "image", title: t("ai.attached"), sub: t("ai.attachedDesc") });
+        });
+      };
+      reader.readAsDataURL(file);
+      return;
+    }
+  }
+
+  /** 「让 AI 修这一行」：请求体只含该行 ±N（结构上保证只改勾中的行要等 patch，见计划）。 */
+  function fixLine(docId, line) {
+    const d = state.doc(docId) || state.activeDoc();
+    if (!d || !state.isTextDoc(d)) return;
+    const lines = String(d.body || "").split("\n");
+    const n = Math.max(1, Math.min(lines.length || 1, Number(line) || 1));
+    const from = Math.max(0, n - 1 - 10);
+    const to = Math.min(lines.length, n + 10);
+    const snippet = lines.slice(from, to).join("\n");
+    const req = baseReq(
+      "review",
+      t("ai.fixLine.prompt", { line: n }),
+      d.format,
+      historyFor(tab(), d.id),
+      "review",
+    );
+    req.context = snippet;
+    focus("review");
+    dispatch(req, tab(), { id: newId(), role: "sys", text: t("ai.fixLine.sys", { line: n }) }, d.id, "editor");
   }
 
   async function pickImage() {
@@ -1578,6 +1741,7 @@ window.DGM = window.DGM || {};
 
     const deliver = $("#ai-deliver");
     if (deliver) deliver.addEventListener("click", deliverClick);
+    document.addEventListener("paste", onPaste);
 
     const ta = input();
     if (ta) {
@@ -1687,6 +1851,7 @@ window.DGM = window.DGM || {};
     send: sendNow,
     explain: explainCurrent,
     applyAsCanvas,
+    fixLine,
     cancel,
     applyLast,
     revertLast,

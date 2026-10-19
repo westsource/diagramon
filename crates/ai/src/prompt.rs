@@ -258,7 +258,15 @@ pub fn build_messages_with_history(
     use serde_json::json;
 
     let mut messages = build_messages(format, intent, prompt, context, image_data_url, files);
-    let fitted = fit_history(history, HISTORY_MAX_TURNS, HISTORY_MAX_CHARS);
+    let mut fitted = fit_history(history, HISTORY_MAX_TURNS, HISTORY_MAX_CHARS);
+    // 当前文档已经作为 `context` 发上去了：如果历史最后一条 assistant 就是同一份正文，
+    // 再带一遍等于把同一张图发两次（30 轮后尤其明显）。只在“完全相同”时去重。
+    if let (Some(ctx), Some(last)) = (context, fitted.last()) {
+        let norm = |s: &str| s.replace("\r\n", "\n").trim().to_string();
+        if last.role == "assistant" && norm(&last.text) == norm(ctx) {
+            fitted.pop();
+        }
+    }
     if fitted.is_empty() {
         return messages;
     }
@@ -702,6 +710,31 @@ mod tests {
         let base = build_messages(FormatId::Dot, AiIntent::Generate, "画个依赖图", Some("digraph G {}"), None, &[]);
         assert_eq!(inject_memory(base.clone(), ""), base);
         assert_eq!(inject_memory(base.clone(), "   \n  "), base);
+    }
+
+    #[test]
+    fn current_document_is_not_sent_twice() {
+        let ctx = "flowchart TD\n    A --> B\n";
+        let dup = build_messages_with_history(
+            FormatId::Mermaid,
+            AiIntent::Review,
+            "改一下",
+            Some(ctx),
+            None,
+            &[turn("assistant", "flowchart TD\r\n    A --> B")],
+            &[],
+        );
+        assert_eq!(dup.len(), 2, "历史最后一条与当前文档相同就不该再带一遍");
+        let kept = build_messages_with_history(
+            FormatId::Mermaid,
+            AiIntent::Review,
+            "改一下",
+            Some(ctx),
+            None,
+            &[turn("assistant", "flowchart TD\n    A --> C\n")],
+            &[],
+        );
+        assert_eq!(kept.len(), 3, "不同版本的历史必须保留");
     }
 
     /// 记忆与历史同时在场时的相对顺序：system(格式) → system(记忆) → 历史 → 本轮 user。

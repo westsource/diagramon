@@ -451,6 +451,15 @@ window.DGM = window.DGM || {};
       // ELK 离线包的启动预热信号：Rust 只看"以前用过 elk 吗"（app_core::render_opts）。
       // 有依据 → main.js boot 里 3 秒后**后台静默** import；没依据的人一分不付。
       ok("app_info 带 ELK 预热信号", !!info && typeof info.warm_elk === "boolean", info && String(info.warm_elk));
+      ok(
+        "上下文预算可见，且上限来自 app_info",
+        !!info &&
+          !!info.ai_limits &&
+          info.ai_limits.history_chars > 0 &&
+          (DGM.ai && DGM.ai.render(), !!((document.getElementById("ai-budget") || {}).textContent || "").trim()),
+        info && info.ai_limits ? JSON.stringify(info.ai_limits) : "没有 ai_limits",
+      );
+      ok("内联修错入口已接上", typeof DGM.ai.fixLine === "function", typeof DGM.ai.fixLine);
       {
         let elkNow = DGM.preview.elkLoaded ? DGM.preview.elkLoaded() : null;
         if (info && info.warm_elk) {

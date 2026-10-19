@@ -568,6 +568,14 @@ pub struct Limits {
     pub preview_max_bytes: u32,
 }
 
+/// 前端展示“上下文预算”用的上限（真源在 `crates/ai::prompt`）。
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
+pub struct AiLimits {
+    pub history_turns: u32,
+    pub history_chars: u32,
+    pub files_chars: u32,
+}
+
 /// 启动信息：版本、平台、格式注册表、护栏阈值、开发开关。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppInfo {
@@ -575,6 +583,8 @@ pub struct AppInfo {
     pub platform: String,
     pub formats: Vec<FormatInfo>,
     pub limits: Limits,
+    #[serde(default)]
+    pub ai_limits: AiLimits,
     pub dev: DevFlags,
     /// 启动时要不要在后台**预热 Mermaid 的 ELK 离线包**。
     ///

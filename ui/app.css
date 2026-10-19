@@ -799,6 +799,10 @@ body.no-ai #ai-gutter { display: none; }
 .ai-deliver .seg-btn + .seg-btn { border-left: 1px solid var(--border); }
 .ai-deliver .seg-btn.on { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
 .ai-deliver .seg-lb { color: var(--faint); }
+.ai-budget { font-size: var(--fs-xs); color: var(--muted); font-variant-numeric: tabular-nums; }
+.ai-budget.capped { color: var(--warn); }
+.msg-ops { margin-left: auto; opacity: 0.45; }
+.msg:hover .msg-ops { opacity: 1; }
 
 .thumb {
   display: flex; gap: 9px; align-items: center;

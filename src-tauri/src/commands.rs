@@ -41,6 +41,11 @@ pub fn app_info(state: State<'_, Arc<AppState>>) -> AppInfo {
         platform: std::env::consts::OS.to_string(),
         formats: app_core::format::registry(),
         limits: app_core::guard::limits(),
+        ai_limits: app_ipc::AiLimits {
+            history_turns: ai::HISTORY_MAX_TURNS as u32,
+            history_chars: ai::HISTORY_MAX_CHARS as u32,
+            files_chars: ai::FILES_MAX_CHARS as u32,
+        },
         // 「以前用过 elk 吗」——前端据此决定要不要在启动后台预热那份 2.4MB 离线包
         warm_elk: state.render_opts().wants_elk_warmup(),
         dev: dev_flags(&state.paths),

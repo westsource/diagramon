@@ -81,6 +81,17 @@ window.DGM = window.DGM || {};
         `<span>${esc(d.name)} · ${esc(t("common.line"))} ${i.line} · ${esc(i.hint)}</span></span>` +
         `<span class="go">${esc(t("panel.issues.goto"))} ${icon("chevR", "ico-sm")}</span>`;
       row.addEventListener("click", () => goto(d.id, i.line));
+      if (state.isTextDoc(d)) {
+        const fix = h("span", "mini-btn issue-fix", `${icon("sparkles", "ico-sm")}${esc(t("ai.fixLine.btn"))}`);
+        fix.setAttribute("role", "button");
+        fix.tabIndex = 0;
+        fix.title = t("ai.fixLine.btnTip", { n: i.line });
+        fix.addEventListener("click", (e) => {
+          e.stopPropagation();
+          if (DGM.ai && DGM.ai.fixLine) DGM.ai.fixLine(d.id, i.line);
+        });
+        row.appendChild(fix);
+      }
       box.appendChild(row);
     }
     return box;

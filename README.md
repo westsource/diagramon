@@ -14,7 +14,7 @@ no external request is ever made**.
 Code or images reach a model only when you actively use AI, and then only the endpoint you chose
 (BYOK talks straight to your own provider, membership goes through the Diagramon cloud gateway).
 
-Version **3.12.0** · Official website <https://www.diagramon.com>
+Version **3.13.0** · Official website <https://www.diagramon.com>
 
 ## Screenshots
 
@@ -169,6 +169,10 @@ Version **3.12.0** · Official website <https://www.diagramon.com>
   land (keep in editor / to canvas); the choice is remembered per document, and “to canvas” converts
   the finished turn automatically (canvas output is normalized to stable ids, failures offer a
   one-shot “Ask AI to fix”)
+- **Context budget is visible** — the composer shows the turn/char budget (limits pushed down from
+  Rust); a document that is already the last assistant turn is not sent twice
+- **Single-turn actions** — regenerate, edit and resend, delete, or branch a conversation from any
+  message; Ctrl+V pastes an image into vision, and “Ask AI to fix this line” sends only that line ±10
 - **Two kinds of credentials, kept visually separate** — the cloud gateway (membership; the credential is
   the current login token, so you fill in nothing) and local BYOK (OpenAI-compatible / Ollama / custom,
   where you supply the key) are shown as groups, never mixed
