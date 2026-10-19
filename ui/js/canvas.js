@@ -46,8 +46,11 @@ window.DGM = window.DGM || {};
    */
   let pendingConversion = null;
 
-  function setPendingConversion(format, source) {
-    pendingConversion = { format, source };
+  /** `opts.mermaid`（可选）随源码一起发给承载页：Mermaid 渲染配置（如 look），
+   *  Excalidraw 的导入器支持把它平铺进 mermaid.initialize。drawio 的导入器不可配置，
+   *  这里的 opts 它拿不到（descriptor 协议里没有这个字段），如实不传。 */
+  function setPendingConversion(format, source, opts) {
+    pendingConversion = { format, source, opts: opts || null };
   }
 
   let container = null;
@@ -373,10 +376,11 @@ window.DGM = window.DGM || {};
     // 转换：这次载入的不是正文，而是 Mermaid 源码（交给引擎自己的导入器）
     if (pendingConversion && pendingConversion.format === format) {
       const source = pendingConversion.source;
+      const opts = pendingConversion.opts;
       pendingConversion = null;
       // 附件缓存是按格式常驻的单例：不归零，上一份文档的 files 会被写进这份新文档
       e.files = {};
-      loadMermaid(format, source);
+      loadMermaid(format, source, opts);
       return true;
     }
 
@@ -488,14 +492,18 @@ window.DGM = window.DGM || {};
     });
   }
 
-  /** 把 Mermaid 源码交给画布解析（单向转换；第 3 步的转换中心用它）。 */
-  function loadMermaid(format, source) {
+  /** 把 Mermaid 源码交给画布解析（单向转换；第 3 步的转换中心用它）。
+   *
+   *  `opts.mermaid` 仅 Excalidraw 认：随 loadMermaid 消息发给承载页，
+   *  由 convertMermaid(source, config) 平铺进 m2e 内置 mermaid 的 initialize。
+   *  drawio 的 descriptor 协议没有配置位，不传。 */
+  function loadMermaid(format, source, opts) {
     const e = entry(format);
     e.lastApplied = "";
     if (format === "drawio") {
       send(format, { action: "load", autosave: 1, descriptor: { format: "mermaid", data: source, wrap: true } });
     } else {
-      send(format, { action: "loadMermaid", source });
+      send(format, { action: "loadMermaid", source, mermaid: (opts && opts.mermaid) || undefined });
     }
   }
 

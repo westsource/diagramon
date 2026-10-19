@@ -154,7 +154,13 @@ window.DGM = window.DGM || {};
   async function convertViaEngine(to, source, srcDoc, dir) {
     const doc = await state.newDoc(to);
     if (!doc) return null;
-    DGM.canvas.setPendingConversion(to, source);
+    // 文档级外观（look）只对 Excalidraw 链有效：m2e 的 config 会平铺进内置 mermaid 的
+    // initialize。drawio 的内置导入器不可配置（descriptor 协议没有配置位），opts 传了也
+    // 拿不到 —— 所以 drawio 不传、notes 里如实说明。布局（elk）两条链都不透传：
+    // layout-elk 是 mermaid ^12 的包，引擎内置的 mermaid 版本不配，一律按默认 dagre。
+    const look = DGM.preview && DGM.preview.effectiveLook ? DGM.preview.effectiveLook(srcDoc) : null;
+    const opts = to === "excalidraw" && look && look !== "auto" ? { mermaid: { look } } : null;
+    DGM.canvas.setPendingConversion(to, source, opts);
     await DGM.preview.render(); // 触发 show → 把源码交给引擎
     const body = await DGM.canvas.waitForBody(to, doc.body || "");
     if (!body) {
@@ -166,7 +172,19 @@ window.DGM = window.DGM || {};
     await state.setBodyNow(doc.id, body);
     const note = bitmapFallbackNote(to, body);
     if (note) state.pushOutput(note, "warn");
-    return { doc: doc, notes: note ? [note] : [] };
+    const notes = note ? [note] : [];
+    // 保真度说明：渲染配置沿用了多少，逐条如实写（转换记录里展示）
+    if (to === "excalidraw") {
+      notes.push(
+        opts && opts.mermaid
+          ? t("conv.lookCarried", { look: opts.mermaid.look })
+          : t("conv.lookDefault"),
+      );
+      notes.push(t("conv.layoutNotCarried"));
+    } else if (to === "drawio") {
+      notes.push(t("conv.drawioFixedConfig"));
+    }
+    return { doc: doc, notes: notes };
   }
 
   /**
@@ -479,7 +497,8 @@ window.DGM = window.DGM || {};
         <div class="seg">${densities.map((x) => `<button class="${s.density === x ? "on" : ""}" data-act="density:${x}">${esc(t("set.density." + x))}</button>`).join("")}</div></div>
       <div class="field"><label>${esc(t("set.appearance.accent"))}</label>
         <div class="swatch-row">${accents.map((x) => `<button class="swatch ${s.accent === x ? "on" : ""}" data-act="accent:${x}" title="${esc(t("set.accent." + x))}"><i class="sw-${x}"></i></button>`).join("")}</div>
-        <span class="hint">${esc(t("set.accent.hint"))}</span></div>`;
+        <span class="hint">${esc(t("set.accent.hint"))}</span></div>
+      ${switchRow(!!s.close_to_tray, t("set.general.closeToTray"), "set.general.closeToTrayHint", "closetray")}`;
   }
 
   function pEditor() {
@@ -651,6 +670,7 @@ window.DGM = window.DGM || {};
         else if (a === "perdoc") state.patchSettings({ editor: { per_doc_view: on } });
         else if (a === "autosave") state.patchSettings({ editor: { autosave: on } });
         else if (a === "restrict") state.patchSettings({ editor: { restrict_to_workspace: on } });
+        else if (a === "closetray") state.patchSettings({ close_to_tray: on });
         else if (a === "ctxdoc") state.patchSettings({ ai: { context_from_doc: on } });
         else if (a === "retry") state.patchSettings({ ai: { render_retry: on } });
         else if (a === "tools") state.patchSettings({ ai: { tools_enabled: on } });

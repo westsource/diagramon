@@ -1087,7 +1087,14 @@ window.DGM = window.DGM || {};
       if (!ok) return;
     }
     await state.flushBody();
-    ipc.win.close();
+    // 显式退出必须走 app_exit（整个应用结束）：ipc.win.close() 只关窗口，
+    // 会被后端按 close_to_tray 拦成"隐藏到托盘" —— 菜单里点退出却藏起来就错了。
+    // mock 模式没有这个命令（返回 null 什么都不做），浏览器里本就没有进程可退。
+    try {
+      await DGM.ipc.invoke("app_exit");
+    } catch (e) {
+      ipc.win.close();
+    }
   }
 
   function formatSource() {
@@ -1279,7 +1286,12 @@ window.DGM = window.DGM || {};
     });
     $("#win-min").addEventListener("click", () => ipc.win.minimize());
     $("#win-max").addEventListener("click", () => ipc.win.toggleMaximize());
-    $("#win-close").addEventListener("click", () => quit());
+    // 关闭按钮：设置了"关闭到托盘"就不弹未保存确认（autosave 有草稿兜底），
+    // 直接关窗口交给后端隐藏；否则走完整退出流程
+    $("#win-close").addEventListener("click", () => {
+      if (state.settings && state.settings.close_to_tray) return ipc.win.close();
+      quit();
+    });
 
     // 侧栏
     $("#side-close").addEventListener("click", () => togglePanel("sidebar"));

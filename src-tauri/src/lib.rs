@@ -22,6 +22,8 @@ use assets::AssetRoots;
 use platform::{AppPaths, CredentialStore};
 use state::AppState;
 use tauri::http::{header, Response};
+use tauri::menu::{Menu, MenuItem};
+use tauri::tray::{TrayIconBuilder, TrayIconEvent};
 use tauri::{Emitter, Manager, WebviewUrl, WebviewWindowBuilder}; // Manager 提供 App::state()
 
 /// 前端产物目录。
@@ -115,13 +117,15 @@ pub fn run() {
         // 单实例必须**第一个**注册：否则第二个进程会先把窗口建出来才被劝退
         .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
             let paths = diagram_files(&argv);
-            if paths.is_empty() {
-                return;
-            }
             // 开文档交给前端：那边才知道编辑器/预览/最近列表各自要做什么。
             // Rust 只负责"第二个进程想开这几个文件"这一件事。
-            let _ = app.emit(events::OPEN_PATHS, app_ipc::OpenPathsEvent { paths });
+            if !paths.is_empty() {
+                let _ = app.emit(events::OPEN_PATHS, app_ipc::OpenPathsEvent { paths });
+            }
+            // 无论有没有带文件都要把主窗口唤起来：窗口可能正缩在托盘里
+            // （close_to_tray），"再点一次图标 = 出窗口"是托盘应用的直觉。
             if let Some(w) = app.get_webview_window("main") {
+                let _ = w.show();
                 let _ = w.unminimize();
                 let _ = w.set_focus();
             }
@@ -171,15 +175,40 @@ pub fn run() {
             });
         })
         .manage(Arc::new(app_state))
+        // 关闭到托盘：CloseRequested 在这里拦（WebviewWindowBuilder 在 tauri 2.12
+        // 上没有 on_window_event，只能挂在 Builder 级）。托盘菜单「退出」走
+        // `app_exit` 直接 app.exit，不经此路，所以不需要额外的"真退出"标记。
+        .on_window_event(|window, event| {
+            if window.label() != "main" {
+                return;
+            }
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                let to_tray = window
+                    .app_handle()
+                    .try_state::<Arc<AppState>>()
+                    .map(|st| st.settings().close_to_tray)
+                    .unwrap_or(false);
+                if to_tray {
+                    api.prevent_close();
+                    let _ = window.hide();
+                }
+            }
+        })
         .setup(|app| {
             let paths = app.state::<Arc<AppState>>().paths.clone();
             build_main_window(app, &paths)?;
+            if let Err(e) = build_tray(app.handle()) {
+                // 托盘建不出来不挡启动：close_to_tray 开着也只是退化为"点了没反应"，
+                // 用户关掉开关即可恢复，不该因小功能挂掉整个应用
+                eprintln!("diagramon|warn|托盘创建失败：{e}");
+            }
             eprintln!("diagramon|url|{}", window_url_label());
             spawn_autosave(app.handle().clone());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             commands::app_info,
+            commands::app_exit,
             commands::settings_get,
             commands::settings_patch,
             commands::session_get,
@@ -384,6 +413,54 @@ fn build_main_window(app: &mut tauri::App, paths: &AppPaths) -> Result<(), Box<d
     }
     let _ = &window;
     Ok(())
+}
+
+/// 系统托盘：图标常驻（不随 close_to_tray 开关走），菜单给"恢复窗口"与"真退出"。
+///
+/// 为什么常驻：窗口可能已经在托盘里用户才关掉开关，没有图标就永远找不回窗口了。
+/// close_to_tray 只决定 CloseRequested 的处置，与图标本身无关。
+/// 菜单文案按启动时的 settings.locale 定，之后改语言不重刷（托盘属系统侧，影响可忽略）。
+fn build_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
+    let zh = app
+        .try_state::<Arc<AppState>>()
+        .map(|st| st.settings().locale != "en-US")
+        .unwrap_or(true);
+    let (show_label, quit_label) =
+        if zh { ("显示主窗口", "退出") } else { ("Show window", "Quit") };
+    let show = MenuItem::with_id(app, "show", show_label, true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "quit", quit_label, true, None::<&str>)?;
+    let menu = Menu::with_items(app, &[&show, &quit])?;
+    let icon = app
+        .default_window_icon()
+        .cloned()
+        .expect("bundle.icon 已配置，default_window_icon 必有");
+    TrayIconBuilder::with_id("main-tray")
+        .icon(icon)
+        .tooltip("Diagramon")
+        .menu(&menu)
+        // 左键不弹菜单（留给双击唤窗），右键才出菜单 —— Windows 惯例
+        .show_menu_on_left_click(false)
+        .on_menu_event(|app, event| match event.id().as_ref() {
+            "show" => show_main_window(app),
+            "quit" => app.exit(0),
+            _ => {}
+        })
+        .on_tray_icon_event(|tray, event| {
+            if let TrayIconEvent::DoubleClick { .. } = event {
+                show_main_window(tray.app_handle());
+            }
+        })
+        .build(app)?;
+    Ok(())
+}
+
+/// 从托盘唤回主窗口（托盘菜单「显示主窗口」、双击图标、第二实例启动共用）。
+fn show_main_window(app: &tauri::AppHandle) {
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.show();
+        let _ = w.unminimize();
+        let _ = w.set_focus();
+    }
 }
 
 /// `DIAGRAMON_SELFTEST=1` 是否开着（自检要干净会话与临时草稿目录）。

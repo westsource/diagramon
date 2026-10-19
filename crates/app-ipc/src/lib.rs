@@ -329,6 +329,9 @@ pub struct Settings {
     pub accent: String,
     /// zh-CN | en-US
     pub locale: String,
+    /// 点击关闭按钮时隐藏到系统托盘而不是退出（托盘菜单可恢复 / 真退出）。
+    /// 托盘图标常驻创建，不受此项影响；影响的是 CloseRequested 的处置。
+    pub close_to_tray: bool,
     pub panels: PanelPrefs,
     pub editor: EditorPrefs,
     pub ai: AiPrefs,
@@ -359,6 +362,7 @@ impl Default for Settings {
             density: "normal".into(),
             accent: "pine".into(),
             locale: "zh-CN".into(),
+            close_to_tray: false,
             panels: PanelPrefs::default(),
             editor: EditorPrefs::default(),
             ai: AiPrefs::default(),

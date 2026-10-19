@@ -570,6 +570,22 @@ window.DGM = window.DGM || {};
         ok("ELK 布局端到端渲染", elkOk, elkOk ? "elk 离线包加载+注册+渲染全通" : "20s 内没等到 elk 渲染");
         if (st && st.setLayout) await st.setLayout(doc.id, "dagre");
         if (st && st.setLook) await st.setLook(doc.id, "auto");
+
+        // 外观口径（转换中心共用）：文档级 > 设置默认 > auto。
+        // mermaid→Excalidraw 的 look 透传 e2e 在 tools/dev/excalidraw_probe.py 的 F 用例 ——
+        // 自检启动场里加载 Excalidraw 引擎会把整场拖进看门狗（渲染进程被挂起），别搬回来。
+        ok(
+          "外观口径：文档级优先",
+          DGM.preview && DGM.preview.effectiveLook && DGM.preview.effectiveLook(doc) === "auto",
+          DGM.preview && DGM.preview.effectiveLook && DGM.preview.effectiveLook(doc),
+        );
+        if (st && st.setLook) await st.setLook(doc.id, "handDrawn");
+        ok(
+          "外观口径：切档生效",
+          DGM.preview.effectiveLook(doc) === "handDrawn",
+          DGM.preview.effectiveLook(doc),
+        );
+        if (st && st.setLook) await st.setLook(doc.id, "auto");
       }
 
       // ── 画布型拒绝分屏 ──
@@ -872,14 +888,27 @@ window.DGM = window.DGM || {};
       clipCv.height = 5;
       clipCv.getContext("2d").fillRect(0, 0, 7, 5);
       const png = clipCv.toDataURL("image/png");
-      const clipOk = await invoke("clip_write_image", { base64: png });
-      ok("原生剪贴板写图（arboard）", clipOk === true, String(clipOk));
+      // 剪贴板是全局单例：剪贴板管理器 / 截图工具会占住它。vision.rs 已带 1.5s 小步重试
+      // （瞬态占用必成），但**长期持锁**（比如机器上正开着截图/剪贴板历史类工具）时重试
+      // 也拿不到 —— 这里 catch 住如实标失败，别让一个环境问题把整个自检尾巴炸掉。
+      let clipOk = null;
+      let clipErr = "";
       try {
-        const back = await invoke("clip_read_image");
-        ok("剪贴板读回尺寸一致", back[0] === 7 && back[1] === 5, JSON.stringify(back));
+        clipOk = await invoke("clip_write_image", { base64: png });
       } catch (e) {
-        // 剪贴板可能被系统/其它程序改写，这不是本应用的错 —— 如实记一条失败原因
-        ok("剪贴板读回尺寸一致", false, String((e && e.message) || e));
+        clipErr = String((e && e.message) || e);
+      }
+      ok("原生剪贴板写图（arboard）", clipOk === true, clipOk === true ? "true" : clipErr || String(clipOk));
+      if (clipOk === true) {
+        try {
+          const back = await invoke("clip_read_image");
+          ok("剪贴板读回尺寸一致", back[0] === 7 && back[1] === 5, JSON.stringify(back));
+        } catch (e) {
+          // 剪贴板可能被系统/其它程序改写，这不是本应用的错 —— 如实记一条失败原因
+          ok("剪贴板读回尺寸一致", false, String((e && e.message) || e));
+        }
+      } else {
+        ok("剪贴板读回尺寸一致", false, "跳过：写剪贴板就失败了（" + (clipErr || clipOk) + "）");
       }
     } catch (e) {
       note("selftest:error " + String((e && e.message) || e));

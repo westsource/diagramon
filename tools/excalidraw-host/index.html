@@ -37,6 +37,8 @@
 //   2) 把画布变更（onChange）压进 window.__hostQueue，由 C# 侧轮询取走 —— 与 drawio 那条通道
 //      形状一致（宿主只要能执行脚本就能工作，不依赖 WebView 包装层的事件）；
 //   3) 暴露 window.__apply 供 C# 侧下发指令：setScene / loadMermaid / fit / getScene / export。
+//      loadMermaid 消息可带 `mermaid` 字段（Mermaid 渲染配置，如 {look:'handDrawn'}），
+//      会被平铺进 m2e 内置 mermaid 的 initialize —— 文档级外观沿用就靠它；不带 = 引擎默认。
 // 视口钩子另有一组（宿主执行自己的脚本调）：__hostZoom（当前缩放读数）/ __hostZoomBy（放大缩小
 // 一档）/ __hostFit（应用级「适应视图」—— 把内容整体放进视口）。
 // 内容真相始终是标签页里的 JSON 文本；本页只负责视图与事件。
@@ -265,7 +267,9 @@
     }
 
     if (msg.action === 'loadMermaid') {
-      return window.ExcalidrawApp.convertMermaid(msg.source).then(function (converted) {
+      // msg.mermaid（可选）：外壳侧的 Mermaid 渲染配置（如 {look:'handDrawn'}），
+      // convertMermaid 会把它平铺进 m2e 内置 mermaid 的 initialize —— 文档级外观因此沿用到转换。
+      return window.ExcalidrawApp.convertMermaid(msg.source, msg.mermaid).then(function (converted) {
         const elements = converted.elements || [];
         messages.pending = { elements: elements };
         out.api.updateScene({ elements: elements });

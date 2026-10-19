@@ -74,6 +74,16 @@ pub fn settings_patch(state: State<'_, Arc<AppState>>, patch: serde_json::Value)
     Ok(s)
 }
 
+/// 显式退出（菜单「退出」/ Ctrl+Q / 托盘「退出」）：整个应用结束。
+///
+/// 不走 `ipc.win.close()` 是因为 CloseRequested 分不清来源 —— 那条路会被
+/// `close_to_tray` 拦成"隐藏到托盘"，菜单里点退出却把窗口藏起来是错的。
+/// sync 命令返回 `()` 没问题（见文件头返回值约定）。
+#[tauri::command]
+pub fn app_exit(app: AppHandle) {
+    app.exit(0);
+}
+
 /* ---------------- 会话与文档 ---------------- */
 
 #[tauri::command]
@@ -247,6 +257,13 @@ pub fn doc_save_as(state: State<'_, Arc<AppState>>, id: String, path: String) ->
 fn save_to(state: &AppState, id: &str, path: &Path) -> R<Doc> {
     // fs scope：开了"限制在工作区内"时，这里是唯一的守门点
     state.check_writable(path)?;
+    // 旧会话身份要在 commit_saved **之前**抓：commit 之后 `path` 已经变了。
+    // 未保存文档 → draft 键；已有路径的文档（另存为）→ 旧路径的文档键。
+    let old_key = {
+        let s = state.session();
+        let d = s.get(id).ok_or_else(|| format!("文档不存在：{id}"))?;
+        app_core::conversations::key_for(d.path.as_deref(), id)
+    };
     let body = {
         let s = state.session();
         s.get(id).ok_or_else(|| format!("文档不存在：{id}"))?.body.clone()
@@ -259,6 +276,15 @@ fn save_to(state: &AppState, id: &str, path: &Path) -> R<Doc> {
     // 落了盘：autosave 的倒计时取消，草稿仓里那份也没用了
     state.cancel_autosave(id);
     app_core::recovery::remove(&state.recovery_dir, id);
+    // 会话跟着文件走：把旧键下的会话迁到新键。另存为也要迁，否则历史留在旧文件上、
+    // 新文件打开是空的 —— 用户会认为"另存为把对话弄丢了"。迁移失败不影响保存本身。
+    let path_text = path.to_string_lossy().to_string();
+    let new_key = app_core::conversations::doc_key(&path_text);
+    if let Err(e) =
+        app_core::conversations::migrate(&state.paths.conversations_dir(), &old_key, &new_key, Some(&path_text))
+    {
+        eprintln!("diagramon|conv-migrate|{e}");
+    }
     state.remember_recent(
         saved.path.as_deref().unwrap_or_default(),
         &saved.name,
@@ -747,51 +773,61 @@ fn now_ms() -> i64 {
         .unwrap_or(0)
 }
 
-/// 把文档解析成"会话身份"：`(doc_key, 路径)`。
+/// 把文档解析成"会话身份"：`(key, path)`。
 ///
-/// **只有存过盘的文档才有稳定身份。** 未保存文档返回 `None` —— 调用方据此如实告诉用户
-/// "本文档尚未保存，对话只在本次运行内有效"，而不是伪造一份重启就丢的"持久化"。
+/// 身份有两种（3.8.0 起）：
 ///
-/// 身份用**路径的 SHA256**（`app-core::conversations::doc_key`），不用文档 id：
-/// 文档 id 是本次运行内的临时标识，拿它当文件名等于永远读不回来。
-fn conversation_key(state: &AppState, doc_id: &str) -> R<Option<(String, String)>> {
+/// * 文档有路径 → `doc_key(path)`（路径 SHA256）—— 路径才是跨会话稳定的东西；
+/// * 文档还没保存 → `draft-<doc.id>` —— 未保存文档本来就在草稿仓（`recovery/`）里，
+///   重启时 `adopt_draft` **保留原 id**，所以草稿会话重启后仍指得回同一份文档。
+///   这是"从无到有生成图"的对话不再丢的关键：以前这类文档返回 `None`，
+///   `conversation_save` 直接回 `false`，整段对话从未落盘。
+///
+/// 路径返回空串表示草稿（写进会话的 `path` 字段，仅供人工排查）。
+fn conversation_key(state: &AppState, doc_id: &str) -> R<(String, String)> {
     let s = state.session();
     let d = s.get(doc_id).ok_or_else(|| format!("文档不存在：{doc_id}"))?;
-    Ok(d.path
-        .as_deref()
-        .map(|p| (app_core::conversations::doc_key(p), p.to_string())))
+    Ok((
+        app_core::conversations::key_for(d.path.as_deref(), doc_id),
+        d.path.clone().unwrap_or_default(),
+    ))
 }
 
-/// 读该文档的会话。没有稳定身份（未保存）或没存过 → 空会话。
+/// 读该文档的会话。没存过 → 空会话。
 #[tauri::command]
 pub fn conversation_load(state: State<'_, Arc<AppState>>, id: String) -> R<Conversation> {
-    let Some((key, _path)) = conversation_key(&state, &id)? else {
-        return Ok(Conversation::default());
-    };
+    let (key, _path) = conversation_key(&state, &id)?;
     Ok(app_core::conversations::load(&state.paths.conversations_dir(), &key))
 }
 
-/// 存该文档的会话。返回 `false` = **没落盘**（未保存文档，界面要如实标注）。
+/// 存该文档的会话。返回 `false` = **真写盘失败**（此时界面要提示一次）；
+/// 未保存文档走草稿身份，照样落盘并返回 `true`。
 #[tauri::command]
 pub fn conversation_save(
     state: State<'_, Arc<AppState>>,
     id: String,
     turns: Vec<ConversationTurn>,
 ) -> R<bool> {
-    let Some((key, path)) = conversation_key(&state, &id)? else {
-        return Ok(false);
+    let (key, path) = conversation_key(&state, &id)?;
+    let (name, format) = {
+        let s = state.session();
+        let d = s.get(&id).ok_or_else(|| format!("文档不存在：{id}"))?;
+        (d.name.clone(), d.format.as_str().to_string())
     };
     let conv = Conversation { doc_key: key, path, turns, updated_at: now_ms() };
-    app_core::conversations::save(&state.paths.conversations_dir(), &conv)?;
+    app_core::conversations::save_doc(
+        &state.paths.conversations_dir(),
+        &conv,
+        &name,
+        &format,
+    )?;
     Ok(true)
 }
 
-/// 清该文档的会话。返回 `false` = 没有可清的东西（未保存文档）。
+/// 清该文档的会话（含 meta）。
 #[tauri::command]
 pub fn conversation_clear(state: State<'_, Arc<AppState>>, id: String) -> R<bool> {
-    let Some((key, _path)) = conversation_key(&state, &id)? else {
-        return Ok(false);
-    };
+    let (key, _path) = conversation_key(&state, &id)?;
     app_core::conversations::clear(&state.paths.conversations_dir(), &key)?;
     Ok(true)
 }

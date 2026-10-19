@@ -333,7 +333,8 @@ window.DGM = window.DGM || {};
     if (layouts.length) host.appendChild(buildOptBtn(d, "layout", t("preview.layoutName"), layouts, d.layout || layouts[0]));
   }
 
-  /** 当前生效的外观（文档级 > 设置默认 > auto）——按钮上显示的就是它。 */
+  /** 当前生效的外观（文档级 > 设置默认 > auto）——按钮上显示的就是它。
+   *  转换中心也用这个口径决定要不要把 look 传给引擎（导出供 dialogs.js 复用）。 */
   function optsCurLook(d) {
     if (d.look) return d.look;
     const s = state.settings && state.settings.mermaid && state.settings.mermaid.look;
@@ -1017,6 +1018,7 @@ window.DGM = window.DGM || {};
     describeError,
     describeMermaid,
     elkLoaded,
+    effectiveLook: optsCurLook,
     exportPng,
     exportSvg,
     copyImage,

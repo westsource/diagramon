@@ -3,7 +3,7 @@
 
     python tools/dev/excalidraw_probe.py
 
-## 它验什么（四个用例都走真实承载页，不 mock）
+## 它验什么（五个用例都走真实承载页，不 mock）
 
 | 用例 | 断言 | 对应过的 bug |
 |---|---|---|
@@ -11,6 +11,7 @@
 | B subgraph | 退化成单个 `image` 时，**位图的 fileId 必须能解析到文件** | 入口丢 `parsed.files` ⇒ 画布上是一块悬空 fileId 的空图 |
 | C 带图片文档 | `setScene` 的 files 进画布、也能被 `getScene` 带回来 | 承载页只给 elements ⇒ 打开含图片的 `.excalidraw` 渲染不出图片（与 mermaid 无关） |
 | D 换文档 | 再 `setScene` 一份无附件文档后，回报的 files **必须为空** | 附件按格式常驻单例 ⇒ 上一份文档的图片被写进新文档正文 |
+| F look 透传 | `loadMermaid` 消息带的 `mermaid` 配置**真的进 m2e**（`{look:'handDrawn'}`）且照常出元素 | 转换沿用文档外观的配置链（2026-10-19）；断链时静默回退默认样式 |
 
 ## 为什么要单独一个探针（而不是并进 canvas_probe）
 
@@ -203,6 +204,32 @@ EXPR = """
   const d = summarise(sc2.msg);
   d.name = 'D setScene 无附件 · 不泄漏';
   out.cases.push(d);
+
+  // ---- F：loadMermaid 带 mermaid 配置（文档级外观沿用，2026-10-19）----
+  // 外壳的「转换沿用渲染配置」链路：dialogs.convertViaEngine → canvas.loadMermaid →
+  // 这里。配置平铺进 m2e 内置 mermaid 的 initialize（parseMermaidToExcalidraw(e, t) 里
+  // `n = {...Ix, ...t}`），所以包一层 ExcalidrawMermaid 记录它实际收到的 cfg，再验证
+  // 配置下转换照常出元素 —— 「发了就算」不算数，要看到引擎真的吃到了。
+  const m2eWrap = { got: null, wrapped: false };
+  if (window.ExcalidrawMermaid && typeof window.ExcalidrawMermaid.parseMermaidToExcalidraw === 'function') {
+    const origParse = window.ExcalidrawMermaid.parseMermaidToExcalidraw;
+    window.ExcalidrawMermaid.parseMermaidToExcalidraw = function (def, cfg) {
+      m2eWrap.got = cfg || null;
+      return origParse.call(window.ExcalidrawMermaid, def, cfg);
+    };
+    m2eWrap.wrapped = true;
+  }
+  clearQueue();
+  apply({ action: 'loadMermaid', source: SESSION[0].src, mermaid: { look: 'handDrawn' } });
+  const loadedF = await waitEvent('loaded', 30000);
+  const scF = await scene();
+  (out.diag = out.diag || []).push({ at: 'F', diag: scF.diag });
+  const f = summarise(scF.msg);
+  f.name = 'F loadMermaid 带 look 配置';
+  f.loaded = !!loadedF;
+  f.cfgGot = m2eWrap.got;
+  f.cfgWrapped = m2eWrap.wrapped;
+  out.cases.push(f);
 
   // ---- E：window.__hostFit（应用级「适应视图」的落点）----
   // 承载页只暴露 __hostZoom / __hostZoomBy 时，应用的两个「适应视图」入口
@@ -544,7 +571,21 @@ def main() -> int:
             if not fit.get("emptyUntouched"):
                 failures.append(f"E：空文档时视图被动了（{fit.get('emptyView')}）")
 
+        # ── F：loadMermaid 带 look 配置（外壳 → 引擎的配置链）──
+        f_case = by.get("F loadMermaid 带 look 配置")
+        if not f_case:
+            failures.append("F：用例缺失")
+        elif not f_case.get("cfgWrapped"):
+            failures.append("F：页面里没包到 ExcalidrawMermaid.parseMermaidToExcalidraw（m2e 未就绪或改动过）")
+        elif (f_case.get("cfgGot") or {}).get("look") != "handDrawn":
+            failures.append(f"F：m2e 没收到 look 配置（cfg={f_case.get('cfgGot')}）—— 外壳→引擎的配置链断了")
+        elif not f_case["loaded"] or f_case["count"] < 3:
+            failures.append(f"F：handDrawn 配置下转换没出元素（loaded={f_case.get('loaded')} count={f_case['count']}）")
+
         log("=" * 66)
+        if f_case:
+            log(f"F look 透传 | m2e 收到: {json.dumps(f_case.get('cfgGot'), ensure_ascii=False)} "
+                f"| 元素 {f_case['count']} | loaded {f_case.get('loaded')}")
         if fit:
             boxes = fit.get("content") or {}
             log(f"E 适应视图 | __hostFit: {fit.get('hasHostFit')} | 有内容裁决 {fit.get('contentVerdict')}"

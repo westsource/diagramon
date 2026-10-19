@@ -2018,7 +2018,10 @@ body.no-mock .mock-badge { display: none; }
   overflow: hidden;
 }
 .dialog-body.has-tabs .dlg-tabs { overflow-y: auto; padding: 12px 0; }
-.dialog-body.has-tabs .dlg-pane { overflow: auto; max-height: none; padding: 14px 16px 16px; }
+/* max-height 不能放开：外层 has-tabs 是 overflow:hidden 的 grid 容器，行高按内容取，
+   面板若被内容撑高，超出部分被容器整体裁掉，自身 overflow:auto 永远不触发
+   （设置窗口没有滚动条、滚不下去的根因）。把面板钉在 62vh 内让它自己滚。 */
+.dialog-body.has-tabs .dlg-pane { overflow: auto; max-height: 62vh; padding: 14px 16px 16px; }
 
 /* §19.10 AI 面板碎片：选区上下文 chip 与"停止"发送键 */
 .ai-chip {

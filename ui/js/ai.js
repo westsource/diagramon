@@ -532,9 +532,12 @@ window.DGM = window.DGM || {};
    *  轮数与体积的裁剪在 Rust 侧做（`crates/ai::fit_history`，带单测）—— 这里只如实交出，
    *  不各自猜一套策略；前端猜一份、Rust 再裁一次，两边迟早漂移。
    */
-  function historyFor(cur) {
+  function historyFor(cur, docId) {
     const out = [];
-    for (const m of msgs(cur) || []) {
+    // 归属优先：渲染回环那轮的对话可能不属于当前活动文档（用户中途切过标签页），
+    // 这时 `msgs(cur)` 会拿错桶 —— 显式传 docId 的调用方都是知道归属的。
+    const list = docId ? bucket(docId)[cur] : msgs(cur);
+    for (const m of list || []) {
       if (m.role !== "user" && m.role !== "assistant") continue;
       if (m.err) continue;
       const text = (m.text || "").trim();
@@ -584,7 +587,7 @@ window.DGM = window.DGM || {};
       context: context || null,
       image_data_url: cur === "vision" && att ? att.dataUrl : null,
       // 前序轮次：**在本轮 push 进 msgs 之前取**，所以天然不含本轮（见 historyFor）
-      history: historyFor(cur),
+      history: historyFor(cur, d && d.id),
     };
 
     if (ta) ta.value = "";
@@ -598,13 +601,19 @@ window.DGM = window.DGM || {};
    *
    *  `sendNow`（走输入框）与「渲染校验回环」（自动重试，不经过输入框）共用它 ——
    *  回环必须能自己造请求，否则用户得手动把报错粘进去，那就不叫自动修正了。
+   *
+   *  `docId`（可选）= 这轮对话**归属**的文档。发送时它就是活动文档；渲染回环要显式传
+   *  （见 `retryCtx.convDoc`）—— 用户中途切了标签页的话，回复必须落回原来的桶，
+   *  否则落盘时（S3：按归属落盘）会写错文档、丢这一轮。
    */
-  async function dispatch(req, cur, userMsg) {
+  async function dispatch(req, cur, userMsg, docId) {
+    const owner = docId || (state.activeDoc() || {}).id || "";
     // `at` 落在这条消息上：会话持久化要按它排跨页签的展示顺序，
     // 落盘时再取 `Date.now()` 会让所有历史轮次挤在同一毫秒上。
     if (userMsg) {
       userMsg.at = Date.now();
-      msgs(cur).push(userMsg);
+      userMsg.doc = owner;
+      bucket(owner)[cur].push(userMsg);
     }
     const bot = {
       id: newId(),
@@ -614,11 +623,12 @@ window.DGM = window.DGM || {};
       req: req.request_id,
       m: cur,
       at: Date.now(),
+      doc: owner,
       // 记下这一轮的**来源与模型 id**：记忆提取要用它们（`m.used.model` 是展示名，不是 id）
       prompt: (userMsg && userMsg.text) || "",
       modelId: req.model_id || "",
     };
-    msgs(cur).push(bot);
+    bucket(owner)[cur].push(bot);
     state.ui.aiBusy = true;
     state.ui.aiRequestId = req.request_id;
     render();
@@ -777,8 +787,10 @@ window.DGM = window.DGM || {};
       state.ui.aiSendThenApply = false;
       applyLast();
     }
-    // 一轮结束就落盘（不 await：落盘失败不该挡住界面）
-    persistConversation();
+    // 一轮结束就落盘（不 await：落盘失败不该挡住界面）。
+    // **按归属落盘**（S3）：这一轮属于哪个文档是发送时定下的（`m.doc`），
+    // 不看"现在活动的是哪个文档" —— 用户中途切标签页的话，按活动文档写盘会丢这一轮。
+    persistConversation(m && m.doc);
     maybeExtractMemory(ev, m);
   }
 
@@ -803,7 +815,7 @@ window.DGM = window.DGM || {};
     const d = state.activeDoc();
     const modelId = m.modelId || (state.currentModel() ? state.currentModel().id : "");
     ipc
-      .invoke("ai_memory_extract", { id: d ? d.id : "", model_id: modelId, prompt, reply })
+      .invoke("ai_memory_extract", { id: (m && m.doc) || (d ? d.id : ""), model_id: modelId, prompt, reply })
       .then(() => state.memoryRefresh())
       .catch(() => {});
   }
@@ -819,8 +831,8 @@ window.DGM = window.DGM || {};
     }
     render();
     // 失败也要落盘：**用户那一轮是真实存在的**（`persistConversation` 会跳过错误气泡，
-    // 所以不会把报错本身写进历史）。
-    persistConversation();
+    // 所以不会把报错本身写进历史）。同样按归属（`m.doc`），不按活动文档。
+    persistConversation(m && m.doc);
   }
 
   /**
@@ -855,11 +867,12 @@ window.DGM = window.DGM || {};
       context: ctx.code || null,
       image_data_url: null,
       // 自动修正也是这条对话的延续，同样带上前序轮次
-      history: historyFor(ctx.tab),
+      history: historyFor(ctx.tab, ctx.convDoc),
     };
     ctx.reqId = req.request_id;
-    // 在这一轮原本所在的 tab 里追加，用户看到的是"同一条对话里它自己修了一次"
-    dispatch(req, ctx.tab, { id: newId(), role: "sys", text: t("ai.retry.sys", { where }) });
+    // 在这一轮原本所在的 tab 里追加，用户看到的是"同一条对话里它自己修了一次"。
+    // 归属也要带回原对话所在文档（S3）：中途切了标签页的话，这轮不能写进别的文档。
+    dispatch(req, ctx.tab, { id: newId(), role: "sys", text: t("ai.retry.sys", { where }) }, ctx.convDoc);
   }
 
   /* ------------------------------------------------------------------ 应用 */
@@ -878,12 +891,17 @@ window.DGM = window.DGM || {};
 
   async function applyBlock(blk, m) {
     const fmt = langToFormat(blk.lang);
+    const fromId = (state.activeDoc() || {}).id || "";
     let d = state.activeDoc();
     if (!d || (state.isTextDoc(d) && d.format !== fmt && blk.lang)) {
       // 目标格式不一致或当前是画布型：另开一个对应格式的新标签页再落正文
       if (!d || state.isCanvasDoc(d) || d.format !== fmt) {
         const created = await state.newDoc(fmt);
         if (created) {
+          // 会话过继（S2）：产物落进新标签页，这段对话就该跟着它走 —— 否则"从无到有"
+          // 生成完，对话留在旧文档（多半还是未保存的），关掉就没了。
+          // 必须在 loadActive() **之前**复制：切换后 render() 读的是新文档的桶。
+          if (fromId && fromId !== created.id) adoptConversation(fromId, created.id);
           DGM.editor.loadActive();
           d = created;
         }
@@ -901,6 +919,8 @@ window.DGM = window.DGM || {};
         format: fmt,
         code: blk.code,
         tab: m && m.m ? m.m : tab(),
+        // 这轮对话归属的文档（S3）：修正轮要写回同一个桶，而不是"当时活动"的文档
+        convDoc: (m && m.doc) || (d && d.id) || "",
         tried: false,
         reqId: null,
       };
@@ -1074,13 +1094,26 @@ window.DGM = window.DGM || {};
     return !!((m.text || "").trim() || (m.thinking || "").trim());
   }
 
-  /** 把该文档的会话落盘。`docId` 为未保存文档时 Rust 侧回 false，界面据此如实标注。
+  /** 把该文档的会话落盘。3.8.0 起未保存文档也有身份（草稿键），Rust 侧照常落盘；
+   *  `false` 只表示**真写盘失败** —— 提示一次，不静默（以前这个 false 被整个忽略，
+   *  用户以为存了，其实"未保存文档"这一类从来就没落过盘）。
+   *
+   *  `docId`（可选）= 这段会话归属的文档。不传则按活动文档（兼容旧调用）。
+   *  按归属而不是按活动文档落盘（S3）：流式过程中用户切了标签页的话，
+   *  按"当前活动"写盘会把这一轮写进别的文档、从原来的文档里丢掉。
    *
    *  只交**文本**：图片是 dataURL、只在内存，永不落盘（对外承诺的"图片不落盘"）；
    *  思考原文是文本，跟着一起存（见 `ConversationTurn::thinking`）。
    */
-  async function persistConversation() {
-    const d = state.activeDoc();
+  let convSaveWarned = false;
+  function warnSaveFailed() {
+    if (convSaveWarned) return;
+    convSaveWarned = true;
+    DGM.toast({ icon: "alert", title: t("ai.convSaveFail"), sub: "", warn: true });
+  }
+
+  async function persistConversation(docId) {
+    const d = docId ? state.doc(docId) : state.activeDoc();
     if (!d) return;
     const b = bucket(d.id);
     const turns = [];
@@ -1099,10 +1132,30 @@ window.DGM = window.DGM || {};
       }
     }
     try {
-      await ipc.invoke("conversation_save", { id: d.id, turns });
+      const ok = await ipc.invoke("conversation_save", { id: d.id, turns });
+      if (!ok) warnSaveFailed();
     } catch (e) {
       /* 存不上不该打断对话；下次落盘会再试 */
     }
+  }
+
+  /** 把 `fromId` 的会话**复制**给 `toId`（AI 应用产物另开标签页时调用，S2）。
+   *
+   *  为什么复制而不是移动：旧文档里那段提问仍然是它的上下文，历史不该凭空消失；
+   *  文本很小，重复一份比"猜用户想去哪"安全。消息对象要逐个浅拷贝 ——
+   *  两个桶共享同一批对象的话，之后任何一边的改动（比如 `applied` 标记）都会串场。
+   *
+   *  时机：必须在 `editor.loadActive()` **之前**调用 —— 切换后 `render()` 读的就是
+   *  新文档的桶，先切后复制会闪一帧空对话。
+   */
+  function adoptConversation(fromId, toId) {
+    const src = msgsByDoc.get(fromId);
+    if (!src || !toId || fromId === toId) return;
+    const copy = { chat: [], vision: [], review: [] };
+    for (const k of Object.keys(copy)) copy[k] = src[k].map((x) => ({ ...x }));
+    msgsByDoc.set(toId, copy);
+    convLoaded.add(toId); // 已就绪：别让 ensureConversation 再拿磁盘上的空会话覆盖它
+    persistConversation(toId);
   }
 
   /** 清空**当前文档**的会话（三个页签一起，与按钮文案"清空当前文档的对话"一致），
