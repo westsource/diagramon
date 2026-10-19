@@ -10,7 +10,7 @@ AI 是第一公民：既可用自有 Key 直连（BYOK），也可走会员云�
 D2 走随包的官方 wasm 构建，drawio 与 Excalidraw 走随包自带的运行时，**不起任何子进程、不发任何外部请求**。
 只有你主动使用 AI 时，相关代码或图片才会发往你选择的上游（BYOK 直连你的服务商，会员走 Diagramon 云网关）。
 
-版本 **3.9.0** · 官网 <https://www.diagramon.com>
+版本 **3.10.0** · 官网 <https://www.diagramon.com>
 
 ## 界面截图
 
@@ -84,9 +84,10 @@ D2 走随包的官方 wasm 构建，drawio 与 Excalidraw 走随包自带的运�
 - **离线自带**：drawio（裁剪过的运行时）与 Excalidraw（本地打包）都随安装包分发，零外部请求
 
 ### 格式转换（转换中心）
-- **方向**：`Mermaid → DOT` / `Mermaid → D2` / `DOT → D2`（纯 Rust 实现）、`Mermaid → drawio`、
-  `Mermaid → Excalidraw`（交给各自的引擎，不重新实现解析器）、`D2 → drawio`（在前端用 D2 自己的
-  wasm 先算出几何，再映射成 mxGraph —— **保几何**，转出来还能继续拖拽编辑）
+- **方向**：`Mermaid → DOT` / `Mermaid → D2` / `DOT → D2`（纯 Rust 实现）、`DOT → drawio`
+  （Graphviz 先出布局，再由 Rust 映射成 mxCell —— **保几何**，端点吸附形状边界，子图变容器）、
+  `Mermaid → drawio`、`Mermaid → Excalidraw`（交给各自的引擎，不重新实现解析器）、`D2 → drawio`
+  （在前端用 D2 自己的 wasm 先算出几何，再映射成 mxGraph —— **保几何**，转出来还能继续拖拽编辑）
 - **明确不做的方向也说明理由**：D2 是 Mermaid / DOT 的超集（容器、classes、vars、layers…），
   反向压缩要逐项决定丢什么，所以不做；「从 D2 出去」由 `D2 → drawio` 承接
 - **单向语义**：产物另开标签页，原文件字节不变

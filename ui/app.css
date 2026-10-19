@@ -1434,6 +1434,7 @@ table.spec td .kbd { font: var(--fs-xs) var(--font-mono); color: var(--ink-2); b
 .conv-issues li .ico { color: var(--warn); flex: none; margin-top: 1px; }
 .conv-issues li.lvl-info .ico { color: var(--accent); }
 .conv-rec-note { color: var(--muted); padding-top: 3px; }
+.conv-chk { display: flex; align-items: center; gap: 6px; margin: 6px 0; font-size: var(--fs-sm); color: var(--ink-2); cursor: pointer; }
 
 /* AI 用量 */
 .usage { font-family: var(--font-ui); }

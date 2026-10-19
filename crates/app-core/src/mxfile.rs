@@ -372,3 +372,278 @@ mod tests {
         assert_eq!(c.labels, 3, "子网 / 网关 / UserObject 的“数据库(主)”");
     }
 }
+
+/* ------------------------------------------------------------------ 输出 */
+
+use crate::plan::{Arrow, CanvasPlan, PlanContainer, PlanPage, Rect, ShapeRole};
+
+/// XML 属性值转义。**换行写成 `&#10;`** —— drawio 存多行标签的方式，别直接塞裸换行。
+fn attr(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 8);
+    for ch in s.chars() {
+        match ch {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\n' => out.push_str("&#10;"),
+            '\r' => {}
+            _ => out.push(ch),
+        }
+    }
+    out
+}
+
+fn container_depth(id: &str, page: &PlanPage, guard: usize) -> usize {
+    if guard == 0 {
+        return 1; // 环：当两层处理，别递归爆栈
+    }
+    match page.containers.iter().find(|c| c.id == id).and_then(|c| c.parent.as_deref()) {
+        Some(parent) => 1 + container_depth(parent, page, guard - 1),
+        None => 1,
+    }
+}
+
+fn edge_style(edge: &crate::plan::PlanEdge) -> String {
+    let mut s = crate::plan::style_of(edge.role, ShapeRole::Rect);
+    s.push_str(match edge.arrow {
+        Arrow::None => "endArrow=none;",
+        Arrow::Classic => "endArrow=classic;",
+        Arrow::Block => "endArrow=block;",
+        Arrow::Open => "endArrow=open;",
+    });
+    if edge.dashed {
+        s.push_str("dashed=1;");
+    }
+    if edge.curved {
+        s.push_str("curved=1;");
+    }
+    for raw in &edge.raw_style {
+        if !raw.trim().is_empty() {
+            s.push_str(raw.trim());
+            if !raw.trim_end().ends_with(';') {
+                s.push(';');
+            }
+        }
+    }
+    s
+}
+
+fn node_style(node: &crate::plan::PlanNode) -> String {
+    let mut s = crate::plan::style_of(node.role, node.shape);
+    for raw in &node.raw_style {
+        if !raw.trim().is_empty() {
+            s.push_str(raw.trim());
+            if !raw.trim_end().ends_with(';') {
+                s.push(';');
+            }
+        }
+    }
+    s
+}
+
+/// 把一份 `CanvasPlan` 写成 mxfile。
+///
+/// 顺序约束（**必须**）：容器先于其子节点。drawio 对 `parent` 的前向引用会**静默丢 cell**，
+/// 而 d2.js 已经踩过一次；这里用拓扑序兜住，不赌调用方的顺序。
+pub fn emit(plan: &CanvasPlan) -> String {
+    let mut out = String::new();
+    out.push_str("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<mxfile host=\"Diagramon\">\n");
+    for page in &plan.pages {
+        out.push_str(&format!(
+            "  <diagram name=\"{}\" id=\"{}\">\n    <mxGraphModel dx=\"800\" dy=\"600\" grid=\"1\" page=\"1\">\n      <root>\n        <mxCell id=\"0\" />\n        <mxCell id=\"1\" parent=\"0\" />\n",
+            attr(&page.name),
+            attr(&page.id)
+        ));
+
+        // 绝对坐标索引（容器 + 节点）。相对化只减**直接父**的原点。
+        let mut abs: std::collections::HashMap<&str, Rect> = std::collections::HashMap::new();
+        for c in &page.containers {
+            abs.insert(c.id.as_str(), c.rect);
+        }
+        for n in &page.nodes {
+            abs.insert(n.id.as_str(), n.rect);
+        }
+        let rel = |rect: Rect, parent: Option<&str>| -> Rect {
+            let (dx, dy) = parent
+                .and_then(|p| abs.get(p).copied())
+                .map(|p| (p.x, p.y))
+                .unwrap_or((0, 0));
+            Rect { x: rect.x - dx, y: rect.y - dy, w: rect.w, h: rect.h }
+        };
+
+        // 容器按嵌套深度升序（先父后子）
+        let mut containers: Vec<&PlanContainer> = page.containers.iter().collect();
+        containers.sort_by_key(|c| container_depth(&c.id, page, 32));
+        for c in containers {
+            let r = rel(c.rect, c.parent.as_deref());
+            out.push_str(&format!(
+                "        <mxCell id=\"{}\" value=\"{}\" style=\"{}\" vertex=\"1\" parent=\"{}\"><mxGeometry x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\" as=\"geometry\" /></mxCell>\n",
+                attr(&c.id),
+                attr(&c.label),
+                crate::plan::style_of(c.role, ShapeRole::Rect)
+                    + &c
+                        .raw_style
+                        .iter()
+                        .filter(|s| !s.trim().is_empty())
+                        .map(|s| if s.trim_end().ends_with(';') { s.trim().to_string() } else { format!("{};", s.trim()) })
+                        .collect::<String>(),
+                attr(c.parent.as_deref().unwrap_or("1")),
+                r.x,
+                r.y,
+                r.w,
+                r.h
+            ));
+        }
+
+        for n in &page.nodes {
+            let r = rel(n.rect, n.parent.as_deref());
+            out.push_str(&format!(
+                "        <mxCell id=\"{}\" value=\"{}\" style=\"{}\" vertex=\"1\" parent=\"{}\"><mxGeometry x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\" as=\"geometry\" /></mxCell>\n",
+                attr(&n.id),
+                attr(&n.label),
+                node_style(n),
+                attr(n.parent.as_deref().unwrap_or("1")),
+                r.x,
+                r.y,
+                r.w,
+                r.h
+            ));
+        }
+
+        for e in &page.edges {
+            out.push_str(&format!(
+                "        <mxCell id=\"{}\" value=\"{}\" style=\"{}\" edge=\"1\" parent=\"1\" source=\"{}\" target=\"{}\">\n          <mxGeometry relative=\"1\" as=\"geometry\"",
+                attr(&e.id),
+                attr(e.label.as_deref().unwrap_or("")),
+                edge_style(e),
+                attr(&e.from),
+                attr(&e.to)
+            ));
+            if e.points.is_empty() {
+                out.push_str(" />\n");
+            } else {
+                // 中间点作为 waypoints；首尾是端点，不放进 Array（否则走线两端各折一下）
+                out.push_str(">\n            <Array as=\"points\">\n");
+                for p in e.points.iter().skip(1).take(e.points.len().saturating_sub(2)) {
+                    out.push_str(&format!(
+                        "              <mxPoint x=\"{}\" y=\"{}\" />\n",
+                        p.x, p.y
+                    ));
+                }
+                out.push_str("            </Array>\n          </mxGeometry>\n");
+            }
+            out.push_str("        </mxCell>\n");
+        }
+
+        out.push_str("      </root>\n    </mxGraphModel>\n  </diagram>\n");
+    }
+    out.push_str("</mxfile>\n");
+    out
+}
+
+#[cfg(test)]
+mod emit_tests {
+    use super::*;
+    use crate::plan::{CanvasPlan, PlanEdge, PlanNode, PlanPage, Point, Provenance, Rect, ShapeRole, StyleRole};
+    use app_ipc::FormatId;
+
+    fn page() -> PlanPage {
+        PlanPage {
+            name: "Page-1".into(),
+            id: "p1".into(),
+            containers: vec![PlanContainer {
+                id: "c1".into(),
+                label: "子网".into(),
+                rect: Rect { x: 100, y: 100, w: 300, h: 200 },
+                parent: None,
+                role: StyleRole::Container,
+                raw_style: vec![],
+            }],
+            nodes: vec![PlanNode {
+                id: "n1".into(),
+                label: "网关 & <API>\n第二行".into(),
+                rect: Rect { x: 150, y: 130, w: 80, h: 40 },
+                shape: ShapeRole::Rounded,
+                role: StyleRole::Primary,
+                parent: Some("c1".into()),
+                raw_style: vec!["sketch=1".into()],
+                raw_children: vec![],
+                at: None,
+            }],
+            edges: vec![PlanEdge {
+                id: "e1".into(),
+                from: "n1".into(),
+                to: "n1".into(),
+                label: Some("自环".into()),
+                points: vec![Point { x: 150, y: 150 }, Point { x: 140, y: 140 }, Point { x: 230, y: 150 }],
+                curved: true,
+                arrow: Arrow::Block,
+                dashed: false,
+                role: StyleRole::Primary,
+                raw_style: vec![],
+                at: None,
+            }],
+        }
+    }
+
+    fn plan() -> CanvasPlan {
+        CanvasPlan {
+            pages: vec![page()],
+            provenance: Provenance {
+                from: FormatId::Dot,
+                source_hash: "abc".into(),
+                converted_at: 0,
+                app_version: "test".into(),
+            },
+            issues: vec![],
+        }
+    }
+
+    #[test]
+    fn emit_output_is_inspectable_and_counts_match() {
+        let p = plan();
+        let xml = emit(&p);
+        let c = inspect(&xml).unwrap();
+        assert_eq!(c, p.counts(), "{xml}");
+        assert_eq!(c.pages, 1);
+        assert_eq!(c.nodes, 2, "节点 + 容器顶点");
+        assert_eq!(c.containers, 1);
+        assert_eq!(c.edges, 1);
+        assert_eq!(c.labels, 3, "网关 / 自环 / 子网");
+    }
+
+    #[test]
+    fn emit_escapes_attributes_and_newlines() {
+        let xml = emit(&plan());
+        assert!(xml.contains("网关 &amp; &lt;API&gt;&#10;第二行"), "{xml}");
+        assert!(!xml.contains("网关 & <API>"), "{xml}");
+    }
+
+    #[test]
+    fn child_geometry_is_relative_to_its_container() {
+        let xml = emit(&plan());
+        // 容器 (100,100)，节点 (150,130) ⇒ 相对 (50,30)
+        assert!(xml.contains("x=\"50\" y=\"30\" width=\"80\" height=\"40\""), "{xml}");
+        // 容器自身保持绝对
+        assert!(xml.contains("x=\"100\" y=\"100\" width=\"300\" height=\"200\""), "{xml}");
+    }
+
+    #[test]
+    fn container_precedes_its_children() {
+        let xml = emit(&plan());
+        let ci = xml.find("id=\"c1\"").unwrap();
+        let ni = xml.find("id=\"n1\"").unwrap();
+        assert!(ci < ni, "drawio 对 parent 前向引用会静默丢 cell\n{xml}");
+    }
+
+    #[test]
+    fn edge_waypoints_exclude_endpoints_and_keep_style_tokens() {
+        let xml = emit(&plan());
+        assert!(xml.contains("curved=1;"), "{xml}");
+        assert!(xml.contains("endArrow=block;"), "{xml}");
+        assert!(xml.contains("<mxPoint x=\"140\" y=\"140\" />"), "{xml}");
+        assert!(!xml.contains("<mxPoint x=\"150\" y=\"150\" />"), "首点不应进 waypoints");
+        assert!(!xml.contains("<mxPoint x=\"230\" y=\"150\" />"), "末点不应进 waypoints");
+    }
+}

@@ -1435,6 +1435,8 @@ pub enum Engine {
     Excalidraw,
     /// 交给**前端的 D2 wasm**：几何在页面里算出来，再转 mxGraph（Rust 侧没有 wasm 跑不了）
     D2Wasm,
+    /// Graphviz 先在页面里出 `json` 布局，再由 Rust 映射成 mxGraph（保几何）
+    DotJson,
     /// 暂不支持
     None,
 }
@@ -1447,6 +1449,7 @@ impl Engine {
             Engine::Drawio => "drawio",
             Engine::Excalidraw => "excalidraw",
             Engine::D2Wasm => "d2wasm",
+            Engine::DotJson => "dotjson",
             Engine::None => "none",
         }
     }
@@ -1499,8 +1502,12 @@ pub fn plan(from: app_ipc::FormatId, to: app_ipc::FormatId) -> Result<Plan, Stri
                 )
             }
             D2 => (Engine::Rust, "由 Rust 侧的 DOT 解析器完成，可立即预览（基础子集，版式会重新计算）"),
-            Drawio | Excalidraw => {
-                return Err("DOT 只能转 D2 或（实验性的）Mermaid：画布承载页没有 DOT 导入器".into())
+            Drawio => (
+                Engine::DotJson,
+                "Graphviz 先在窗口内出 json 布局，再由 Rust 映射成 mxGraph（保几何，可继续拖拽编辑）",
+            ),
+            Excalidraw => {
+                return Err("DOT 不能转 Excalidraw：Excalidraw 只接 Mermaid，且没有 DOT 导入器".into())
             }
             Dot => return Err(same()),
         },
@@ -1561,6 +1568,9 @@ pub fn convert(
             Engine::D2Wasm => {
                 Err("D2 → drawio 由前端的 D2 wasm 编译器完成（经画布承载页）".into())
             }
+            Engine::DotJson => Err(
+                "DOT → drawio 由前端 Graphviz 先出 json 布局，再交给 dot_layout_to_drawio 映射".into(),
+            ),
             // 走到这里说明 plan() 放行了却没有 Rust 侧的实现 —— 是接线漏了，如实说出来
             Engine::Rust => Err(format!("{from:?} → {to:?} 缺 Rust 侧的映射器")),
             Engine::None => Err(p.reason),
@@ -1832,7 +1842,9 @@ mod tests {
         let e = plan(D2, Mermaid).unwrap_err();
         assert!(e.contains("超集"), "反向转换要说清为什么不做的道理：{e}");
         assert!(plan(D2, Excalidraw).unwrap_err().contains("drawio"));
-        assert!(plan(Dot, Drawio).unwrap_err().contains("没有 DOT 导入器"));
+        assert!(plan(Dot, Drawio).unwrap().engine.id() == "dotjson");
+        assert!(convert(Dot, Drawio, "digraph { a -> b }").is_err(), "真正的实现在 dot_layout_to_drawio，不在 convert()");
+        assert!(plan(Dot, Excalidraw).unwrap_err().contains("Excalidraw"));
     }
 
     /* ---------------- Mermaid → D2 ---------------- */

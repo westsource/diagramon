@@ -231,6 +231,7 @@ pub fn run() {
             commands::export_write,
             commands::convert_text,
             commands::mxfile_inspect,
+            commands::dot_layout_to_drawio,
             commands::debug_note,
             commands::ai_model_key_set,
             commands::ai_model_key_delete,

@@ -78,6 +78,11 @@ pub fn issue_from_note(note: &str) -> ConvIssue {
 /// 正常转换记成失败。3.8.0 起 Excalidraw 链会真沿用文档 `look`，drawio 链的导入器
 /// 不可配置 —— 两者都要如实写进报告，而不是只剩一句“交给了引擎”。
 pub fn engine_issues(to: FormatId, engine: &str, look: Option<&str>) -> Vec<ConvIssue> {
+    // DOT → drawio 不是“交给承载页”：Graphviz 只负责布局，映射在 Rust；
+    // 外观/布局的说明与 drawio 导入器无关。
+    if engine == "dotjson" {
+        return vec![issue(Level::Info, "engine.dotjson", &[("engine", engine)])];
+    }
     let mut out = vec![issue(Level::Info, "engine.delegated", &[("engine", engine)])];
     match to {
         FormatId::Excalidraw => {
@@ -101,6 +106,7 @@ pub fn issue_note(issue: &ConvIssue) -> String {
     let p = |key: &str| issue.params.get(key).map(String::as_str).unwrap_or("");
     match issue.code.as_str() {
         "engine.delegated" => format!("由 {} 引擎完成（经画布承载页）", p("engine")),
+        "engine.dotjson" => "Graphviz 出布局，Rust 映射成 drawio（保几何）".to_string(),
         "engine.look.carried" => format!(
             "转换沿用文档外观：look = {}（布局不参与转换，按引擎默认）",
             p("look")

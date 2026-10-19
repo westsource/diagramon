@@ -890,6 +890,51 @@ window.DGM = window.DGM || {};
       }
       ok("dot → mermaid 如实报未实现（不是静默成功）", convertErr.includes("实验方向"), convertErr.slice(0, 60));
 
+      // ── 3.10.0：DOT → drawio（Graphviz 真布局 + Rust 映射）──
+      // 这条必须走**真实的** Graphviz wasm 与命令，DOT 的几何换算（单位/翻转）只有这条能证明。
+      try {
+        const g = await window.DGMGraphvizReady;
+        const dotSrc = "digraph G { rankdir=LR; subgraph cluster_a { A; B } A -> B [label=\"x\"]; }";
+        const dotJson = await g.layout(dotSrc, "json", "dot");
+        const dotOut = await invoke("dot_layout_to_drawio", {
+          json: dotJson,
+          source: dotSrc,
+          options: { layout: "dot", cluster_as_container: true },
+        });
+        ok("DOT → drawio 进入 dotjson 引擎并产出 mxfile", dotOut.engine === "dotjson" && dotOut.body.includes("<mxfile"), dotOut.engine);
+        ok("DOT 产物报告 geometry=exact、style=approx", dotOut.report.fidelity.geometry === "exact" && dotOut.report.fidelity.style === "approx", JSON.stringify(dotOut.report.fidelity));
+        const dotInspected = await invoke("mxfile_inspect", { xml: dotOut.body });
+        ok(
+          "DOT 产物自检计数与报告一致（节点/边/容器）",
+          dotInspected.nodes === dotOut.report.counts.nodes &&
+            dotInspected.edges === dotOut.report.counts.edges &&
+            dotInspected.containers >= 1,
+          JSON.stringify({ inspected: dotInspected, report: dotOut.report.counts }),
+        );
+        ok("DOT 的 subgraph 变成了 drawio 容器", dotOut.body.includes("container=1"), "");
+        const flat = await invoke("dot_layout_to_drawio", {
+          json: dotJson,
+          source: dotSrc,
+          options: { layout: "dot", cluster_as_container: false },
+        });
+        ok("取消「子图转容器」时如实降级为 partial", flat.report.fidelity.structure === "partial" && !flat.body.includes("container=1"), JSON.stringify(flat.report.fidelity));
+
+        // UI 全链路：`runConvert` → Graphviz → 命令 → 新标签页 → 转换记录
+        const dotDoc = await st.newDoc("dot");
+        await st.setBodyNow(dotDoc.id, dotSrc);
+        const dir = DGM.directionFor("dot", "drawio");
+        await DGM.dialogs.runConvert(dotDoc, dir, null, { layout: "dot", cluster_as_container: true });
+        const conv = st.convLast("dot", "drawio");
+        const made = st.activeDoc();
+        ok(
+          "从「转换」入口走完 DOT → drawio（新标签页 + 报告入账）",
+          !!conv && !!made && made.format === "drawio" && made.body.includes("<mxfile"),
+          conv ? conv.report.engine : "没有记录",
+        );
+      } catch (e) {
+        ok("DOT → drawio 全链路", false, (e && e.message) || String(e));
+      }
+
       // ── D2（第 5 种格式）──
       //
       // 为什么这几条必须在真机自检里跑：D2 的 wasm 走 `/d2/index.js` 这个**自定义协议挂载点**，

@@ -289,6 +289,49 @@ window.DGM = window.DGM || {};
     return { doc, notes: made.notes };
   }
 
+  /**
+   * DOT → drawio：**几何必须由 Graphviz 真的算出来**（Rust 侧没有 wasm）。
+   *
+   * 顺序：窗口内 `layout(..., "json")` → `dot_layout_to_drawio`（Rust 映射 + 自检）→ 新标签页。
+   * 布局失败时**不建标签页**（G19 的同一原则）：错误里通常带 DOT 行号，直接显示。
+   */
+  async function convertViaDotJson(source, srcDoc, dir, options) {
+    if (!window.DGMGraphvizReady) {
+      DGM.toast({ icon: "alert", title: t("dlg.convert.title"), sub: t("conv.dotjson.noEngine"), warn: true });
+      return null;
+    }
+    const fmt = state.docFmt(srcDoc);
+    const layout = fmt.layouts && fmt.layouts.includes(srcDoc.layout) ? srcDoc.layout : "dot";
+    let json = "";
+    try {
+      const g = await window.DGMGraphvizReady;
+      if (!g) throw new Error(window.DGMGraphvizError || t("conv.dotjson.noEngine"));
+      json = await g.layout(source, "json", layout);
+    } catch (e) {
+      const msg = (e && e.message) || String(e);
+      state.pushConvert({ from: dir.from, to: dir.to, doc: srcDoc.name, ok: false, note: msg });
+      DGM.toast({ icon: "alert", title: t("dlg.convert.title"), sub: t("conv.dotjson.failed", { msg }), warn: true });
+      return null;
+    }
+    let out = null;
+    try {
+      out = await DGM.ipc.invoke("dot_layout_to_drawio", {
+        json,
+        source,
+        options: Object.assign({}, options, { layout }),
+      });
+    } catch (e) {
+      const msg = (e && e.message) || String(e);
+      state.pushConvert({ from: dir.from, to: dir.to, doc: srcDoc.name, ok: false, note: msg });
+      DGM.toast({ icon: "alert", title: t("dlg.convert.title"), sub: msg, warn: true });
+      return null;
+    }
+    const doc = await state.newDoc(dir.to);
+    if (!doc) return null;
+    await state.setBodyNow(doc.id, out.body);
+    return { doc, notes: out.notes || [], report: out.report || null };
+  }
+
   /** 转换成功后统一收尾：刷新界面、记转换记录、提示。 */
   async function finishConvert(created, dir, srcDoc, notes, report) {
     DGM.editor.loadActive();
@@ -340,7 +383,8 @@ window.DGM = window.DGM || {};
     if (!sel) sel = dirs.find((c) => c.ok) || dirs[0];
 
     // 后端说这个方向谁来做（一次询问，弹窗与执行都用它，避免两处判断不一致）
-    const plan = await planOf(sel.from, sel.to, d.body, docOptions(d));
+    const dOpts = docOptions(d);
+    const plan = await planOf(sel.from, sel.to, d.body, dOpts);
 
     const targets = dirs
       .map(
@@ -362,9 +406,11 @@ window.DGM = window.DGM || {};
 
     const previewHtml = plan.error
       ? `<div class="callout warn">${icon("alert")}<span>${esc(plan.error)}</span></div>`
-      : isRust
-        ? `<pre class="conv-pre">${esc(plan.text)}</pre>${notesHtml}`
-        : `<div class="callout">${icon("info")}<span>${esc(plan.notes[0] || t("dlg.convert.noPreview"))}</span></div>`;
+      : plan.engine === "dotjson"
+        ? `<div class="callout">${icon("info")}<span>${esc(t("conv.dotjson.plan", { layout: dOpts.layout || "dot" }))}<br>${esc(plan.notes[0] || "")}</span></div>`
+        : isRust
+          ? `<pre class="conv-pre">${esc(plan.text)}</pre>${notesHtml}`
+          : `<div class="callout">${icon("info")}<span>${esc(plan.notes[0] || t("dlg.convert.noPreview"))}</span></div>`;
 
     const meta = isRust && plan.text ? t("dlg.convert.previewMeta", { n: plan.text.split("\n").length }) : "";
     const newName = d.name.replace(/\.[^.]+$/, "") + (state.fmtById(sel.to).exts[0] || "." + sel.to);
@@ -373,6 +419,11 @@ window.DGM = window.DGM || {};
       : isRust
         ? ""
         : t("conv.viaEngine", { engine: state.fmtById(sel.to).name });
+    // 集群转容器：只对 DOT → drawio 有意义（Graphviz 是唯一带真实 cluster 几何的源）
+    const clusterHtml =
+      sel.from === "dot" && sel.to === "drawio"
+        ? `<label class="conv-chk"><input type="checkbox" id="conv-cluster" checked /> ${esc(t("conv.opt.cluster"))}</label>`
+        : "";
 
     openDialog(
       head(t("dlg.convert.titleTo", { from: state.docFmt(d).name, to: state.fmtById(sel.to).name }), "swap") +
@@ -388,6 +439,7 @@ window.DGM = window.DGM || {};
             <div class="conv-col"><h4>${esc(t("dlg.convert.pickTarget"))}</h4><div class="tgts">${targets}</div></div>
             <div class="conv-col"><h4>${esc(t("dlg.convert.preview"))} <span class="meta">${esc(meta)}</span></h4>${previewHtml}</div>
           </div>
+          ${clusterHtml}
           <div class="callout warn">${icon("alert")}<span>${t("dlg.convert.oneway", { name: esc(d.name) })}</span></div>
         </div>` +
         foot(hint,
@@ -402,15 +454,19 @@ window.DGM = window.DGM || {};
         return;
       }
       if (act === "go") {
+        const cb = document.querySelector("#conv-cluster");
+        const opts = Object.assign({}, dOpts, {
+          cluster_as_container: cb ? !!cb.checked : dOpts.cluster_as_container,
+        });
         close();
-        runConvert(d, sel, plan);
+        runConvert(d, sel, plan, opts);
       }
     });
   }
 
   /** 真正执行转换。`plan` 是弹窗里那次询问的结果（复用，不重复问）。 */
-  async function runConvert(srcDoc, dir, plan) {
-    const options = docOptions(srcDoc);
+  async function runConvert(srcDoc, dir, plan, optsIn) {
+    const options = optsIn || docOptions(srcDoc);
     const p = plan || (await planOf(dir.from, dir.to, srcDoc.body, options));
     if (p.error) {
       DGM.toast({ icon: "alert", title: t("dlg.convert.notImpl"), sub: p.error, warn: true });
@@ -421,9 +477,16 @@ window.DGM = window.DGM || {};
 
     let created = null;
     let extraNotes = [];
+    let viaReport = p.report;
     if (p.engine === "rust") {
       created = await state.newDoc(dir.to);
       if (created) await state.setBodyNow(created.id, p.text);
+    } else if (p.engine === "dotjson") {
+      // DOT → drawio：Graphviz 出布局，Rust 映射（保几何）
+      const via = await convertViaDotJson(srcDoc.body, srcDoc, dir, options);
+      created = via && via.doc;
+      extraNotes = (via && via.notes) || [];
+      viaReport = (via && via.report) || p.report;
     } else if (p.engine === "d2wasm") {
       // D2 → drawio：几何在前端由 wasm 算，产物是一份完整的 mxfile
       const via = await convertViaD2Wasm(srcDoc.body, srcDoc, dir);
@@ -438,7 +501,7 @@ window.DGM = window.DGM || {};
       return;
     }
     if (!created) return;
-    await finishConvert(created, dirWithReport, srcDoc, (p.notes || []).concat(extraNotes), p.report);
+    await finishConvert(created, dirWithReport, srcDoc, (p.notes || []).concat(extraNotes), viaReport);
   }
 
   /* ================================================================== 识图 */

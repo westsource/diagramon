@@ -64,18 +64,17 @@ pub fn registry() -> Vec<FormatInfo> {
             surface: Surface::Text,
             split_view: true,
             ai: true,
-            // DOT 唯一可用的方向是 D2（Rust 解析器，基础子集）。
+            // DOT 的唯一出口是 D2（Rust）与 drawio（Graphviz json + Rust 映射）。
             // DOT → Mermaid 目前**没有映射器**：注册表不再声明它可用（G15）；
             // 转换中心仍会把它列出来（`shell.js` 的 directions() 读 i18n 的说明），
             // 卡片标“实验 / 尚无映射器”，而不是装扮成可用。
-            // DOT → drawio 在 3.10.0（E3）落地后再加进来。
-            convert_to: vec![FormatId::D2],
+            convert_to: vec![FormatId::D2, FormatId::Drawio],
             layouts: DOT_LAYOUTS.iter().map(|s| (*s).to_string()).collect(),
             looks: vec![],
             note: "文本图表，支持源码 / 分屏 / 预览三态，六种布局引擎".into(),
             default_body: DOT_BODY.into(),
-            // 3.10.0 起 DOT 产物才能落到 drawio；之前不声明这个入口
-            ai_via: vec![],
+            // DOT 经 Graphviz json 布局后由 Rust 映射成 mxGraph（3.10.0 起）
+            ai_via: vec![FormatId::Drawio],
         },
         FormatInfo {
             id: FormatId::D2,
@@ -109,8 +108,8 @@ pub fn registry() -> Vec<FormatInfo> {
             looks: vec![],
             note: "画布即编辑器；文件仍是可 diff 的 mxfile XML".into(),
             default_body: DRAWIO_BODY.into(),
-            // 3.9.0 的现状：Mermaid 与 D2 能落到 drawio；DOT 要等 3.10.0 的 E3
-            ai_via: vec![FormatId::Mermaid, FormatId::D2],
+            // Mermaid / D2 / DOT 的产物现在都能落到 drawio
+            ai_via: vec![FormatId::Mermaid, FormatId::Dot, FormatId::D2],
         },
         FormatInfo {
             id: FormatId::Excalidraw,

@@ -398,6 +398,25 @@ async function main() {
     process.exit(0);
   }
 
+  // 第 9 步（3.10.0 起）：转换门禁。它跑的是**转换语料 + 几何/结构不变量**，
+  // 与第 6 步的“全量单测”互补（这里失败会明确指出是哪条链）。
+  step("转换门禁（convert_probe：语料 / 5×5 / emit / from_dot）");
+  {
+    const py = findPython();
+    if (!py) {
+      skipped.push("转换门禁（没有可用的 Python）");
+    } else {
+      const r = spawnSync(py[0], [...py.slice(1), "tools/dev/convert_probe.py"], {
+        cwd: ROOT,
+        stdio: "inherit",
+      });
+      if (r.status !== 0) {
+        log(C.red("转换门禁失败（见上方输出）"));
+        process.exit(1);
+      }
+    }
+  }
+
   step("真机自检（启动客户端 → 前端跑真实 IPC 断言 → 落盘报告）");
   // `--skip-test` 不建构建：这时也要保证 exe 读到的是当前 ui/（见 syncDebugUi 的注释）
   syncDebugUi();

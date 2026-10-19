@@ -37,11 +37,18 @@ REQUIRED = [
     "shapes.d2",
     "stencil.drawio",
     "container.drawio",
+    # 3.10.0：Graphviz 真产物的 json（from_dot 的几何/结构回归）
+    "login_lr.json",
+    "subgraph_two_levels.json",
+    "self_loop.json",
+    "chinese_labels.json",
 ]
 
 SUITES = [
     ("convert::tests", "5×5 注册表不变量 + 转换计数"),
     ("mxfile::tests", "mxfile 扫描器 + 语料可读"),
+    ("mxfile::emit_tests", "emit：转义 / 相对几何 / 容器先于子节点"),
+    ("from_dot::tests", "Graphviz json：objects 集群 / 单位 / y 翻转 / 1px 中心一致"),
 ]
 
 
@@ -64,8 +71,8 @@ def main() -> int:
             return code
         print(f"[ok] {what}")
 
-    # 3.10.0 的扩展点（明确写出来，别让人以为漏了）
-    print("[skip] 1pt / 结构守恒 / 幂等 / 500 节点计时 —— 3.10.0 接入（emit + from_dot 落地后）")
+    # 3.11.0 的扩展点（明确写出来，别让人以为漏了）
+    print("[skip] 往返幂等（parse/emit）—— 3.11.0 接入；500 节点计时在 check.mjs 第 9 步")
     return 0
 
 

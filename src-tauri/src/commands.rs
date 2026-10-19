@@ -469,7 +469,14 @@ pub fn convert_text(req: ConvertRequest) -> Result<ConvertOutcome, String> {
         elapsed_us: started.elapsed().as_micros() as u64,
         source_hash,
         // 引擎方向“实际用到的布局”就是那个引擎；drawio 的记录里明确写 n/a。
-        layout: if req.to == FormatId::Drawio { "drawio".into() } else { engine.clone() },
+        // `dotjson` 例外：布局引擎是文档选的那个（dot/neato/…），由前端传上来。
+        layout: if engine == "dotjson" {
+            req.options.layout.clone().unwrap_or_else(|| "dot".into())
+        } else if req.to == FormatId::Drawio {
+            "drawio".into()
+        } else {
+            engine.clone()
+        },
         look: req
             .options
             .look
@@ -486,6 +493,60 @@ pub fn convert_text(req: ConvertRequest) -> Result<ConvertOutcome, String> {
 #[tauri::command]
 pub fn mxfile_inspect(xml: String) -> Result<app_ipc::Counts, String> {
     app_core::mxfile::inspect(&xml).map_err(|e| e.to_string())
+}
+
+/// DOT → drawio：Graphviz 的 `json` 布局 → `CanvasPlan` → mxfile。
+///
+/// **入参只有字符串**（json / 源 DOT）与 options —— 不收路径、不碰网络。
+/// `source` 只用来算 `source_hash`（判断“源改过没有”），不参与转换。
+#[tauri::command]
+pub fn dot_layout_to_drawio(
+    json: String,
+    source: String,
+    options: app_ipc::ConvertOptions,
+) -> Result<ConvertOutcome, String> {
+    use app_ipc::{ConvReport, Fidelity, Grade};
+
+    let started = std::time::Instant::now();
+    let source_hash = app_core::report::source_hash(&source);
+    let layout = options.layout.clone().unwrap_or_else(|| "dot".into());
+    let cluster = options.cluster_as_container.unwrap_or(true);
+    let plan = app_core::from_dot::dot_json_to_plan(
+        &json,
+        &app_core::from_dot::DotOpts {
+            layout: layout.clone(),
+            cluster_as_container: cluster,
+            source_hash: source_hash.clone(),
+        },
+    )?;
+    let body = app_core::mxfile::emit(&plan);
+    // 产物自检：数不出来说明 emit 写坏了 —— 这是内部错误，如实报，不产出坏文件
+    let counts = app_core::mxfile::inspect(&body)
+        .map_err(|e| format!("产物自检失败（{e}），本次转换不产出文件"))?;
+    let flattened = plan.issues.iter().any(|i| i.code == "cluster.flattened");
+    let fidelity = Fidelity {
+        // 集群被要求拍平 ⇒ 结构只是部分保留（与 plan 里的 issue 同一判据）
+        structure: if flattened { Grade::Partial } else { Grade::Exact },
+        geometry: Grade::Exact,
+        style: Grade::Approx,
+    };
+    let notes = plan
+        .issues
+        .iter()
+        .map(app_core::report::issue_note)
+        .collect::<Vec<_>>();
+    let report = ConvReport {
+        engine: "dotjson".into(),
+        counts,
+        fidelity,
+        issues: plan.issues.clone(),
+        elapsed_us: started.elapsed().as_micros() as u64,
+        source_hash,
+        layout,
+        look: "n/a".into(),
+        theme: options.theme.clone().unwrap_or_default(),
+    };
+    Ok(ConvertOutcome { engine: "dotjson".into(), body, notes, report })
 }
 
 /* ---------------- 凭据（密钥永不回传前端） ---------------- */

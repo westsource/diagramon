@@ -14,7 +14,7 @@ no external request is ever made**.
 Code or images reach a model only when you actively use AI, and then only the endpoint you chose
 (BYOK talks straight to your own provider, membership goes through the Diagramon cloud gateway).
 
-Version **3.9.0** · Official website <https://www.diagramon.com>
+Version **3.10.0** · Official website <https://www.diagramon.com>
 
 ## Screenshots
 
@@ -111,6 +111,8 @@ Version **3.9.0** · Official website <https://www.diagramon.com>
 
 ### Format conversion (Conversion Center)
 - **Directions** — `Mermaid → DOT` / `Mermaid → D2` / `DOT → D2` (implemented in pure Rust),
+  `DOT → drawio` (Graphviz computes the layout in-window, then Rust maps it to mxCell —
+  **geometry preserved**, edges snapped to shape boundaries, subgraphs become containers),
   `Mermaid → drawio` and `Mermaid → Excalidraw` (handed to each engine's own parser instead of
   reimplementing one), and `D2 → drawio` (D2's own wasm computes the geometry in the page first, then it
   is mapped to mxGraph — **geometry preserved**, and the result stays draggable and editable)
