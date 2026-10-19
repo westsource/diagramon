@@ -16,6 +16,7 @@ pub mod memory;
 pub mod outline;
 pub mod pixels;
 pub mod recovery;
+pub mod render_opts;
 pub mod scope;
 pub mod session;
 pub mod settings;

@@ -817,10 +817,20 @@ window.DGM = window.DGM || {};
 
   /* ------------------------------------------------------------------ 会话 / 文档 */
 
+  /** 把一份文档并进会话。
+   *
+   *  **要求 `id`，且**就地合并**（不换对象）：
+   *   - 没有 `id` 的一律忽略 —— 真机上出过两类"塞垃圾进 state.docs"的事故：
+   *     `doc_set_layout` 曾返回 `bool`，`upsertDoc(true)` 把 `true` 塞进去；
+   *     `doc_set_view_mode` 返回的是 Session（`{docs, active}`）也照塞。两者现在都返回 Doc
+   *     （见 Rust 侧注释），这道守卫是防止下一次再漂。
+   *   - 就地合并是因为**别的模块抓着这些对象用**（渲染、对话框、自检的局部变量）：
+   *     整对象替换会把它们的引用变成"过去的快照"，界面看着像没生效。
+   */
   function upsertDoc(doc) {
-    if (!doc) return;
+    if (!doc || !doc.id) return;
     const i = state.docs.findIndex((d) => d.id === doc.id);
-    if (i >= 0) state.docs[i] = doc;
+    if (i >= 0) Object.assign(state.docs[i], doc);
     else state.docs.push(doc);
   }
 
@@ -973,30 +983,45 @@ window.DGM = window.DGM || {};
     emit("session:changed");
   }
 
+  /** 布局引擎（按文档）。合法值来自注册表（DOT 六种 / D2 三种 / Mermaid 两种）。
+   *
+   *  后端在 `render-opts.json` 里**按文件路径记住**这次选择，下次打开这个文件就恢复它；
+   *  未保存的标签页没有路径，记不了（保存那一刻按新路径记上，见 `doc_save` 那条路）。
+   *
+   *  `doc_set_layout` 返回**文档**（契约：单文档变更 → Doc），所以 `upsertDoc` 收的是对象；
+   *  早先它返回 bool，`if (doc) upsertDoc(doc)` 会把 `true` 当成文档塞进 `state.docs`
+   *  （真机上多出一个空标签页；mock 后端返回的是 Doc，所以探针看不见这个 bug）。
+   */
   async function setLayout(id, layout) {
     const d = state.doc(id);
     if (!d) return;
+    const prev = d.layout;
     d.layout = layout;
     emit("doc:changed");
     try {
       const doc = await ipc.invoke("doc_set_layout", { id, layout });
-      if (doc) upsertDoc(doc);
+      if (doc && doc.id) upsertDoc(doc);
     } catch (e) {
-      /* 布局落盘失败不阻断 */
+      // 后端不认这个值（注册表里没有 / 文档不在了）：把界面改回去 ——
+      // 让控件显示一个没生效的选择，比看得见地回弹更糟。
+      d.layout = prev;
+      emit("doc:changed");
     }
   }
 
-  /** Mermaid 外观模式（classic / neo / handDrawn / auto），按文档落盘 —— 与 setLayout 同一套约定。 */
+  /** Mermaid 外观模式（classic / neo / handDrawn / auto），按文档落盘且按文件记住 —— 与 setLayout 同一套约定。 */
   async function setLook(id, look) {
     const d = state.doc(id);
     if (!d) return;
+    const prev = d.look;
     d.look = look;
     emit("doc:changed");
     try {
       const doc = await ipc.invoke("doc_set_look", { id, look });
-      if (doc) upsertDoc(doc);
+      if (doc && doc.id) upsertDoc(doc);
     } catch (e) {
-      /* 外观落盘失败不阻断 */
+      d.look = prev;
+      emit("doc:changed");
     }
   }
 

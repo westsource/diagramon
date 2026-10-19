@@ -75,8 +75,9 @@ Version **3.8.0** · Official website <https://www.diagramon.com>
   `dagre` and ELK, the latter shipping as an offline bundle (`@mermaid-js/layout-elk`) whose failed load
   falls back to dagre instead of breaking the preview
 - **Render options live in the preview top bar** — Mermaid shows two (Look + Layout), DOT / D2 show one
-  (Layout) and the canvas formats hide them entirely; the choice is saved with the document and
-  re-renders immediately (the status-bar layout entry stays and reads the same data)
+  (Layout) and the canvas formats hide them entirely; the choice is **remembered per file** (close the
+  tab or restart the app and reopening that file still uses it) and re-renders immediately (the
+  status-bar layout entry stays and reads the same data)
 - **Mermaid look modes** — classic / neo / handDrawn, switchable at any time, matching the mermaid.live
   look and feel
 - **The D2 engine warms up on demand** — D2's runtime is an 11 MB **offline** wasm build: the first `.d2`

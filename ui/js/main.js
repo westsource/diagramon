@@ -833,6 +833,63 @@ window.DGM = window.DGM || {};
       const back = await invoke("workspace_get");
       ok("删除后树回到 1 个文件", back.file_count === 1, back.file_count);
 
+      // ── 渲染选项**按文件**记住（外观 / 布局）：关掉标签页再打开这个文件，还是上次选的 ──
+      //  身份是**路径**（`render-opts.json` 里 doc_key(path) → {look, layout}），所以这里必须用
+      //  真实文件：未保存标签页没有身份，记不住（保存那一刻才落上，另存为则要把记录挪到新路径）。
+      {
+        const norm = (p) => String(p || "").replace(/\\/g, "/");
+        const keepPath = wsDir + "/flows/keep.mmd";
+        const otherPath = wsDir + "/flows/other.mmd";
+        await invoke("export_write", { path: keepPath, base64: encRaw("flowchart TD\n    A-->B\n") });
+        await invoke("export_write", { path: otherPath, base64: encRaw("flowchart LR\n    X-->Y\n") });
+
+        const open1 = await invoke("doc_open_paths", { paths: [keepPath] });
+        const first = open1.docs.find((d) => norm(d.path) === norm(keepPath)) || {};
+        ok("按路径打开的文件进了会话", !!first.id && first.look == null && first.layout === "dagre", `${first.id} ${first.layout}`);
+        await invoke("doc_set_look", { id: first.id, look: "handDrawn" });
+        await invoke("doc_set_layout", { id: first.id, layout: "elk" });
+        await invoke("doc_close", { id: first.id });
+
+        const open2 = await invoke("doc_open_paths", { paths: [keepPath, otherPath] });
+        const again = open2.docs.find((d) => norm(d.path) === norm(keepPath)) || {};
+        ok("重开文件恢复上次选的外观", again.look === "handDrawn", again.look);
+        ok("重开文件恢复上次选的布局", again.layout === "elk", again.layout);
+        const other = open2.docs.find((d) => norm(d.path) === norm(otherPath)) || {};
+        ok(
+          "另一个文件不受影响（按文件记的，不是全局默认）",
+          other.look == null && other.layout === "dagre",
+          `look=${other.look} layout=${other.layout}`,
+        );
+
+        // 另存为：记录要跟着文件走（新路径接着用、旧路径不留）
+        const savePath = wsDir + "/flows/moved.mmd";
+        const saved = await invoke("doc_save_as", { id: again.id, path: savePath });
+        ok("另存为后渲染选项跟着新路径", saved.look === "handDrawn" && saved.layout === "elk", `${saved.look}/${saved.layout}`);
+        await invoke("doc_close", { id: saved.id });
+        const open3 = await invoke("doc_open_paths", { paths: [savePath, keepPath] });
+        const movedDoc = open3.docs.find((d) => norm(d.path) === norm(savePath)) || {};
+        ok("另存为产生的新文件重开后仍是上次选的外观", movedDoc.look === "handDrawn", movedDoc.look);
+        ok("另存为产生的新文件重开后仍是上次选的布局", movedDoc.layout === "elk", movedDoc.layout);
+        const oldPath = open3.docs.find((d) => norm(d.path) === norm(keepPath)) || {};
+        ok(
+          "另存为后旧路径不再留记录",
+          oldPath.look == null && oldPath.layout === "dagre",
+          `look=${oldPath.look} layout=${oldPath.layout}`,
+        );
+
+        // 清理：不留文件、不留标签页，后面的断言不该被这里影响
+        for (const id of [movedDoc.id, oldPath.id, other.id].filter(Boolean)) {
+          try {
+            await invoke("doc_close", { id });
+          } catch (e) { /* 已经不在会话里就算了 */ }
+        }
+        for (const p of [keepPath, otherPath, savePath]) {
+          try {
+            await invoke("workspace_delete", { path: p });
+          } catch (e) { /* 清理失败不影响断言 */ }
+        }
+      }
+
       // 多词命令参数的命名一致性（ai_cancel 曾在两侧各写一套，真机上才炸）
       let cancelErr = "";
       try {

@@ -114,9 +114,12 @@ pub struct Doc {
     pub view_mode: ViewMode,
     pub caret_line: u32,
     pub caret_col: u32,
-    /// DOT 布局引擎（Mermaid 复用同一字段存布局选择：dagre / elk）
+    /// DOT 布局引擎（Mermaid 复用同一字段存布局选择：dagre / elk）。
+    ///
+    /// 文档级，但**按文件路径记住**：打开文件时由 `app-core::render_opts` 恢复上次的选择。
     pub layout: Option<String>,
-    /// Mermaid 外观模式（classic / neo / handDrawn；None = 跟随默认/设置）
+    /// Mermaid 外观模式（classic / neo / handDrawn；None = 跟随默认/设置）。
+    /// 与 `layout` 同样按文件路径记住（`render-opts.json`）。
     #[serde(default)]
     pub look: Option<String>,
 }

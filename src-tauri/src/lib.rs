@@ -562,17 +562,9 @@ fn open_cli_files(state: &AppState) {
     }
     let (opened, failed) = state.session().open_paths(&files);
     for id in opened {
-        let entry = {
-            let s = state.session();
-            s.get(&id).and_then(|d| {
-                d.path
-                    .clone()
-                    .map(|p| (p, d.name.clone(), d.format))
-            })
-        };
-        if let Some((path, name, format)) = entry {
-            state.remember_recent(&path, &name, format);
-        }
+        // 恢复「按文件记着的渲染选项」+ 记最近打开：与 `doc_open_paths` 共用同一份收尾，
+        // 否则命令行打开的这份又会"不记得上次选的布局"。
+        crate::commands::after_open_file(state, &id);
     }
     for (path, err) in failed {
         eprintln!("diagramon|open-failed|{path}|{err}");

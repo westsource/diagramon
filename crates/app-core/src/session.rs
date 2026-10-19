@@ -222,6 +222,27 @@ impl Session {
         }
     }
 
+    /// 把「按文件记着的渲染选项」恢复进这份文档（打开文件时调）。
+    ///
+    /// 合法性由 `set_layout` / `set_look` 里的注册表校验把关：不认识的值一律不写进文档
+    /// （手改过的 `render-opts.json` 不该把非法值灌进界面）。返回是否有任一项被接受。
+    pub fn restore_render_opts(&mut self, id: &str, opts: &crate::render_opts::DocOpts) -> bool {
+        let mut applied = false;
+        if let Some(l) = opts.layout.clone() {
+            applied |= self.set_layout(id, l);
+        }
+        if let Some(l) = opts.look.clone() {
+            applied |= self.set_look(id, l);
+        }
+        applied
+    }
+
+    /// 这份文档此刻的渲染选项（要按路径记下来时读它）。
+    pub fn render_opts(&self, id: &str) -> Option<crate::render_opts::DocOpts> {
+        let d = self.get(id)?;
+        Some(crate::render_opts::DocOpts { look: d.look.clone(), layout: d.layout.clone() })
+    }
+
     /// 落盘成功后的收口（路径重定向 + 脏标记清除）。
     pub fn commit_saved(&mut self, id: &str, path: Option<&Path>) -> Option<Doc> {
         let e = self.entry_mut(id)?;
@@ -410,6 +431,36 @@ mod tests {
         s.adopt_draft("untitled-9".into(), "n.mmd".into(), FormatId::Mermaid, "a\n".into());
         let fresh = s.new_doc(FormatId::Mermaid);
         assert_eq!(fresh.id, "untitled-10", "编号要跳过已恢复的号，否则 id 会撞");
+    }
+
+    #[test]
+    fn render_opts_restore_accepts_only_registry_values() {
+        let dir = std::env::temp_dir().join("diagramon-session-test");
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("opts.mmd");
+        std::fs::write(&p, "flowchart TD\n").unwrap();
+
+        let mut s = Session::default();
+        let (opened, _) = s.open_paths(&[p.to_string_lossy().to_string()]);
+        let id = opened[0].clone();
+        assert_eq!(s.get(&id).unwrap().layout.as_deref(), Some("dagre"), "刚打开是注册表默认");
+        assert_eq!(s.render_opts(&id), Some(crate::render_opts::DocOpts { look: None, layout: Some("dagre".into()) }));
+
+        let remembered =
+            crate::render_opts::DocOpts { look: Some("handDrawn".into()), layout: Some("elk".into()) };
+        assert!(s.restore_render_opts(&id, &remembered), "两项都合法，应被接受");
+        let d = s.get(&id).unwrap();
+        assert_eq!(d.look.as_deref(), Some("handDrawn"));
+        assert_eq!(d.layout.as_deref(), Some("elk"));
+        assert_eq!(s.render_opts(&id), Some(remembered.clone()));
+
+        // 磁盘上被手改过的值：不进文档（注册表是唯一真源），现值保持不变
+        let bad = crate::render_opts::DocOpts { look: Some("sketch".into()), layout: Some("neato".into()) };
+        assert!(!s.restore_render_opts(&id, &bad));
+        let d = s.get(&id).unwrap();
+        assert_eq!(d.look.as_deref(), Some("handDrawn"));
+        assert_eq!(d.layout.as_deref(), Some("elk"));
+        assert!(!s.restore_render_opts("no-such-doc", &remembered), "文档不存在时不该谎报成功");
     }
 
     #[test]

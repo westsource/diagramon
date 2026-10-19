@@ -25,7 +25,7 @@ use app_ipc::{
 use base64::Engine as _;
 use tauri::{AppHandle, Emitter, State};
 
-use crate::state::{credential_key, AppState};
+use crate::state::{credential_key, now_ms, AppState};
 
 type R<T> = Result<T, String>;
 
@@ -96,18 +96,31 @@ pub fn doc_new(state: State<'_, Arc<AppState>>, format: FormatId) -> Doc {
     state.session().new_doc(format)
 }
 
+/// 打开文件后的统一收尾：恢复「按文件记着的渲染选项」+ 记一条「最近打开」。
+///
+/// 两条打开入口（`doc_open_paths` 与单实例/命令行 `open_cli_files`）共用这一份 ——
+/// 各写一遍必然漂，而"命令行打开的文件不记得上次选的布局"这种漂法只在真机上才看得见。
+pub(crate) fn after_open_file(state: &AppState, id: &str) {
+    let (path, name, format) = {
+        let s = state.session();
+        let Some(d) = s.get(id) else { return };
+        let Some(path) = d.path.clone() else { return };
+        (path, d.name.clone(), d.format)
+    };
+    // 上次给这个文件选的显示样式 / 布局：打开即恢复（没记过就按默认）。
+    // 过滤按**此刻的格式**做：文件改过扩展名时格式变了，旧值可能已经不合法。
+    let remembered = state.render_opts().get(&path).map(|o| o.sanitized(format));
+    if let Some(opts) = remembered {
+        state.session().restore_render_opts(id, &opts);
+    }
+    state.remember_recent(&path, &name, format);
+}
+
 #[tauri::command]
 pub fn doc_open_paths(state: State<'_, Arc<AppState>>, paths: Vec<String>) -> SessionPayload {
     let (opened, failed) = state.session().open_paths(&paths);
     for id in &opened {
-        let s = state.session();
-        if let Some(d) = s.get(id) {
-            if let Some(p) = d.path.clone() {
-                let (name, fmt) = (d.name.clone(), d.format);
-                drop(s);
-                state.remember_recent(&p, &name, fmt);
-            }
-        }
+        after_open_file(state.inner(), id);
     }
     if !failed.is_empty() {
         // 打开失败要出声：静默吞掉会让用户以为"点了没反应"
@@ -173,23 +186,57 @@ pub fn doc_set_caret(state: State<'_, Arc<AppState>>, id: String, line: u32, col
     Ok(())
 }
 
+/// 视图模式（源码 / 分屏 / 预览）。返回**文档**（契约：单文档变更 → Doc）——
+/// 早先返回的是 Session，前端 `upsertDoc` 拿到的对象没有 `id`，于是要么被忽略、
+/// 要么（旧版没有 id 守卫时）把整个 Session 塞进 `state.docs`。
+/// 「关掉『记住每个标签页视图模式』时其它标签一起跟」是**前端**的事（`state.setViewMode`）。
 #[tauri::command]
-pub fn doc_set_view_mode(state: State<'_, Arc<AppState>>, id: String, mode: ViewMode) -> R<SessionPayload> {
+pub fn doc_set_view_mode(state: State<'_, Arc<AppState>>, id: String, mode: ViewMode) -> R<Doc> {
     let mut s = state.session();
+    // 画布型没有分屏：**拒绝**而不是悄悄改成预览（静默改写会把前端多出来的控件藏起来）
     if !s.set_view_mode(&id, mode) {
-        return Err(format!("文档不存在：{id}"));
+        return Err(format!("这个格式没有分屏 / 源码视图，只有预览：{id}"));
     }
-    Ok(s.payload())
+    s.get(&id).cloned().ok_or_else(|| format!("文档不存在：{id}"))
+}
+
+/// 改完渲染选项后的统一收尾：把当前选项**按路径**记下来（下次打开这个文件恢复它），
+/// 再把文档回给前端。
+///
+/// 返回值是文档本身（契约：单文档变更 → Doc）。早先这两条命令返回 `bool`，而前端
+/// `if (doc) upsertDoc(doc)` —— `true` 于是被当成文档塞进 `state.docs`（真机上会多出
+/// 一个空标签页，探针看不见：mock 后端返回的是 Doc）。
+fn commit_render_opt(state: &AppState, id: &str) -> R<Doc> {
+    let (doc, format) = {
+        let s = state.session();
+        let d = s.get(id).ok_or_else(|| format!("文档不存在：{id}"))?;
+        (d.clone(), d.format)
+    };
+    // 未落盘文档没有稳定身份（路径），没处可记 —— 保存时 `save_to` 会按新路径记上
+    if let Some(path) = doc.path.clone() {
+        let opts = app_core::render_opts::DocOpts { look: doc.look.clone(), layout: doc.layout.clone() };
+        state.remember_render_opts(None, &path, opts.sanitized(format));
+    }
+    Ok(doc)
 }
 
 #[tauri::command]
-pub fn doc_set_layout(state: State<'_, Arc<AppState>>, id: String, layout: String) -> R<bool> {
-    Ok(state.session().set_layout(&id, layout))
+pub fn doc_set_layout(state: State<'_, Arc<AppState>>, id: String, layout: String) -> R<Doc> {
+    // 合法布局由注册表说了算（DOT 六个 / D2 三个 / Mermaid 两个）；不认的值明确报错，
+    // 而不是悄悄忽略 —— 前端只提供注册表里的值，走到这里说明两侧契约漂了。
+    if !state.session().set_layout(&id, layout.clone()) {
+        return Err(format!("这个格式没有布局引擎「{layout}」"));
+    }
+    commit_render_opt(state.inner(), &id)
 }
 
 #[tauri::command]
-pub fn doc_set_look(state: State<'_, Arc<AppState>>, id: String, look: String) -> R<bool> {
-    Ok(state.session().set_look(&id, look))
+pub fn doc_set_look(state: State<'_, Arc<AppState>>, id: String, look: String) -> R<Doc> {
+    // 同上：外观模式（auto / classic / neo / handDrawn）只在 Mermaid 上存在
+    if !state.session().set_look(&id, look.clone()) {
+        return Err(format!("这个格式没有外观模式「{look}」"));
+    }
+    commit_render_opt(state.inner(), &id)
 }
 
 #[tauri::command]
@@ -259,10 +306,10 @@ fn save_to(state: &AppState, id: &str, path: &Path) -> R<Doc> {
     state.check_writable(path)?;
     // 旧会话身份要在 commit_saved **之前**抓：commit 之后 `path` 已经变了。
     // 未保存文档 → draft 键；已有路径的文档（另存为）→ 旧路径的文档键。
-    let old_key = {
+    let (old_key, old_path) = {
         let s = state.session();
         let d = s.get(id).ok_or_else(|| format!("文档不存在：{id}"))?;
-        app_core::conversations::key_for(d.path.as_deref(), id)
+        (app_core::conversations::key_for(d.path.as_deref(), id), d.path.clone())
     };
     let body = {
         let s = state.session();
@@ -290,6 +337,16 @@ fn save_to(state: &AppState, id: &str, path: &Path) -> R<Doc> {
         &saved.name,
         saved.format,
     );
+    // 「按文件记着」的渲染选项也跟着文件走：另存为把旧路径的记录挪到新路径（旧路径不留在原地），
+    // 首次保存的文档则把这次的选择记在新路径上 —— 否则"另存为之后外观/布局又回到默认"。
+    let opts = state.session().render_opts(id); // 先取值再放手（不把会话锁带进落盘那段）
+    if let Some(opts) = opts {
+        state.remember_render_opts(
+            old_path.as_deref(),
+            saved.path.as_deref().unwrap_or_default(),
+            opts.sanitized(saved.format),
+        );
+    }
     Ok(saved)
 }
 
@@ -765,13 +822,6 @@ pub fn ai_cancel(state: State<'_, Arc<AppState>>, id: String) -> R<()> {
 }
 
 /* ---------------- AI 会话持久化 ---------------- */
-
-fn now_ms() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as i64)
-        .unwrap_or(0)
-}
 
 /// 把文档解析成"会话身份"：`(key, path)`。
 ///

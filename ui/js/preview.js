@@ -313,7 +313,9 @@ window.DGM = window.DGM || {};
    *  - Mermaid：两颗（外观 = fmt.looks；布局 = fmt.layouts，elk 走懒加载离线包）；
    *  - DOT / D2：一颗布局（引擎清单来自注册表，与状态栏旧入口同一数据源）；
    *  - 画布型与其它没有选项的格式：整组隐藏。
-   *  点选落 `d.look` / `d.layout`（文档级，随文档保存），点完立即重渲染。
+   *  点选落 `d.look` / `d.layout`（文档级），点完立即重渲染；Rust 侧同时按**文件路径**
+   *  记进 `render-opts.json`，下次打开这个文件就恢复这次的选择（未保存标签页没有路径，
+   *  记不了 —— 首次保存那一刻才落上）。
    */
   let optsKey = null;
 

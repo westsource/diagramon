@@ -63,6 +63,14 @@ impl AppPaths {
         self.data_dir.join("memory")
     }
 
+    /// 按文件记着的渲染选项（外观 / 布局）：`render-opts.json`。
+    ///
+    /// 放 `data_dir` 而不是 `settings.json`：那是"每个文件上次选的什么"，与用户偏好
+    /// 是两回事，条数还会随打开过的文件增长（有上限，见 `app_core::render_opts::MAX_DOCS`）。
+    pub fn render_opts_file(&self) -> PathBuf {
+        self.data_dir.join("render-opts.json")
+    }
+
     /// 首次运行要建目录；已存在不算错。
     pub fn ensure(&self) -> Result<(), Error> {
         for d in [&self.config_dir, &self.data_dir, &self.conversations_dir(), &self.memory_dir()] {

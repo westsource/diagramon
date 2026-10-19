@@ -11,7 +11,7 @@
  *
  * 返回值约定（契约未固定返回值时的补充，前端一律做成可容错）：
  *   - 列表型变更（doc_new / doc_open_paths / doc_close / doc_activate）→ Session{docs,active}
- *   - 单文档变更（doc_save / doc_save_as / doc_set_body / doc_set_view_mode / doc_set_layout）→ Doc
+ *   - 单文档变更（doc_save / doc_save_as / doc_set_body / doc_set_view_mode / doc_set_layout / doc_set_look）→ Doc
  *   - doc_set_caret / ai_model_key_set / ai_model_key_delete / ai_chat / ai_cancel → 无意义返回值
  *   - doc_issues → Issue[] · doc_outline → OutlineGroup[] · doc_scope → String
  *   前端 applyResult() 同时接受 Session 与 Doc，所以 Rust 侧两种都接得住。
@@ -767,6 +767,12 @@ digraph Pipeline {
         case "doc_set_layout": {
           const d = this._doc(args.id);
           if (d) d.layout = args.layout;
+          return d ? this._clone(d) : null;
+        }
+
+        case "doc_set_look": {
+          const d = this._doc(args.id);
+          if (d) d.look = args.look;
           return d ? this._clone(d) : null;
         }
 

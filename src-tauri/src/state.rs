@@ -13,6 +13,19 @@ use app_core::Session;
 use app_ipc::{Settings, WorkspaceInfo};
 use platform::{AppPaths, CredentialStore};
 
+/// 现在（毫秒）。**毫秒是前后端唯一的单位**：前端 `Date.now()`、`RecentEntry.opened_at`
+/// 的比较（`sidebar.recentWhen` / `dialogs.openedWhen` 都是 `Date.now() - ts`）、
+/// 「按文件记着的渲染选项」的时刻，全用它。
+///
+/// `opened_at` 以前在 Rust 侧写的是 `as_secs()`，前端按毫秒读 —— 磁盘上那份"最近打开"
+/// 于是显示成几万天前（自检看不见：它只验证返回值，不验证这个字段的语义）。
+pub(crate) fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
+
 /// 工作区：根目录 + 扫描结果 + 正在跑的监视器。
 ///
 /// 三者绑在一起换（打开新目录 = 停旧的、换根、重扫），所以放同一个锁里，
@@ -43,6 +56,8 @@ pub struct AppState {
     pub autosave: Mutex<HashMap<String, Instant>>,
     /// 未落盘文档的草稿目录
     pub recovery_dir: PathBuf,
+    /// 按文件记着的渲染选项（外观 / 布局）：打开文件时恢复，用户一改就落盘
+    pub render_opts: Mutex<app_core::render_opts::Store>,
     /// 识图截屏的冻结帧（框选期间有效）
     pub vision: crate::vision::Frames,
 }
@@ -54,6 +69,7 @@ impl AppState {
         // 云网关、以及没填空闲超时的 openai / custom 模型都落到这一档。
         let http = http_client(ai::provider::idle_timeout_for("openai", None));
         let recovery_dir = app_core::recovery::dir_for(&paths.data_dir);
+        let render_opts = app_core::render_opts::load(&paths.render_opts_file());
         Self {
             session: Mutex::new(Session::default()),
             settings: Mutex::new(settings),
@@ -66,6 +82,7 @@ impl AppState {
             workspace: Mutex::new(WorkspaceState::default()),
             autosave: Mutex::new(HashMap::new()),
             recovery_dir,
+            render_opts: Mutex::new(render_opts),
             vision: crate::vision::Frames::new(),
         }
     }
@@ -108,6 +125,10 @@ impl AppState {
         lock(&self.workspace)
     }
 
+    pub fn render_opts(&self) -> MutexGuard<'_, app_core::render_opts::Store> {
+        lock(&self.render_opts)
+    }
+
     pub fn autosave(&self) -> MutexGuard<'_, HashMap<String, Instant>> {
         lock(&self.autosave)
     }
@@ -147,16 +168,38 @@ impl AppState {
                 path: path.to_string(),
                 name: name.to_string(),
                 format,
-                opened_at: std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map(|d| d.as_secs() as i64)
-                    .unwrap_or(0),
+                opened_at: now_ms(),
             },
         );
         s.recent.truncate(50);
         let snapshot = s.clone();
         drop(s);
         let _ = self.persist_settings(&snapshot);
+    }
+
+    /// 记下某个文件的渲染选项（外观 / 布局）并落盘 —— 下次打开这个文件就恢复它。
+    ///
+    /// `from` 是"这份文档原来的路径"（另存为 / 首次保存时给）：记录跟着文件走，
+    /// 否则旧文件的记录会永远留着、新文件打开还是默认。
+    ///
+    /// 与 `remember_recent` 一样**吞掉写失败**：这只是一份"记住上次选择"的缓存，
+    /// 磁盘写不进去不该让用户的一次下拉选择报错。
+    pub fn remember_render_opts(
+        &self,
+        from: Option<&str>,
+        to: &str,
+        opts: app_core::render_opts::DocOpts,
+    ) {
+        let mut store = self.render_opts();
+        if let Some(old) = from {
+            if old != to {
+                store.forget(old);
+            }
+        }
+        store.set(to, opts, now_ms());
+        let snapshot = store.clone();
+        drop(store);
+        let _ = app_core::render_opts::save(&self.paths.render_opts_file(), &snapshot);
     }
 
     /* ---------------- autosave 计时 ---------------- */
