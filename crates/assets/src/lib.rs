@@ -6,22 +6,24 @@
 //! Windows 上 origin 是 `http://dgm.localhost/`，其它平台是 `dgm://localhost/`
 //! （见 `src-tauri` 的 `webview_url`）。
 //!
-//! 挂载点沿用 dev2.0 的四个并新增 `d2`：`/drawio/`、`/excalidraw/`、`/graphviz/`、
-//! `/mermaid/`、`/d2/`；其余路径落到前端产物目录（`/` → `index.html`），从而外壳与资产同源。
+//! 挂载点沿用 dev2.0 的四个并新增 `d2` 与 `mermaid-elk`：`/drawio/`、`/excalidraw/`、
+//! `/graphviz/`、`/mermaid/`、`/d2/`、`/mermaid-elk/`；其余路径落到前端产物目录
+//! （`/` → `index.html`），从而外壳与资产同源。
 
 use std::path::{Path, PathBuf};
 
 /// 一个资产挂载点。落在这些前缀下的请求会去挂载目录取，而不是前端产物目录。
-pub const MOUNTS: [&str; 5] = ["drawio", "excalidraw", "graphviz", "mermaid", "d2"];
+pub const MOUNTS: [&str; 6] = ["drawio", "excalidraw", "graphviz", "mermaid", "d2", "mermaid-elk"];
 
 /// 各挂载点的入口文件。判断"这个目录像不像源工作树"只看入口在不在 ——
 /// 空壳目录（仓库根下曾有 `Assets/{drawio,…}/` 这种）不能被当成资产在位的证据。
-const MOUNT_ENTRY: [(&str, &str); 5] = [
+const MOUNT_ENTRY: [(&str, &str); 6] = [
     ("drawio", "index.html"),
     ("excalidraw", "index.html"),
     ("graphviz", "graphviz.js"),
     ("mermaid", "mermaid.min.js"),
     ("d2", "index.js"),
+    ("mermaid-elk", "mermaid-layout-elk.esm.js"),
 ];
 
 /// 资源根集合。

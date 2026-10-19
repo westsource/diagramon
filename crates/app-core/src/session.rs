@@ -147,6 +147,7 @@ impl Session {
             caret_line: 1,
             caret_col: 1,
             layout: document::default_layout(format),
+            look: None,
         };
         let id = doc.id.clone();
         self.entries.push(Entry::born_dirty(doc));
@@ -199,10 +200,22 @@ impl Session {
 
     pub fn set_layout(&mut self, id: &str, layout: String) -> bool {
         match self.entry_mut(id) {
-            // 合法布局由**注册表**说了算（DOT 六个、D2 三个、其余没有）——
+            // 合法布局由**注册表**说了算（DOT 六个、D2 三个、Mermaid 两个）——
             // 这里不再各写一份清单，否则加格式时必然漏一处。
             Some(e) if format::info(e.doc.format).layouts.contains(&layout) => {
                 e.doc.layout = Some(layout);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Mermaid 外观模式（classic / neo / handDrawn / auto），合法性同样由注册表说了算。
+    /// `auto` 也照存：前端把它当"不干预"处理，但用户显式选过这一档要记住。
+    pub fn set_look(&mut self, id: &str, look: String) -> bool {
+        match self.entry_mut(id) {
+            Some(e) if format::info(e.doc.format).looks.contains(&look) => {
+                e.doc.look = Some(look);
                 true
             }
             _ => false,
@@ -317,14 +330,21 @@ mod tests {
 
         assert_eq!(s.get(&dot.id).unwrap().layout.as_deref(), Some("dot"), "DOT 出生即带默认布局");
         assert_eq!(s.get(&d2.id).unwrap().layout.as_deref(), Some("dagre"), "D2 默认布局是快的那个");
-        assert_eq!(s.get(&mmd.id).unwrap().layout, None);
+        // Mermaid 现在也有布局清单（dagre 内建 / elk 离线包），出生即带 dagre
+        assert_eq!(s.get(&mmd.id).unwrap().layout.as_deref(), Some("dagre"));
+        assert_eq!(s.get(&mmd.id).unwrap().look, None, "外观出生不带，走设置/内建默认");
 
         assert!(s.set_layout(&dot.id, "neato".into()));
         assert_eq!(s.get(&dot.id).unwrap().layout.as_deref(), Some("neato"));
         assert!(s.set_layout(&d2.id, "tala".into()));
         assert!(!s.set_layout(&d2.id, "neato".into()), "D2 没有 neato，未知布局应拒绝");
         assert!(!s.set_layout(&dot.id, "nope".into()), "未知布局应拒绝");
-        assert!(!s.set_layout(&mmd.id, "dot".into()), "Mermaid 没有布局引擎，不接布局");
+        assert!(!s.set_layout(&mmd.id, "dot".into()), "Mermaid 只接注册表里的两个布局");
+        assert!(s.set_layout(&mmd.id, "elk".into()));
+        assert!(!s.set_look(&mmd.id, "sketch".into()), "未知外观应拒绝");
+        assert!(s.set_look(&mmd.id, "handDrawn".into()));
+        assert_eq!(s.get(&mmd.id).unwrap().look.as_deref(), Some("handDrawn"));
+        assert!(!s.set_look(&dot.id, "neo".into()), "DOT 没有外观模式，不接");
     }
 
     #[test]

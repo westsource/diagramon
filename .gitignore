@@ -406,3 +406,5 @@ ui/.shots/
 
 # WorkBuddy 会话的本地项目记忆（工作日志、笔记，属个人工作台，不入库）
 /.workbuddy/
+# Mermaid-ELK offline bundle (built by tools/fetch-mermaid-elk.ps1 via esbuild, not committed)
+tools/mermaid-elk/

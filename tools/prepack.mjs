@@ -21,7 +21,7 @@ import { fileURLToPath } from "node:url";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const CHECK_ONLY = process.argv.includes("--check");
-const MOUNTS = ["drawio", "excalidraw", "graphviz", "mermaid", "d2"];
+const MOUNTS = ["drawio", "excalidraw", "graphviz", "mermaid", "d2", "mermaid-elk"];
 const DEV_DIRS = ["ui/.shots"];
 
 const log = (s = "") => console.log(s);

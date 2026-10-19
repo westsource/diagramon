@@ -306,6 +306,75 @@ window.DGM = window.DGM || {};
     svg.style.display = "block";
   }
 
+  /* ------------------------------------------------------------------ 顶栏渲染选项控件 */
+
+  /** 预览顶栏的「外观 / 布局」控件。
+   *
+   *  - Mermaid：两颗（外观 = fmt.looks；布局 = fmt.layouts，elk 走懒加载离线包）；
+   *  - DOT / D2：一颗布局（引擎清单来自注册表，与状态栏旧入口同一数据源）；
+   *  - 画布型与其它没有选项的格式：整组隐藏。
+   *  点选落 `d.look` / `d.layout`（文档级，随文档保存），点完立即重渲染。
+   */
+  let optsKey = null;
+
+  function renderOpts(d) {
+    const host = document.getElementById("pv-opts");
+    if (!host) return;
+    const key = d ? [d.id, d.format, d.look || "", d.layout || ""].join("|") : "";
+    if (key === optsKey) return;
+    optsKey = key;
+    host.innerHTML = "";
+    if (!d || state.isCanvasDoc(d)) return;
+    const fmt = state.docFmt(d);
+    const looks = fmt.looks || [];
+    const layouts = fmt.layouts || [];
+    if (!looks.length && !layouts.length) return;
+    if (looks.length) host.appendChild(buildOptBtn(d, "look", t("preview.look"), looks, optsCurLook(d)));
+    if (layouts.length) host.appendChild(buildOptBtn(d, "layout", t("preview.layoutName"), layouts, d.layout || layouts[0]));
+  }
+
+  /** 当前生效的外观（文档级 > 设置默认 > auto）——按钮上显示的就是它。 */
+  function optsCurLook(d) {
+    if (d.look) return d.look;
+    const s = state.settings && state.settings.mermaid && state.settings.mermaid.look;
+    return s || "auto";
+  }
+
+  function buildOptBtn(d, kind, name, values, cur) {
+    const b = h("button", "mini-btn pv-opt");
+    b.title = t("preview.renderOptsTip");
+    b.innerHTML =
+      icon(kind === "look" ? "palette" : "diagram", "ico-sm") +
+      `<span>${esc(name)} · <span class="pv-opt-val">${esc(cur)}</span></span>` +
+      icon("chevD", "ico-sm");
+    b.addEventListener("click", (e) => {
+      e.stopPropagation(); // showPop 的约定：锚点点击不能进文档级「点外关闭」监听，否则刚开就被关
+      const cur2 = kind === "look" ? optsCurLook(d) : d.layout || values[0];
+      const items = values.map((v) => {
+        const it = { label: kind === "look" ? t("preview.look." + v) : v, check: true, on: v === cur2, v };
+        if (kind === "layout" && v === "elk" && d.format === "mermaid") {
+          if (!elkLoaded()) {
+            it.disabled = true;
+            it.kbd = t("preview.elk.loading");
+            loadElk().then(schedule).catch(() => {}); // 后台预热，加载完下次打开就可点
+          }
+        }
+        return it;
+      });
+      items.unshift({ label2: kind === "look" ? t("preview.lookMenu") : t("preview.layoutMenu") });
+      if (kind === "look") items.push({ sep: true }, { label2: t("preview.lookFooter") });
+      const r = b.getBoundingClientRect();
+      DGM.pop.show(items, { x: r.left, y: r.bottom + 4 }, (it) => {
+        DGM.pop.hide();
+        if (it.disabled || it.v === cur2) return;
+        if (kind === "look") state.setLook(d.id, it.v);
+        else state.setLayout(d.id, it.v);
+        schedule();
+      });
+    });
+    return b;
+  }
+
   /* ------------------------------------------------------------------ 渲染入口 */
 
   function schedule() {
@@ -346,6 +415,7 @@ window.DGM = window.DGM || {};
     }
     const fmt = state.docFmt(d);
     lastFormat = d.format;
+    renderOpts(d); // 顶栏「外观 / 布局」控件随文档/格式显隐与取值
 
     // 换了目标文档 = 一次新的「初始化」：视口记账作废，这一次挂上图时要重新按画布适应。
     // 同一份文档的重渲染（敲字 / 换主题 / 切视图模式）不走这里 —— 视口保持用户调过的样子。
@@ -403,7 +473,7 @@ window.DGM = window.DGM || {};
     try {
       let svgText;
       if (d.format === "mermaid") {
-        svgText = await renderMermaid(body, mine);
+        svgText = await renderMermaid(body, mine, d);
       } else if (d.format === "dot") {
         svgText = await renderDot(body, d.layout || "dot");
       } else if (d.format === "d2") {
@@ -454,10 +524,65 @@ window.DGM = window.DGM || {};
     });
   }
 
-  async function renderMermaid(body, mine) {
+  /** Mermaid ELK 布局引擎（懒加载随包离线 bundle，模式与 DGM.d2 一致）。
+   *
+   *  资产在 `/mermaid-elk/mermaid-layout-elk.esm.js`（crates/assets 的第六个挂载点），
+   *  **故意不进 `ui/vendor/`**：`build.frontendDist = "../ui"` 会把 ui 再嵌进 exe 一份。
+   *  单例懒加载：首次用到（用户把布局切到 elk）才 `import()`，注册进 mermaid 后复用。
+   *  失败不缓存 —— 资产可能刚被取资产脚本补齐，下次还能重试。
+   */
+  let elkPromise = null;
+  let elkReady = false;
+
+  function elkLoaded() {
+    return elkReady;
+  }
+
+  function loadElk() {
+    if (elkReady) return Promise.resolve(true);
+    if (!elkPromise) {
+      elkPromise = import("/mermaid-elk/mermaid-layout-elk.esm.js")
+        .then((m) => {
+          if (typeof window.mermaid.registerLayoutLoaders !== "function") {
+            throw new Error("mermaid.registerLayoutLoaders is not a function");
+          }
+          window.mermaid.registerLayoutLoaders(m.default);
+          elkReady = true;
+          return true;
+        })
+        .catch((err) => {
+          elkPromise = null;
+          throw new Error(t("preview.elk.unavailable", { msg: (err && err.message) || String(err) }));
+        });
+    }
+    return elkPromise;
+  }
+
+  async function renderMermaid(body, mine, d) {
     if (typeof window.mermaid === "undefined") throw new Error(t("preview.mermaidUnavailable"));
     const dark = document.documentElement.dataset.theme === "dark";
-    window.mermaid.initialize({ startOnLoad: false, securityLevel: "strict", theme: dark ? "dark" : "default" });
+    // 外观（look）：文档级 > 设置默认 > 不干预。「auto」与未设置都交给 Mermaid 内建默认
+    // （12 的流程图 = neo + redux-color 主题，与 mermaid.live 对齐）。
+    const setLookPref = state.settings && state.settings.mermaid && state.settings.mermaid.look;
+    let look = d.look && d.look !== "auto" ? d.look : setLookPref && setLookPref !== "auto" ? setLookPref : null;
+    // 布局：文档级（Rust 侧按注册表校验过；elk 需要离线包，加载失败回退 dagre 而不是报错断流）
+    const fmt = state.docFmt(d);
+    let layout = d.layout && fmt.layouts && fmt.layouts.includes(d.layout) ? d.layout : null;
+    if (layout === "elk") {
+      try {
+        await loadElk();
+      } catch (e) {
+        if (DGM.status) DGM.status(t("preview.elk.fallback", { msg: e.message }), "warn");
+        layout = "dagre";
+      }
+    }
+    window.mermaid.initialize({
+      startOnLoad: false,
+      securityLevel: "strict",
+      theme: dark ? "dark" : "default",
+      ...(look ? { look } : {}),
+      ...(layout ? { layout } : {}),
+    });
     if (typeof window.mermaid.parse === "function") await window.mermaid.parse(body);
     const out = await window.mermaid.render(`dgm-${mine}`, body);
     return out.svg;
@@ -872,6 +997,11 @@ window.DGM = window.DGM || {};
   DGM.bus.on("doc:changed", schedule);
   // 主题变化要让 mermaid 重新按暗色/亮色渲染（渲染器主题不跟 CSS 变量走）
   DGM.bus.on("settings:changed", schedule);
+  // 设置里改了 Mermaid 默认外观 → 顶栏按钮上的当前值要跟着变（渲染本身由上面的 schedule 兜住）
+  DGM.bus.on("settings:changed", () => {
+    optsKey = null;
+    renderOpts(state.activeDoc());
+  });
 
   DGM.preview = {
     render: renderActive,
@@ -886,6 +1016,7 @@ window.DGM = window.DGM || {};
     toPngDataUrl,
     describeError,
     describeMermaid,
+    elkLoaded,
     exportPng,
     exportSvg,
     copyImage,

@@ -529,6 +529,49 @@ window.DGM = window.DGM || {};
         if (st && st.setBodyNow) await st.setBodyNow(doc.id, withGe); // 还原后面的断言要用的正文
       }
 
+      // ── Mermaid 外观 / 布局：注册表契约 + 文档级落盘 + 顶栏控件 + ELK 真渲染（2026-10-19）──
+      {
+        const mm = info.formats.find((f) => f.id === "mermaid");
+        ok(
+          "Mermaid 注册 looks×4 + layouts×2",
+          !!mm && mm.looks.length === 4 && mm.layouts.join(",") === "dagre,elk",
+          mm && "looks=" + mm.looks.join("/") + " layouts=" + mm.layouts.join("/"),
+        );
+        ok(
+          "顶栏控件对 Mermaid 出两颗",
+          document.querySelectorAll("#pv-opts .pv-opt").length === 2,
+          document.querySelectorAll("#pv-opts .pv-opt").length,
+        );
+        await invoke("doc_set_look", { id: doc.id, look: "handDrawn" });
+        const sessLook = await invoke("session_get");
+        ok(
+          "外观按文档落盘",
+          (sessLook.docs.find((x) => x.id === doc.id) || {}).look === "handDrawn",
+          sessLook.docs.find((x) => x.id === doc.id) && sessLook.docs.find((x) => x.id === doc.id).look,
+        );
+        // 注意：渲染读的是 state 里的文档副本，裸 invoke 不更新它 —— UI 路径必须走 state.setLayout/setLook
+        if (st && st.setLook) await st.setLook(doc.id, "handDrawn");
+
+        // ELK 端到端：切布局 → 预览换新 SVG，且 elk 离线包真的加载注册成功
+        // （elk 加载失败会静默回退 dagre 照样出图，所以必须钉 elkLoaded 标志）。
+        const before = document.querySelector("#canvas-stage svg");
+        if (st && st.setLayout) await st.setLayout(doc.id, "elk");
+        else await invoke("doc_set_layout", { id: doc.id, layout: "elk" });
+        if (DGM.preview && DGM.preview.schedule) DGM.preview.schedule();
+        let elkOk = false;
+        for (let i = 0; i < 200; i++) {
+          const now = document.querySelector("#canvas-stage svg");
+          if (now && now !== before && DGM.preview.elkLoaded && DGM.preview.elkLoaded()) {
+            elkOk = true;
+            break;
+          }
+          await new Promise((r) => setTimeout(r, 100));
+        }
+        ok("ELK 布局端到端渲染", elkOk, elkOk ? "elk 离线包加载+注册+渲染全通" : "20s 内没等到 elk 渲染");
+        if (st && st.setLayout) await st.setLayout(doc.id, "dagre");
+        if (st && st.setLook) await st.setLook(doc.id, "auto");
+      }
+
       // ── 画布型拒绝分屏 ──
       const cv = st && st.newDoc ? await st.newDoc("drawio") : await invoke("doc_new", { format: "drawio" });
       let rejected = false;

@@ -1,0 +1,9 @@
+# Diagramon Mermaid-ELK offline bundle version pin (tools/fetch-mermaid-elk.ps1 reads this file).
+# One key=value per line; lines starting with '#' are comments. Missing keys make the script exit.
+# Upgrade: change the version here and re-run powershell -NoProfile -File tools\fetch-mermaid-elk.ps1
+#   layout-elk  @mermaid-js/layout-elk (ESM-only, peer of mermaid ^12; bundles elkjs/katex/d3/dayjs/
+#               dompurify/dagre-d3-es; mermaid itself is NOT imported - it is passed in via
+#               mermaid.registerLayoutLoaders at runtime)
+#   esbuild     the bundler itself, pinned like fetch-excalidraw.ps1 does
+layout-elk=1.0.1
+esbuild=0.28.2

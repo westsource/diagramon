@@ -986,6 +986,20 @@ window.DGM = window.DGM || {};
     }
   }
 
+  /** Mermaid 外观模式（classic / neo / handDrawn / auto），按文档落盘 —— 与 setLayout 同一套约定。 */
+  async function setLook(id, look) {
+    const d = state.doc(id);
+    if (!d) return;
+    d.look = look;
+    emit("doc:changed");
+    try {
+      const doc = await ipc.invoke("doc_set_look", { id, look });
+      if (doc) upsertDoc(doc);
+    } catch (e) {
+      /* 外观落盘失败不阻断 */
+    }
+  }
+
   /* ------------------------------------------------------------------ 派生数据 */
 
   async function refreshDerived(id) {
@@ -1143,6 +1157,7 @@ window.DGM = window.DGM || {};
     setCaret,
     setViewMode,
     setLayout,
+    setLook,
     refreshDerived,
     refreshIssues,
     refreshOutline,

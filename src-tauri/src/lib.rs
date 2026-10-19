@@ -191,6 +191,7 @@ pub fn run() {
             commands::doc_set_caret,
             commands::doc_set_view_mode,
             commands::doc_set_layout,
+            commands::doc_set_look,
             commands::doc_reload,
             commands::doc_issues,
             commands::doc_outline,

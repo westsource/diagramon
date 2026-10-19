@@ -11,6 +11,14 @@ pub const DOT_LAYOUTS: [&str; 6] = ["dot", "neato", "fdp", "sfdp", "twopi", "cir
 /// D2 的三种布局引擎。都跑在 D2 自己的 wasm 里；`tala` 实测首次编译约 5.6s（如实在 UI 里标注）。
 pub const D2_LAYOUTS: [&str; 3] = ["dagre", "elk", "tala"];
 
+/// Mermaid 的两种布局引擎：`dagre` 内建；`elk` 走随包离线 bundle
+/// （@mermaid-js/layout-elk，前端经 `mermaid.registerLayoutLoaders` 注册后才可用）。
+pub const MERMAID_LAYOUTS: [&str; 2] = ["dagre", "elk"];
+
+/// Mermaid 的外观模式（mermaid 12 的 `look` 配置）。`auto` = 不干预
+/// （Mermaid 内建默认：流程图为 neo + redux-color 主题）。
+pub const MERMAID_LOOKS: [&str; 4] = ["auto", "classic", "neo", "handDrawn"];
+
 const MERMAID_BODY: &str = "flowchart TD\n    A([开始]) --> B[第一步]\n    B --> C{判断}\n    C -- 是 --> D([结束])\n    C -- 否 --> B\n";
 
 const DOT_BODY: &str = "digraph G {\n    rankdir=LR;\n    node [shape=box, style=\"rounded,filled\"];\n    A -> B -> C;\n}\n";
@@ -41,7 +49,8 @@ pub fn registry() -> Vec<FormatInfo> {
                 // Mermaid flowchart → D2 由 Rust 侧的 Mermaid 解析器完成（flowchart 子集）
                 FormatId::D2,
             ],
-            layouts: vec![],
+            layouts: MERMAID_LAYOUTS.iter().map(|s| (*s).to_string()).collect(),
+            looks: MERMAID_LOOKS.iter().map(|s| (*s).to_string()).collect(),
             note: "文本图表，支持源码 / 分屏 / 预览三态".into(),
             default_body: MERMAID_BODY.into(),
         },
@@ -56,6 +65,7 @@ pub fn registry() -> Vec<FormatInfo> {
             // DOT → Mermaid 只在 flowchart 子集内可行，列为实验方向（转换中心会标出来）
             convert_to: vec![FormatId::Mermaid],
             layouts: DOT_LAYOUTS.iter().map(|s| (*s).to_string()).collect(),
+            looks: vec![],
             note: "文本图表，支持源码 / 分屏 / 预览三态，六种布局引擎".into(),
             default_body: DOT_BODY.into(),
         },
@@ -71,6 +81,7 @@ pub fn registry() -> Vec<FormatInfo> {
             // D2 → Mermaid / DOT 明确不做：D2 是那两者的超集，反向压缩每个特性都要单独决定丢什么。
             convert_to: vec![FormatId::Drawio],
             layouts: D2_LAYOUTS.iter().map(|s| (*s).to_string()).collect(),
+            looks: vec![],
             note: "文本图表，支持源码 / 分屏 / 预览三态；三种布局引擎（tala 较慢）".into(),
             default_body: D2_BODY.into(),
         },
@@ -86,6 +97,7 @@ pub fn registry() -> Vec<FormatInfo> {
             // 画布型则要先把内容导回文本或 Mermaid
             convert_to: vec![],
             layouts: vec![],
+            looks: vec![],
             note: "画布即编辑器；文件仍是可 diff 的 mxfile XML".into(),
             default_body: DRAWIO_BODY.into(),
         },
@@ -99,6 +111,7 @@ pub fn registry() -> Vec<FormatInfo> {
             ai: false,
             convert_to: vec![],
             layouts: vec![],
+            looks: vec![],
             note: "手绘风画布；文件是场景 JSON".into(),
             default_body: EXCALIDRAW_BODY.into(),
         },
@@ -170,10 +183,18 @@ mod tests {
     #[test]
     fn dot_exposes_six_layouts_and_others_do_not() {
         assert_eq!(info(FormatId::Dot).layouts.len(), 6);
-        assert!(info(FormatId::Mermaid).layouts.is_empty());
         let d2 = info(FormatId::D2);
         assert_eq!(d2.layouts, vec!["dagre", "elk", "tala"], "D2 的布局清单要如实照抄实测");
         assert_eq!(d2.layouts[0], "dagre", "默认布局必须是快的那个（tala 实测 5.6s）");
+        // Mermaid：dagre 内建 + elk（离线 bundle）；外观模式四档，其余格式没有
+        assert_eq!(info(FormatId::Mermaid).layouts, vec!["dagre", "elk"]);
+        assert_eq!(
+            info(FormatId::Mermaid).looks,
+            vec!["auto", "classic", "neo", "handDrawn"]
+        );
+        for id in [FormatId::Dot, FormatId::D2, FormatId::Drawio, FormatId::Excalidraw] {
+            assert!(info(id).looks.is_empty(), "{id:?} 不应有外观模式");
+        }
     }
 
     /// 文本型的三种格式都要有可渲染的默认正文（新建出来不能是空预览 + 报错面板）。

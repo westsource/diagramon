@@ -545,6 +545,10 @@ body.no-ai #ai-gutter { display: none; }
 }
 .pane-head .sp { flex: 1; }
 .pane-head .lbl { text-transform: uppercase; }
+/* 顶栏渲染选项控件（Mermaid 外观 / DOT·D2 布局）：mini-btn 同规格，当前值加粗 */
+.pv-opt { gap: 5px; }
+.pv-opt .pv-opt-val { font-weight: 600; color: var(--ink); }
+.pv-opt:hover .pv-opt-val, .pv-opt.open .pv-opt-val { color: var(--accent); }
 .mini-btn {
   display: inline-flex; align-items: center; gap: 4px;
   padding: 1px 7px;

@@ -294,7 +294,7 @@ async function preflight() {
   } else log(`✓ ${TAG} 尚不存在`);
 
   // 7. 资产挂载点（prepack 会再校验，这里先给个早退）
-  const MOUNTS = ["drawio", "excalidraw", "graphviz", "mermaid", "d2"];
+  const MOUNTS = ["drawio", "excalidraw", "graphviz", "mermaid", "d2", "mermaid-elk"];
   for (const mp of MOUNTS) {
     if (!existsSync(join(ROOT, "assets", mp))) die(`资产缺 ${mp} —— 先 node tools/fetch-assets.mjs`);
   }

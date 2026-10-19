@@ -494,6 +494,9 @@ window.DGM = window.DGM || {};
       <div class="field"><label>${esc(t("set.editor.defaultView"))}</label>
         <div class="seg">${views.map((x) => `<button class="${e.default_view === x.id ? "on" : ""}" data-act="dview:${x.id}">${esc(t(x.label))}</button>`).join("")}</div>
         <span class="hint">${esc(t("set.editor.defaultViewHint"))}</span></div>
+      <div class="field"><label>${esc(t("set.editor.mermaidLook"))}</label>
+        <div class="seg" id="seg-mlook">${["auto", "classic", "neo", "handDrawn"].map((x) => `<button class="${((s.mermaid && s.mermaid.look) || "auto") === x ? "on" : ""}" data-act="mlook:${x}">${esc(t("preview.look." + x))}</button>`).join("")}</div>
+        <span class="hint">${esc(t("set.editor.mermaidLookHint"))}</span></div>
       <div class="field-row">
         <div class="field narrow"><label>${esc(t("set.editor.fontSize"))}</label><input type="number" min="10" max="22" value="${e.font_size || 13}" id="e-fs"></div>
         <div class="field"><label>${esc(t("set.editor.ratio"))}</label><input type="range" min="25" max="50" value="${(s.panels && s.panels.split_src) || 33}" id="e-split"><span class="hint">${esc(t("set.editor.ratioHint"))}</span></div>
@@ -706,7 +709,17 @@ window.DGM = window.DGM || {};
       if (act.startsWith("dview:")) {
         const v = act.slice(6);
         state.patchSettings({ editor: { default_view: v } });
-        $$(".seg button", pane).forEach((x) => x.classList.toggle("on", x === btn));
+        // 只翻自己这个 seg：编辑器页里现有两组 seg（默认视图 / Mermaid 外观），
+        // 全 pane 扫 .seg button 会把另一组的选中态抹掉
+        const seg = btn && btn.closest(".seg");
+        if (seg) $$(".seg button", seg).forEach((x) => x.classList.toggle("on", x === btn));
+        return;
+      }
+      if (act.startsWith("mlook:")) {
+        const v = act.slice(6);
+        state.patchSettings({ mermaid: { look: v } });
+        const seg = btn && btn.closest(".seg");
+        if (seg) $$(".seg button", seg).forEach((x) => x.classList.toggle("on", x === btn));
         return;
       }
       if (act === "add") return addModel();

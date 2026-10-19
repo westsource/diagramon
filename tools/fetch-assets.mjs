@@ -113,6 +113,15 @@ const MOUNTS = [
     extra: [],
   },
   {
+    // Mermaid 的 ELK 布局引擎（@mermaid-js/layout-elk 打的离线 ESM 包，见 tools/fetch-mermaid-elk.ps1）。
+    // 故意不进 ui/（build.frontendDist 会把它再嵌进 exe 一份）；前端按需懒加载 /mermaid-elk/。
+    name: "mermaid-elk",
+    from: mountSource(["tools", "mermaid-elk"], "mermaid-layout-elk.esm.js"),
+    entry: "mermaid-layout-elk.esm.js",
+    needDirs: [],
+    extra: [],
+  },
+  {
     name: "d2",
     from: mountSource(["tools", "d2"], "index.js"),
     entry: "index.js",

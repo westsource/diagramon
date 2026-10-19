@@ -91,8 +91,10 @@ pub struct FormatInfo {
     pub ai: bool,
     /// 可作为转换源的目标格式
     pub convert_to: Vec<FormatId>,
-    /// 布局引擎（仅 DOT）
+    /// 布局引擎（DOT 六种 / D2 三种 / Mermaid 两种：dagre 内建 + elk 离线包）
     pub layouts: Vec<String>,
+    /// 外观模式（目前仅 Mermaid：auto/classic/neo/handDrawn，映射 `initialize({ look })`）
+    pub looks: Vec<String>,
     /// 一句话说明，用于新建对话框与 tooltip
     pub note: String,
     /// 新建文档的默认正文
@@ -112,8 +114,11 @@ pub struct Doc {
     pub view_mode: ViewMode,
     pub caret_line: u32,
     pub caret_col: u32,
-    /// DOT 布局引擎
+    /// DOT 布局引擎（Mermaid 复用同一字段存布局选择：dagre / elk）
     pub layout: Option<String>,
+    /// Mermaid 外观模式（classic / neo / handDrawn；None = 跟随默认/设置）
+    #[serde(default)]
+    pub look: Option<String>,
 }
 
 /// 会话：打开的文档与当前活动文档。
@@ -328,7 +333,23 @@ pub struct Settings {
     pub editor: EditorPrefs,
     pub ai: AiPrefs,
     pub cloud: CloudPrefs,
+    /// Mermaid 渲染偏好（目前只有默认外观；布局走文档级 d.layout）
+    pub mermaid: MermaidPrefs,
     pub recent: Vec<RecentEntry>,
+}
+
+/// Mermaid 的全局渲染偏好。文档级选择（`d.look` / `d.layout`）永远优先于这里。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct MermaidPrefs {
+    /// 默认外观：auto | classic | neo | handDrawn（auto = 不干预，用 Mermaid 内建默认）
+    pub look: String,
+}
+
+impl Default for MermaidPrefs {
+    fn default() -> Self {
+        Self { look: "auto".into() }
+    }
 }
 
 impl Default for Settings {
@@ -342,6 +363,7 @@ impl Default for Settings {
             editor: EditorPrefs::default(),
             ai: AiPrefs::default(),
             cloud: CloudPrefs::default(),
+            mermaid: MermaidPrefs::default(),
             recent: Vec::new(),
         }
     }
@@ -922,6 +944,7 @@ pub mod commands {
     pub const DOC_SET_CARET: &str = "doc_set_caret";
     pub const DOC_SET_VIEW_MODE: &str = "doc_set_view_mode";
     pub const DOC_SET_LAYOUT: &str = "doc_set_layout";
+    pub const DOC_SET_LOOK: &str = "doc_set_look";
     pub const DOC_RELOAD: &str = "doc_reload";
     pub const DOC_ISSUES: &str = "doc_issues";
     pub const DOC_OUTLINE: &str = "doc_outline";

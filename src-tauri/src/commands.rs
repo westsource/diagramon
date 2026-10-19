@@ -178,6 +178,11 @@ pub fn doc_set_layout(state: State<'_, Arc<AppState>>, id: String, layout: Strin
 }
 
 #[tauri::command]
+pub fn doc_set_look(state: State<'_, Arc<AppState>>, id: String, look: String) -> R<bool> {
+    Ok(state.session().set_look(&id, look))
+}
+
+#[tauri::command]
 pub fn doc_issues(state: State<'_, Arc<AppState>>, id: String) -> R<Vec<Issue>> {
     let s = state.session();
     let d = s.get(&id).ok_or_else(|| format!("文档不存在：{id}"))?;

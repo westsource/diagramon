@@ -1,0 +1,285 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>原型 · 预览顶栏渲染选项（外观 / 布局）</title>
+<link rel="stylesheet" href="proto.css">
+<style>
+  /* —— 本页专属的小样式（其余全部走 proto.css 设计系统） —— */
+  body { margin: 0; padding: 28px 32px 60px; background: var(--bg); color: var(--ink); font: var(--fs-md) var(--font-ui); }
+  h1 { font-size: 18px; margin: 0 0 4px; }
+  .lede { color: var(--ink-2); margin: 0 0 18px; max-width: 860px; line-height: 1.55; }
+  .lede b { color: var(--accent); }
+  .tabs { display: flex; gap: 6px; margin: 0 0 14px; }
+  .tab {
+    padding: 4px 14px; font-size: var(--fs-sm); color: var(--ink-2); cursor: pointer;
+    border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface);
+  }
+  .tab.on { color: var(--accent); border-color: var(--accent-line); background: var(--accent-soft); font-weight: 600; }
+
+  /* 预览窗格模拟：结构照抄 ui/index.html 的 .pane-head / .canvas-viewport */
+  .window { max-width: 980px; border: 1px solid var(--border-strong); border-radius: var(--radius); overflow: hidden; background: var(--surface); box-shadow: var(--sh-2, 0 2px 8px rgba(0,0,0,.06)); }
+  .canvas-viewport { position: relative; height: 300px; display: flex; align-items: center; justify-content: center; background: var(--surface-inset); }
+  .canvas-viewport svg.demo { max-width: 92%; max-height: 84%; opacity: .92; }
+  .canvas-note { position: absolute; left: 12px; bottom: 10px; font-size: var(--fs-xs); color: var(--faint); }
+
+  /* 顶栏新控件：与 mini-btn 同规格，但带文字与下拉箭头 */
+  .mini-btn.look { gap: 5px; font-weight: 500; }
+  .mini-btn.look .chev { width: 10px; height: 10px; transition: transform .12s; }
+  .mini-btn.look.open .chev { transform: rotate(180deg); }
+  .mini-btn.look .val { color: var(--ink); }
+  .mini-btn.look:hover .val, .mini-btn.look.open .val { color: var(--accent); }
+
+  /* pop 菜单里的分组小标题与页脚提示（app 的 pop-row.label2 同款式） */
+  .pop-row.head { color: var(--faint); font-size: var(--fs-xs); pointer-events: none; text-transform: uppercase; letter-spacing: .4px; }
+  .pop-row.hint { color: var(--faint); font-size: var(--fs-xs); pointer-events: none; border-top: 1px solid var(--border); margin-top: 3px; padding-top: 6px; white-space: normal; line-height: 1.5; }
+
+  /* 设置对话框小样 */
+  .settings-mock { max-width: 980px; margin-top: 26px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); }
+  .settings-mock .sh { padding: 9px 14px; font-size: var(--fs-xs); font-weight: 600; letter-spacing: .4px; color: var(--muted); background: var(--surface-inset); border-bottom: 1px solid var(--border); }
+  .settings-mock .field { display: flex; align-items: center; gap: 14px; padding: 12px 14px; }
+  .settings-mock .field label { width: 200px; color: var(--ink-2); font-size: var(--fs-sm); }
+  .settings-mock select { padding: 3px 8px; font-size: var(--fs-sm); color: var(--ink); border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); }
+  .settings-mock .why { color: var(--faint); font-size: var(--fs-xs); }
+
+  .notes { max-width: 980px; margin-top: 22px; color: var(--ink-2); font-size: var(--fs-sm); line-height: 1.7; }
+  .notes h3 { font-size: var(--fs-md); color: var(--ink); margin: 14px 0 4px; }
+  .notes code { font: var(--fs-xs) var(--font-mono); background: var(--surface-3); border-radius: 3px; padding: 1px 5px; }
+</style>
+</head>
+<body>
+  <h1>预览顶栏 · 渲染选项控件（原型）</h1>
+  <p class="lede">
+    把「布局引擎 / 外观模式」从<b>状态栏小按钮</b>升级到<b>预览窗格顶栏</b>：控件在顶栏按钮排里，
+    按当前文档格式<b>自动显隐</b>——Mermaid 显示「外观 + 布局」两颗，DOT / D2 显示「布局」一颗，
+    画布型（drawio / Excalidraw）整组隐藏。选择<b>按文档落盘</b>（<code style="font:var(--fs-xs) var(--font-mono)">d.layout</code>，与现状同一字段），点完立即重渲染。
+    主题：<button class="mini-btn" id="btn-theme" title="切换明暗">🌙 暗色</button>
+  </p>
+
+  <div class="tabs" id="tabs"></div>
+
+  <div class="window">
+    <div class="pane-head">
+      <span class="lbl">预览</span>
+      <span class="pane-sub" id="sub"></span>
+      <span class="sp"></span>
+      <span id="ctrl-host" style="display:contents"></span>
+      <button class="mini-btn" title="复制图片"><svg class="ico ico-sm"><use href="#i-copy"></use></svg></button>
+      <button class="mini-btn" title="导出图片"><svg class="ico ico-sm"><use href="#i-download"></use></svg></button>
+      <button class="mini-btn" title="显示源码窗口  Ctrl+1"><svg class="ico ico-sm"><use href="#i-code"></use></svg></button>
+    </div>
+    <div class="canvas-viewport" id="stage">
+      <div class="canvas-note" id="canvas-note"></div>
+    </div>
+  </div>
+
+  <div class="settings-mock">
+    <div class="sh">设置 · 图表渲染（对话框小样）</div>
+    <div class="field">
+      <label>Mermaid 默认外观</label>
+      <select id="set-look">
+        <option value="auto">跟随 Mermaid 默认（流程图 = neo）</option>
+        <option value="classic">classic（经典风格）</option>
+        <option value="neo">neo（新视觉）</option>
+        <option value="handDrawn">handDrawn（手绘）</option>
+      </select>
+      <span class="why">全局兜底：文档内未手动选过外观时用它。文档选择 &gt; 这里的默认。</span>
+    </div>
+  </div>
+
+  <div class="notes">
+    <h3>交互与落盘约定（实施时照此）</h3>
+    ① 控件只在文本型且有选项的格式上出现：Mermaid = <b>外观 + 布局两颗</b>（外观：auto / classic / neo / handDrawn；
+       布局：dagre / elk），DOT = 6 种布局引擎，D2 = dagre / elk / tala；drawio / Excalidraw 无此按钮。<br>
+    ② 点选即写 <code>d.layout</code>（复用现有 <code>state.setLayout</code> / <code>doc_set_layout</code>，与状态栏旧入口
+       同一字段、互相同步；Mermaid 的外观与布局两项的存储编码实施时定：同字段分节或加 <code>d.mlook</code>）→ 立即重渲染；
+       按钮文案与预览副标题同步更新。<br>
+    ③ Mermaid 渲染映射：外观 → <code>initialize({ look })</code>；布局 → <code>initialize({ layout })</code>。
+       <b>elk 需要 vendor <code>@mermaid-js/layout-elk@1.0.1</code></b>（ESM-only，照 fetch-excalidraw 的
+       npm install + esbuild IIFE 模式打离线包，<code>mermaid.registerLayoutLoaders(elkLayouts)</code> 注册）；
+       未注册时菜单里 elk 置灰并提示。frontmatter config 仍然最高优先。<br>
+    ④ 状态栏旧入口保留（同一数据源），后续可再议去留。
+  </div>
+
+<script>
+/* —— 原型数据（实施时来自 format.rs 注册表 + d.layout） —— */
+const DOCS = {
+  mermaid: {
+    label: "Mermaid", subName: "Mermaid", state: { look: "classic", layout: "dagre" },
+    controls: [
+      { id: "look", name: "外观", menuTitle: "外观模式（本文档）",
+        items: [
+          { id: "auto",      label: "跟随默认", hint: "Mermaid 12：流程图 = neo" },
+          { id: "classic",   label: "classic", hint: "经典风格" },
+          { id: "neo",       label: "neo",     hint: "新视觉" },
+          { id: "handDrawn", label: "handDrawn", hint: "手绘" },
+        ],
+        btnName: { auto: "默认", classic: "classic", neo: "neo", handDrawn: "handDrawn" } },
+      { id: "layout", name: "布局", menuTitle: "布局引擎（本文档）",
+        items: [
+          { id: "dagre", label: "dagre", hint: "内建默认，快" },
+          { id: "elk",   label: "elk",   hint: "分层更整（随包离线 ELK）" },
+        ] },
+    ],
+  },
+  dot: {
+    label: "DOT", subName: "Graphviz DOT", state: { layout: "dot" },
+    controls: [
+      { id: "layout", name: "布局", menuTitle: "布局引擎（本文档）",
+        items: ["dot", "neato", "fdp", "circo", "twopi", "osage"].map((l) => ({ id: l, label: l })) },
+    ],
+  },
+  d2: {
+    label: "D2", subName: "D2", state: { layout: "dagre" },
+    controls: [
+      { id: "layout", name: "布局", menuTitle: "布局引擎（本文档）",
+        items: [
+          { id: "dagre", label: "dagre", hint: "默认，快" },
+          { id: "elk",   label: "elk",   hint: "分层更整" },
+          { id: "tala",  label: "tala",  hint: "较慢（实测 5.6s）" },
+        ] },
+    ],
+  },
+  drawio: { label: "drawio（画布型）", subName: "drawio", state: {}, controls: [] },
+};
+
+const $ = (s) => document.querySelector(s);
+let cur = "mermaid";
+let pop = null;
+
+/* —— 格式页签 —— */
+const tabs = $("#tabs");
+for (const [id, d] of Object.entries(DOCS)) {
+  const b = document.createElement("button");
+  b.className = "tab"; b.textContent = d.label; b.dataset.id = id;
+  b.onclick = () => { cur = id; render(); };
+  tabs.appendChild(b);
+}
+
+/* —— 顶栏控件（每文档一或多颗） —— */
+const host = $("#ctrl-host");
+
+function closePop() { if (pop) { pop.remove(); pop = null; } document.querySelectorAll(".mini-btn.look.open").forEach((b) => b.classList.remove("open")); }
+document.addEventListener("click", closePop);
+
+function openMenu(e, d, c, btnEl) {
+  e.stopPropagation();
+  if (pop) { closePop(); return; }
+  const r = btnEl.getBoundingClientRect();
+  pop = document.createElement("div");
+  pop.className = "pop";
+  pop.style.left = Math.min(r.left, innerWidth - 280) + "px";
+  pop.style.top = r.bottom + 6 + "px";
+  const curVal = d.state[c.id];
+  pop.innerHTML = rowHtml({ head: c.menuTitle })
+    + c.items.map((it) => rowHtml(it, curVal === it.id)).join("")
+    + (c.id === "look" ? rowHtml({ hint: "全局兜底在 设置 → Mermaid 默认外观；frontmatter config 优先于这里。" }) : "");
+  document.body.appendChild(pop);
+  pop.onclick = (ev) => {
+    const row = ev.target.closest(".pop-row");
+    if (!row || !row.dataset.id) return;
+    ev.stopPropagation();
+    d.state[c.id] = row.dataset.id;
+    closePop();
+    render();
+    toast("已按文档保存 → 重渲染");
+  };
+  btnEl.classList.add("open");
+}
+
+function rowHtml(it, on) {
+  if (it.head) return `<div class="pop-row head"><span class="lbl">${it.head}</span></div>`;
+  if (it.hint && !it.id) return `<div class="pop-row hint"><span class="lbl">${it.hint}</span></div>`;
+  return `<button class="pop-row check${on ? " on" : ""}" data-id="${it.id}">
+    <span class="lbl">${it.label}</span><span class="kbd">${it.hint || ""}</span></button>`;
+}
+
+/* —— 顶部渲染 —— */
+function render() {
+  const d = DOCS[cur];
+  document.querySelectorAll(".tab").forEach((t) => t.classList.toggle("on", t.dataset.id === cur));
+  host.innerHTML = "";
+  for (const c of d.controls) {
+    const curVal = d.state[c.id];
+    const val = c.btnName ? (c.btnName[curVal] || curVal) : curVal;
+    const b = document.createElement("button");
+    b.className = "mini-btn look";
+    b.title = "本文档的渲染选项（随文档保存）";
+    b.innerHTML = `<svg class="ico ico-sm"><use href="#i-${c.id === "look" ? "palette" : "diagram"}"></use></svg>`
+      + `<span>${c.name} · <span class="val">${val}</span></span>`
+      + `<svg class="ico chev"><use href="#i-chevD"></use></svg>`;
+    b.onclick = (e) => openMenu(e, d, c, b);
+    host.appendChild(b);
+  }
+  $("#sub").textContent = d.controls.length
+    ? d.subName + " · " + d.controls.map((c) => c.name + " " + d.state[c.id]).join(" · ")
+    : d.subName + " · 画布型：无渲染选项（整组按钮隐藏）";
+  $("#stage").querySelectorAll("svg.demo").forEach((n) => n.remove());
+  if (d.controls.length) $("#stage").insertAdjacentHTML("beforeend", demoSvg(cur, d.state));
+  $("#canvas-note").textContent = d.controls.length ? "示意图形 —— 真实实现为对应引擎的渲染结果" : "承载面（iframe）—— 顶栏不出现渲染选项";
+}
+
+/* —— 三种 look 的示意小图（卖概念用，非真实渲染） —— */
+function demoSvg(fmt, state) {
+  if (fmt === "mermaid") {
+    const sketches = {
+      classic: '<rect x="20" y="20" width="120" height="44" rx="3" fill="var(--surface)"/><rect x="240" y="20" width="120" height="44" rx="3" fill="var(--surface)"/><rect x="130" y="120" width="120" height="44" rx="22" fill="var(--surface)"/>',
+      neo: '<rect x="20" y="20" width="120" height="44" rx="8" fill="var(--accent-soft)" stroke="var(--accent)"/><rect x="240" y="20" width="120" height="44" rx="8" fill="var(--accent-soft)" stroke="var(--accent)"/><rect x="130" y="120" width="120" height="44" rx="22" fill="var(--accent-soft)" stroke="var(--accent)"/>',
+      handDrawn: '<path d="M24 24 q58 -6 112 0 q4 20 0 38 q-58 5 -112 0 q-5 -19 0 -38z" fill="var(--surface)"/><path d="M244 22 q56 -4 112 2 q5 18 -1 38 q-57 6 -111 0 q-4 -21 0 -40z" fill="var(--surface)"/><path d="M136 122 q54 -8 108 2 q6 18 -2 38 q-55 5 -105 -2 q-5 -20 -1 -38z" fill="var(--surface)"/>',
+    };
+    const stroke = state.look === "handDrawn" ? 'stroke-width="1.4"' : 'stroke-width="1.3"';
+    return `<svg class="demo" width="380" height="200" viewBox="0 0 380 200" fill="none" stroke="var(--ink-2)" ${stroke} font-family="var(--font-ui)">
+      ${sketches[state.look] || sketches.classic}
+      <path d="M140 42 h100" marker-end="url(#arrow)"/><path d="M180 64 L190 118" marker-end="url(#arrow)"/>
+      <g fill="var(--ink)" stroke="none" font-size="13" text-anchor="middle">
+        <text x="80" y="46">开始</text><text x="300" y="46">判断</text><text x="190" y="146">结束</text>
+      </g>
+      <defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="var(--ink-2)"/></marker></defs>
+    </svg>`;
+  }
+  /* DOT / D2 通用示意（布局差异不在此模拟） */
+  return `<svg class="demo" width="380" height="200" viewBox="0 0 380 200" fill="none" stroke="var(--ink-2)" stroke-width="1.3" font-family="var(--font-ui)">
+    <rect x="30" y="30" width="110" height="42" rx="3" fill="var(--surface)"/><rect x="240" y="120" width="110" height="42" rx="3" fill="var(--surface)"/><rect x="240" y="30" width="110" height="42" rx="3" fill="var(--surface)"/>
+    <path d="M140 51 h100 M185 72 L250 118" marker-end="url(#arrow2)"/>
+    <g fill="var(--ink)" stroke="none" font-size="13" text-anchor="middle"><text x="85" y="55">A</text><text x="295" y="55">B</text><text x="295" y="145">C</text></g>
+    <defs><marker id="arrow2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="var(--ink-2)"/></marker></defs>
+  </svg>`;
+}
+
+/* —— 轻提示（真实实现走 DGM.toast） —— */
+let toastTimer = 0;
+function toast(msg) {
+  let n = $("#proto-toast");
+  if (!n) {
+    n = document.createElement("div");
+    n.id = "proto-toast";
+    n.style.cssText = "position:fixed;left:50%;bottom:26px;transform:translateX(-50%);padding:7px 16px;font-size:var(--fs-sm);color:var(--ink);background:var(--surface);border:1px solid var(--border-strong);border-radius:var(--radius);box-shadow:var(--sh-3,0 4px 16px rgba(0,0,0,.12));z-index:300";
+    document.body.appendChild(n);
+  }
+  n.textContent = msg;
+  n.style.opacity = "1";
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { n.style.opacity = "0"; }, 1800);
+}
+
+/* —— 主题切换（原型辅助） —— */
+$("#btn-theme").onclick = () => {
+  const dark = document.documentElement.dataset.theme === "dark";
+  document.documentElement.dataset.theme = dark ? "light" : "dark";
+  $("#btn-theme").textContent = dark ? "🌙 暗色" : "☀️ 亮色";
+};
+
+render();
+
+/* 图标精灵要在 body 存在后注入（proto-icons.js 是立即执行的 IIFE） */
+</script>
+<script src="proto-icons.js"></script>
+<script>
+  /* 截图辅助：?open=1 自动展开第一颗菜单；?doc=dot|d2|drawio 直达对应格式 */
+  const q = new URLSearchParams(location.search);
+  if (q.get("doc")) { cur = q.get("doc"); render(); }
+  if (q.get("open")) { const b = document.querySelector("#ctrl-host .mini-btn.look"); if (b) b.click(); }
+</script>
+</body>
+</html>

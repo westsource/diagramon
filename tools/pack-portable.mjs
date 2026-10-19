@@ -28,7 +28,7 @@ import { fileURLToPath } from "node:url";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const RELEASE = join(ROOT, "target", "release");
-const MOUNTS = ["drawio", "excalidraw", "graphviz", "mermaid", "d2"];
+const MOUNTS = ["drawio", "excalidraw", "graphviz", "mermaid", "d2", "mermaid-elk"];
 
 const argv = process.argv.slice(2);
 const argOf = (name, fallback) => {
