@@ -889,6 +889,16 @@ window.DGM = window.DGM || {};
         fmtOnce.changes > 0 && fmtTwice.changes === 0 && fmtOnce.body.includes("%% 注释"),
         `${fmtOnce.changes} → ${fmtTwice.changes}`,
       );
+      // 3.14.0：行级 diff 与“只应用勾选块”
+      const hs = DGM.ai._diffHunks("a\nb\nc\n", "a\nB\nc\n");
+      ok("行级 diff 能分出可勾选的块", hs.length === 1 && hs[0].before[0] === "b" && hs[0].after[0] === "B", JSON.stringify(hs));
+      const picked = DGM.ai._applyHunks("a\nb\nc\n", hs, [false]);
+      const picked2 = DGM.ai._applyHunks("a\nb\nc\n", hs, [true]);
+      ok(
+        "只应用勾选块：取消时不动、勾选时只改那一块",
+        picked === "a\nb\nc\n" && picked2 === "a\nB\nc\n",
+        JSON.stringify({ picked, picked2 }),
+      );
 
       // 引擎方向回来的是 mxfile：`mxfile_inspect` 只吃字符串（不收路径、不碰网络）
       const inspectCounts = await invoke("mxfile_inspect", {

@@ -803,6 +803,12 @@ body.no-ai #ai-gutter { display: none; }
 .ai-budget.capped { color: var(--warn); }
 .msg-ops { margin-left: auto; opacity: 0.45; }
 .msg:hover .msg-ops { opacity: 1; }
+.ai-diff { border-top: 1px solid var(--border); padding: 6px 8px 8px; background: var(--surface-inset); }
+.diff-hunk { display: flex; gap: 6px; align-items: flex-start; padding: 3px 0; font-family: var(--font-mono); font-size: var(--fs-xs); }
+.diff-hunk input { margin-top: 3px; }
+.diff-body { margin: 0; flex: 1; min-width: 0; overflow-x: auto; white-space: pre; }
+.diff-body .del { color: var(--err); }
+.diff-body .add { color: var(--ok); }
 
 .thumb {
   display: flex; gap: 9px; align-items: center;

@@ -453,6 +453,122 @@ window.DGM = window.DGM || {};
     dispatch(req, tab(), { id: newId(), role: "sys", text: t("ai.fixConvert.sys") }, undefined, "editor");
   }
 
+  /** 行级 diff：返回 `{start, before[], after[]}` 的块（供逐块勾选）。 */
+  function diffHunks(base, next) {
+    const a = String(base || "").split("\n");
+    const b = String(next || "").split("\n");
+    if (a.join("\n") === b.join("\n")) return [];
+    if (a.length * b.length > 4_000_000) {
+      return [{ start: 0, before: a, after: b }];
+    }
+    const n = a.length;
+    const m = b.length;
+    const dp = Array.from({ length: n + 1 }, () => new Int32Array(m + 1));
+    for (let i = n - 1; i >= 0; i -= 1) {
+      for (let j = m - 1; j >= 0; j -= 1) {
+        dp[i][j] = a[i] === b[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
+      }
+    }
+    const ops = [];
+    let i = 0;
+    let j = 0;
+    while (i < n || j < m) {
+      if (i < n && j < m && a[i] === b[j]) {
+        ops.push({ t: "=", s: a[i] });
+        i += 1;
+        j += 1;
+      } else if (i < n && (j >= m || dp[i + 1][j] >= dp[i][j + 1])) {
+        ops.push({ t: "-", s: a[i] });
+        i += 1;
+      } else {
+        ops.push({ t: "+", s: b[j] });
+        j += 1;
+      }
+    }
+    const hunks = [];
+    let cur = null;
+    let pos = 0;
+    for (const op of ops) {
+      if (op.t === "=") {
+        if (cur) {
+          hunks.push(cur);
+          cur = null;
+        }
+        pos += 1;
+        continue;
+      }
+      if (!cur) cur = { start: pos, before: [], after: [] };
+      if (op.t === "-") cur.before.push(op.s);
+      else cur.after.push(op.s);
+    }
+    if (cur) hunks.push(cur);
+    return hunks;
+  }
+
+  function applyHunks(base, hunks, pick) {
+    const a = String(base || "").split("\n");
+    const out = [];
+    let cursor = 0;
+    hunks.forEach((h, i) => {
+      out.push(...a.slice(cursor, h.start));
+      out.push(...(pick[i] ? h.after : h.before));
+      cursor = h.start + h.before.length;
+    });
+    out.push(...a.slice(cursor));
+    return out.join("\n");
+  }
+
+  async function applySelectedHunks(blk, m) {
+    const d = state.activeDoc();
+    if (!d) return;
+    // 以**当前正文**重算 hunk：用户可能在上一次渲染之后又改过文档。
+    const fresh = diffHunks(d.body, blk.code);
+    const pick = Array.isArray(m.pick) && m.pick.length === fresh.length ? m.pick : fresh.map(() => true);
+    const chosen = pick.filter(Boolean).length;
+    if (!chosen) {
+      DGM.toast({ icon: "info", title: t("ai.patch.none"), sub: "" });
+      return;
+    }
+    const next = applyHunks(d.body, fresh, pick);
+    if (sameBody(next, d.body)) return;
+    pushUndo(d.id, d.body);
+    await DGM.editor.applyBody(next);
+    m.applied = true;
+    render();
+    DGM.toast({ icon: "check", title: t("ai.patch.applied", { n: chosen }), sub: "" });
+  }
+
+  /** 同格式文本文档：把“整段应用”变成可逐块勾选的 diff。 */
+  function diffNode(blk, m) {
+    const d = state.activeDoc();
+    const fmt = langToFormat(blk.lang);
+    if (!d || !state.isTextDoc(d) || d.format !== fmt || m.intent === "explain" || m.applied) return null;
+    const hunks = diffHunks(d.body, blk.code);
+    if (!hunks.length) return null;
+    if (!Array.isArray(m.pick) || m.pick.length !== hunks.length) m.pick = hunks.map(() => true);
+    const wrap = h("div", "ai-diff");
+    hunks.forEach((hn, idx) => {
+      const lb = h("label", "diff-hunk");
+      const cb = document.createElement("input");
+      cb.type = "checkbox";
+      cb.checked = !!m.pick[idx];
+      cb.addEventListener("change", () => {
+        m.pick[idx] = cb.checked;
+      });
+      const pre = h("pre", "diff-body");
+      pre.innerHTML =
+        hn.before.map((l) => `<span class="del">- ${esc(l)}</span>`).join("\n") +
+        (hn.before.length && hn.after.length ? "\n" : "") +
+        hn.after.map((l) => `<span class="add">+ ${esc(l)}</span>`).join("\n");
+      lb.append(cb, pre);
+      wrap.appendChild(lb);
+    });
+    const btn = h("button", "btn sm primary", `${icon("check", "ico-sm")}${esc(t("ai.patch.apply"))}`);
+    btn.addEventListener("click", () => applySelectedHunks(blk, m));
+    wrap.appendChild(btn);
+    return wrap;
+  }
+
   function codeCard(blk, m) {
     const fmt = langToFormat(blk.lang);
     const lines = blk.code.split("\n").length;
@@ -497,6 +613,8 @@ window.DGM = window.DGM || {};
     card.addEventListener("click", (e) => {
       if (e.target.closest('[data-a="copy"]')) copyText(blk.code);
     });
+    const dn = diffNode(blk, m);
+    if (dn) card.appendChild(dn);
     return card;
   }
 
@@ -1386,7 +1504,14 @@ window.DGM = window.DGM || {};
     return norm(a) === norm(b);
   }
 
-  let lastApplied = null; // {id, body}
+  /** 多步撤销：每条是 `{id, body}`（**应用前**的正文），上限 20。 */
+  let appliedStack = [];
+  const APPLY_STACK_MAX = 20;
+
+  function pushUndo(id, body) {
+    appliedStack.push({ id, body: body == null ? "" : body });
+    if (appliedStack.length > APPLY_STACK_MAX) appliedStack.shift();
+  }
 
   /** 「渲染校验回环」的布防状态。
    *
@@ -1402,22 +1527,31 @@ window.DGM = window.DGM || {};
     const fmt = langToFormat(blk.lang);
     const fromId = (state.activeDoc() || {}).id || "";
     let d = state.activeDoc();
-    if (!d || (state.isTextDoc(d) && d.format !== fmt && blk.lang)) {
-      // 目标格式不一致或当前是画布型：另开一个对应格式的新标签页再落正文
-      if (!d || state.isCanvasDoc(d) || d.format !== fmt) {
-        const created = await state.newDoc(fmt);
-        if (created) {
-          // 会话过继（S2）：产物落进新标签页，这段对话就该跟着它走 —— 否则"从无到有"
-          // 生成完，对话留在旧文档（多半还是未保存的），关掉就没了。
-          // 必须在 loadActive() **之前**复制：切换后 render() 读的是新文档的桶。
-          if (fromId && fromId !== created.id) adoptConversation(fromId, created.id);
-          DGM.editor.loadActive();
-          d = created;
-        }
+    // 3.14.0 的格式守卫：文本文档里**拒绝**落另一格式的代码块。
+    // 以前会偷偷另开一个对应格式的标签页，用户以为改的是当前文档。
+    if (d && state.isTextDoc(d) && blk.lang && d.format !== fmt) {
+      DGM.toast({
+        icon: "alert",
+        title: t("ai.wrongFormat"),
+        sub: t("ai.wrongFormatSub", { have: state.docFmt(d).name, got: state.fmtById(fmt).name }),
+        warn: true,
+      });
+      return;
+    }
+    if (!d || state.isCanvasDoc(d)) {
+      // 画布型（或没有文档）：另开一个对应格式的新标签页再落正文
+      const created = await state.newDoc(fmt);
+      if (created) {
+        // 会话过继（S2）：产物落进新标签页，这段对话就该跟着它走 —— 否则"从无到有"
+        // 生成完，对话留在旧文档（多半还是未保存的），关掉就没了。
+        // 必须在 loadActive() **之前**复制：切换后 render() 读的是新文档的桶。
+        if (fromId && fromId !== created.id) adoptConversation(fromId, created.id);
+        DGM.editor.loadActive();
+        d = created;
       }
     }
     if (!d) return;
-    lastApplied = { id: d.id, body: d.body };
+    pushUndo(d.id, d.body);
     await DGM.editor.applyBody(blk.code);
     if (m) m.applied = true;
     // 布防：这一版渲染失败就自动修正一次（开关见「AI 设置 → 渲染失败时…」）。
@@ -1451,17 +1585,26 @@ window.DGM = window.DGM || {};
   }
 
   async function revertLast() {
-    if (!lastApplied) {
+    const cur = state.activeDoc();
+    let at = -1;
+    for (let i = appliedStack.length - 1; i >= 0; i -= 1) {
+      if (!cur || appliedStack[i].id === cur.id) {
+        at = i;
+        break;
+      }
+    }
+    if (at < 0) {
       DGM.toast({ icon: "undo", title: t("ai.reverted"), sub: t("common.none") });
       return;
     }
-    const d = state.doc(lastApplied.id);
+    const entry = appliedStack[at];
+    appliedStack.splice(at, 1);
+    const d = state.doc(entry.id);
     if (d) {
-      await DGM.editor.applyBody(lastApplied.body);
+      await DGM.editor.applyBody(entry.body);
       render();
       DGM.toast({ icon: "undo", title: t("ai.reverted"), sub: t("ai.revertedSub") });
     }
-    lastApplied = null;
   }
 
   function copyText(text) {
@@ -1852,6 +1995,8 @@ window.DGM = window.DGM || {};
     explain: explainCurrent,
     applyAsCanvas,
     fixLine,
+    _diffHunks: diffHunks,
+    _applyHunks: applyHunks,
     cancel,
     applyLast,
     revertLast,

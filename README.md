@@ -14,7 +14,7 @@ no external request is ever made**.
 Code or images reach a model only when you actively use AI, and then only the endpoint you chose
 (BYOK talks straight to your own provider, membership goes through the Diagramon cloud gateway).
 
-Version **3.13.0** · Official website <https://www.diagramon.com>
+Version **3.14.0** · Official website <https://www.diagramon.com>
 
 ## Screenshots
 
@@ -173,6 +173,9 @@ Version **3.13.0** · Official website <https://www.diagramon.com>
   Rust); a document that is already the last assistant turn is not sent twice
 - **Single-turn actions** — regenerate, edit and resend, delete, or branch a conversation from any
   message; Ctrl+V pastes an image into vision, and “Ask AI to fix this line” sends only that line ±10
+- **Review AI edits as a diff** — same-format text output is shown as per-block checkboxes; apply only
+  the blocks you ticked, undo up to 20 applies, and a wrong-format code block is refused instead of
+  silently opening another tab
 - **Two kinds of credentials, kept visually separate** — the cloud gateway (membership; the credential is
   the current login token, so you fill in nothing) and local BYOK (OpenAI-compatible / Ollama / custom,
   where you supply the key) are shown as groups, never mixed
