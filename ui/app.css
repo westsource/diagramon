@@ -2030,6 +2030,25 @@ body.no-mock .mock-badge { display: none; }
   background: var(--ai-soft); border: 1px solid var(--ai-line); border-radius: var(--radius);
 }
 .ai-chip .icon-btn { margin-left: auto; }
+
+/* §19.12 「附加文件」一行：全路径输入 + 选择文件；以及拖放落点的高亮 */
+.ai-file-row { display: flex; align-items: center; gap: 5px; margin-top: 7px; }
+.ai-file-row > .ico { flex: none; color: var(--faint); }
+.ai-file-row input {
+  flex: 1; min-width: 0;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--fg); font-size: var(--fs-xs);
+  padding: 4px 7px;
+}
+.ai-file-row input::placeholder { color: var(--faint); }
+.ai-file-row input:focus { outline: 0; border-color: var(--ai); }
+/* 文件 chip 用等宽体显示文件名：路径与扩展名一眼能分辨 */
+.ai-chip.file { font-family: var(--mono, ui-monospace, monospace); }
+.ai-chip.file .dim { color: var(--faint); }
+/* 拖放命中：整块输入区描边高亮（原生拖放事件里我们自己做命中判定，见 ai.js::insideAiPane） */
+.ai-pane.drag-over .ai-box { border-color: var(--ai); box-shadow: 0 0 0 2px var(--ai-soft); }
+.ai-pane.drag-over .ai-file-row { opacity: 0.6; }
 .send-btn.stop { background: var(--err); color: #fff; }
 .send-btn.stop:hover { background: var(--err); filter: brightness(1.06); }
 

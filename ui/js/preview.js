@@ -643,7 +643,7 @@ window.DGM = window.DGM || {};
    * 自己的转义纪律；而 innerHTML 插入的 SVG 里**事件属性是会执行的**。
    * 用 <template> 承接：模板内容是惰性的（脚本不执行、事件不触发），
    * 且 HTML 解析对 mermaid 标签里未闭合的 `<br>` 宽容（XML 解析会直接 parsererror，
-   * 见 toPngDataUrl 的注释），消毒完再把 <svg> 摘出来挂载。
+   * 见 pngDataUrl 的注释），消毒完再把 <svg> 摘出来挂载。
    */
   function sanitizeSvgNode(svgText) {
     const tpl = document.createElement("template");
@@ -762,6 +762,38 @@ window.DGM = window.DGM || {};
 
   /* ------------------------------------------------------------------ 位图导出 */
 
+  /** 导出画布的硬上限（真机实测 WebView2/Chromium）：**面积 ≤ 2^28 px、单边 ≤ 65535**。
+   *
+   * 超限时 `drawImage` **静默不画**、`toDataURL` 交回一张空图 —— 用户看到的就是
+   * "导出的图是空白"。实测（2026-10-19，本机 WebView2）：
+   * `16384²` = 268,435,456 ✓ 能画；`20000²` ✗ 空白；`65535×4000` ✓；`100000×1000` ✗。
+   * 所以两条都要守：面积是主约束，单边兜底（长条形图不该被单边卡住）。
+   */
+  const MAX_CANVAS_AREA = 268435456; // 2^28
+  const MAX_CANVAS_SIDE = 65535;
+
+  /** 把"想要的倍率"压到上限以内（面积为主、单边兜底）。`capped` = 压过了。 */
+  function fitExportScale(w, h, want) {
+    if (!(w > 0) || !(h > 0)) return { scale: want, capped: false };
+    const bySide = Math.min(MAX_CANVAS_SIDE / w, MAX_CANVAS_SIDE / h);
+    const byArea = Math.sqrt(MAX_CANVAS_AREA / (w * h));
+    const scale = Math.min(want, bySide, byArea);
+    return { scale, capped: scale < want - 1e-6 };
+  }
+
+  /** 导出位图的底色：与预览同源（`--canvas-bg`）。
+   *
+   * 不填底色的 PNG/DIB 是**全透明**的 —— 暗色主题（浅色笔画、深色底）导出来就是
+   * "透明底 + 浅灰线条"，在任何白色看图器里几乎一片空白（2026-10-19 用户报的
+   * "导出是空白"正是这一条 + 上面那个尺寸上限）。这里按用户眼前所见填底色。
+   */
+  function exportBg() {
+    const pane = document.querySelector(".pane-preview");
+    const c = pane ? getComputedStyle(pane).backgroundColor : "";
+    if (c && c !== "transparent" && !/rgba\(0, 0, 0, 0\)/.test(c)) return c;
+    return getComputedStyle(document.body).backgroundColor || "#ffffff";
+  }
+
   function exportScale(svg) {
     const n = svg.querySelectorAll("g.node, g.cluster").length;
     const e = svg.querySelectorAll("g.edge, .edgePath, path.flowchart-link").length;
@@ -773,13 +805,22 @@ window.DGM = window.DGM || {};
     return 1.5;
   }
 
-  async function toPngDataUrl() {
+  function trimNum(v) {
+    return String(Number(v.toFixed(2)));
+  }
+
+  /** 把当前预览栅格化成 PNG dataURL。
+   *
+   *  返回 `{ url, w, h, scale, want, capped }` —— 导出/复制两条路都用它，
+   *  `capped` 让调用方**如实说出**"为什么不是自适应倍率"（被画布上限压过）。
+   */
+  async function pngDataUrl() {
     // 画布型：让承载页自己导出（drawio 的 export / Excalidraw 的 exportToBlob），
     // 本站只把 data URI 拿回来落盘
     if (canvasMode) {
       const data = await DGM.canvas.exportPng(lastFormat, 2, false);
       if (!data) throw new Error(t("exp.canvasFail"));
-      return data;
+      return { url: data, w: 0, h: 0, scale: 2, want: 2, capped: false };
     }
     if (!lastSvg) throw new Error(t("exp.noContent"));
     // 优先克隆**活着的 SVG 节点**，而不是拿渲染时的原始文本重新过一遍 XML 解析。
@@ -795,7 +836,8 @@ window.DGM = window.DGM || {};
       ? live.cloneNode(true)
       : new DOMParser().parseFromString(lastSvg, "image/svg+xml").documentElement;
     const { w, h } = svgSize(svg);
-    const scale = exportScale(svg);
+    const want = exportScale(svg);
+    const { scale, capped } = fitExportScale(w, h, want);
     svg.setAttribute("width", String(w));
     svg.setAttribute("height", String(h));
     const text = new XMLSerializer().serializeToString(svg);
@@ -810,8 +852,19 @@ window.DGM = window.DGM || {};
     canvas.width = Math.max(1, Math.round(w * scale));
     canvas.height = Math.max(1, Math.round(h * scale));
     const ctx = canvas.getContext("2d");
+    // 先铺底色：不铺就是"透明 PNG"（见 exportBg 的注释）
+    ctx.fillStyle = exportBg();
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
     ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-    return canvas.toDataURL("image/png");
+    return { url: canvas.toDataURL("image/png"), w, h, scale, want, capped };
+  }
+
+  /** 倍率被画布上限压过时，把原因说清楚（状态栏 + 输出面板，不静默降级）。 */
+  function noteScaleCap(png) {
+    if (!png || !png.capped) return;
+    const note = t("exp.scaleCapped", { got: trimNum(png.scale), want: trimNum(png.want) });
+    DGM.status(note, "warn");
+    state.pushOutput(note, "warn");
   }
 
   function stem() {
@@ -832,15 +885,16 @@ window.DGM = window.DGM || {};
 
   async function exportPng() {
     try {
-      const dataUrl = await toPngDataUrl();
+      const png = await pngDataUrl();
       let path = await DGM.ipc.dialog.pickSavePath({
         defaultPath: stem() + ".png",
         filters: [{ name: "PNG", extensions: ["png"] }],
       });
       if (!path) return exportCancelled(t("exp.png"));
-      await state.exportWrite(path, dataUrlToBase64(dataUrl));
+      await state.exportWrite(path, dataUrlToBase64(png.url));
       state.pushOutput(t("exp.saved", { path }), "ok");
       DGM.toast({ icon: "download", title: t("exp.png"), sub: path });
+      noteScaleCap(png);
     } catch (e) {
       DGM.toast({ icon: "alert", title: t("exp.png"), sub: (e && e.message) || String(e), warn: true });
     }
@@ -873,9 +927,10 @@ window.DGM = window.DGM || {};
 
   async function copyImage() {
     try {
-      const dataUrl = await toPngDataUrl();
-      const ok = await copyImageDataUrl(dataUrl);
+      const png = await pngDataUrl();
+      const ok = await copyImageDataUrl(png.url);
       DGM.toast({ icon: "copy", title: t("exp.copy"), sub: ok ? "" : t("exp.copyFail") });
+      noteScaleCap(png);
     } catch (e) {
       DGM.toast({ icon: "alert", title: t("exp.copy"), sub: (e && e.message) || String(e), warn: true });
     }
@@ -1016,7 +1071,10 @@ window.DGM = window.DGM || {};
     hasContent: () => canvasMode || !!lastSvg,
     isCanvasFormat: () => canvasMode,
     canvasMode: () => canvasMode,
-    toPngDataUrl,
+    pngDataUrl,
+    fitExportScale,
+    MAX_CANVAS_AREA,
+    MAX_CANVAS_SIDE,
     describeError,
     describeMermaid,
     elkLoaded,

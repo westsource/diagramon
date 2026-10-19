@@ -223,6 +223,7 @@ pub fn run() {
             commands::doc_set_look,
             commands::doc_reload,
             commands::doc_issues,
+            commands::file_read_text,
             commands::doc_outline,
             commands::doc_scope,
             commands::doc_save,

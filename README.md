@@ -85,7 +85,10 @@ Version **3.8.0** · Official website <https://www.diagramon.com>
   milliseconds. Warm-up only happens **if you recently opened a `.d2` file**, so people who don't use D2
   never carry that resident memory around
 - **Export** — save an image (PNG, selectable scale) or copy it to the clipboard; text formats go
-  `SVG → canvas → PNG` with zero subprocesses
+  `SVG → canvas → PNG` with zero subprocesses. Bitmaps carry **the same background as the preview**
+  (opaque, so pasting into a white document never looks blank), and a diagram beyond Chromium's canvas
+  limit (2^28 pixels) has its scale reduced with a note in the status bar instead of silently producing
+  an empty image
 - **Render output is sanitized before it is mounted** — the engine's SVG is stripped of scripts, embedded
   objects and event attributes in an inert container first (a second line of defence behind each engine's
   own escaping), and the shell document ships a CSP that allows no inline script
@@ -149,6 +152,11 @@ Version **3.8.0** · Official website <https://www.diagramon.com>
 - **Two ways into vision** — pick an image file, or **drag out a region of the screen** (freeze-frame plus
   a borderless overlay, so multi-monitor and DPI scaling never come into play); the image is compressed to
   ≤1568px in memory and never written to disk
+- **External files work as context too** — drop a file **onto the AI panel**, paste a full path into the
+  field under the composer, or use the folder button: up to 8 files, 256 KiB each (larger ones are cut
+  on a character boundary and labelled), UTF-8 text only (binary or other encodings report a clear
+  error). Reference files and "current diagram source" are worded separately in the prompt, so the
+  model does not treat your reference as the document to rewrite
 - **Usage is labelled with its source** — only tokens the provider actually reports are accumulated;
   anything unreported shows `—` with an explanation, never `0` and never a local estimate
 - **It actually remembers the conversation** — previous turns are carried into the next request

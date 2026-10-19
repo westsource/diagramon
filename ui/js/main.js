@@ -568,6 +568,66 @@ window.DGM = window.DGM || {};
           await new Promise((r) => setTimeout(r, 100));
         }
         ok("ELK 布局端到端渲染", elkOk, elkOk ? "elk 离线包加载+注册+渲染全通" : "20s 内没等到 elk 渲染");
+
+        // ── 导出 PNG：必须有底色、有内容，超大图不越画布上限（2026-10-19 用户报"导出是空白"） ──
+        //  两个成因各自钉一条：① 位图没铺底色（透明 PNG + 暗色主题 = 白色看图器里一片空白）；
+        //  ② 越上限后 drawImage 静默不画（WebView2 实测：面积 2^28 以内能画，之外交回空图）。
+        {
+          // 后台窗口里定时器被节流：显式催一次渲染，再等预览自报"有内容"（最多 6s）。
+          // 不等就调导出会在"渲染还没落图"的窗口里抛 `exp.noContent` —— 那会把整场自检
+          // 从这一行之后全带走（下面的断言一条都跑不到）。
+          DGM.preview.render();
+          let ready = false;
+          for (let i = 0; i < 60; i++) {
+            if (DGM.preview.hasContent()) {
+              ready = true;
+              break;
+            }
+            await new Promise((r) => setTimeout(r, 100));
+          }
+          const stageText = ((document.querySelector("#canvas-stage") || {}).textContent || "").slice(0, 120);
+          ok("预览渲染出可导出的内容", ready, ready ? "hasContent" : stageText);
+          if (!ready) {
+            ok("导出的 PNG 不是空图", false, "预览没有内容，导出断言无从谈起");
+          } else {
+            const png = await DGM.preview.pngDataUrl();
+            ok(
+              "导出的 PNG 不是空图",
+              !!png && String(png.url).startsWith("data:image/png") && png.url.length > 2000,
+              png && png.url.length,
+            );
+            const facts = await new Promise((res) => {
+              const img = new Image();
+              img.onload = () => {
+                const c = document.createElement("canvas");
+                c.width = img.width;
+                c.height = img.height;
+                const x = c.getContext("2d");
+                x.drawImage(img, 0, 0);
+                const d = x.getImageData(0, 0, c.width, c.height).data;
+                let content = 0;
+                for (let i = 0; i < d.length; i += 4) {
+                  if (Math.abs(d[i] - d[0]) + Math.abs(d[i + 1] - d[1]) + Math.abs(d[i + 2] - d[2]) > 24) content++;
+                }
+                res({ w: c.width, h: c.height, alpha: d[3], content });
+              };
+              img.onerror = () => res(null);
+              img.src = png.url;
+            });
+            ok("导出的 PNG 有底色（角上不透明）", !!facts && facts.alpha === 255, facts && `alpha=${facts.alpha}`);
+            ok("导出的 PNG 画上了内容", !!facts && facts.content > 100, facts && `${facts.content}/${facts.w * facts.h}`);
+          }
+
+          const fit = DGM.preview.fitExportScale(8000, 12000, 3);
+          ok(
+            "超大图导出倍率被压到画布上限内",
+            fit.capped === true && 8000 * fit.scale * 12000 * fit.scale <= DGM.preview.MAX_CANVAS_AREA + 1,
+            `scale=${fit.scale} capped=${fit.capped}`,
+          );
+          const small = DGM.preview.fitExportScale(400, 300, 5);
+          ok("小图仍是自适应倍率（没被无谓地压）", small.capped === false && small.scale === 5, `scale=${small.scale}`);
+        }
+
         if (st && st.setLayout) await st.setLayout(doc.id, "dagre");
         if (st && st.setLook) await st.setLook(doc.id, "auto");
 
@@ -884,6 +944,74 @@ window.DGM = window.DGM || {};
           } catch (e) { /* 已经不在会话里就算了 */ }
         }
         for (const p of [keepPath, otherPath, savePath]) {
+          try {
+            await invoke("workspace_delete", { path: p });
+          } catch (e) { /* 清理失败不影响断言 */ }
+        }
+      }
+
+      // ── 外部文件作为 AI 上下文：读盘（含截断/二进制拒绝）、拖放落点、手填路径 ──
+      //  「指定某个文件给 AI 看」这条链的真机部分在这里钉死；"文件内容有没有真的进请求"
+      //  由浏览器原型（tools/dev/ui_probe.py）用 mock 的 `[ctx]` 回显夹具断言 —— 真机自检
+      //  没有可用的上游，发不出真实请求。
+      {
+        const ctxPath = wsDir + "/flows/ctx-note.mmd";
+        await invoke("export_write", { path: ctxPath, base64: encRaw("# 需求\n用 mermaid 画登录流程\n") });
+        const f = await invoke("file_read_text", { path: ctxPath });
+        ok(
+          "file_read_text 读回正文与文件名",
+          !!f && f.name === "ctx-note.mmd" && f.text.includes("登录流程") && !f.truncated,
+          f && `${f.name}/${f.text.length}`,
+        );
+
+        const bigPath = wsDir + "/flows/ctx-big.mmd";
+        await invoke("export_write", { path: bigPath, base64: encRaw("字".repeat(300 * 1024)) });
+        const big = await invoke("file_read_text", { path: bigPath });
+        ok(
+          "超过 256 KiB 的文件按上限截断并标出来",
+          !!big && big.truncated === true && big.text.length >= 80000 && big.text.length <= 262144,
+          big && `${big.text.length} 字符 / truncated=${big.truncated}`,
+        );
+
+        let binErr = "";
+        try {
+          const binPath = wsDir + "/flows/ctx-bin.mmd";
+          await invoke("export_write", { path: binPath, base64: encRaw("\u0000\u0001\u0002binary") });
+          await invoke("file_read_text", { path: binPath });
+        } catch (e) {
+          binErr = (e && e.message) || String(e);
+        }
+        ok("二进制文件被拒绝并说明原因（不是静默乱码）", binErr.includes("NUL"), binErr);
+
+        // 拖放：命中 AI 面板才算数（落在面板外的拖动不该被这里吞掉）
+        // 注意：自检里没有裸 `state`，要用 `DGM.state`（`st` 就是它）
+        ok("原生文件拖放已接上", st && st.ui.aiDragDrop === true, String(st && st.ui.aiDragDrop));
+        const paneRect = document.querySelector("#ai-pane").getBoundingClientRect();
+        const dpr = window.devicePixelRatio || 1;
+        await DGM.ai.handleDrop({
+          type: "drop",
+          paths: [ctxPath],
+          position: { x: (paneRect.left + paneRect.width / 2) * dpr, y: (paneRect.top + paneRect.height / 2) * dpr },
+        });
+        ok("拖到 AI 面板 → 进了上下文", DGM.ai.contextFiles().length === 1, JSON.stringify(DGM.ai.contextFiles().map((x) => x.name)));
+        ok(
+          "上下文 chip 上显示文件名",
+          (document.querySelector("#ai-attachments") || {}).textContent.includes("ctx-note.mmd"),
+          (document.querySelector("#ai-attachments") || {}).textContent || "",
+        );
+        await DGM.ai.handleDrop({ type: "drop", paths: [bigPath], position: { x: 4, y: 4 } });
+        ok("拖到面板之外不动上下文", DGM.ai.contextFiles().length === 1, DGM.ai.contextFiles().length);
+
+        // 手填全路径（对话框里那一行）：Enter 加入；重复路径按去重拒绝
+        const finp = document.querySelector("#ai-file-path");
+        finp.value = ctxPath;
+        finp.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+        ok("重复附加同一路径不重复入列", DGM.ai.contextFiles().length === 1, DGM.ai.contextFiles().length);
+
+        DGM.ai.removeContextFile(ctxPath);
+        ok("移除后上下文为空", DGM.ai.contextFiles().length === 0, DGM.ai.contextFiles().length);
+
+        for (const p of [ctxPath, bigPath, wsDir + "/flows/ctx-bin.mmd"]) {
           try {
             await invoke("workspace_delete", { path: p });
           } catch (e) { /* 清理失败不影响断言 */ }

@@ -4,6 +4,7 @@
 //! 因此它可以被 `cargo test` 直接覆盖（各模块尾部都有 `#[cfg(test)]`）。
 
 pub mod cloudmap;
+pub mod context_file;
 pub mod conversations;
 pub mod convert;
 pub mod convert_dot;

@@ -3,7 +3,7 @@
 //! 三件事在提示词里必须说清：**目标格式**、**只输出代码**、**当前正文是上下文而不是要重写的东西**。
 //! 提取侧则要容错：模型很爱把代码包在 ``` 里再配一段解释，围栏提取失败就退化为"整段当代码"。
 
-use app_ipc::{AiIntent, AiTurn, FormatId};
+use app_ipc::{AiContextFile, AiIntent, AiTurn, FormatId};
 
 fn format_name(id: FormatId) -> &'static str {
     match id {
@@ -75,6 +75,60 @@ pub fn system_prompt(format: FormatId, intent: AiIntent) -> String {
     )
 }
 
+/// 附加文件的字符预算（**所有文件合计**）。
+///
+/// 单文件的上限在 `app_core::context_file`（256 KiB）—— 那是"读得动"的上限，
+/// 这里是"发得出去"的上限：几份大文件一叠加，小模型的上下文就爆了。超预算的部分不静默丢：
+/// 块里会写明还有几个文件没带上。
+pub const FILES_MAX_CHARS: usize = 24000;
+
+/// 附件块：**参考资料**的措辞与"当前图表源码"分开，别让模型把参考文件当正文重写。
+///
+/// 返回 `(块, 没带上的文件数)`；没有可用文件时返回 `None`。
+pub fn files_block(files: &[AiContextFile]) -> Option<(String, usize)> {
+    let mut out = String::new();
+    let mut used = 0usize;
+    let mut omitted = 0usize;
+    for f in files {
+        if f.text.trim().is_empty() {
+            continue;
+        }
+        let header = format!("--- 文件：{}（{}）{}---\n", f.name, f.path, if f.truncated { "［已截断］" } else { "" });
+        let body = f.text.trim_end();
+        if used + header.chars().count() + body.chars().count() > FILES_MAX_CHARS {
+            // 还装得下多少就给多少（按字符截，别把最后一个字切两半）
+            let left = FILES_MAX_CHARS.saturating_sub(used + header.chars().count());
+            if left < 200 {
+                omitted += 1;
+                continue;
+            }
+            let cut: String = body.chars().take(left).collect();
+            if out.is_empty() {
+                out.push_str("以下是我附加的文件（参考资料，不是要改的图）：\n");
+            }
+            out.push_str(&header);
+            out.push_str(&cut);
+            out.push_str("\n（这一份按上下文预算截断）\n\n");
+            used = FILES_MAX_CHARS;
+            continue;
+        }
+        if out.is_empty() {
+            out.push_str("以下是我附加的文件（参考资料，不是要改的图）：\n");
+        }
+        out.push_str(&header);
+        out.push_str(body);
+        out.push_str("\n\n");
+        used += header.chars().count() + body.chars().count();
+    }
+    if out.is_empty() {
+        return None;
+    }
+    if omitted > 0 {
+        out.push_str(&format!("（另有 {omitted} 个文件因上下文预算没带上）\n\n"));
+    }
+    Some((out, omitted))
+}
+
 /// 组装发给模型的 messages。
 pub fn build_messages(
     format: FormatId,
@@ -82,12 +136,17 @@ pub fn build_messages(
     prompt: &str,
     context: Option<&str>,
     image_data_url: Option<&str>,
+    files: &[AiContextFile],
 ) -> Vec<serde_json::Value> {
     use serde_json::json;
 
     let mut messages = vec![json!({ "role": "system", "content": system_prompt(format, intent) })];
 
     let mut user_text = String::new();
+    // 附件在前、当前正文在后：模型读到"当前图表源码"时，参考资料已经交代完了
+    if let Some((block, _)) = files_block(files) {
+        user_text.push_str(&block);
+    }
     if let Some(ctx) = context {
         if !ctx.trim().is_empty() {
             user_text.push_str("当前图表源码（作为上下文，不要整段重写）：\n```\n");
@@ -176,10 +235,11 @@ pub fn build_messages_with_history(
     context: Option<&str>,
     image_data_url: Option<&str>,
     history: &[AiTurn],
+    files: &[AiContextFile],
 ) -> Vec<serde_json::Value> {
     use serde_json::json;
 
-    let mut messages = build_messages(format, intent, prompt, context, image_data_url);
+    let mut messages = build_messages(format, intent, prompt, context, image_data_url, files);
     let fitted = fit_history(history, HISTORY_MAX_TURNS, HISTORY_MAX_CHARS);
     if fitted.is_empty() {
         return messages;
@@ -456,7 +516,7 @@ mod tests {
 
     #[test]
     fn vision_message_carries_image_as_content_array() {
-        let m = build_messages(FormatId::Mermaid, AiIntent::Vision, "转成 mermaid", None, Some("data:image/png;base64,AAA"));
+        let m = build_messages(FormatId::Mermaid, AiIntent::Vision, "转成 mermaid", None, Some("data:image/png;base64,AAA"), &[]);
         assert_eq!(m.len(), 2);
         let content = m[1].get("content").unwrap();
         assert!(content.is_array(), "视觉请求的 content 必须是数组");
@@ -465,7 +525,7 @@ mod tests {
 
     #[test]
     fn context_is_wrapped_in_a_fence_so_the_model_does_not_echo_it() {
-        let m = build_messages(FormatId::Mermaid, AiIntent::Review, "加一条失败分支", Some("flowchart TD\n A-->B\n"), None);
+        let m = build_messages(FormatId::Mermaid, AiIntent::Review, "加一条失败分支", Some("flowchart TD\n A-->B\n"), None, &[]);
         let text = m[1]["content"].as_str().unwrap();
         assert!(text.contains("作为上下文，不要整段重写"));
         assert!(text.contains("flowchart TD"));
@@ -526,6 +586,7 @@ mod tests {
             None,
             None,
             &[turn("user", "先画一张流程图"), turn("assistant", "好，这是流程图")],
+            &[],
         );
         assert_eq!(m.len(), 4);
         assert_eq!(m[0]["role"], "system");
@@ -540,8 +601,8 @@ mod tests {
     /// 多出任何一条消息都会改变已有行为的成本与结果。
     #[test]
     fn empty_history_is_a_no_op() {
-        let a = build_messages(FormatId::Dot, AiIntent::Generate, "画个依赖图", Some("digraph G {}"), None);
-        let b = build_messages_with_history(FormatId::Dot, AiIntent::Generate, "画个依赖图", Some("digraph G {}"), None, &[]);
+        let a = build_messages(FormatId::Dot, AiIntent::Generate, "画个依赖图", Some("digraph G {}"), None, &[]);
+        let b = build_messages_with_history(FormatId::Dot, AiIntent::Generate, "画个依赖图", Some("digraph G {}"), None, &[], &[]);
         assert_eq!(a, b);
     }
 
@@ -598,7 +659,7 @@ mod tests {
     /// 又不会顶掉格式提示词的位置。
     #[test]
     fn memory_block_lands_right_after_the_first_system_message() {
-        let base = build_messages(FormatId::Mermaid, AiIntent::Generate, "画个流程", None, None);
+        let base = build_messages(FormatId::Mermaid, AiIntent::Generate, "画个流程", None, None, &[]);
         let with = inject_memory(base, "偏好：配色用暗色");
         assert_eq!(with.len(), 3);
         assert_eq!(with[0]["role"], "system");
@@ -612,7 +673,7 @@ mod tests {
     /// 多出一条空的 system 消息就已经是"不一样"了。
     #[test]
     fn empty_memory_block_changes_nothing() {
-        let base = build_messages(FormatId::Dot, AiIntent::Generate, "画个依赖图", Some("digraph G {}"), None);
+        let base = build_messages(FormatId::Dot, AiIntent::Generate, "画个依赖图", Some("digraph G {}"), None, &[]);
         assert_eq!(inject_memory(base.clone(), ""), base);
         assert_eq!(inject_memory(base.clone(), "   \n  "), base);
     }
@@ -627,6 +688,7 @@ mod tests {
             None,
             None,
             &[turn("user", "先画一张")],
+            &[],
         );
         let full = inject_memory(with_hist, "偏好：配色用暗色");
         assert_eq!(full.len(), 4);
@@ -699,5 +761,63 @@ mod tests {
         let text = memory_extract_user(&long, &long);
         assert!(text.contains('…'));
         assert!(text.chars().count() < 2_000, "两侧都要截断：{}", text.chars().count());
+    }
+
+    /* ---------------- 附件（外部文件） ---------------- */
+
+    fn ctx_file(name: &str, text: &str) -> AiContextFile {
+        AiContextFile { path: format!("E:/ref/{name}"), name: name.into(), text: text.into(), truncated: false }
+    }
+
+    /// 附件要**带上文件名与路径**，且措辞必须与"当前图表源码"分开 ——
+    /// 否则模型会把参考资料当成待重写的正文。
+    #[test]
+    fn attached_files_are_labelled_as_reference_material() {
+        let m = build_messages(
+            FormatId::Mermaid,
+            AiIntent::Generate,
+            "按这份需求画一张",
+            Some("flowchart TD\n  A-->B\n"),
+            None,
+            &[ctx_file("需求.md", "第一步要支持导出 PNG")],
+        );
+        let user = m.last().unwrap()["content"].as_str().unwrap();
+        assert!(user.contains("参考资料"), "{user}");
+        assert!(user.contains("需求.md") && user.contains("E:/ref/需求.md"), "{user}");
+        assert!(user.contains("第一步要支持导出 PNG"), "{user}");
+        assert!(user.contains("当前图表源码"), "{user}");
+        assert!(user.ends_with("按这份需求画一张"), "用户这句话要在最后：{user}");
+    }
+
+    /// 单个附件超预算：截断并在块里写明（不静默丢），且**不切出半个字**。
+    #[test]
+    fn a_huge_attachment_is_cut_to_the_budget_with_a_note() {
+        let huge = "字".repeat(FILES_MAX_CHARS);
+        let (block, omitted) = files_block(&[ctx_file("大.md", &huge)]).unwrap();
+        assert_eq!(omitted, 0);
+        assert!(block.contains("按上下文预算截断"), "要写明被截断");
+        assert!(block.chars().count() < FILES_MAX_CHARS + 200);
+        assert!(!block.contains('\u{FFFD}'));
+    }
+
+    /// 多个附件合计超预算：后面的**不带**，并写明还有几个 —— 而不是把它们悄悄丢掉。
+    #[test]
+    fn remaining_attachments_are_reported_when_the_budget_runs_out() {
+        let one = "字".repeat(FILES_MAX_CHARS - 100);
+        let files = vec![ctx_file("a.md", &one), ctx_file("b.md", &one), ctx_file("c.md", &one)];
+        let (block, omitted) = files_block(&files).unwrap();
+        assert!(omitted >= 1, "没带上的要计数：{omitted}");
+        assert!(block.contains("因上下文预算没带上"), "{block}");
+        assert!(!block.contains("--- 文件：c.md"), "放不下的不该硬塞");
+    }
+
+    /// 空附件（全空白）不进提示词，且没有附件时**与从前逐字一致**。
+    #[test]
+    fn blank_attachments_change_nothing() {
+        assert!(files_block(&[ctx_file("空.md", "   \n\n")]).is_none());
+        assert!(files_block(&[]).is_none());
+        let with = build_messages(FormatId::Dot, AiIntent::Generate, "画个依赖图", None, None, &[]);
+        let without = build_messages(FormatId::Dot, AiIntent::Generate, "画个依赖图", None, None, &[ctx_file("meta.txt", "  ")]);
+        assert_eq!(with, without);
     }
 }

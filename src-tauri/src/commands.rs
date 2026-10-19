@@ -17,10 +17,10 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
 
 use app_ipc::{
-    events, AiAgentStep, AiChatRequest, AiDelta, AiDone, AiFailed, AiModel, AiThinking, AppInfo,
-    Conversation, ConversationTurn, ConvertOutcome, ConvertRequest, DevFlags, Doc, FormatId, Issue,
-    MemoryEntry, MemoryList, MemoryScope, MemoryState, OutlineGroup, Session as SessionPayload,
-    Settings, ViewMode,
+    events, AiAgentStep, AiChatRequest, AiContextFile, AiDelta, AiDone, AiFailed, AiModel, AiThinking,
+    AppInfo, Conversation, ConversationTurn, ConvertOutcome, ConvertRequest, DevFlags, Doc, FormatId,
+    Issue, MemoryEntry, MemoryList, MemoryScope, MemoryState, OutlineGroup,
+    Session as SessionPayload, Settings, ViewMode,
 };
 use base64::Engine as _;
 use tauri::{AppHandle, Emitter, State};
@@ -237,6 +237,16 @@ pub fn doc_set_look(state: State<'_, Arc<AppState>>, id: String, look: String) -
         return Err(format!("这个格式没有外观模式「{look}」"));
     }
     commit_render_opt(state.inner(), &id)
+}
+
+/// 把一个外部文件读成 AI 上下文（拖进对话框 / 手填全路径都走这条）。
+///
+/// 上限、二进制与编码判定都在 `app_core::context_file`（带单测）：这里只转发。
+/// **不受"限制在工作区内"约束** —— 那个开关管的是写路径，读用户自己指名的参考文件
+/// 不该被它拦住。
+#[tauri::command]
+pub fn file_read_text(path: String) -> R<AiContextFile> {
+    app_core::context_file::read(Path::new(&path))
 }
 
 #[tauri::command]
@@ -553,6 +563,7 @@ pub async fn ai_chat(
         req.context.as_deref(),
         req.image_data_url.as_deref(),
         &req.history,
+        &req.files,
     );
     // 长期记忆：作为**独立的 system 消息**注入（不改 `system_prompt` 本身）。
     // 关掉开关时这里拿到 `None`，请求体与没有记忆时**逐字节一致**。
@@ -742,6 +753,7 @@ pub async fn ai_agent_run(
         req.context.as_deref(),
         req.image_data_url.as_deref(),
         &req.history,
+        &req.files,
     );
     // 长期记忆与 `ai_chat` 同一套注入（关掉时逐字节一致）
     let messages = match memory_block(&st, &active_doc_key(&st)) {

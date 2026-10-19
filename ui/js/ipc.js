@@ -183,11 +183,52 @@ window.DGM = window.DGM || {};
     });
   }
 
+  /**
+   * 原生文件拖放（Tauri 的文件拖放事件）。
+   *
+   * WebView2 下 Tauri 默认接管窗口的文件拖放，页面里**收不到** `dataTransfer.files` ——
+   * 要拿"拖进来的文件"就只能走这条路，而且它给的是**真实路径**（正是我们要的）。
+   * payload：`{ type: "enter"|"over"|"drop"|"leave", paths?: string[], position?: {x,y} }`
+   * （`position` 是**物理像素**，用的人自己除以 devicePixelRatio）。
+   *
+   * 返回取消订阅函数；当前环境没有原生拖放（mock 原型 / 老 API）时返回 `null`，
+   * 调用方据此关掉相关能力与提示 —— 不做假的"已支持"。
+   */
+  function onDragDrop(cb) {
+    if (!isTauri) return null;
+    const wv = TAURI.webview && typeof TAURI.webview.getCurrentWebview === "function" ? TAURI.webview.getCurrentWebview() : null;
+    if (wv && typeof wv.onDragDropEvent === "function") {
+      let un = null;
+      wv.onDragDropEvent((e) => {
+        try {
+          cb(e && "payload" in e ? e.payload : e);
+        } catch (err) {
+          console.error("[DGM] drag-drop handler error:", err);
+        }
+      }).then((f) => (un = f));
+      return () => {
+        if (un) un();
+      };
+    }
+    // 老 API 退路：事件名由 webview 发到事件总线
+    if (TAURI.event && typeof TAURI.event.listen === "function") {
+      let un = null;
+      TAURI.event
+        .listen("tauri://drag-drop", (e) => cb(e && "payload" in e ? e.payload : e))
+        .then((f) => (un = f));
+      return () => {
+        if (un) un();
+      };
+    }
+    return null;
+  }
+
   DGM.ipc = {
     isTauri,
     isMock: !isTauri,
     invoke,
     on,
+    onDragDrop,
     emit: emitLocal, // 仅供 mock 后端内部与本地事件转发
     win,
     dialog: { pickPaths, pickSavePath, pickImage },
@@ -776,6 +817,16 @@ digraph Pipeline {
           return d ? this._clone(d) : null;
         }
 
+        // 外部文件作为上下文：mock 不读盘，按路径造一份固定内容（形状与 app-ipc 契约一致）。
+        // 路径里带 "nope" 的当作"读不到"，供探针断言失败路径也出声。
+        case "file_read_text": {
+          const p = String(args.path || "").trim().replace(/\\/g, "/");
+          if (!p) throw new Error("路径为空");
+          if (/nope|不存在|missing/i.test(p)) throw new Error(`读不到这个文件：${p}`);
+          const name = p.split("/").filter(Boolean).pop() || p;
+          return { path: p, name, text: `# MOCK ${name}\n第一行内容\n第二行内容`, truncated: false };
+        }
+
         case "doc_issues":
           return this._clone(ISSUES[args.id] || []);
 
@@ -1208,6 +1259,15 @@ digraph Pipeline {
       if (probePrompt.includes("[hist]")) {
         const n = Array.isArray(req.history) ? req.history.length : 0;
         return `本轮请求带了前序轮次 ${n} 条。`;
+      }
+      // `[ctx]` → 把请求里的**附加文件**原样回显，供探针断言"文件内容真的进了请求"
+      //（拖拽/手填路径那两条入口只在真机有，但"读回来的内容有没有上行"两边都能钉）。
+      if (probePrompt.includes("[ctx]")) {
+        const files = Array.isArray(req.files) ? req.files : [];
+        return (
+          `附加文件 ${files.length} 个` +
+          files.map((f) => `；${f.name}=${String(f.text || "").replace(/\n/g, "\\n").slice(0, 60)}`).join("")
+        );
       }
       // `[mem]` → 报"客户端有没有自己往请求里塞记忆"。
       // 记忆**只该由 Rust 在 `ai_chat` 里注入一处**；前端再塞一份就会双重注入。

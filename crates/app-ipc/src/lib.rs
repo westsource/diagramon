@@ -398,6 +398,24 @@ pub struct AiTurn {
     pub text: String,
 }
 
+/// 用户附加的**外部文件**（AI 上下文）：拖进对话框、或手填/粘贴全路径。
+///
+/// 与 `AiChatRequest.context`（**当前图表源码**）分开两个字段是刻意的：
+/// 提示词里两者的措辞与用途不同（一个是"要改的图"，一个是"参考资料"），
+/// 混进同一个字段会让模型把参考资料当成待重写的正文。判定与上限见
+/// `app_core::context_file`（带单测），`file_read_text` 原样把它交给前端。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AiContextFile {
+    /// 绝对路径（正斜杠），也是去重键
+    pub path: String,
+    /// 文件名（界面显示用）
+    pub name: String,
+    pub text: String,
+    /// 文件超过读取上限，正文被截断（界面要如实标出来）
+    #[serde(default)]
+    pub truncated: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AiChatRequest {
     pub request_id: String,
@@ -408,6 +426,9 @@ pub struct AiChatRequest {
     pub format: FormatId,
     /// 当前文档正文（作为上下文；可空）
     pub context: Option<String>,
+    /// 附加的外部文件（参考资料；可空）
+    #[serde(default)]
+    pub files: Vec<AiContextFile>,
     /// `data:image/png;base64,…`（识图）
     pub image_data_url: Option<String>,
     /// 前序轮次（**不含本轮**的 prompt / context）。

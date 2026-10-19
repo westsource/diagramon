@@ -110,6 +110,11 @@ window.DGM = window.DGM || {};
       zoom: 1,
       aiTab: "chat",
       aiAttachment: null,
+      // 附加的外部文件（AI 上下文）：拖进来 / 手填路径 / 选择文件都进这里。
+      // **瞬态**（不落盘）：路径与内容都跟这次会话强相关，重启后重新指定更诚实。
+      aiContextFiles: [],
+      // 原生拖放是否接上了（Tauri 的文件拖放事件）。自检钉它，防 API 漂了没人发现。
+      aiDragDrop: false,
       aiBusy: false,
       aiRequestId: null,
       zen: false,

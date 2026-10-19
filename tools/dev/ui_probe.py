@@ -1620,6 +1620,61 @@ def main() -> int:
             log(f"（断言 26 解析失败：{e}）")
             fails.append("断言 26 拿不到结果（多轮消息链路可能整个没接上）")
 
+        # ---- 断言 26.5：外部文件作为上下文（手填全路径 → 进请求） ----
+        # 「把某个文件给 AI 看」这条链在浏览器原型里能整条走通：手填路径（对话框里那一行）
+        # → `file_read_text` → chip → 请求体里的 `files`。mock 的 `[ctx]` 夹具把请求里的
+        # 附件原样回显（见 ipc.js `_aiText`），所以这里断言的是**请求真的带上了文件内容**，
+        # 不是"界面上多了个 chip"。
+        ctxprobe = ev(
+            "(async () => {"
+            "  DGM.ai.focus('chat');"
+            "  await new Promise(r => setTimeout(r, 200));"
+            "  DGM.ai.clear();"
+            "  await new Promise(r => setTimeout(r, 200));"
+            "  const inp = document.querySelector('#ai-file-path');"
+            "  const enter = (v) => {"
+            "    inp.value = v;"
+            "    inp.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));"
+            "  };"
+            "  enter('E:/ref/需求说明.md');"
+            "  await new Promise(r => setTimeout(r, 300));"
+            "  const n1 = DGM.ai.contextFiles().length;"
+            "  const chips = (document.querySelector('#ai-attachments').textContent) || '';"
+            "  enter('E:/ref/需求说明.md');"  # 重复：应被去重拒绝
+            "  await new Promise(r => setTimeout(r, 200));"
+            "  const n2 = DGM.ai.contextFiles().length;"
+            "  await DGM.ai.addContextFile('E:/ref/nope.md');"  # mock 对 nope 抛错
+            "  const n3 = DGM.ai.contextFiles().length;"
+            "  const ta = document.querySelector('#ai-input');"
+            "  ta.value = '[ctx] 按这份需求画一张';"
+            "  ta.dispatchEvent(new Event('input', { bubbles: true }));"
+            "  document.querySelector('#ai-send').click();"
+            "  await new Promise(r => setTimeout(r, 1800));"
+            "  const txt = (document.querySelector('#ai-stream').textContent) || '';"
+            "  DGM.ai.removeContextFile('E:/ref/需求说明.md');"
+            "  const n4 = DGM.ai.contextFiles().length;"
+            "  return JSON.stringify({ n1, n2, n3, n4, chips: chips.slice(0, 60), echo: txt.includes('附加文件 1 个') && txt.includes('第一行内容'), tail: txt.slice(-140) });"
+            "})()"
+        )
+        log(f"外部文件作为上下文: {ctxprobe}")
+        try:
+            r = json.loads(ctxprobe or "{}")
+            if r.get("n1") != 1:
+                fails.append("手填路径后没进上下文（file_read_text 或 chip 链路断了）")
+            if "需求说明.md" not in (r.get("chips") or ""):
+                fails.append(f"chip 上没显示文件名：{r.get('chips')}")
+            if r.get("n2") != 1:
+                fails.append("重复附加同一路径被重复入列了（去重没生效）")
+            if r.get("n3") != 1:
+                fails.append("读不到的文件被塞进了上下文（失败路径没拦住）")
+            if not r.get("echo"):
+                fails.append(f"附加文件的内容没进请求（files 没上行）：{r.get('tail')}")
+            if r.get("n4") != 0:
+                fails.append("移除后上下文没清空")
+        except Exception as e:
+            log(f"（断言 26.5 解析失败：{e}）")
+            fails.append("断言 26.5 拿不到结果（外部文件上下文链路可能整个没接上）")
+
         # ---- 断言 27：会话按文档持久化（写盘 → 读回 → 按文档分开） ----
         # 阶段三之前：`conversations_dir()` 全仓零读写（只建了个空目录），而对话框的说明
         # 却写着"按文档稳定身份持久化（真实实现里路径 SHA256）"。这条断言钉住四件事：
@@ -1841,11 +1896,14 @@ def main() -> int:
             log(f"（断言 29 解析失败：{e}）")
             fails.append("断言 29 拿不到结果（工具循环链路可能整个没接上）")
 
-        # ---- 断言 30：PNG 导出在含 <br> 的标签上不炸 ----
+        # ---- 断言 30：PNG 导出在含 <br> 的标签上不炸，且**不是一张空白图** ----
         # 2026-10-16 用户真机报「位图栅格化失败」：mermaid 的 htmlLabels 把标签里的
         # `<br>` 以未闭合 HTML 写进 <foreignObject>，导出时按 image/svg+xml 严格解析
         # 直接 parsererror。修复是优先克隆**活着的 DOM 节点**（XMLSerializer 必然良构）。
-        # 这条断言钉住：正文带 <br> / & 的 mermaid 文档必须能出 PNG。
+        # 2026-10-19 用户又报「导出的图是空白」：两个成因都在这里钉住 ——
+        #   ① 位图**没铺底色**（透明底 + 暗色主题的浅色笔画 = 白色看图器里几乎一片空白）；
+        #   ② 画布尺寸越过 Chromium 上限（面积 2^28 / 单边 65535）后 drawImage 静默不画。
+        # 所以断言不只"出得来"，还要"角上是实心的"+"确实画了东西"。
         png = ev(
             "(async () => {"
             "  const d = DGM.state.activeDoc();"
@@ -1855,8 +1913,25 @@ def main() -> int:
             "  DGM.preview.render();"
             "  await new Promise(r => setTimeout(r, 2600));"
             "  const out = {};"
-            "  try { const u = await DGM.preview.toPngDataUrl(); out.png = 'ok:len=' + u.length; }"
-            "  catch (e) { out.png = 'fail: ' + (e && e.message || e); }"
+            "  try {"
+            "    const png = await DGM.preview.pngDataUrl();"
+            "    out.png = 'ok:len=' + png.url.length + '|scale=' + png.scale;"
+            "    const img = await new Promise((res, rej) => {"
+            "      const n = new Image(); n.onload = () => res(n); n.onerror = () => rej(new Error('decode')); n.src = png.url;"
+            "    });"
+            "    const c = document.createElement('canvas');"
+            "    c.width = img.width; c.height = img.height;"
+            "    const x = c.getContext('2d');"
+            "    x.drawImage(img, 0, 0);"
+            "    const id = x.getImageData(0, 0, c.width, c.height).data;"
+            "    out.corner = id[3];"
+            "    let content = 0;"
+            "    for (let i = 0; i < id.length; i += 4) {"
+            "      if (Math.abs(id[i] - id[0]) + Math.abs(id[i+1] - id[1]) + Math.abs(id[i+2] - id[2]) > 24) content++;"
+            "    }"
+            "    out.content = content;"
+            "    out.px = c.width * c.height;"
+            "  } catch (e) { out.png = 'fail: ' + ((e && e.message) || e); }"
             "  await DGM.state.setBody(d.id, prev);"
             "  DGM.preview.render();"
             "  await new Promise(r => setTimeout(r, 800));"
@@ -1868,6 +1943,10 @@ def main() -> int:
             r = json.loads(png or "{}")
             if not str(r.get("png", "")).startswith("ok:"):
                 fails.append(f"含 <br> 标签的图导出 PNG 失败：{r.get('png')}（foreignObject 的未闭合 HTML 又把 XML 解析炸了）")
+            elif r.get("corner") != 255:
+                fails.append(f"导出的 PNG 是透明的（角上 alpha={r.get('corner')}）—— 暗色主题下就是一张空白图")
+            elif (r.get("content") or 0) < 100:
+                fails.append(f"导出的 PNG 里没有内容（非底色像素 {r.get('content')} 个 / 共 {r.get('px')}）")
         except Exception as e:
             log(f"（断言 30 解析失败：{e}）")
             fails.append("断言 30 拿不到结果（PNG 导出链路可能整个没接上）")

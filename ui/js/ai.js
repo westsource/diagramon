@@ -415,6 +415,105 @@ window.DGM = window.DGM || {};
     btn.classList.toggle("stop", busy);
   }
 
+  /* ---------------------------------------------------------- 外部文件作为上下文 */
+
+  /** 附加上限：8 份 / 每次请求（再多也只是把提示词预算吃光，见 ai::prompt::FILES_MAX_CHARS）。 */
+  const MAX_CTX_FILES = 8;
+
+  function ctxFiles() {
+    if (!Array.isArray(state.ui.aiContextFiles)) state.ui.aiContextFiles = [];
+    return state.ui.aiContextFiles;
+  }
+
+  /** 规范化用户给的路径：去空白、去成对引号（Windows"复制为路径"会带引号）、反斜杠转正斜杠。 */
+  function normPath(p) {
+    return String(p || "")
+      .trim()
+      .replace(/^"(.*)"$/, "$1")
+      .replace(/\\/g, "/");
+  }
+
+  /**
+   * 把一个**外部文件**读成上下文并挂上。拖拽、手填路径、选择文件三条入口都走这里。
+   *
+   * 读盘与判定全在 Rust（`file_read_text` → `app_core::context_file`：256 KiB 上限、
+   * 二进制与编码校验）。这里只做去重、上限与提示 —— 失败一律出声，不静默吞。
+   */
+  async function addContextFile(path) {
+    const p = normPath(path);
+    if (!p) return false;
+    const list = ctxFiles();
+    if (list.some((f) => f.path.toLowerCase() === p.toLowerCase())) {
+      DGM.toast({ icon: "file", title: t("ai.fileCtx"), sub: t("ai.fileDup") });
+      return false;
+    }
+    if (list.length >= MAX_CTX_FILES) {
+      DGM.toast({ icon: "alert", title: t("ai.fileCtx"), sub: t("ai.fileTooMany", { n: MAX_CTX_FILES }), warn: true });
+      return false;
+    }
+    const prev = tab();
+    try {
+      const f = await ipc.invoke("file_read_text", { path: p });
+      if (!f || !f.path) throw new Error(t("ai.fileFail"));
+      list.push({ path: f.path, name: f.name, text: f.text, truncated: !!f.truncated });
+    } catch (e) {
+      DGM.toast({ icon: "alert", title: t("ai.fileCtx"), sub: (e && e.message) || String(e), warn: true });
+      return false;
+    }
+    // 只更新 chips，不改用户正在看的 tab
+    if (tab() === prev) render();
+    const last = list[list.length - 1];
+    DGM.toast({
+      icon: "file",
+      title: t("ai.fileAdded", { name: last.name }),
+      sub: last.truncated ? t("ai.fileTruncated") : t("ai.fileChars", { n: last.text.length }),
+    });
+    return true;
+  }
+
+  function removeContextFile(path) {
+    const p = normPath(path);
+    state.ui.aiContextFiles = ctxFiles().filter((f) => f.path.toLowerCase() !== p.toLowerCase());
+    render();
+  }
+
+  /** `.ai-pane` 是否被包含在（物理像素）坐标点里 —— 拖放事件给的是物理坐标。 */
+  function insideAiPane(pos) {
+    const pane = $("#ai-pane");
+    if (!pane || pane.classList.contains("hidden-pane")) return false;
+    if (!pos || typeof pos.x !== "number") return true; // 拿不到坐标就别拦（宁可多接一次）
+    const r = pane.getBoundingClientRect();
+    const s = window.devicePixelRatio || 1;
+    const x = pos.x / s;
+    const y = pos.y / s;
+    return x >= r.left && x <= r.right && y >= r.top && y <= r.bottom;
+  }
+
+  /**
+   * 原生拖放落点（Tauri `tauri://drag-drop`）。
+   *
+   * 为什么不用 HTML5 的 drop：WebView2 下 Tauri 默认**接管**文件拖放，页面拿不到
+   * `dataTransfer.files`；而原生事件里带的正是我们要的东西 —— **真实路径**
+   * （附件按路径去重、按路径读盘、chip 上显示全路径）。
+   *
+   * 落在 AI 面板之外的一律不动：拖到画布上的手势不该被这里吞掉。
+   */
+  async function handleDrop(payload) {
+    const type = String((payload && payload.type) || "drop");
+    const inside = insideAiPane(payload && payload.position);
+    // 拖到面板上方时高亮输入区（enter/over）；离开或落下就撤掉
+    const pane = $("#ai-pane");
+    if (pane) pane.classList.toggle("drag-over", inside && type !== "drop" && type !== "leave");
+    if (type !== "drop") return false;
+    const paths = (payload && payload.paths) || [];
+    if (!paths.length || !inside) return false;
+    let n = 0;
+    for (const p of paths) {
+      if (await addContextFile(p)) n += 1;
+    }
+    return n > 0;
+  }
+
   /* ------------------------------------------------------------------ 附件 / 选区 */
 
   function renderAttachment() {
@@ -422,6 +521,23 @@ window.DGM = window.DGM || {};
     if (!box) return;
     box.innerHTML = "";
     const att = state.ui.aiAttachment;
+    // 附加的外部文件（AI 上下文）：一行一个 chip，标题里给出**全路径**，
+    // 截断过的如实标出来（别让用户以为模型看到了全文）。
+    for (const f of ctxFiles()) {
+      const chip = h("div", "ai-chip file");
+      chip.title = f.path;
+      chip.innerHTML =
+        icon("file", "ico-sm") +
+        `<span>${esc(f.name)}</span>` +
+        `<span class="dim">${esc(f.truncated ? t("ai.fileTruncated") : t("ai.fileChars", { n: f.text.length }))}</span>`;
+      const x = h("button", "icon-btn", icon("close", "ico-sm"));
+      x.title = t("ai.removeImage");
+      x.addEventListener("click", () => {
+        removeContextFile(f.path);
+      });
+      chip.appendChild(x);
+      box.appendChild(chip);
+    }
     if (att) {
       const chip = h("div", "thumb");
       chip.innerHTML =
@@ -585,6 +701,9 @@ window.DGM = window.DGM || {};
       prompt: text,
       format: fmtId,
       context: context || null,
+      // 附加的外部文件（参考资料）：与 context（当前图表源码）分开两个字段，
+      // 提示词里措辞不同 —— 别让模型把参考文件当成要重写的正文。
+      files: ctxFiles().map((f) => ({ path: f.path, name: f.name, text: f.text, truncated: !!f.truncated })),
       image_data_url: cur === "vision" && att ? att.dataUrl : null,
       // 前序轮次：**在本轮 push 进 msgs 之前取**，所以天然不含本轮（见 historyFor）
       history: historyFor(cur, d && d.id),
@@ -865,6 +984,8 @@ window.DGM = window.DGM || {};
       format: ctx.format,
       // 把刚应用的那版当上下文（就是它渲染失败了）
       context: ctx.code || null,
+      // 自动修正那一轮同样带上附加文件：它是同一条对话的延续
+      files: ctxFiles().map((f) => ({ path: f.path, name: f.name, text: f.text, truncated: !!f.truncated })),
       image_data_url: null,
       // 自动修正也是这条对话的延续，同样带上前序轮次
       history: historyFor(ctx.tab, ctx.convDoc),
@@ -1261,6 +1382,29 @@ window.DGM = window.DGM || {};
         DGM.toast({ icon: "diagram", title: t("ai.ctxSet"), sub: d.name });
       });
     }
+    /* 附加文件（外部上下文）：手填全路径 / 选择文件 / 原生拖放三条入口 */
+    const fpath = $("#ai-file-path");
+    if (fpath) {
+      fpath.addEventListener("keydown", (e) => {
+        if (e.key !== "Enter") return;
+        e.preventDefault();
+        const v = fpath.value;
+        fpath.value = "";
+        addContextFile(v);
+      });
+      // 粘贴一整行路径后回车是最顺手的用法；输入框里贴进来的引号交给 normPath 处理
+    }
+    const fpick = $("#ai-file-pick");
+    if (fpick)
+      fpick.addEventListener("click", async () => {
+        const picked = await ipc.dialog.pickPaths({ multiple: true });
+        const list = Array.isArray(picked) ? picked : picked ? [picked] : [];
+        for (const p of list) await addContextFile(p);
+      });
+    // 原生文件拖放（Tauri 事件；WebView2 下页面拿不到 dataTransfer.files）。
+    // 返回 null = 这个环境没有原生拖放（mock / 老 API），界面照常可用，只是不能拖。
+    state.ui.aiDragDrop = !!ipc.onDragDrop((payload) => handleDrop(payload));
+
     const model = $("#ai-model");
     // stopPropagation 不能省：见 shell.js::showPop 的约定 ——
     // 否则文档级"点外面就关"会在同一次点击里把它刚弹出的下拉关掉（点了没反应）。
@@ -1326,6 +1470,12 @@ window.DGM = window.DGM || {};
     modelItems: groupModelItems,
     pickImage,
     compressImage,
+    // 外部文件作为上下文（拖拽 / 手填路径 / 选择文件）：导出让自检与探针能直接驱动，
+    // 不必去模拟操作系统的拖放事件。
+    addContextFile,
+    removeContextFile,
+    handleDrop,
+    contextFiles: ctxFiles,
     // 会话持久化：`ensureConversation` 供启动与「历史会话」对话框用；
     // `turnCount` 让对话框显示**真实**轮次数（以前拿 `state.usage.calls` 冒充，
     // 那是本次运行内的调用计数，重启归零）。
