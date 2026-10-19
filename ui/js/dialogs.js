@@ -129,23 +129,61 @@ window.DGM = window.DGM || {};
    * 它会把 subgraph 当作"不精确归属"直接不管、把 classDef 丢掉，而且和 Rust 侧
    * 将来任何改进都不会同步。现在只有一处实现：`crates/app-core/src/convert.rs`。
    */
-  async function requestConversion(from, to, source) {
-    return DGM.ipc.invoke("convert_text", { req: { from, to, source } });
+  async function requestConversion(from, to, source, options) {
+    return DGM.ipc.invoke("convert_text", { req: { from, to, source, options: options || {} } });
   }
 
-  /** 归一化的方向查询结果：引擎给谁、正文（rust 才有）、保真度说明、错误。 */
-  async function planOf(from, to, source) {
+  /** 归一化的方向查询结果：引擎给谁、正文（rust 才有）、报告、错误。 */
+  async function planOf(from, to, source, options) {
     try {
-      const out = await requestConversion(from, to, source);
+      const out = await requestConversion(from, to, source, options);
       return {
         engine: out.engine,
         text: out.body || "",
         notes: out.notes || [],
+        report: out.report || null,
         error: "",
       };
     } catch (e) {
-      return { engine: "none", text: "", notes: [], error: (e && e.message) || String(e) };
+      return { engine: "none", text: "", notes: [], report: null, error: (e && e.message) || String(e) };
     }
+  }
+
+  /** 这次转换要带上的文档级选项（**与预览顶栏同一份数据**，不在对话框另存）。 */
+  function docOptions(d) {
+    const fmt = state.docFmt(d);
+    const look = DGM.preview && DGM.preview.effectiveLook ? DGM.preview.effectiveLook(d) : null;
+    return {
+      layout: (d && d.layout) || null,
+      look: look || null,
+      theme: document.documentElement.dataset.theme || null,
+      // 3.9.0 只解析、不生效；显式写出来是为了 3.11.0 的默认值收口时不用改两处
+      normalize: false,
+      cluster_as_container: true,
+    };
+  }
+
+  /** 引擎产物回来后补上结构计数（`mxfile_inspect` 只吃字符串）。 */
+  async function attachCounts(report, body) {
+    if (!report || !body || body.indexOf("<mxfile") < 0) return report;
+    try {
+      const counts = await DGM.ipc.invoke("mxfile_inspect", { xml: body });
+      report.counts = counts;
+      // 能数清产物 ≠ 证明了与源一一对应：这里只能给 `partial`（诚实口径）
+      const has = counts.nodes > 0 || counts.edges > 0;
+      report.fidelity = Object.assign({ structure: "none", geometry: "none", style: "none" }, report.fidelity || {});
+      report.fidelity.structure = has ? "partial" : "none";
+    } catch (e) {
+      const msg = (e && e.message) || String(e);
+      // 转换本身仍然成功；报告降级为 structure:none + 一条 issue（不让一次成功变失败）
+      report.issues = (report.issues || []).concat([
+        { level: "degraded", code: "structure.unverified", params: { msg }, at: null },
+      ]);
+      report.fidelity = Object.assign({ structure: "none", geometry: "none", style: "none" }, report.fidelity || {});
+      report.fidelity.structure = "none";
+      state.pushOutput(t("conv.report.inspectFailed", { msg }), "warn");
+    }
+    return report;
   }
 
   /**
@@ -171,27 +209,31 @@ window.DGM = window.DGM || {};
     await DGM.preview.render(); // 触发 show → 把源码交给引擎
     const body = await DGM.canvas.waitForBody(to, doc.body || "");
     if (!body) {
-      // 取不到就**留着这个标签页**让用户自己看画布，别静默关掉
-      state.pushConvert({ from: dir.from, to, doc: srcDoc.name, ok: false, note: t("conv.engineEmpty") });
-      DGM.toast({ icon: "alert", title: t("dlg.convert.title"), sub: t("conv.engineEmpty"), warn: true });
+      // G19：取不到正文 = 这次转换没有产物。**关掉刚建的标签页**，
+      // 记录一条失败（可追溯），并明确告诉用户——不留一张空画布让人猜。
+      await state.closeDoc(doc.id);
+      state.pushConvert({
+        from: dir.from,
+        to,
+        doc: srcDoc.name,
+        ok: false,
+        note: t("conv.engineEmpty"),
+        report: dir.report || null,
+      });
+      DGM.toast({
+        icon: "alert",
+        title: t("dlg.convert.title"),
+        sub: t("conv.emptyRolledBack"),
+        warn: true,
+      });
       return null;
     }
     await state.setBodyNow(doc.id, body);
     const note = bitmapFallbackNote(to, body);
     if (note) state.pushOutput(note, "warn");
-    const notes = note ? [note] : [];
-    // 保真度说明：渲染配置沿用了多少，逐条如实写（转换记录里展示）
-    if (to === "excalidraw") {
-      notes.push(
-        opts && opts.mermaid
-          ? t("conv.lookCarried", { look: opts.mermaid.look })
-          : t("conv.lookDefault"),
-      );
-      notes.push(t("conv.layoutNotCarried"));
-    } else if (to === "drawio") {
-      notes.push(t("conv.drawioFixedConfig"));
-    }
-    return { doc: doc, notes: notes };
+    // 外观/布局的说明由 Rust 报告给出（`engine.look.*` / `engine.drawio.fixed_config`），
+    // 这里只补上游兜底成位图这一条**只有界面能判**的说明。别再各写一套。
+    return { doc: doc, notes: note ? [note] : [] };
   }
 
   /**
@@ -248,22 +290,27 @@ window.DGM = window.DGM || {};
   }
 
   /** 转换成功后统一收尾：刷新界面、记转换记录、提示。 */
-  function finishConvert(created, dir, srcDoc, notes) {
+  async function finishConvert(created, dir, srcDoc, notes, report) {
     DGM.editor.loadActive();
     DGM.preview.schedule();
     state.refreshDerived(created.id);
+    const live = state.doc(created.id) || created;
+    const full = await attachCounts(report || null, live.body);
     state.pushConvert({
       from: dir.from,
       to: dir.to,
       doc: srcDoc.name,
       ok: true,
+      engine: (full && full.engine) || "",
+      source_hash: (full && full.source_hash) || "",
+      report: full,
       note: dir.how + (notes && notes.length ? " · " + notes.join("；") : ""),
     });
     state.pushOutput(t("dlg.convert.done", { name: state.fmtById(dir.to).name }) + " ← " + srcDoc.name, "ok");
     DGM.toast({
       icon: "swap",
       title: t("dlg.convert.done", { name: state.fmtById(dir.to).name }),
-      sub: t("dlg.convert.doneSub", { file: created.name }),
+      sub: t("dlg.convert.doneSub", { file: live.name }),
     });
   }
 
@@ -293,7 +340,7 @@ window.DGM = window.DGM || {};
     if (!sel) sel = dirs.find((c) => c.ok) || dirs[0];
 
     // 后端说这个方向谁来做（一次询问，弹窗与执行都用它，避免两处判断不一致）
-    const plan = await planOf(sel.from, sel.to, d.body);
+    const plan = await planOf(sel.from, sel.to, d.body, docOptions(d));
 
     const targets = dirs
       .map(
@@ -363,11 +410,14 @@ window.DGM = window.DGM || {};
 
   /** 真正执行转换。`plan` 是弹窗里那次询问的结果（复用，不重复问）。 */
   async function runConvert(srcDoc, dir, plan) {
-    const p = plan || (await planOf(dir.from, dir.to, srcDoc.body));
+    const options = docOptions(srcDoc);
+    const p = plan || (await planOf(dir.from, dir.to, srcDoc.body, options));
     if (p.error) {
       DGM.toast({ icon: "alert", title: t("dlg.convert.notImpl"), sub: p.error, warn: true });
       return;
     }
+    // 失败路径也要能写报告（G19 的空标签页回滚会记一条带 report 的失败）
+    const dirWithReport = Object.assign({}, dir, { report: p.report });
 
     let created = null;
     let extraNotes = [];
@@ -380,7 +430,7 @@ window.DGM = window.DGM || {};
       created = via && via.doc;
       extraNotes = (via && via.notes) || [];
     } else if (p.engine !== "none") {
-      const via = await convertViaEngine(dir.to, srcDoc.body, srcDoc, dir);
+      const via = await convertViaEngine(dir.to, srcDoc.body, srcDoc, dirWithReport);
       created = via && via.doc;
       extraNotes = (via && via.notes) || [];
     } else {
@@ -388,7 +438,7 @@ window.DGM = window.DGM || {};
       return;
     }
     if (!created) return;
-    finishConvert(created, dir, srcDoc, (p.notes || []).concat(extraNotes));
+    await finishConvert(created, dirWithReport, srcDoc, (p.notes || []).concat(extraNotes), p.report);
   }
 
   /* ================================================================== 识图 */

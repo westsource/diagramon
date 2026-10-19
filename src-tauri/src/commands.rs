@@ -423,22 +423,69 @@ pub fn debug_note(text: String) {
 ///
 /// 先问 `plan()`：**Rust 能算的就直接算**；引擎型的两个方向回一个带 `engine` 的空结果
 /// （附原因），由前端把源码交给承载页 —— 不把「不是 Rust 的活」当成错误。
+///
+/// **报告在这里生成**（`report` 字段）：
+/// - Rust 方向：计数来自真正的解析结果，`notes` 逐条映射成 `ConvIssue`；
+/// - 引擎方向：`Info{engine.delegated}` + 外观/布局的稳定说明，**不是失败**。
 #[tauri::command]
 pub fn convert_text(req: ConvertRequest) -> Result<ConvertOutcome, String> {
+    use app_ipc::{ConvReport, Fidelity, Grade};
+
+    let started = std::time::Instant::now();
     let plan = app_core::convert::plan(req.from, req.to)?;
+    let engine = plan.engine.id().to_string();
+    let source_hash = app_core::report::source_hash(&req.source);
+
     if matches!(plan.engine, app_core::convert::Engine::Rust) {
         let c = app_core::convert::convert(req.from, req.to, &req.source)?;
-        return Ok(ConvertOutcome {
-            engine: plan.engine.id().to_string(),
-            body: c.body,
-            notes: c.notes,
-        });
+        let issues =
+            c.notes.iter().map(|n| app_core::report::issue_from_note(n)).collect::<Vec<_>>();
+        let report = ConvReport {
+            engine: engine.clone(),
+            counts: c.counts,
+            fidelity: app_core::report::text_fidelity(req.from, req.to),
+            issues,
+            elapsed_us: started.elapsed().as_micros() as u64,
+            source_hash,
+            layout: req.options.layout.clone().unwrap_or_default(),
+            look: req.options.look.clone().unwrap_or_default(),
+            theme: req.options.theme.clone().unwrap_or_default(),
+        };
+        return Ok(ConvertOutcome { engine, body: c.body, notes: c.notes, report });
     }
-    Ok(ConvertOutcome {
-        engine: plan.engine.id().to_string(),
-        body: String::new(),
-        notes: vec![plan.reason],
-    })
+
+    // 引擎方向：正文由承载页产出（这里为空），但**报告必须有内容**，
+    // 否则 3.8.0 起那四条“外观/布局到底生效没生效”的说明就丢了。
+    let issues =
+        app_core::report::engine_issues(req.to, &engine, req.options.look.as_deref());
+    let notes = std::iter::once(plan.reason.clone())
+        .chain(issues.iter().map(app_core::report::issue_note))
+        .collect::<Vec<_>>();
+    let report = ConvReport {
+        engine: engine.clone(),
+        counts: Default::default(),
+        fidelity: Fidelity { structure: Grade::None, geometry: Grade::None, style: Grade::None },
+        issues,
+        elapsed_us: started.elapsed().as_micros() as u64,
+        source_hash,
+        // 引擎方向“实际用到的布局”就是那个引擎；drawio 的记录里明确写 n/a。
+        layout: if req.to == FormatId::Drawio { "drawio".into() } else { engine.clone() },
+        look: req
+            .options
+            .look
+            .clone()
+            .unwrap_or_else(|| if req.to == FormatId::Excalidraw { "auto".into() } else { "n/a".into() }),
+        theme: req.options.theme.clone().unwrap_or_default(),
+    };
+    Ok(ConvertOutcome { engine, body: String::new(), notes, report })
+}
+
+/// 只数一份 mxfile 的结构（引擎方向的产物回来后由前端调用）。
+///
+/// **只吃字符串**：不收路径、不碰网络（安全审计口径）。
+#[tauri::command]
+pub fn mxfile_inspect(xml: String) -> Result<app_ipc::Counts, String> {
+    app_core::mxfile::inspect(&xml).map_err(|e| e.to_string())
 }
 
 /* ---------------- 凭据（密钥永不回传前端） ---------------- */
@@ -576,6 +623,16 @@ pub async fn ai_chat(
     };
 
     let request_id = req.request_id.clone();
+    // 场景口径只在客户端定义（服务端只做短串校验）。重试来源随头一起发，
+    // 运营侧据此统计重试率；两边都不解析对方的字符串。
+    let scene = match req.intent {
+        app_ipc::AiIntent::Generate => "generate",
+        app_ipc::AiIntent::Vision => "vision",
+        app_ipc::AiIntent::Review => "review",
+        app_ipc::AiIntent::Explain => "explain",
+    };
+    let meta = ai::RequestMeta::new(scene, req.retry_of.as_deref());
+    let scene = scene.to_string();
     let cancel = Arc::new(AtomicBool::new(false));
     st.cancels().insert(request_id.clone(), cancel.clone());
 
@@ -591,7 +648,7 @@ pub async fn ai_chat(
         let http = st.http_for_idle(resolved.idle_timeout);
         // messages 先 clone 进第一次调用：401 重试要用原来的再发一遍
         let mut result =
-            ai::stream_chat(&http, &resolved, messages.clone(), &cancel, on_delta).await;
+            ai::stream_chat(&http, &resolved, messages.clone(), &meta, &cancel, on_delta).await;
 
         // 网络类失败（请求没送达 / 一帧未到就断）**自动重试一次**。走到 `Network` 就
         // 意味着用户一个字都没收到 —— 收到正文后断流会原样交付（Ok），收到思考后断流
@@ -602,7 +659,7 @@ pub async fn ai_chat(
         if matches!(result, Err(ai::ChatError::Network(_))) && !cancel.load(Ordering::Relaxed) {
             let on_delta_retry = delta_forwarder(app.clone(), request_id.clone());
             result =
-                ai::stream_chat(&http, &resolved, messages.clone(), &cancel, on_delta_retry)
+                ai::stream_chat(&http, &resolved, messages.clone(), &meta, &cancel, on_delta_retry)
                     .await;
         }
 
@@ -615,7 +672,7 @@ pub async fn ai_chat(
                         if let Ok(resolved2) = resolve_target(&st, &model_id).await {
                             let on_delta2 = delta_forwarder(app.clone(), request_id.clone());
                             let http2 = st.http_for_idle(resolved2.idle_timeout);
-                            result = ai::stream_chat(&http2, &resolved2, messages, &cancel, on_delta2).await;
+                            result = ai::stream_chat(&http2, &resolved2, messages, &meta, &cancel, on_delta2).await;
                         }
                     }
                     Err(e) if !crate::cloud::is_network_failure(&e) => {
@@ -637,6 +694,7 @@ pub async fn ai_chat(
                         request_id: request_id.clone(),
                         text,
                         model: used_model,
+                        scene: scene.clone(),
                         prompt_tokens: usage.prompt_tokens,
                         completion_tokens: usage.completion_tokens,
                         reasoning_tokens: usage.reasoning_tokens,
@@ -765,13 +823,21 @@ pub async fn ai_agent_run(
     };
 
     let request_id = req.request_id.clone();
+    // 工具循环的每一步都是独立计费的 HTTP 调用：场景固定 `tool`，
+    // `retry_of` 只在“整轮是自动重试”时才带。
+    let meta = ai::RequestMeta::new("tool", req.retry_of.as_deref());
     let cancel = Arc::new(AtomicBool::new(false));
     st.cancels().insert(request_id.clone(), cancel.clone());
 
     let used_model = resolved.model.clone();
     tauri::async_runtime::spawn(async move {
         let http = st.http_for_idle(resolved.idle_timeout);
-        let completer = ai::HttpCompleter { client: &http, resolved: &resolved };
+        let completer = ai::HttpCompleter {
+            client: &http,
+            resolved: &resolved,
+            meta: &meta,
+            usage: std::sync::Mutex::new(ai::Usage::default()),
+        };
         let step = Arc::new(AtomicU32::new(0));
         let wrapped: Vec<Box<dyn ai::Tool>> = tools
             .into_iter()
@@ -786,6 +852,8 @@ pub async fn ai_agent_run(
             .collect();
 
         let result = ai::run(&completer, messages, &wrapped, ai::DEFAULT_MAX_STEPS, &cancel).await;
+        // 多步的 usage 在 completer 里逐次累加 —— 这里取走，随 AI_DONE 一起交给界面。
+        let usage = completer.take_usage();
 
         match result {
             Ok(outcome) => {
@@ -795,10 +863,11 @@ pub async fn ai_agent_run(
                         request_id: request_id.clone(),
                         text: outcome.text,
                         model: used_model,
-                        prompt_tokens: None,
-                        completion_tokens: None,
-                        reasoning_tokens: None,
-                        usage_source: "none".to_string(),
+                        scene: "tool".into(),
+                        prompt_tokens: usage.prompt_tokens,
+                        completion_tokens: usage.completion_tokens,
+                        reasoning_tokens: usage.reasoning_tokens,
+                        usage_source: if usage.reported() { "server" } else { "none" }.to_string(),
                         // 工具循环是**非流式多步**，没有"流结束"这回事：终态留给上游解析，
                         // 这里如实报"这条路不给终态"（界面只对已知值动作，见 `AiDone.finish`）。
                         finish: String::new(),
@@ -1107,6 +1176,7 @@ pub fn ai_memory_clear(state: State<'_, Arc<AppState>>, id: String, kind: String
 /// 它失败了不该在界面上报一次错（那会让用户以为对话本身出了问题）。
 #[tauri::command]
 pub async fn ai_memory_extract(
+    app: AppHandle,
     state: State<'_, Arc<AppState>>,
     id: String,
     model_id: String,
@@ -1133,9 +1203,27 @@ pub async fn ai_memory_extract(
         serde_json::json!({ "role": "system", "content": ai::MEMORY_EXTRACT_SYSTEM }),
         serde_json::json!({ "role": "user", "content": ai::memory_extract_user(&prompt, &reply) }),
     ];
-    let Ok((text, _usage)) = ai::chat_once(&st.http_for_idle(resolved.idle_timeout), &resolved, messages).await else {
+    let meta = ai::RequestMeta::new("memory", None);
+    let Ok((text, usage)) =
+        ai::chat_once(&st.http_for_idle(resolved.idle_timeout), &resolved, messages, &meta).await
+    else {
         return Ok(memory_list(&st, &id));
     };
+
+    // 记忆提取**没有对应的界面消息**，但它是真实计费的一次调用：单独发 `ai://usage`，
+    // 否则用量页上这笔钱永远看不到（3.5.x 的“幽灵调用”）。
+    let _ = app.emit(
+        events::AI_USAGE,
+        app_ipc::AiUsageEvent {
+            request_id: format!("memory-{}", now_ms()),
+            model: resolved.model.clone(),
+            scene: "memory".into(),
+            prompt_tokens: usage.prompt_tokens,
+            completion_tokens: usage.completion_tokens,
+            reasoning_tokens: usage.reasoning_tokens,
+            reported: usage.reported(),
+        },
+    );
 
     let now = now_ms();
     let mut added = false;

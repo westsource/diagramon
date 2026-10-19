@@ -5,6 +5,12 @@
 
 use app_ipc::{AiContextFile, AiIntent, AiTurn, FormatId};
 
+/// 提示词版本：随每个请求发 `X-Diagramon-Prompt-Version`，服务端按它聚合通过率/成本。
+///
+/// **改了任何系统提示词的措辞就升这一版**（版本号不是产品版本，而是提示词快照的编号）——
+/// 否则“改完提示词后失败率变没变”永远回答不了。
+pub const PROMPT_VERSION: &str = "v4-3.9.0";
+
 fn format_name(id: FormatId) -> &'static str {
     match id {
         FormatId::Mermaid => "Mermaid",
@@ -50,6 +56,17 @@ pub fn format_hint(id: FormatId) -> String {
 
 /// 生成系统提示词。`intent` 决定任务是"从头画"、"看图还原"还是"局部改"。
 pub fn system_prompt(format: FormatId, intent: AiIntent) -> String {
+    // 解释是**唯一不产代码**的意图：它不进围栏提取，也不该出现“应用”按钮。
+    if intent == AiIntent::Explain {
+        return format!(
+            "你是 Diagramon 的图表助手。用户会给你一份 {} 图表源码，请解释它在表达什么。\n\n\
+             输出要求：\n\
+             1. 只写 3–8 句自然语言：先说整体在讲什么，再说关键路径与明显的风险/空缺；\n\
+             2. **不要输出任何代码块**，不要给修改方案，不要逐字复述源码；\n\
+             3. 不要写教程或语法说明。",
+            format_name(format)
+        );
+    }
     let head = match intent {
         AiIntent::Generate => format!(
             "你是 Diagramon 的图表助手。请把用户的描述画成 {} 图表。",
@@ -65,6 +82,7 @@ pub fn system_prompt(format: FormatId, intent: AiIntent) -> String {
              保留原有的节点 id 与结构，除非用户明确要求改。",
             format_name(format)
         ),
+        AiIntent::Explain => unreachable!("Explain 已在函数开头单独返回"),
     };
     format!(
         "{head}\n\n{rules}\n\n输出要求：\n\
@@ -512,6 +530,14 @@ mod tests {
     fn review_prompt_forbids_full_rewrite() {
         let p = system_prompt(FormatId::Mermaid, AiIntent::Review);
         assert!(p.contains("只做局部修改"), "改图必须明确不重写整张图：{p}");
+    }
+
+    #[test]
+    fn explain_prompt_forbids_code_blocks() {
+        let p = system_prompt(FormatId::Mermaid, AiIntent::Explain);
+        assert!(p.contains("不要输出任何代码块"), "解释意图不能要求代码围栏：{p}");
+        assert!(!p.contains("用 ``` 围栏包起来"), "解释意图不该复用“只输出代码”的输出要求：{p}");
+        assert!(p.contains("3–8 句"), "{p}");
     }
 
     #[test]

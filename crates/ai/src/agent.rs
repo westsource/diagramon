@@ -199,6 +199,18 @@ fn tool_names(tools: &[Box<dyn Tool>]) -> Vec<String> {
 pub struct HttpCompleter<'a> {
     pub client: &'a reqwest::Client,
     pub resolved: &'a Resolved,
+    /// 归因头（场景 / 重试来源 / 提示词版本）。
+    pub meta: &'a crate::provider::RequestMeta,
+    /// 工具循环是**多步非流式**：每一步的 usage 都要累加，否则界面上这一轮永远是
+    /// `usage_source=none`（v3 §C4 的“工具循环 token 全 None”）。
+    pub usage: std::sync::Mutex<crate::provider::Usage>,
+}
+
+impl HttpCompleter<'_> {
+    /// 取走累计用量（循环结束后调用一次）。
+    pub fn take_usage(&self) -> crate::provider::Usage {
+        std::mem::take(&mut *self.usage.lock().unwrap_or_else(|e| e.into_inner()))
+    }
 }
 
 impl Completer for HttpCompleter<'_> {
@@ -214,7 +226,7 @@ impl Completer for HttpCompleter<'_> {
             }
 
             let body = build_body_with_tools(r, &messages, &tools, false);
-            let mut request = self.client.post(r.endpoint()).json(&body);
+            let mut request = self.meta.apply(self.client.post(r.endpoint()).json(&body));
             if let Some(key) = r.api_key.as_deref() {
                 if !key.trim().is_empty() {
                     request = request.bearer_auth(key.trim());
@@ -228,6 +240,12 @@ impl Completer for HttpCompleter<'_> {
                 return Err(ChatError::Http { status: status.as_u16(), body: truncate(&text, 600) });
             }
             let payload: Value = resp.json().await.map_err(|e| ChatError::Protocol(e.to_string()))?;
+
+            // 每一步都是真实计费：把 usage 累加到自己身上（`take_usage` 在循环结束后取走）。
+            {
+                let mut total = self.usage.lock().unwrap_or_else(|e| e.into_inner());
+                crate::provider::merge_usage(&mut total, &payload, r.is_ollama());
+            }
 
             let message = if r.is_ollama() {
                 payload.get("message").cloned()

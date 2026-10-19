@@ -11,9 +11,9 @@ pub use agent::{run, AgentOutcome, Completer, Completion, HttpCompleter, StopRea
 pub use prompt::{
     build_messages, build_messages_with_history, extract_code, fit_history, inject_memory,
     memory_extract_user, parse_memory_candidates, system_prompt, HISTORY_MAX_CHARS,
-    HISTORY_MAX_TURNS, MEMORY_EXTRACT_MAX, MEMORY_EXTRACT_SYSTEM,
+    HISTORY_MAX_TURNS, MEMORY_EXTRACT_MAX, MEMORY_EXTRACT_SYSTEM, PROMPT_VERSION,
 };
 pub use provider::{
     build_body, build_body_with_tools, chat_once, normalize_base_url, stream_chat, ChatError, Chunk,
-    Finish, Resolved, Usage,
+    Finish, RequestMeta, Resolved, Usage,
 };

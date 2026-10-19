@@ -359,7 +359,13 @@ window.DGM = window.DGM || {};
           if (!elkLoaded()) {
             it.disabled = true;
             it.kbd = t("preview.elk.loading");
-            loadElk().then(schedule).catch(() => {}); // 后台预热，加载完下次打开就可点
+            loadElk()
+              .then(schedule)
+              .catch((e) => {
+                // 菜单里的后台预热失败也要留痕（以前 `.catch(() => {})` 吞掉，
+                // 用户只看到“一直加载中”，不知道离线包已经不可能加载成功）
+                state.pushOutput((e && e.message) || String(e), "warn");
+              });
           }
         }
         return it;
@@ -581,7 +587,10 @@ window.DGM = window.DGM || {};
       try {
         await loadElk();
       } catch (e) {
-        if (DGM.status) DGM.status(t("preview.elk.fallback", { msg: e.message }), "warn");
+        const msg = t("preview.elk.fallback", { msg: e.message });
+        if (DGM.status) DGM.status(msg, "warn");
+        // G24：加载失败**不许装作切成功** —— 顶栏给出明确回退说明，并把原因记进输出面板
+        state.pushOutput(msg, "warn");
         layout = "dagre";
       }
     }

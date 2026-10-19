@@ -14,7 +14,7 @@ no external request is ever made**.
 Code or images reach a model only when you actively use AI, and then only the endpoint you chose
 (BYOK talks straight to your own provider, membership goes through the Diagramon cloud gateway).
 
-Version **3.8.4** · Official website <https://www.diagramon.com>
+Version **3.9.0** · Official website <https://www.diagramon.com>
 
 ## Screenshots
 
@@ -118,8 +118,16 @@ Version **3.8.4** · Official website <https://www.diagramon.com>
   (containers, classes, vars, layers…), so folding it back would mean deciding per feature what to drop;
   the "get out of D2" need is served by `D2 → drawio` instead
 - **One-way semantics** — the product opens in a new tab and the original file's bytes never change
-- **Lossy conversions say so** — the result carries `notes` listing exactly what did not migrate
-  (e.g. `subgraph → cluster` drops styling); the dialog shows them, nothing is dropped silently
+- **Lossy conversions say so** — the result carries a structured report with the three fidelity layers
+  (structure / geometry / style), output counts (nodes / edges / containers / pages / labels), engine,
+  elapsed time, layout and theme, plus every degradation as its own row in the conversion record
+  (e.g. `subgraph → cluster` drops styling); nothing is dropped silently and the rows follow the UI language
+- **The Conversion Center shows measured badges** — each direction renders three dots taken from the
+  **latest successful** report; directions without a sample show hollow dots and say “no sample yet”
+  instead of estimating
+- **A failed conversion leaves no empty canvas** — if the engine returns nothing, the freshly created
+  tab is closed and a traceable failure is recorded; unavailable directions no longer pretend to work
+  (DOT → Mermaid is marked experimental because it has no mapper yet)
 - **Unavailable directions are still listed, with a stated reason**, rather than hidden for you to guess
 - **The Mermaid details that used to break the output are handled** — edge endpoint markers are honoured
   (`<-->` becomes DOT's `dir=both` / D2's `<->`), markers the target format has no shape for
@@ -149,6 +157,8 @@ Version **3.8.4** · Official website <https://www.diagramon.com>
 ### AI assistant
 - **Three tabs** — generate (natural language → diagram code for the current format), vision
   (image → code) and review (ask for changes to the current document)
+- **“Explain the current diagram” really explains** — the empty-state button sends a dedicated explain
+  request (3–8 sentences, no code fence, no Apply button) instead of just focusing the input
 - **Two kinds of credentials, kept visually separate** — the cloud gateway (membership; the credential is
   the current login token, so you fill in nothing) and local BYOK (OpenAI-compatible / Ollama / custom,
   where you supply the key) are shown as groups, never mixed
@@ -164,7 +174,11 @@ Version **3.8.4** · Official website <https://www.diagramon.com>
   still exactly the version the AI applied; syntax errors you introduce yourself are never rewritten
   behind your back (they are still reported in the preview and the problems panel)
 - **Usage is labelled with its source** — only tokens the provider actually reports are accumulated;
-  anything unreported shows `—` with an explanation, never `0` and never a local estimate
+  anything unreported shows `—` with an explanation, never `0` and never a local estimate; the usage
+  panel also breaks calls down **by scene** (generate / vision / review / explain / tool loop / memory)
+- **Tool loops and memory extraction are accounted** — a multi-step tool loop reports the sum of its
+  steps instead of “none”, and memory extraction (a real, billed call) gets its own usage row instead
+  of becoming a ghost call
 - **It actually remembers the conversation** — previous turns are carried into the next request
   (auto-trimmed, newest turn always kept), so you can keep refining the same diagram across messages
   instead of starting from scratch every time

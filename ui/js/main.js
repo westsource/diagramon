@@ -837,10 +837,47 @@ window.DGM = window.DGM || {};
       ok("subgraph 变成了 cluster", toDot.body.includes("subgraph cluster_0") && toDot.body.includes("label=\"风控\""));
       ok("classDef 样式挂到了节点上", toDot.body.includes("fillcolor=\"#f8e9e6\""));
       ok("保真度说明非空（有损就要写清）", Array.isArray(toDot.notes) && toDot.notes.length > 0, toDot.notes.join(" / "));
+      // 3.9.0：报告是唯一真源（计数来自解析结果，不是事后猜）
+      const rep = toDot.report || {};
+      ok(
+        "转换返回结构化报告（计数 + 三层保真度）",
+        !!(rep.counts && rep.counts.nodes > 0 && rep.counts.edges > 0 && rep.fidelity && rep.fidelity.structure === "exact"),
+        JSON.stringify(rep.counts || null),
+      );
+      ok("报告带 16 位源 hash", typeof rep.source_hash === "string" && /^[0-9a-f]{16}$/.test(rep.source_hash), rep.source_hash || "");
+
+      // 报告不只要在 IPC 里对：面板与矩阵必须真的把它渲染出来
+      st.pushConvert({ from: "mermaid", to: "dot", doc: "selftest.mmd", ok: true, report: rep });
+      ok("按方向能取到最近一次报告", !!st.convLast("mermaid", "dot"));
+      const beforePanels = Object.assign({}, st.panels());
+      await st.patchSettings({ panels: { bottom: true, bottom_tab: "convert" } });
+      const rec = document.querySelector(".conv-log");
+      ok(
+        "转换记录渲染三层徽章 + 可展开报告",
+        !!rec && rec.querySelectorAll(".conv-marks .g").length === 3 && !!rec.querySelector(".conv-rec-body"),
+        rec ? rec.className : "no .conv-log",
+      );
+      await st.patchSettings({ panels: { sidebar: true, sidebar_view: "convert" } });
+      const matrixDots = document.querySelectorAll(".conv-matrix .mx-c.yes .g").length;
+      ok("转换中心矩阵按报告画徽章（不是预估值）", matrixDots >= 3, String(matrixDots));
+      await st.patchSettings({ panels: beforePanels });
+
+      // 引擎方向回来的是 mxfile：`mxfile_inspect` 只吃字符串（不收路径、不碰网络）
+      const inspectCounts = await invoke("mxfile_inspect", {
+        xml: '<mxfile><diagram name="p"><mxGraphModel><root><mxCell id="0"/><mxCell id="1" parent="0"/><mxCell id="v" value="节点" vertex="1" parent="1"/></root></mxGraphModel></diagram></mxfile>',
+      });
+      ok("mxfile_inspect 数出顶点/页/标签", inspectCounts.nodes === 1 && inspectCounts.pages === 1 && inspectCounts.labels === 1, JSON.stringify(inspectCounts));
+      const inspectErr = await invoke("mxfile_inspect", { xml: "not xml at all" }).then(() => "", (e) => (e && e.message) || String(e));
+      ok("mxfile_inspect 对非 mxfile 如实报错", inspectErr.includes("mxfile"), inspectErr.slice(0, 60));
 
       const toDrawio = await invoke("convert_text", { req: { from: "mermaid", to: "drawio", source: srcBody } });
       ok("mermaid → drawio 交给引擎（不是 Rust）", toDrawio.engine === "drawio" && toDrawio.body === "", toDrawio.engine);
       ok("引擎方向给出原因", (toDrawio.notes[0] || "").includes("drawio"), toDrawio.notes[0]);
+      ok(
+        "引擎方向的报告保留“外观/布局”事实（不是只有 delegated）",
+        !!(toDrawio.report && toDrawio.report.issues.some((i) => i.code === "engine.drawio.fixed_config")),
+        JSON.stringify((toDrawio.report && toDrawio.report.issues) || []).slice(0, 120),
+      );
 
       const toXcal = await invoke("convert_text", { req: { from: "mermaid", to: "excalidraw", source: srcBody } });
       ok("mermaid → Excalidraw 交给引擎", toXcal.engine === "excalidraw", toXcal.engine);

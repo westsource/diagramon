@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mxfile host="Diagramon">
+  <diagram name="stencil" id="p1">
+    <mxGraphModel dx="800" dy="600" grid="1" page="1">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="s1" value="用户" style="sketch=0;outlineConnect=0;shape=mxgraph.aws4.user;html=1;" vertex="1" parent="1">
+          <mxGeometry x="40" y="80" width="60" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="s2" value="API" style="shape=hexagon;perimeter=hexagonPerimeter2;html=1;" vertex="1" parent="1">
+          <mxGeometry x="160" y="80" width="100" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="e1" value="HTTPS" edge="1" parent="1" source="s1" target="s2">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

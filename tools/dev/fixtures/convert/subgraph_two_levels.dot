@@ -1,0 +1,26 @@
+digraph platform {
+    compound=true;
+    node [shape=box];
+
+    subgraph cluster_edge {
+        label="边缘层";
+        cdn [label="CDN"];
+        waf [label="WAF"];
+        subgraph cluster_gateway {
+            label="网关";
+            lb  [label="负载均衡"];
+            api [label="API"];
+        }
+    }
+    subgraph cluster_core {
+        label="核心层";
+        svc  [label="用户服务"];
+        db   [shape=cylinder, label="数据库"];
+    }
+
+    cdn -> waf;
+    waf -> lb;
+    lb -> api;
+    api -> svc [label="gRPC"];
+    svc -> db  [label="SQL"];
+}

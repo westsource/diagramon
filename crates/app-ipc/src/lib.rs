@@ -99,6 +99,11 @@ pub struct FormatInfo {
     pub note: String,
     /// 新建文档的默认正文
     pub default_body: String,
+    /// 能承接哪些**文本格式**的 AI 产物（落地目标）。空 = 不能作为落地目标。
+    ///
+    /// 注意：**不要与 `ai` 混用** —— `ai` 是"直出"，`ai_via` 是"落地（要经转换且会降级）"。
+    #[serde(default)]
+    pub ai_via: Vec<FormatId>,
 }
 
 /// 打开/新建的文档。
@@ -378,13 +383,16 @@ impl Default for Settings {
 
 /* ---------------- AI 请求与流 ---------------- */
 
-/// 意图：生成 / 识图 / 改图。决定系统提示词与是否必须视觉档。
+/// 意图：生成 / 识图 / 改图 / 解释。决定系统提示词与是否必须视觉档。
+///
+/// `Explain` 与 `Review` 分开：解释**只输出自然语言**，不产代码、不出 apply。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum AiIntent {
     Generate,
     Vision,
     Review,
+    Explain,
 }
 
 /// 一轮前序对话（发给上游的形态）。
@@ -437,6 +445,15 @@ pub struct AiChatRequest {
     /// 前端只负责如实把对话给出来，不各自猜一套策略。
     #[serde(default)]
     pub history: Vec<AiTurn>,
+    /// 这次调用属于哪个场景（`generate` / `vision` / `review` / `tool` / `memory`，
+    /// 将来还会有 `convert.retry` / `patch`）。随 `X-Diagramon-Scene` 发出，
+    /// 服务端按它归因；**枚举定义只在客户端**，服务端只做短串校验。
+    #[serde(default)]
+    pub scene: String,
+    /// 若是自动重试（渲染失败修正 / 转换失败回环），上一轮的 request_id。
+    /// 随 `X-Diagramon-Retry-Of` 发出，运营侧据此统计重试率。
+    #[serde(default)]
+    pub retry_of: Option<String>,
 }
 
 /// 事件名：`ai://delta` / `ai://thinking` / `ai://done` / `ai://failed`
@@ -480,6 +497,9 @@ pub struct AiDone {
     pub text: String,
     /// 本次实际使用的模型名（自动选档时由服务端回报，BYOK 下即配置里的 model）
     pub model: String,
+    /// 这次调用属于哪个场景（与请求头 `X-Diagramon-Scene` 同值）。
+    #[serde(default)]
+    pub scene: String,
     pub prompt_tokens: Option<u32>,
     pub completion_tokens: Option<u32>,
     /// 其中有多少是思考 token（供应商不报就是 `None`）。界面用它解释"这一轮为什么没有正文"。
@@ -504,6 +524,25 @@ pub struct AiDone {
 pub struct AiFailed {
     pub request_id: String,
     pub message: String,
+}
+
+/// 事件名：`ai://usage` —— **只有用量、没有消息**的一轮（当前是记忆提取）。
+///
+/// 为什么单独一个事件：记忆提取是真实计费的一次调用，但它没有对应的界面消息。
+/// 塞进 `ai://done` 会被 `onDone` 按 request_id 找不到消息而整包丢弃 ——
+/// 于是用量页上看不到这笔钱（3.5.x 的“幽灵调用”）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AiUsageEvent {
+    pub request_id: String,
+    pub model: String,
+    /// 场景口径（与 `AiChatRequest.scene` 同一套字符串）
+    pub scene: String,
+    pub prompt_tokens: Option<u32>,
+    pub completion_tokens: Option<u32>,
+    #[serde(default)]
+    pub reasoning_tokens: Option<u32>,
+    /// `true` = 上游回报了用量；`false` = 没回报，界面显示“—”
+    pub reported: bool,
 }
 
 /// 开发开关：由后端按环境变量如实声明，前端不猜。
@@ -548,27 +587,160 @@ pub struct AppInfo {
 /// 事件名常量（与前端 `ipc.on(...)` 逐字对应）。
 /* ---------------- 格式转换 ---------------- */
 
+/// 转换保真度的三档评价。
+///
+/// 取值是**报告的唯一真源**（前端只渲染，不自己再判一次）：
+/// `exact` 精确 / `approx` 近似 / `partial` 部分 / `none` 无。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Grade {
+    Exact,
+    Approx,
+    Partial,
+    None,
+}
+
+/// 一条转换问题的严重程度。
+///
+/// **不是失败**：`Info` 只说明"这次转换由谁完成"，`Degraded` / `Dropped` 说明丢了什么，
+/// 只有 `Blocking` 才意味着"这个方向做不了"。旧前端读 `notes`，新前端读这个。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Level {
+    Info,
+    Degraded,
+    Dropped,
+    Blocking,
+}
+
+/// 结构计数：由 `mxfile::inspect` 或 Rust 侧解析结果给出。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct Counts {
+    pub nodes: u32,
+    pub edges: u32,
+    pub containers: u32,
+    pub pages: u32,
+    pub labels: u32,
+}
+
+/// 三层保真度。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Fidelity {
+    pub structure: Grade,
+    pub geometry: Grade,
+    pub style: Grade,
+}
+
+/// 源位置（1 起的行号 + 可选的节点 id）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SourceRef {
+    #[serde(default)]
+    pub line: Option<u32>,
+    #[serde(default)]
+    pub node: Option<String>,
+}
+
+/// 一条转换问题。
+///
+/// `code` 是**稳定词表**，不是文案：前端用它查 i18n 并决定图标；
+/// `params` 是插值参数，`at` 指向源码位置。名字带 `Conv` 前缀是为了与
+/// `lint::Issue`（语法诊断）分开 —— 两者语义不同，别合并。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ConvIssue {
+    pub level: Level,
+    pub code: String,
+    #[serde(default)]
+    pub params: std::collections::BTreeMap<String, String>,
+    #[serde(default)]
+    pub at: Option<SourceRef>,
+}
+
+/// 一次转换的结构化报告。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ConvReport {
+    /// 直接抄 `Engine::id()`：`rust` / `drawio` / `excalidraw` / `d2wasm` / `dotjson` / `none`。
+    pub engine: String,
+    pub counts: Counts,
+    pub fidelity: Fidelity,
+    pub issues: Vec<ConvIssue>,
+    /// 微秒。报告里一律不用浮点，便于逐字段比对（除这个字段）。
+    pub elapsed_us: u64,
+    /// sha256(源文本) 的前 16 位十六进制；只用于判断"源改过没有"，不是安全边界。
+    pub source_hash: String,
+    /// 实际用于布局的引擎（dot/d2）；引擎方向记目标引擎名或 `n/a`。
+    #[serde(default)]
+    pub layout: String,
+    /// 实际生效的外观；Excalidraw 链会真沿用，drawio 链记 `n/a`。
+    #[serde(default)]
+    pub look: String,
+    /// `light` / `dark`：样式快照时的应用主题。
+    #[serde(default)]
+    pub theme: String,
+}
+
+impl ConvReport {
+    /// 没有任何数据时的报告：`structure: none`，并带上一条说明性 issue。
+    /// `inspect` 失败时用它降级，**不能把一次成功的转换记成失败**。
+    pub fn unavailable(engine: &str, code: &str) -> Self {
+        let mut params = std::collections::BTreeMap::new();
+        params.insert("engine".to_string(), engine.to_string());
+        Self {
+            engine: engine.to_string(),
+            counts: Counts::default(),
+            fidelity: Fidelity { structure: Grade::None, geometry: Grade::None, style: Grade::None },
+            issues: vec![ConvIssue { level: Level::Info, code: code.to_string(), params, at: None }],
+            elapsed_us: 0,
+            source_hash: String::new(),
+            layout: String::new(),
+            look: String::new(),
+            theme: String::new(),
+        }
+    }
+}
+
+/// 一次转换的可选参数。旧前端不带也能跑（全部走默认值）。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ConvertOptions {
+    /// mermaid：是否经 plan 归一化（本期只解析、不生效）。
+    pub normalize: bool,
+    /// dot/d2 的布局引擎；`None` = 默认。
+    pub layout: Option<String>,
+    /// 样式快照主题；`None` = 当前。
+    pub theme: Option<String>,
+    /// 未映射元素是否允许兜成位图。
+    pub bitmap_fallback: bool,
+    /// dot：集群是否变容器（默认 true）。
+    pub cluster_as_container: Option<bool>,
+    /// 文档当前外观（mermaid）。引擎方向用它如实报告"外观沿用没沿用"。
+    pub look: Option<String>,
+}
+
 /// 一次转换请求。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConvertRequest {
     pub from: FormatId,
     pub to: FormatId,
     pub source: String,
+    #[serde(default)]
+    pub options: ConvertOptions,
 }
 
 /// 一次转换的结果。
 ///
 /// `notes` 不是装饰：转换是**单向有损**的，逐条写明「丢了什么」由界面如实展示，
-/// 不静默丢（见路线图的 P2 决策）。
+/// 不静默丢（见路线图的 P2 决策）。`report` 是同一批信息的结构化形态：
+/// **旧前端继续读 `notes`，新前端只读 `report`**。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConvertOutcome {
-    /// 谁来完成这次转换：`rust` / `drawio` / `excalidraw` / `none`。
+    /// 谁来完成这次转换：`rust` / `drawio` / `excalidraw` / `d2wasm` / `dotjson` / `none`。
     ///
     /// **前端按它分支**，而不是从错误文案里猜引擎 —— 猜字符串一改文案就崩。
     pub engine: String,
     /// 纯 Rust 方向才有正文；引擎方向为空（由承载页产出）。
     pub body: String,
     pub notes: Vec<String>,
+    pub report: ConvReport,
 }
 
 /* ---------------- 工作区与文件系统 ---------------- */
@@ -974,6 +1146,8 @@ pub mod events {
     pub const AI_THINKING: &str = "ai://thinking";
     pub const AI_DONE: &str = "ai://done";
     pub const AI_FAILED: &str = "ai://failed";
+    /// 只有用量、没有消息的一轮（载荷 `AiUsageEvent`）
+    pub const AI_USAGE: &str = "ai://usage";
     /// 工具循环里的一次工具执行（载荷 `AiAgentStep`）
     pub const AI_AGENT: &str = "ai://agent";
     /// 工作区文件被改动（批量 `Vec<FsChange>`）

@@ -38,6 +38,44 @@ pub fn idle_timeout_for(provider: &str, configured: Option<u32>) -> Duration {
     }
 }
 
+/// 平台的归因头。随每个请求发出（BYOK 的上游会忽略未知头，无副作用）。
+///
+/// 三个头与 v3 §C4 / v4 §S1 的口径一致：
+/// - `X-Diagramon-Scene`：场景（`generate` / `vision` / `review` / `tool` / `memory` / …）；
+/// - `X-Diagramon-Prompt-Version`：提示词版本（服务端按它聚合）；
+/// - `X-Diagramon-Retry-Of`：这是一次自动重试时，上一轮的 request_id。
+///
+/// 头的值只由 Rust 侧决定（场景字符串来自命令层），前端不直接拼。
+#[derive(Debug, Clone, Default)]
+pub struct RequestMeta {
+    pub scene: Option<String>,
+    pub retry_of: Option<String>,
+}
+
+impl RequestMeta {
+    pub fn new(scene: &str, retry_of: Option<&str>) -> Self {
+        Self {
+            scene: Some(scene).filter(|s| !s.trim().is_empty()).map(str::to_string),
+            retry_of: retry_of
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string),
+        }
+    }
+
+    /// 把归因头贴到请求上。`Prompt-Version` 恒定发送；另外两个有值才发。
+    pub fn apply(&self, mut req: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+        req = req.header("X-Diagramon-Prompt-Version", crate::prompt::PROMPT_VERSION);
+        if let Some(scene) = self.scene.as_deref() {
+            req = req.header("X-Diagramon-Scene", scene);
+        }
+        if let Some(retry) = self.retry_of.as_deref() {
+            req = req.header("X-Diagramon-Retry-Of", retry);
+        }
+        req
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Resolved {
     /// openai | ollama | custom
@@ -267,6 +305,7 @@ pub async fn stream_chat<F>(
     client: &reqwest::Client,
     r: &Resolved,
     messages: Vec<Value>,
+    meta: &RequestMeta,
     cancel: &AtomicBool,
     mut on_delta: F,
 ) -> Result<(String, String, Usage), ChatError>
@@ -279,7 +318,7 @@ where
 
     let url = r.endpoint();
     let body = build_body(r, &messages, true);
-    let req = client.post(&url).json(&body);
+    let req = meta.apply(client.post(&url).json(&body));
     // 流式请求**不能继承**客户端的 300s 总超时：思考型模型一条流跑 5 分钟+很正常，
     // 撞上它会被硬掐成"error decoding response body"（真机实录 2026-10-16：改图流
     // 恰在 300s 整断掉，服务端 ai_usage 记 299.9s cancelled）。这里放宽成 30 分钟
@@ -454,7 +493,7 @@ fn extract_chunks(v: &Value, ollama: bool) -> Vec<Chunk> {
     out
 }
 
-fn merge_usage(usage: &mut Usage, v: &Value, ollama: bool) {
+pub(crate) fn merge_usage(usage: &mut Usage, v: &Value, ollama: bool) {
     // 终态每帧都试着读一次：它出现在**最后一帧**（OpenAI 兼容那一帧的 `delta` 是空的，
     // 只有 `finish_reason`）。漏了它，"被截断"与"正常收尾"就没法区分（见 `Finish`）。
     let finish = finish_of(v, ollama);
@@ -506,6 +545,7 @@ pub async fn chat_once(
     client: &reqwest::Client,
     r: &Resolved,
     messages: Vec<Value>,
+    meta: &RequestMeta,
 ) -> Result<(String, Usage), ChatError> {
     if !r.is_ollama() && r.api_key.as_deref().unwrap_or("").trim().is_empty() {
         return Err(ChatError::MissingKey);
@@ -513,7 +553,7 @@ pub async fn chat_once(
 
     let url = r.endpoint();
     let body = build_body(r, &messages, false);
-    let mut req = client.post(&url).json(&body);
+    let mut req = meta.apply(client.post(&url).json(&body));
     if let Some(key) = r.api_key.as_deref() {
         if !key.trim().is_empty() {
             req = req.bearer_auth(key.trim());
@@ -736,7 +776,7 @@ mod tests {
         let client = reqwest::Client::new();
         let cancel = AtomicBool::new(false);
         let err = rt
-            .block_on(stream_chat(&client, &r, vec![], &cancel, |_| {}))
+            .block_on(stream_chat(&client, &r, vec![], &RequestMeta::default(), &cancel, |_| {}))
             .unwrap_err();
         assert!(matches!(err, ChatError::MissingKey), "{err:?}");
     }
@@ -822,7 +862,14 @@ mod tests {
         let r = Resolved { base_url, ..openai() };
         // `enable_all`：reqwest 的连接超时走 tokio 的 timer，只有 "rt" 的运行时里没有它。
         let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
-        rt.block_on(stream_chat(&reqwest::Client::new(), &r, vec![], &AtomicBool::new(false), |_| {}))
+        rt.block_on(stream_chat(
+            &reqwest::Client::new(),
+            &r,
+            vec![],
+            &RequestMeta::default(),
+            &AtomicBool::new(false),
+            |_| {},
+        ))
             .map(|(text, _reasoning, usage)| (text, usage))
     }
 

@@ -1,0 +1,11 @@
+direction: right
+边缘: {
+  label: "边缘"
+  网关 -> WAF
+  网关 -> CDN
+}
+核心: {
+  label: "核心"
+  用户服务 -> 数据库: SQL
+}
+边缘.网关 -> 核心.用户服务: gRPC

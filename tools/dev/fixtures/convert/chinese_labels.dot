@@ -1,0 +1,10 @@
+digraph 中文标签 {
+    rankdir=LR;
+    开始 [shape=ellipse, label="开始"];
+    判断 [shape=diamond, label="是否合法？"];
+    成功 [label="保存成功"];
+    失败 [label="记录错误"];
+    开始 -> 判断;
+    判断 -> 成功 [label="是"];
+    判断 -> 失败 [label="否"];
+}

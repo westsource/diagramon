@@ -28,6 +28,11 @@ pub struct Conversion {
     pub body: String,
     /// 保真度说明：逐条写清「哪一类信息没迁移过去」。
     pub notes: Vec<String>,
+    /// 结构计数：节点 / 边 / 容器 / 页 / 标签。
+    ///
+    /// 由**真正的解析结果**给出（不是事后再扫一遍正文）—— 报告面板与矩阵直接用它，
+    /// 不去猜。文本目标没有“页”的概念，恒为 1。
+    pub counts: app_ipc::Counts,
 }
 
 /* ------------------------------------------------------------------ 中间表示 */
@@ -877,7 +882,22 @@ pub fn mermaid_to_dot(src: &str) -> Result<Conversion, String> {
     }
 
     notes.dedup();
-    Ok(Conversion { body: out, notes })
+    let labels = label_of
+        .values()
+        .filter(|(label, _)| label.as_deref().map(|l| !l.trim().is_empty()).unwrap_or(false))
+        .count()
+        + edges
+            .iter()
+            .filter(|(_, _, link)| link.label.as_deref().map(|l| !l.trim().is_empty()).unwrap_or(false))
+            .count();
+    let counts = app_ipc::Counts {
+        nodes: order.len() as u32,
+        edges: edges.len() as u32,
+        containers: clusters.len() as u32,
+        pages: 1,
+        labels: labels as u32,
+    };
+    Ok(Conversion { body: out, notes, counts })
 }
 
 /// 一个 subgraph 在 DOT 里的落点。
@@ -1160,6 +1180,23 @@ pub fn mermaid_to_d2(src: &str) -> Result<Conversion, String> {
         return Err("subgraph 没有配对的 `end`".into());
     }
 
+    // 计数必须在把模型 move 进 D2Emit **之前**算（之后这些容器已经归发射器所有）。
+    let labels = label_of
+        .values()
+        .filter(|(label, _)| label.as_deref().map(|l| !l.trim().is_empty()).unwrap_or(false))
+        .count()
+        + edges
+            .iter()
+            .filter(|(_, _, link)| link.label.as_deref().map(|l| !l.trim().is_empty()).unwrap_or(false))
+            .count();
+    let counts = app_ipc::Counts {
+        nodes: order.len() as u32,
+        edges: edges.len() as u32,
+        containers: containers.len() as u32,
+        pages: 1,
+        labels: labels as u32,
+    };
+
     let model = D2Emit {
         label_of,
         container_of,
@@ -1271,7 +1308,7 @@ pub fn mermaid_to_d2(src: &str) -> Result<Conversion, String> {
     notes.push("版式由 D2 的布局引擎重新计算（Mermaid 不保留位置信息）".to_string());
 
     notes.dedup();
-    Ok(Conversion { body: out, notes })
+    Ok(Conversion { body: out, notes, counts })
 }
 
 /// 把一组 `style.*` 键值对写成一行 `k: v; k2: v2`（`classes` 块里用）。
@@ -1937,5 +1974,47 @@ mod tests {
             .unwrap();
         assert!(c.body.contains("stroke-width: 2"), "{}", c.body);
         assert!(!c.notes.iter().any(|n| n.contains("stroke-width")), "{:?}", c.notes);
+    }
+
+    /// I0 门禁：**注册表说“能转”与 `plan()` 说“能做”必须逐格一致**。
+    ///
+    /// 这条测试 2026-10-19 之前是红的：`format.rs` 声明 DOT → Mermaid 可用，
+    /// 而 `plan()` 返回 Err（G15）。修法是改注册表，不许改测试。
+    #[test]
+    fn registry_and_plan_agree() {
+        use app_ipc::FormatId::*;
+        let all = [Mermaid, Dot, D2, Drawio, Excalidraw];
+        for from in all {
+            let targets = crate::format::convert_targets(from);
+            for to in all {
+                if from == to {
+                    continue;
+                }
+                assert_eq!(
+                    targets.contains(&to),
+                    plan(from, to).is_ok(),
+                    "format.rs 说 {from:?}→{to:?} = {}，plan() 说 {}",
+                    targets.contains(&to),
+                    plan(from, to).is_ok()
+                );
+            }
+        }
+    }
+
+    /// 报告的计数来自真正的解析结果：节点/边/容器的数量必须与正文对得上。
+    #[test]
+    fn conversion_reports_structure_counts() {
+        let src = "flowchart LR\n    A[开始] --> B{判断}\n    B -- 是 --> C[结束]\n    subgraph 组\n      D --> E\n    end\n";
+        let c = mermaid_to_dot(src).unwrap();
+        assert_eq!(c.counts.pages, 1);
+        assert_eq!(c.counts.nodes, 5, "A B C D E");
+        assert_eq!(c.counts.edges, 3);
+        assert_eq!(c.counts.containers, 1);
+        assert_eq!(c.counts.labels, 4, "A/B/C 的标签 + 一条边的标签；D/E 没有标签");
+
+        let d2 = mermaid_to_d2(src).unwrap();
+        assert_eq!(d2.counts.nodes, 5);
+        assert_eq!(d2.counts.edges, 3);
+        assert_eq!(d2.counts.containers, 1);
     }
 }

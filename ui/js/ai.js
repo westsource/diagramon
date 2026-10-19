@@ -238,7 +238,8 @@ window.DGM = window.DGM || {};
       body.appendChild(line);
     }
 
-    const parsed = splitFences(m.text || "");
+    // 解释意图**不产代码**：即便模型不听话塞了围栏，也不渲染代码卡/应用按钮。
+    const parsed = m.intent === "explain" ? { text: m.text || "", blocks: [] } : splitFences(m.text || "");
     if (parsed.text) {
       const b = h("div", "bubble" + (m.streaming ? " streaming" : ""), esc(parsed.text).replace(/\n/g, "<br>"));
       b.dataset.req = m.req || "";
@@ -303,10 +304,38 @@ window.DGM = window.DGM || {};
       const b = e.target.closest("button");
       if (!b) return;
       if (b.dataset.a === "vision") DGM.ai.focus("vision");
-      else if (b.dataset.a === "ctx") DGM.ai.focus("review");
+      else if (b.dataset.a === "ctx") explainCurrent();
       else input().focus();
     });
     return box;
+  }
+
+  /** 空态「解释当前这张图」：真的发一轮 **explain** 请求。
+   *
+   *  以前这个按钮只是切到「改图」页签，点下去什么都不发生 —— 按钮写着“解释”，
+   *  行为却是“换个输入框”。解释意图单独存在：只出自然语言，不出代码卡、不出 apply。
+   */
+  function explainCurrent() {
+    const d = state.activeDoc();
+    if (!d || !state.isTextDoc(d)) {
+      DGM.toast({ icon: "info", title: t("ai.explain.empty"), sub: "" });
+      return;
+    }
+    focus("chat");
+    const prompt = t("ai.explain.prompt");
+    const req = {
+      request_id: newId(),
+      model_id: state.currentModel() ? state.currentModel().id : "",
+      intent: "explain",
+      prompt,
+      format: d.format,
+      context: d.body || null,
+      files: ctxFiles().map((f) => ({ path: f.path, name: f.name, text: f.text, truncated: !!f.truncated })),
+      image_data_url: null,
+      history: historyFor("chat", d.id),
+    };
+    if (ta) ta.value = "";
+    dispatch(req, "chat", { id: newId(), role: "user", text: prompt });
   }
 
   /** 「一个可用的模型都没有」时的引导。
@@ -746,6 +775,7 @@ window.DGM = window.DGM || {};
       // 记下这一轮的**来源与模型 id**：记忆提取要用它们（`m.used.model` 是展示名，不是 id）
       prompt: (userMsg && userMsg.text) || "",
       modelId: req.model_id || "",
+      intent: req.intent || "",
     };
     bucket(owner)[cur].push(bot);
     state.ui.aiBusy = true;
@@ -755,7 +785,7 @@ window.DGM = window.DGM || {};
     // 受控工具循环：开关开着且**不是识图**时改走 `ai_agent_run`（非流式多步 +
     // 工具活动事件）。识图那一路永远直连 —— 工具是为"画对图"设计的，看图用不上。
     const cmd =
-      state.settings && state.settings.ai && state.settings.ai.tools_enabled && cur !== "vision"
+      state.settings && state.settings.ai && state.settings.ai.tools_enabled && cur !== "vision" && req.intent !== "explain"
         ? "ai_agent_run"
         : "ai_chat";
 
@@ -1432,6 +1462,11 @@ window.DGM = window.DGM || {};
     ipc.on("ai://agent", onAgent);
     ipc.on("ai://done", onDone);
     ipc.on("ai://failed", onFailed);
+    // 只有用量、没有消息的一轮（记忆提取）：单独入账，否则这笔钱在用量页上看不见
+    ipc.on("ai://usage", (ev) => {
+      if (!ev) return;
+      state.addUsage(Object.assign({}, ev, { usage_source: ev.reported ? "server" : "none" }));
+    });
     // 截屏框选完成（Rust 发来 dataURL；取消时是 null）
     ipc.on("vision://picked", (dataUrl) => {
       if (!dataUrl) return;
@@ -1468,6 +1503,7 @@ window.DGM = window.DGM || {};
     unread,
     clear,
     send: sendNow,
+    explain: explainCurrent,
     cancel,
     applyLast,
     revertLast,

@@ -17,6 +17,10 @@ window.DGM = window.DGM || {};
    *  两边靠它把"这次对话走网关还是走本地 BYOK"分流（见 `commands.rs::resolve_target`）。 */
   const GW_PREFIX = "gw:";
 
+  /** 转换报告 v2 的**回滚开关**：出问题时改成 false，面板与矩阵退回旧的一行文本渲染，
+   *  不需要回退整个版本（旧记录仍然只有 `note`，新记录多一个 `report` 也不影响）。 */
+  const CONV_V2 = true;
+
   /* ------------------------------------------------------------------ 事件总线 */
 
   const handlers = new Map();
@@ -103,7 +107,7 @@ window.DGM = window.DGM || {};
     // 本地日志与用量。token 只累计**供应商实报**的（ai://done 的 usage_source），
     // 没回报的不估算 —— 本地估算和服务端实报混成一个数就没法对账了（P3 拍板）。
     logs: { output: [], convert: [] },
-    usage: { calls: 0, reported: 0, prompt: 0, completion: 0, byModel: {} },
+    usage: { calls: 0, reported: 0, prompt: 0, completion: 0, byModel: {}, byScene: {} },
 
     // 瞬态界面状态
     ui: {
@@ -1098,6 +1102,17 @@ window.DGM = window.DGM || {};
     emit("logs:changed");
   }
 
+  /** 最近一次**成功**的某方向转换（矩阵徽章取它；没有样本时返回 null）。
+   *
+   *  只认带 `report` 的记录：老记录没有报告，拿它画徽章等于编造。 */
+  function convLast(from, to) {
+    return (
+      state.logs.convert.find(
+        (c) => c.ok && c.from === from && c.to === to && c.report && c.report.counts,
+      ) || null
+    );
+  }
+
   function addUsage(done) {
     // usage_source === "server" 才算数；"none" 只记调用次数，token 不掺估算值
     const reported = !!done && done.usage_source === "server";
@@ -1114,6 +1129,15 @@ window.DGM = window.DGM || {};
     row.prompt += p;
     row.completion += c;
     state.usage.byModel[model] = row;
+    // 场景归因（generate / vision / review / explain / tool / memory …）：
+    // 与服务端 `ai_usage.scene` 同一个字符串，客户端不另立一套枚举。
+    const scene = (done && done.scene) || "unknown";
+    const srow = state.usage.byScene[scene] || { calls: 0, reported: 0, prompt: 0, completion: 0 };
+    srow.calls += 1;
+    srow.reported += reported ? 1 : 0;
+    srow.prompt += p;
+    srow.completion += c;
+    state.usage.byScene[scene] = srow;
     emit("usage:changed");
   }
 
@@ -1171,6 +1195,7 @@ window.DGM = window.DGM || {};
     on,
     emit,
     load,
+    convV2: CONV_V2,
     applyThemeAttrs,
     patchSettings,
     upsertDoc,
@@ -1195,6 +1220,7 @@ window.DGM = window.DGM || {};
     issueTotals,
     pushOutput,
     pushConvert,
+    convLast,
     addUsage,
     setStatus,
     exportWrite,

@@ -480,6 +480,11 @@ window.DGM = window.DGM || {};
     return b;
   }
 
+  function gdot(kind, grade) {
+    const g = grade || "none";
+    return `<i class="g ${g}" title="${esc(t("conv.fidelity." + kind))}: ${esc(t("conv.grade." + g))}"></i>`;
+  }
+
   function convMatrix(dirs) {
     const list = state.formatList;
     const find = (from, to) => dirs.find((c) => c.from === from && c.to === to);
@@ -496,7 +501,22 @@ window.DGM = window.DGM || {};
           if (src.id === dst.id) return `<span class="mx-c self" title="${esc(t("side.convert.self"))}">—</span>`;
           const c = find(src.id, dst.id);
           if (!c) return `<span class="mx-c no" title="${esc(t("side.convert.unplanned"))}">·</span>`;
-          return `<span class="mx-c ${c.ok ? "yes" : "plan"}" title="${esc(src.name)} → ${esc(dst.name)}：${esc(c.how)}">${c.ok ? "✓" : "…"}</span>`;
+          if (!c.ok) {
+            return `<span class="mx-c plan" title="${esc(src.name)} → ${esc(dst.name)}：${esc(c.how)}">…</span>`;
+          }
+          if (!state.convV2) {
+            return `<span class="mx-c yes" title="${esc(src.name)} → ${esc(dst.name)}：${esc(c.how)}">✓</span>`;
+          }
+          const last = state.convLast(src.id, dst.id);
+          const f = last && last.report && last.report.fidelity;
+          if (!f) {
+            // 没有样本就**不预估**：三颗灰点 + 明确说明
+            const dots = gdot("structure", "none") + gdot("geometry", "none") + gdot("style", "none");
+            return `<span class="mx-c yes nosample" title="${esc(t("conv.sample.none"))}">${dots}</span>`;
+          }
+          const dots = gdot("structure", f.structure) + gdot("geometry", f.geometry) + gdot("style", f.style);
+          const tip = `${src.name} → ${dst.name}：${t("conv.fidelity.structure")} ${t("conv.grade." + f.structure)} · ${t("conv.fidelity.geometry")} ${t("conv.grade." + f.geometry)} · ${t("conv.fidelity.style")} ${t("conv.grade." + f.style)}（${t("conv.sample.latest")}）`;
+          return `<span class="mx-c yes" title="${esc(tip)}">${dots}</span>`;
         })
         .join("");
       row.innerHTML = `<span class="mx-src" title="${esc(src.name)}">${esc(src.short || src.name)}</span>${cells}`;

@@ -1331,6 +1331,8 @@ table.spec td .kbd { font: var(--fs-xs) var(--font-mono); color: var(--ink-2); b
 .mx-src { padding: 4px 6px; font-size: 10px; color: var(--ink-2); border-right: 1px solid var(--border); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mx-c { text-align: center; font-size: var(--fs-xs); padding: 4px 0; }
 .mx-c.yes { color: var(--ok); font-weight: 700; cursor: help; }
+.mx-c.yes.nosample { font-weight: 400; }
+.mx-c.yes .g { margin: 0 1px; vertical-align: middle; }
 .mx-c.plan { color: var(--faint); cursor: help; }
 .mx-c.no { color: var(--border-strong); }
 .mx-c.self { color: var(--faint); }
@@ -1390,12 +1392,15 @@ table.spec td .kbd { font: var(--fs-xs) var(--font-mono); color: var(--ink-2); b
 .issue.err .sev .ico { color: var(--err); }
 .issue .go { display: inline-flex; align-items: center; gap: 2px; }
 .conv-log {
-  display: grid;
-  grid-template-columns: 84px 190px 74px minmax(0, 1fr);
-  gap: 8px; align-items: center;
+  display: block;
   font-family: var(--font-ui); font-size: var(--fs-xs);
   padding: 5px 0;
   border-bottom: 1px solid var(--border);
+}
+.conv-rec-top {
+  display: grid;
+  grid-template-columns: 74px auto 170px minmax(0, 1fr) auto auto;
+  gap: 8px; align-items: center;
 }
 .conv-log .t { color: var(--faint); font-family: var(--font-mono); }
 .conv-log .pair { display: flex; align-items: center; gap: 4px; }
@@ -1403,12 +1408,37 @@ table.spec td .kbd { font: var(--fs-xs) var(--font-mono); color: var(--ink-2); b
 .conv-log .st { display: inline-flex; align-items: center; gap: 4px; }
 .conv-log .st.ok { color: var(--ok); }
 .conv-log .st.bad { color: var(--warn); }
-.conv-log .doc { color: var(--ink-2); }
-.conv-log .note { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.conv-log .doc { color: var(--ink-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.conv-log .sp { min-width: 0; }
+/* 回滚开关 `state.convV2=false` 时的旧版一行布局 */
+.conv-log.legacy {
+  display: grid;
+  grid-template-columns: 84px 190px 74px minmax(0, 1fr);
+  gap: 8px; align-items: center;
+}
+.conv-log.legacy .note { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.conv-log-note { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding-top: 3px; }
+.conv-marks { display: inline-flex; gap: 3px; align-items: center; }
+/* 保真度小圆点：精确 / 近似 / 部分 / 无 */
+.g { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--border-strong); }
+.g.exact { background: var(--ok); }
+.g.approx { background: var(--warn); }
+.g.partial { background: color-mix(in srgb, var(--warn) 55%, var(--err)); }
+.g.none { background: transparent; border: 1px solid var(--border-strong); }
+.conv-rec-body { margin-top: 4px; padding-left: 2px; }
+.conv-rec-body summary { cursor: pointer; color: var(--accent); font-size: var(--fs-xs); user-select: none; }
+.conv-meta { display: flex; flex-wrap: wrap; gap: 4px 14px; padding: 5px 0 3px; color: var(--muted); font-family: var(--font-mono); }
+.conv-meta b { color: var(--faint); font-weight: 500; margin-right: 4px; }
+.conv-issues { margin: 2px 0 4px; padding-left: 0; list-style: none; }
+.conv-issues li { display: flex; gap: 5px; align-items: flex-start; padding: 1px 0; color: var(--ink-2); }
+.conv-issues li .ico { color: var(--warn); flex: none; margin-top: 1px; }
+.conv-issues li.lvl-info .ico { color: var(--accent); }
+.conv-rec-note { color: var(--muted); padding-top: 3px; }
 
 /* AI 用量 */
 .usage { font-family: var(--font-ui); }
 .usage-head { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: 10px; }
+.usage-sub { margin: 12px 0 4px; font-size: var(--fs-xs); color: var(--muted); }
 .usage-kpi { padding: 8px 11px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); }
 .usage-kpi .lb { display: block; font-size: var(--fs-xs); color: var(--muted); }
 .usage-kpi .num { font-size: 19px; font-weight: 600; color: var(--ink); font-variant-numeric: tabular-nums; }

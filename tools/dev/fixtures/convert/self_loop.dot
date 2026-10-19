@@ -1,0 +1,5 @@
+digraph retry {
+    rankdir=TB;
+    job [shape=box, label="任务"];
+    job -> job [label="失败后重试", style=dashed];
+}

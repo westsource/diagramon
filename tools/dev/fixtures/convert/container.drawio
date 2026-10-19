@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mxfile host="Diagramon">
+  <diagram name="container" id="p1">
+    <mxGraphModel dx="800" dy="600" grid="1" page="1">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="box" value="子网" style="rounded=1;container=1;collapsible=0;fillColor=none;" vertex="1" parent="1">
+          <mxGeometry x="40" y="40" width="260" height="180" as="geometry" />
+        </mxCell>
+        <mxCell id="n1" value="网关" style="rounded=1;fillColor=#e4efec;" vertex="1" parent="box">
+          <mxGeometry x="20" y="30" width="90" height="40" as="geometry" />
+        </mxCell>
+        <UserObject label="数据库&#10;(主)" id="n2" link="https://example.invalid/db">
+          <mxCell style="shape=cylinder3;" vertex="1" parent="box">
+            <mxGeometry x="140" y="80" width="80" height="60" as="geometry" />
+          </mxCell>
+        </UserObject>
+        <mxCell id="e1" value="" edge="1" parent="1" source="n1" target="n2">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="150" y="120" />
+              <mxPoint x="190" y="150" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

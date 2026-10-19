@@ -1,0 +1,18 @@
+digraph login {
+    rankdir=LR;
+    node [shape=box, style="rounded,filled", fillcolor="#e4efec"];
+    start [shape=ellipse, label="打开登录页"];
+    check [shape=diamond, label="已记住账号?"];
+    fill  [label="填充账号"];
+    verify [shape=diamond, label="校验通过?"];
+    home  [shape=ellipse, label="进入首页"];
+    retry [label="提示重试"];
+
+    start -> check;
+    check -> fill [label="是"];
+    check -> retry [label="否"];
+    fill -> verify;
+    verify -> home [label="是"];
+    verify -> retry [label="否"];
+    retry -> check [style=dashed];
+}

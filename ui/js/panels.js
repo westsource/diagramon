@@ -98,6 +98,52 @@ window.DGM = window.DGM || {};
     return box;
   }
 
+  /** 一条 issue 的文案：**稳定 code → i18n**，不认识就退回原文。 */
+  function issueText(it) {
+    const key = "conv.issue." + (it.code || "");
+    const params = Object.assign({ detail: "", text: "" }, it.params || {});
+    if (DGM.i18n && typeof DGM.i18n.has === "function" && DGM.i18n.has(key)) return t(key, params);
+    return (it.params && it.params.text) || it.code || "";
+  }
+
+  function gradeDot(kind, grade) {
+    const g = grade || "none";
+    return `<i class="g ${g}" title="${esc(t("conv.fidelity." + kind))}: ${esc(t("conv.grade." + g))}"></i>`;
+  }
+
+  function reportBlock(c) {
+    const r = c.report;
+    if (!r || !r.counts) return "";
+    const issues = r.issues || [];
+    const degraded = issues.filter((i) => i.level === "degraded" || i.level === "dropped").length;
+    const meta = [
+      [t("conv.report.engine"), r.engine || ""],
+      [t("conv.report.elapsed"), r.elapsed_us != null ? Math.round(r.elapsed_us / 1000) + " ms" : ""],
+      [t("conv.report.layout"), r.layout || ""],
+      [t("conv.report.theme"), r.theme || ""],
+      [t("conv.report.hash"), r.source_hash || ""],
+    ]
+      .filter(([, v]) => v)
+      .map(([k, v]) => `<span><b>${esc(k)}</b> ${esc(v)}</span>`)
+      .join("");
+    const list = issues.length
+      ? `<ul class="conv-issues">${issues
+          .map(
+            (i) =>
+              `<li class="lvl-${esc(i.level || "info")}">${icon(i.level === "info" ? "info" : "alert", "ico-sm")}<span>${esc(issueText(i))}</span></li>`,
+          )
+          .join("")}</ul>`
+      : `<div class="dim">${esc(t("conv.report.noIssues"))}</div>`;
+    return (
+      `<details class="conv-rec-body"><summary>${esc(t("conv.report.details"))} · ${esc(
+        degraded ? t("conv.report.issues", { n: degraded }) : t("conv.report.noIssues"),
+      )}</summary>` +
+      `<div class="conv-meta">${meta}</div>${list}` +
+      (c.note ? `<div class="conv-rec-note">${esc(c.note)}</div>` : "") +
+      `</details>`
+    );
+  }
+
   function viewConvert() {
     const box = h("div");
     if (!state.logs.convert.length) {
@@ -107,13 +153,37 @@ window.DGM = window.DGM || {};
     for (const c of state.logs.convert) {
       const src = state.fmtById(c.from);
       const dst = state.fmtById(c.to);
+      if (!state.convV2) {
+        const row = h("div", "conv-log legacy");
+        row.innerHTML =
+          `<span class="t">${esc(c.t)}</span>` +
+          `<span class="pair"><span class="chip ${src.id}">${esc(src.name)}</span>${icon("chevR", "ico-sm")}<span class="chip ${dst.id}">${esc(dst.name)}</span></span>` +
+          `<span class="st ${c.ok ? "ok" : "bad"}">${icon(c.ok ? "check" : "alert", "ico-sm")}${esc(c.ok ? t("panel.convert.ok") : t("panel.convert.partial"))}</span>` +
+          `<span class="doc">${esc(c.doc || "")}</span>` +
+          `<span class="note">${esc(c.note || "")}</span>`;
+        box.appendChild(row);
+        continue;
+      }
+      const r = c.report;
+      const marks =
+        r && r.fidelity
+          ? `<span class="conv-marks" title="${esc(t("conv.sample.latest"))}">` +
+            gradeDot("structure", r.fidelity.structure) +
+            gradeDot("geometry", r.fidelity.geometry) +
+            gradeDot("style", r.fidelity.style) +
+            `</span>`
+          : "";
       const row = h("div", "conv-log");
       row.innerHTML =
+        `<div class="conv-rec-top">` +
         `<span class="t">${esc(c.t)}</span>` +
         `<span class="pair"><span class="chip ${src.id}">${esc(src.name)}</span>${icon("chevR", "ico-sm")}<span class="chip ${dst.id}">${esc(dst.name)}</span></span>` +
-        `<span class="st ${c.ok ? "ok" : "bad"}">${icon(c.ok ? "check" : "alert", "ico-sm")}${esc(c.ok ? t("panel.convert.ok") : t("panel.convert.partial"))}</span>` +
         `<span class="doc">${esc(c.doc || "")}</span>` +
-        `<span class="note">${esc(c.note || "")}</span>`;
+        `<span class="sp"></span>${marks}` +
+        `<span class="st ${c.ok ? "ok" : "bad"}">${icon(c.ok ? "check" : "alert", "ico-sm")}${esc(c.ok ? t("panel.convert.ok") : t("panel.convert.partial"))}</span>` +
+        `</div>` +
+        reportBlock(c) +
+        (!r && c.note ? `<div class="conv-log-note">${esc(c.note)}</div>` : "");
       box.appendChild(row);
     }
     return box;
@@ -138,6 +208,19 @@ window.DGM = window.DGM || {};
           })
           .join("")
       : `<tr><td colspan="4" class="n">${esc(t("panel.output.empty"))}</td></tr>`;
+    const scenes = Object.keys(u.byScene || {});
+    const sceneRows = scenes.length
+      ? scenes
+          .map((s) => {
+            const r = u.byScene[s];
+            const has = r.reported > 0;
+            return (
+              `<tr><td>${esc(s)}</td><td class="n">${r.calls}</td>` +
+              `<td class="n">${cell(r.prompt, has)}</td><td class="n">${cell(r.completion, has)}</td></tr>`
+            );
+          })
+          .join("")
+      : `<tr><td colspan="4" class="n">${esc(t("panel.output.empty"))}</td></tr>`;
     box.innerHTML =
       `<div class="usage-head">` +
       `<div class="usage-kpi"><span class="lb">${esc(t("panel.usage.calls"))}</span><span class="num">${u.calls}</span><span class="unit">${esc(t("panel.usage.localTitle"))}</span></div>` +
@@ -150,7 +233,14 @@ window.DGM = window.DGM || {};
       `<th class="n">${esc(t("panel.usage.calls"))}</th>` +
       `<th class="n">${esc(t("panel.usage.prompt"))}</th>` +
       `<th class="n">${esc(t("panel.usage.completion"))}</th>` +
-      `</tr></thead><tbody>${rows}</tbody></table>`;
+      `</tr></thead><tbody>${rows}</tbody></table>` +
+      `<div class="usage-sub">${esc(t("panel.usage.scene"))}</div>` +
+      `<table class="usage-table"><thead><tr>` +
+      `<th>${esc(t("panel.usage.scene"))}</th>` +
+      `<th class="n">${esc(t("panel.usage.calls"))}</th>` +
+      `<th class="n">${esc(t("panel.usage.prompt"))}</th>` +
+      `<th class="n">${esc(t("panel.usage.completion"))}</th>` +
+      `</tr></thead><tbody>${sceneRows}</tbody></table>`;
     return box;
   }
 

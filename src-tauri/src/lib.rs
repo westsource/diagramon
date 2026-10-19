@@ -230,6 +230,7 @@ pub fn run() {
             commands::doc_save_as,
             commands::export_write,
             commands::convert_text,
+            commands::mxfile_inspect,
             commands::debug_note,
             commands::ai_model_key_set,
             commands::ai_model_key_delete,

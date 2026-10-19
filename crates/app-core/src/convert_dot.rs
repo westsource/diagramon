@@ -711,7 +711,24 @@ impl Graph {
         for e in &self.edges {
             self.emit_edge(&mut out, e);
         }
-        Conversion { body: out, notes: self.notes() }
+        let labels = self
+            .nodes
+            .values()
+            .filter(|n| n.attrs.iter().any(|(k, v)| k == "label" && !v.trim().is_empty()))
+            .count()
+            + self
+                .edges
+                .iter()
+                .filter(|e| e.attrs.iter().any(|(k, v)| k == "label" && !v.trim().is_empty()))
+                .count();
+        let counts = app_ipc::Counts {
+            nodes: self.order.len() as u32,
+            edges: self.edges.len() as u32,
+            containers: self.clusters.len() as u32,
+            pages: 1,
+            labels: labels as u32,
+        };
+        Conversion { body: out, notes: self.notes(), counts }
     }
 }
 
