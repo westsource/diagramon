@@ -42,6 +42,12 @@ const CFG = {
   originRemote: "origin",
 };
 
+// 附件上传走 socks5 代理，实测约 130 KB/s ⇒ 62 MiB 要 8 分钟以上，900s 的总超时太紧
+// （2026-10-19 实测被 --max-time 砍掉一次，curl 无输出导致报错成了 "HTTP NaN"）。
+// 上传不能续传，所以失败后要**先删同名残留再重传**（见 uploadAsset）。
+const UPLOAD_TIMEOUT_S = 1800;
+const UPLOAD_ATTEMPTS = 3;
+
 const STEPS = ["preflight", "prepack", "build", "portable", "manifest", "tag", "branches", "push", "publish", "verify"];
 
 // ── 参数 ──────────────────────────────────────────────────────────────────
@@ -198,18 +204,38 @@ function curlJson({ method = "GET", url, body = null, token = null, proxy = null
   }
   return { code: httpCode, json };
 }
+/** 删掉某个同名附件（重传前清残留：上传中断会留下 state=starter 的空壳，同名再 POST 会 422）。 */
+function deleteAssetByName(releaseId, name) {
+  const list = curlJson({ url: `https://api.github.com/repos/${CFG.repo}/releases/${releaseId}/assets`, token: ghToken(), proxy: CFG.ghProxy }).json || [];
+  for (const a of list.filter((x) => x.name === name)) {
+    log(`  删残留附件 ${a.name}（id ${a.id}，state=${a.state}）`);
+    curlJson({ method: "DELETE", url: `https://api.github.com/repos/${CFG.repo}/releases/assets/${a.id}`, token: ghToken(), proxy: CFG.ghProxy, expect: [204] });
+  }
+}
 async function uploadAsset(releaseId, file) {
   const url = `https://uploads.github.com/repos/${CFG.repo}/releases/${releaseId}/assets?name=${encodeURIComponent(basename(file))}`;
   if (opts.dryRun) { log(`  （--dry-run：上传 ${basename(file)}）`); return; }
-  const args = ["-s", "-X", "POST", "--proxy", CFG.ghProxy, "--max-time", "900",
+  const args = ["-sS", "-X", "POST", "--proxy", CFG.ghProxy, "--max-time", String(UPLOAD_TIMEOUT_S),
     "-H", `Authorization: Bearer ${ghToken()}`, "-H", "Accept: application/vnd.github+json",
     "-H", "Content-Type: application/octet-stream", "--data-binary", `@${file}`, url,
     "-w", "\\n%{http_code}"];
-  log(`▸ 上传 ${basename(file)}（${(statSync(file).size / 1048576).toFixed(2)} MiB，可能要几分钟）`);
-  const r = capture("curl", args);
-  const code = Number(r.out.trimEnd().split("\n").pop());
-  if (code !== 201) die(`上传 ${basename(file)} 失败（HTTP ${code}）`);
-  log("  ✓ 已上传");
+  const mb = (statSync(file).size / 1048576).toFixed(2);
+  for (let attempt = 1; attempt <= UPLOAD_ATTEMPTS; attempt++) {
+    if (attempt > 1) {
+      warn(`第 ${attempt} 次尝试（上一次失败）`);
+      deleteAssetByName(releaseId, basename(file));
+      await new Promise((r) => setTimeout(r, 5000));
+    }
+    log(`▸ 上传 ${basename(file)}（${mb} MiB，可能要几分钟）`);
+    const t0 = Date.now();
+    const r = capture("curl", args);
+    const code = Number(r.out.trimEnd().split("\n").pop());
+    if (code === 201) { log(`  ✓ 已上传（${((Date.now() - t0) / 1000).toFixed(0)}s）`); return; }
+    // curl 自己挂了（超时 28 / 连接重置 56…）时 %{http_code} 是 000，取不到就用退出码说话
+    const why = Number.isFinite(code) && code ? `HTTP ${code}` : `curl 退出码 ${r.code}${r.err.trim() ? "：" + r.err.trim().split("\n")[0] : ""}`;
+    if (attempt === UPLOAD_ATTEMPTS) die(`上传 ${basename(file)} 失败（${why}，已试 ${UPLOAD_ATTEMPTS} 次）`);
+    warn(`上传 ${basename(file)} 失败（${why}）`);
+  }
 }
 
 // ── 工具函数 ──────────────────────────────────────────────────────────────
@@ -488,7 +514,7 @@ async function publish() {
   if (opts.dryRun) {
     log(`  正文 ${body.length} 字符（含「# 中文」与「# English」，含安装包链接）`);
     if (opts.bodyOnly) log(`  计划（--body-only）：PATCH 两端 Release 的说明，不动附件、不改发布状态`);
-    else log(`  计划：GET /releases/tags/${TAG} →（无则 POST 建草稿）→ 删同名旧附件 → 上传 ${opts.portable ? 4 : 3} 个 → PATCH draft=false`);
+    else log(`  计划：GET /releases/tags/${TAG} →（无则复用同 tag 的草稿，再没有才 POST 建草稿）→ 删同名旧附件 → 上传 ${opts.portable ? 4 : 3} 个 → PATCH draft=false`);
     log(`  计划：Gitee GET/PATCH /releases/tags/${TAG}（更新必须带 tag_name，正文不含附件）`);
     return;
   }
@@ -522,6 +548,13 @@ async function publish() {
   // ── GitHub
   let r = curlJson({ url: `https://api.github.com/repos/${CFG.repo}/releases/tags/${TAG}`, token: ghToken(), proxy: CFG.ghProxy, expect: [200, 404] });
   let id = r.json?.id;
+  if (!id) {
+    // ⚠️ /releases/tags/<tag> **看不见草稿**（draft 一律 404）。上一次 publish 传到一半断了时，
+    // 这里若直接 POST 就会另建一个草稿：附件白传（实测两次共 260MB），旧草稿还得手工删。
+    const drafts = curlJson({ url: `https://api.github.com/repos/${CFG.repo}/releases?per_page=50`, token: ghToken(), proxy: CFG.ghProxy }).json || [];
+    const stale = drafts.find((x) => x.tag_name === TAG && x.draft);
+    if (stale) { id = stale.id; log(`  复用未完成的草稿 id=${id}（附件会先删同名再重传）`); }
+  }
   if (id) log(`  已有 Release id=${id}，复用`); 
   else {
     const draftFile = join(TMP_DIR, `gh-draft-${VERSION}.json`);
