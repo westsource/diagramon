@@ -1097,20 +1097,30 @@ window.DGM = window.DGM || {};
     }
   }
 
-  function formatSource() {
+  async function formatSource() {
     const d = state.activeDoc();
     if (!d) return;
     if (state.isCanvasDoc(d)) {
       toast({ icon: "wand", title: t("status.canvasFormat"), sub: t("status.canvasFormatSub") });
       return;
     }
-    // 真实实现里格式化由 Rust 侧的格式器完成；这里只做一次无害的空格规整（原型同款行为）
-    const body = d.body.split("\n").map((ln) => ln.replace(/\s+$/, "")).join("\n");
-    if (body !== d.body) {
-      state.setBodyNow(d.id, body).then(() => DGM.editor.setValue(body));
+    let res = null;
+    try {
+      res = await ipc.invoke("pretty_source", { format: d.format, body: d.body });
+    } catch (e) {
+      toast({ icon: "alert", title: t("mi.format"), sub: (e && e.message) || String(e), warn: true });
+      return;
     }
-    status(t("mi.format"), "ok");
-    toast({ icon: "wand", title: t("mi.format"), sub: "" });
+    if (!res || res.changes === 0) {
+      // **0 处变化就说“无需改动”** —— 以前无条件报“已完成”正是 G22。
+      status(t("fmt.noChange"), "ok");
+      toast({ icon: "wand", title: t("mi.format"), sub: t("fmt.noChange") });
+      return;
+    }
+    await state.setBodyNow(d.id, res.body);
+    if (DGM.editor && DGM.editor.setValue) DGM.editor.setValue(res.body);
+    status(t("fmt.done", { n: res.changes }), "ok");
+    toast({ icon: "wand", title: t("mi.format"), sub: t("fmt.done", { n: res.changes }) });
   }
 
   /* ------------------------------------------------------------------ 分隔条 / 面板高度拖拽 */

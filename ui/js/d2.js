@@ -15,6 +15,9 @@ window.DGM = window.DGM || {};
 
   const t = (k, v) => DGM.i18n.t(k, v);
 
+  /** 3.12.0 的迁移开关：出问题切回旧的 JS 拼 XML（保留一个版本）。 */
+  const PLAN_TO_DRAWIO = true;
+
   let enginePromise = null;
   /** 引擎是否已经就绪（首次 `import` + 实例化完成）—— 首开要给用户一个加载态 */
   let ready = false;
@@ -171,6 +174,179 @@ window.DGM = window.DGM || {};
    *    当 waypoints 用的只能是中间那部分，否则走线会在两端各折一下；
    * 3. `fill` / `stroke` 是**主题色标**（`B4` / `B1` 这种），不是具体色值 ⇒ 不能当 `fillColor` 用。
    */
+  /** D2 `compile()` 产物 → `CanvasPlan`（JS 只给**绝对坐标**，相对化只在 Rust 的 emit 里做）。 */
+  function toPlan(diagram, srcBody) {
+    const shapes = Array.isArray(diagram.shapes) ? diagram.shapes : [];
+    const conns = Array.isArray(diagram.connections) ? diagram.connections : [];
+    const notes = [];
+    const issues = [];
+
+    const byId = new Map(shapes.map((s) => [s.id, s]));
+    const ids = new Map();
+    const used = new Set();
+    const cellId = (raw) => {
+      if (ids.has(raw)) return ids.get(raw);
+      const base = "d2-" + (String(raw).replace(/[^\w.\-\u4e00-\u9fff]/g, "_") || "cell");
+      let id = base;
+      let n = 2;
+      while (used.has(id)) id = `${base}_${n++}`;
+      used.add(id);
+      ids.set(raw, id);
+      return id;
+    };
+
+    const parentOf = (path) => {
+      const parts = String(path).split(".");
+      for (let i = parts.length - 1; i > 0; i -= 1) {
+        const cand = parts.slice(0, i).join(".");
+        if (byId.has(cand)) return cand;
+      }
+      return null;
+    };
+    const isContainer = new Set();
+    for (const s of shapes) {
+      const p = parentOf(s.id);
+      if (p) isContainer.add(p);
+    }
+
+    const containers = [];
+    const nodes = [];
+    const unmapped = new Set();
+    // 父先于子（Rust emit 会再拓扑排序一次，这里排是为了 report 顺序稳定）
+    const ordered = shapes
+      .map((s) => ({ s, depth: String(s.id).split(".").length }))
+      .sort((a, b) => a.depth - b.depth)
+      .map((x) => x.s);
+
+    for (const s of ordered) {
+      const parent = parentOf(s.id);
+      const rect = {
+        x: Math.round(s.pos ? s.pos.x : 0),
+        y: Math.round(s.pos ? s.pos.y : 0),
+        w: Math.round(s.width || 0),
+        h: Math.round(s.height || 0),
+      };
+      if (isContainer.has(s.id)) {
+        containers.push({
+          id: cellId(s.id),
+          label: s.label || "",
+          rect,
+          parent: parent ? cellId(parent) : null,
+          role: "Container",
+          // 保留旧产物外观（role 的配色会被这些键覆盖，drawio 后者优先）
+          raw_style: [
+            "rounded=1",
+            "verticalAlign=top",
+            "fillColor=none",
+            "strokeColor=#9aa4ae",
+            "recursiveResize=0",
+          ],
+        });
+        continue;
+      }
+
+      const raw = ["fillColor=#ffffff", "strokeColor=#000000", "fontColor=#000000"];
+      if (Object.prototype.hasOwnProperty.call(DRAWIO_SHAPES, s.type)) {
+        const mapped = DRAWIO_SHAPES[s.type];
+        if (mapped) raw.push(mapped);
+      } else {
+        raw.push("rounded=0");
+        if (s.type) unmapped.add(s.type);
+      }
+      if (s.borderRadius > 0) {
+        raw.push("rounded=1");
+        raw.push(`arcSize=${Math.max(4, Math.round((s.borderRadius / Math.max(1, Math.min(s.width, s.height))) * 100))}`);
+      }
+      if (s.strokeWidth) raw.push(`strokeWidth=${s.strokeWidth}`);
+      if (s.strokeDash > 0) raw.push("dashed=1");
+      if (s.fontSize) raw.push(`fontSize=${s.fontSize}`);
+      const fs = fontStyleOf(s);
+      if (fs) raw.push(`fontStyle=${fs}`);
+      if (s.tooltip) raw.push(`tooltip=${esc(s.tooltip)}`);
+      if (s.icon) raw.push("image=;imageAspect=0");
+      if (s.link) raw.push(`link=${esc(s.link)}`);
+
+      nodes.push({
+        id: cellId(s.id),
+        label: s.label || "",
+        rect,
+        shape: "Rect",
+        role: "Primary",
+        parent: parent ? cellId(parent) : null,
+        raw_style: raw,
+        raw_children: [],
+        at: null,
+      });
+    }
+
+    const edges = [];
+    for (const c of conns) {
+      const route = Array.isArray(c.route) ? c.route : [];
+      const raw = ["edgeStyle=none", "rounded=0"];
+      const end = arrowOf(c.dstArrow);
+      if (c.isCurve) raw.push("curved=1");
+      if (c.strokeWidth) raw.push(`strokeWidth=${c.strokeWidth}`);
+      if (c.strokeDash > 0) raw.push("dashed=1");
+      if (c.label) raw.push("labelBackgroundColor=#ffffff");
+      if (c.fontSize) raw.push(`fontSize=${c.fontSize}`);
+      const fs = fontStyleOf(c);
+      if (fs) raw.push(`fontStyle=${fs}`);
+      if (c.srcArrow && c.srcArrow !== "none") raw.push(`startArrow=${arrowOf(c.srcArrow)}`);
+      // `arrow` 只表达“有没有/哪类箭头”，精确形状（oval/diamond）留在 raw 里
+      const arrow = end === "none" ? "None" : end === "classic" ? "Classic" : end === "open" ? "Open" : "Block";
+      if (end !== "block" && end !== "none") raw.push(`endArrow=${end}`);
+      edges.push({
+        id: cellId(c.id || `${c.src}->${c.dst}`),
+        from: byId.has(c.src) ? cellId(c.src) : "",
+        to: byId.has(c.dst) ? cellId(c.dst) : "",
+        label: c.label || null,
+        points: route.map((p) => ({ x: Math.round(p.x), y: Math.round(p.y) })),
+        curved: !!c.isCurve,
+        arrow,
+        dashed: c.strokeDash > 0,
+        role: "Primary",
+        raw_style: raw,
+        at: null,
+      });
+    }
+
+    if (unmapped.size) {
+      const list = [...unmapped].sort().join(" / ");
+      notes.push(t("conv.d2.mxfile.shapes", { list }));
+      issues.push({ level: "degraded", code: "shape.fallback", params: { shapes: list }, at: null });
+    }
+    if (shapes.some((s) => s.icon) || conns.some((c) => c.icon)) {
+      notes.push(t("conv.d2.mxfile.icon"));
+      issues.push({ level: "degraded", code: "icon.dropped", params: { n: "1" }, at: null });
+    }
+    const cfg = diagram.config || {};
+    if (cfg.themeID || cfg.sketch) {
+      notes.push(t("conv.d2.mxfile.theme"));
+      issues.push({ level: "degraded", code: "style.approx", params: { n: "1" }, at: null });
+    }
+    const boards = boardCount(srcBody);
+    if (boards > 0) {
+      notes.push(t("conv.d2.mxfile.boards"));
+      issues.push({ level: "degraded", code: "board.collapsed", params: { n: String(boards) }, at: null });
+    }
+    notes.push(t("conv.d2.mxfile.geometry"));
+    issues.push({ level: "info", code: "layout.recomputed", params: {}, at: null });
+    if (containers.length) {
+      issues.push({ level: "info", code: "cluster.mapped", params: {}, at: null });
+    }
+
+    if (!nodes.length && !containers.length) throw new Error(t("conv.d2.mxfile.empty"));
+
+    return {
+      plan: {
+        pages: [{ name: "Page-1", id: "p1", nodes, edges, containers }],
+        provenance: { from: "d2", source_hash: "", converted_at: Date.now(), app_version: "" },
+        issues,
+      },
+      notes,
+    };
+  }
+
   function toMxfile(diagram, srcBody) {
     const shapes = Array.isArray(diagram.shapes) ? diagram.shapes : [];
     const conns = Array.isArray(diagram.connections) ? diagram.connections : [];
@@ -321,11 +497,18 @@ window.DGM = window.DGM || {};
     return { xml, notes };
   }
 
-  /** 正文 → `{xml, notes}`（给转换中心用）。 */
+  /** 正文 → `{xml, notes, report}`（给转换中心用）。 */
   async function toDrawio(body, layout) {
     const r = await compile(body, layout);
-    return toMxfile(r.diagram, body);
+    if (!PLAN_TO_DRAWIO) return toMxfile(r.diagram, body);
+    const made = toPlan(r.diagram, body);
+    const out = await DGM.ipc.invoke("plan_to_drawio", {
+      plan: made.plan,
+      source: body,
+      options: { layout: (r.diagram && r.diagram.config && r.diagram.config.layoutID) || layout || null },
+    });
+    return { xml: out.body, notes: made.notes.concat(out.notes || []), report: out.report };
   }
 
-  DGM.d2 = { warmup, compile, renderSvg, describeError, boardCount, toDrawio, toMxfile, isReady };
+  DGM.d2 = { warmup, compile, renderSvg, describeError, boardCount, toDrawio, toMxfile, toPlan, isReady };
 })();

@@ -312,7 +312,7 @@ window.DGM = window.DGM || {};
     const doc = await state.newDoc(dir.to);
     if (!doc) return null;
     await state.setBodyNow(doc.id, made.xml);
-    return { doc, notes: made.notes };
+    return { doc, notes: made.notes, report: made.report || null };
   }
 
   /**
@@ -372,6 +372,9 @@ window.DGM = window.DGM || {};
       ok: true,
       engine: (full && full.engine) || "",
       source_hash: (full && full.source_hash) || "",
+      sourceId: srcDoc.id || "",
+      targetId: live.id,
+      source_format: dir.from,
       report: full,
       note: dir.how + (notes && notes.length ? " · " + notes.join("；") : ""),
     });
@@ -519,6 +522,7 @@ window.DGM = window.DGM || {};
       const via = await convertViaD2Wasm(srcDoc.body, srcDoc, dir);
       created = via && via.doc;
       extraNotes = (via && via.notes) || [];
+      viaReport = (via && via.report) || p.report;
     } else if (p.engine !== "none") {
       const via = await convertViaEngine(dir.to, srcDoc.body, srcDoc, dirWithReport, options);
       created = via && via.doc;

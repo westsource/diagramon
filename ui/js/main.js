@@ -857,10 +857,29 @@ window.DGM = window.DGM || {};
         !!rec && rec.querySelectorAll(".conv-marks .g").length === 3 && !!rec.querySelector(".conv-rec-body"),
         rec ? rec.className : "no .conv-log",
       );
+      const recBody = rec && rec.querySelector(".conv-rec-body");
+      ok(
+        "转换记录有「在画布打开 / 重转 / 复制报告」",
+        !!recBody &&
+          !!recBody.querySelector('[data-ca="open"]') &&
+          !!recBody.querySelector('[data-ca="reconvert"]') &&
+          !!recBody.querySelector('[data-ca="copy"]'),
+        recBody ? recBody.querySelectorAll("[data-ca]").length + " 个动作" : "没有报告体",
+      );
       await st.patchSettings({ panels: { sidebar: true, sidebar_view: "convert" } });
       const matrixDots = document.querySelectorAll(".conv-matrix .mx-c.yes .g").length;
       ok("转换中心矩阵按报告画徽章（不是预估值）", matrixDots >= 3, String(matrixDots));
       await st.patchSettings({ panels: beforePanels });
+
+      // 3.12.0：真格式化器
+      const messy = "flowchart TD\n  A-->B\n\n\n  %% 注释\n  subgraph 组\n A-->C\n end\n";
+      const fmtOnce = await invoke("pretty_source", { format: "mermaid", body: messy });
+      const fmtTwice = await invoke("pretty_source", { format: "mermaid", body: fmtOnce.body });
+      ok(
+        "格式化真的会改内容，且第二次「无需改动」",
+        fmtOnce.changes > 0 && fmtTwice.changes === 0 && fmtOnce.body.includes("%% 注释"),
+        `${fmtOnce.changes} → ${fmtTwice.changes}`,
+      );
 
       // 引擎方向回来的是 mxfile：`mxfile_inspect` 只吃字符串（不收路径、不碰网络）
       const inspectCounts = await invoke("mxfile_inspect", {
@@ -1013,6 +1032,12 @@ window.DGM = window.DGM || {};
         mxRes && mxRes.err ? mxRes.err : mxXml.length + " 字节",
       );
       ok("D2 → mxfile 附保真度说明", !!(mxRes && mxRes.notes && mxRes.notes.length), ((mxRes && mxRes.notes) || []).join(" / "));
+      ok(
+        "D2 → drawio 走 plan_to_drawio，报告几何精确",
+        !!(mxRes && mxRes.report && mxRes.report.engine === "d2wasm" && mxRes.report.fidelity.geometry === "exact"),
+        mxRes && mxRes.report ? JSON.stringify(mxRes.report.fidelity) : "没有报告",
+      );
+      ok("D2 产物使用稳定前缀 id（d2-）", mxXml.includes('id="d2-'), "");
 
       // ── 工作区与文件系统（第 4 步）：全是纯 IPC，不靠定时器 ──
       // 造一个真实目录：借 export_write 的"父目录会自动建"这一特性

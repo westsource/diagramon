@@ -111,7 +111,7 @@ window.DGM = window.DGM || {};
     return `<i class="g ${g}" title="${esc(t("conv.fidelity." + kind))}: ${esc(t("conv.grade." + g))}"></i>`;
   }
 
-  function reportBlock(c) {
+  function reportBlock(c, idx) {
     const r = c.report;
     if (!r || !r.counts) return "";
     const issues = r.issues || [];
@@ -134,23 +134,88 @@ window.DGM = window.DGM || {};
           )
           .join("")}</ul>`
       : `<div class="dim">${esc(t("conv.report.noIssues"))}</div>`;
+    const acts =
+      `<div class="conv-acts">` +
+      `<button class="btn sm ghost" data-ca="open" data-target="${esc(c.targetId || "")}"${c.targetId ? "" : " disabled"}>${icon("diagram", "ico-sm")}${esc(t("conv.openTarget"))}</button>` +
+      `<button class="btn sm ghost" data-ca="reconvert" data-i="${idx}"${c.sourceId ? "" : " disabled"}>${icon("swap", "ico-sm")}${esc(t("conv.reconvert"))}</button>` +
+      `<button class="btn sm ghost" data-ca="copy" data-i="${idx}">${icon("copy", "ico-sm")}${esc(t("conv.copyReport"))}</button>` +
+      `</div>`;
     return (
       `<details class="conv-rec-body"><summary>${esc(t("conv.report.details"))} · ${esc(
         degraded ? t("conv.report.issues", { n: degraded }) : t("conv.report.noIssues"),
       )}</summary>` +
       `<div class="conv-meta">${meta}</div>${list}` +
       (c.note ? `<div class="conv-rec-note">${esc(c.note)}</div>` : "") +
+      acts +
       `</details>`
     );
   }
 
+  /** 「在画布打开 / 重转 / 复制报告」。 */
+  async function convAction(e) {
+    const b = e.target.closest("[data-ca]");
+    if (!b) return;
+    const kind = b.dataset.ca;
+    if (kind === "open") {
+      const id = b.dataset.target;
+      if (!id || !state.doc(id)) {
+        DGM.toast({ icon: "info", title: t("conv.targetMissing"), sub: "" });
+        return;
+      }
+      await state.activateDoc(id);
+      if (DGM.editor && DGM.editor.loadActive) DGM.editor.loadActive();
+      return;
+    }
+    const rec = state.logs.convert[Number(b.dataset.i)];
+    if (!rec) return;
+    if (kind === "copy") {
+      try {
+        await navigator.clipboard.writeText(JSON.stringify(rec.report === undefined ? rec : rec.report, null, 2));
+        DGM.toast({ icon: "copy", title: t("conv.copyReport"), sub: t("conv.copyDone") });
+      } catch (err) {
+        DGM.toast({ icon: "alert", title: t("conv.copyReport"), sub: t("conv.copyFailed"), warn: true });
+      }
+      return;
+    }
+    if (kind === "reconvert") {
+      const src = state.doc(rec.sourceId);
+      if (!src) {
+        DGM.toast({ icon: "info", title: t("conv.sourceMissing"), sub: "" });
+        return;
+      }
+      const dir = DGM.directionFor && DGM.directionFor(rec.from, rec.to);
+      if (!dir) {
+        DGM.toast({ icon: "alert", title: t("conv.reconvert"), sub: `${rec.from} → ${rec.to}`, warn: true });
+        return;
+      }
+      try {
+        const h = await DGM.ipc.invoke("source_hash", { text: src.body });
+        const old = rec.report && rec.report.source_hash;
+        if (old && h && h !== old) {
+          const ok = await DGM.dialogs.confirm({
+            title: t("conv.reconvert"),
+            body: t("conv.sourceChanged"),
+            danger: true,
+            ok: t("conv.reconvert"),
+          });
+          if (!ok) return;
+        }
+      } catch (err) {
+        /* 拿不到 hash 就按“源可能改过”处理更保守 —— 这里选择照常重转（用户已点） */
+      }
+      await DGM.dialogs.runConvert(src, dir, null, null);
+      DGM.toast({ icon: "swap", title: t("conv.reconvert"), sub: t("conv.reconvertDone") });
+    }
+  }
+
   function viewConvert() {
     const box = h("div");
+    box.addEventListener("click", convAction);
     if (!state.logs.convert.length) {
       box.appendChild(h("div", "bp-empty", `${icon("swap")}<span>${esc(t("panel.convert.empty"))}</span>`));
       return box;
     }
-    for (const c of state.logs.convert) {
+    for (const [idx, c] of state.logs.convert.entries()) {
       const src = state.fmtById(c.from);
       const dst = state.fmtById(c.to);
       if (!state.convV2) {
@@ -182,7 +247,7 @@ window.DGM = window.DGM || {};
         `<span class="sp"></span>${marks}` +
         `<span class="st ${c.ok ? "ok" : "bad"}">${icon(c.ok ? "check" : "alert", "ico-sm")}${esc(c.ok ? t("panel.convert.ok") : t("panel.convert.partial"))}</span>` +
         `</div>` +
-        reportBlock(c) +
+        reportBlock(c, idx) +
         (!r && c.note ? `<div class="conv-log-note">${esc(c.note)}</div>` : "");
       box.appendChild(row);
     }

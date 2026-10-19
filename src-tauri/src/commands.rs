@@ -495,6 +495,61 @@ pub fn mxfile_inspect(xml: String) -> Result<app_ipc::Counts, String> {
     app_core::mxfile::inspect(&xml).map_err(|e| e.to_string())
 }
 
+/// 源文本的稳定 hash（界面判断“源改过没有”用；与 `ConvReport.source_hash` 同一实现）。
+#[tauri::command]
+pub fn source_hash(text: String) -> String {
+    app_core::report::source_hash(&text)
+}
+
+/// 幂等格式化（G22）：“格式化源码”真的会改缩进/空行，并返回改动处数。
+#[tauri::command]
+pub fn pretty_source(format: app_ipc::FormatId, body: String) -> app_ipc::PrettyResult {
+    let (body, changes) = app_core::pretty::pretty(format, &body);
+    app_ipc::PrettyResult { body, changes: changes as u32 }
+}
+
+/// D2 → drawio：前端把 `compile()` 的绝对几何整理成 `CanvasPlan`，Rust 统一 emit。
+///
+/// 与 `dot_layout_to_drawio` 同一条纪律：入参只有数据与 options，产物先自检。
+#[tauri::command]
+pub fn plan_to_drawio(
+    plan: app_core::plan::CanvasPlan,
+    source: String,
+    options: app_ipc::ConvertOptions,
+) -> Result<ConvertOutcome, String> {
+    use app_ipc::{ConvReport, Fidelity, Grade};
+
+    let started = std::time::Instant::now();
+    let mut plan = plan;
+    plan.provenance.from = FormatId::D2;
+    plan.provenance.source_hash = app_core::report::source_hash(&source);
+    plan.provenance.converted_at = now_ms();
+    plan.provenance.app_version = env!("CARGO_PKG_VERSION").to_string();
+
+    let body = app_core::mxfile::emit(&plan);
+    let counts = app_core::mxfile::inspect(&body)
+        .map_err(|e| format!("产物自检失败（{e}），本次转换不产出文件"))?;
+    let partial = plan.issues.iter().any(|i| i.code == "board.collapsed");
+    let issues = plan.issues.clone();
+    let notes = issues.iter().map(app_core::report::issue_note).collect::<Vec<_>>();
+    let report = ConvReport {
+        engine: "d2wasm".into(),
+        counts,
+        fidelity: Fidelity {
+            structure: if partial { Grade::Partial } else { Grade::Exact },
+            geometry: Grade::Exact,
+            style: Grade::Approx,
+        },
+        issues,
+        elapsed_us: started.elapsed().as_micros() as u64,
+        source_hash: plan.provenance.source_hash.clone(),
+        layout: options.layout.clone().unwrap_or_default(),
+        look: "n/a".into(),
+        theme: options.theme.clone().unwrap_or_default(),
+    };
+    Ok(ConvertOutcome { engine: "d2wasm".into(), body, notes, report })
+}
+
 /// drawio 产物的收尾：`inspectOnly`（只数结构）或 `normalize`（parse→前缀→emit）。
 ///
 /// **归一化默认关**：手动转换走原样（零风险），只有 AI 落地链需要稳定 id。

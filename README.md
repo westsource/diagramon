@@ -14,7 +14,7 @@ no external request is ever made**.
 Code or images reach a model only when you actively use AI, and then only the endpoint you chose
 (BYOK talks straight to your own provider, membership goes through the Diagramon cloud gateway).
 
-Version **3.11.0** · Official website <https://www.diagramon.com>
+Version **3.12.0** · Official website <https://www.diagramon.com>
 
 ## Screenshots
 
@@ -114,8 +114,12 @@ Version **3.11.0** · Official website <https://www.diagramon.com>
   `DOT → drawio` (Graphviz computes the layout in-window, then Rust maps it to mxCell —
   **geometry preserved**, edges snapped to shape boundaries, subgraphs become containers),
   `Mermaid → drawio` and `Mermaid → Excalidraw` (handed to each engine's own parser instead of
-  reimplementing one), and `D2 → drawio` (D2's own wasm computes the geometry in the page first, then it
-  is mapped to mxGraph — **geometry preserved**, and the result stays draggable and editable)
+  reimplementing one), and `D2 → drawio` (D2's own wasm computes the geometry in the page first, then
+  the shared `CanvasPlan` pipeline emits mxGraph — **geometry preserved**, stable `d2-` ids, and the
+  result stays draggable and editable)
+- **“Format source” really formats** — Mermaid / DOT are re-indented idempotently (D2 only gets
+  whitespace cleanup); a second run reports “Nothing to change”, and the record can be expanded,
+  copied, opened on the canvas, or re-converted after a source-hash check
 - **Directions that are deliberately not built say why** — D2 is a superset of Mermaid / DOT
   (containers, classes, vars, layers…), so folding it back would mean deciding per feature what to drop;
   the "get out of D2" need is served by `D2 → drawio` instead

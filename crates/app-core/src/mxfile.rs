@@ -516,13 +516,17 @@ pub fn emit(plan: &CanvasPlan) -> String {
         }
 
         for e in &page.edges {
+            let ends = format!(
+                "{}{}",
+                if e.from.is_empty() { String::new() } else { format!(" source=\"{}\"", attr(&e.from)) },
+                if e.to.is_empty() { String::new() } else { format!(" target=\"{}\"", attr(&e.to)) },
+            );
             out.push_str(&format!(
-                "        <mxCell id=\"{}\" value=\"{}\" style=\"{}\" edge=\"1\" parent=\"1\" source=\"{}\" target=\"{}\">\n          <mxGeometry relative=\"1\" as=\"geometry\"",
+                "        <mxCell id=\"{}\" value=\"{}\" style=\"{}\" edge=\"1\" parent=\"1\"{}>\n          <mxGeometry relative=\"1\" as=\"geometry\"",
                 attr(&e.id),
                 attr(e.label.as_deref().unwrap_or("")),
                 edge_style(e),
-                attr(&e.from),
-                attr(&e.to)
+                ends
             ));
             if e.points.is_empty() {
                 out.push_str(" />\n");

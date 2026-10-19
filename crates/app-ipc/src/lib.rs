@@ -743,6 +743,15 @@ pub struct ConvertOutcome {
     pub report: ConvReport,
 }
 
+/// “格式化源码”的结果：新正文 + 改动处数。
+///
+/// `changes == 0` 时界面必须说“无需改动”，不要再无条件报“已完成”（G22）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PrettyResult {
+    pub body: String,
+    pub changes: u32,
+}
+
 /* ---------------- 工作区与文件系统 ---------------- */
 
 /// 工作区树的一个节点。目录带 `children`，文件不带。

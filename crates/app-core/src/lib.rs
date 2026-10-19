@@ -20,6 +20,7 @@ mod mxfile_parse;
 pub mod outline;
 pub mod pixels;
 pub mod plan;
+pub mod pretty;
 pub mod recovery;
 pub mod render_opts;
 pub mod report;
