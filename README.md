@@ -14,7 +14,7 @@ no external request is ever made**.
 Code or images reach a model only when you actively use AI, and then only the endpoint you chose
 (BYOK talks straight to your own provider, membership goes through the Diagramon cloud gateway).
 
-Version **3.6.1** · Official website <https://www.diagramon.com>
+Version **3.8.0** · Official website <https://www.diagramon.com>
 
 ## Screenshots
 
@@ -43,6 +43,12 @@ Version **3.6.1** · Official website <https://www.diagramon.com>
 - **Syntax checking with inline errors** — only problems that can actually be *proven* (unbalanced
   brackets/quotes/tags, JSON that fails to parse) are reported, never style guesses; the Problems panel
   aggregates every open document and labels each row with its file name and line/column
+- **Mermaid engine 10.9.5 → 12.2.0** — picks up every diagram type and syntax improvement upstream added
+  since then, with render output aligned to mermaid.live
+- **Errors point at the line and column** — the Problems panel prints "line N, column M" and its button
+  switches to the source view with the caret pinned to that spot; the offending line gets a red squiggle
+  in the editor (gone the moment it is fixed), and the same location — column included — is fed to the AI
+  repair loop
 - **Outline and current scope** — nodes and the `subgraph` / `cluster` / D2 container tree are derived
   from the body; the status bar shows the enclosing subgraph/cluster/container next to the caret
   position (and nowhere else, so no information is duplicated)
@@ -65,7 +71,14 @@ Version **3.6.1** · Official website <https://www.diagramon.com>
   hidden so two numbers can never disagree on screen)
 - **Layout engine picker** — DOT offers `dot` / `neato` / `fdp` / `sfdp` / `twopi` / `circo`, switched
   incrementally without reloading the WASM engine; D2 offers `dagre` / `elk` / `tala`, recompiled for the
-  new layout while the engine instance is reused (`tala` is slow — pick it deliberately)
+  new layout while the engine instance is reused (`tala` is slow — pick it deliberately); Mermaid offers
+  `dagre` and ELK, the latter shipping as an offline bundle (`@mermaid-js/layout-elk`) whose failed load
+  falls back to dagre instead of breaking the preview
+- **Render options live in the preview top bar** — Mermaid shows two (Look + Layout), DOT / D2 show one
+  (Layout) and the canvas formats hide them entirely; the choice is saved with the document and
+  re-renders immediately (the status-bar layout entry stays and reads the same data)
+- **Mermaid look modes** — classic / neo / handDrawn, switchable at any time, matching the mermaid.live
+  look and feel
 - **The D2 engine warms up on demand** — D2's runtime is an 11 MB **offline** wasm build: the first `.d2`
   document waits a few seconds (the UI says "initializing the D2 engine") and later renders take tens of
   milliseconds. Warm-up only happens **if you recently opened a `.d2` file**, so people who don't use D2
@@ -106,6 +119,9 @@ Version **3.6.1** · Official website <https://www.diagramon.com>
   (`o--o` / `x--x`) degrade to a plain edge and are recorded in `notes`, names that collide with DOT
   keywords (`EDGE`, `node`) are quoted so graphviz accepts them, and D2's `stroke-width` is rounded and
   clamped to its 0–15 range with the original value recorded in `notes`
+- **`Mermaid → Excalidraw` inherits the document's look** — when the source document picked classic /
+  neo / handDrawn in the top bar, the converted Excalidraw is rendered with that same look; the
+  conversion record states what was inherited and that the layout was re-done with the engine's defaults
 
 ### Workspace and files
 - **Open a folder** — explorer tree (only extensions this app knows; `.git` / `node_modules` / `target`
@@ -140,6 +156,13 @@ Version **3.6.1** · Official website <https://www.diagramon.com>
 - **Conversation history, persisted per document** — histories live locally, keyed by document, and
   survive restarts; the History dialog shows real turns, and clearing affects only the current document
   (images are never written to disk)
+- **A conversation exists before the file does** — a brand-new document that was never saved keeps its
+  conversation in a **draft** store, so it comes back after a restart; the draft moves under the file's
+  identity at the moment you save / save-as, so conversations recorded before a rename or move are not
+  stranded on the old path
+- **Conversations are stored by ownership, not "the active tab"** — switching tabs while an answer is
+  streaming no longer loses a turn, and "apply as a new tab" carries the conversation over with the
+  diagram it produced; a failed save now says so instead of being ignored
 - **The reasoning is visible — and collapsible** — thinking models (GLM / DeepSeek / Qwen family)
   stream their chain of thought above the bubble; it folds away automatically when the turn ends, and a
   click on the summary row (or Enter / Space) opens it again for the full transcript. A turn that
@@ -194,6 +217,13 @@ Version **3.6.1** · Official website <https://www.diagramon.com>
 - **Built-in auto-update** — minisign signature verification; "up to date", "new version available"
   (download → restart) and "error" are three distinct outcomes, and a failed check is never reported as
   "up to date"
+- **Close to tray (opt-in)** — turned on in Settings → Appearance, ✕ only hides the window; the tray icon
+  brings it back, or quits from its menu. The icon is always present, so you can quit under either setting
+- **Default Mermaid look** — a global fallback used when a document has no look of its own (priority:
+  document choice > global default > Mermaid's built-in; frontmatter config always wins)
+- **The settings panel scrolls** — it used to be clipped wholesale by an outer container (a `max-height`
+  that leaked out of the panel), putting everything below the fold out of reach; content taller than the
+  panel now scrolls inside it
 
 ## Tech Stack
 
