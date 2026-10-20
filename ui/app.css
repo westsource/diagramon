@@ -738,6 +738,8 @@ body.no-ai #ai-gutter { display: none; }
 .msg-head { display: flex; align-items: center; gap: 6px; font-size: var(--fs-xs); color: var(--muted); }
 .msg-head .who { font-weight: 600; color: var(--ink-2); }
 .msg-head .badge-used { font-size: 10px; color: var(--ai); background: var(--ai-soft); padding: 0 5px; border-radius: 999px; border: 1px solid var(--ai-line); }
+/* 回复头的「拷贝源码」：贴右缘，不跟 used 徽标挤在左边 */
+.msg-head .msg-copy { margin-left: auto; }
 
 .bubble {
   position: relative;
