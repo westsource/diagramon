@@ -235,8 +235,13 @@ body.no-ai #ai-gutter { display: none; }
   background: var(--surface-2);
   border-bottom: 1px solid var(--border);
 }
-.brand { display: flex; align-items: center; gap: 7px; font-weight: 600; letter-spacing: .2px; }
+/* 基线对齐：品牌名 13px 与版本号 11px 字号不同，按盒子中线居中会把版本号抬高
+   约 2px（行盒越矮，中线下移、基线反而上移）。基线对齐后 "3.8.4" 与 "Diagramon"
+   落在同一条基线上，也与菜单中文的基线一致（中文墨迹下缘本来就贴着基线）。
+   图标与 mock 徽标不是正文，保持盒子居中。 */
+.brand { display: flex; align-items: baseline; gap: 7px; font-weight: 600; letter-spacing: .2px; }
 .brand .logo {
+  align-self: center;   /* 非文字，不参与基线对齐 */
   width: 18px; height: 18px; border-radius: 5px;
   display: grid; place-items: center;
   color: var(--accent-ink);
@@ -1810,6 +1815,7 @@ html.full .doc-page { height: auto; overflow: visible; }
 /* --- 19.5 mock 模式可见标注（不许悄悄降级） --- */
 .mock-badge {
   display: inline-flex; align-items: center; gap: 5px;
+  align-self: center;   /* 胶囊不参与基线对齐，保持盒子居中 */
   padding: 0 8px; height: 16px;
   font-size: 10px; font-weight: 600; letter-spacing: .2px;
   color: #fff; background: var(--warn);
@@ -2038,6 +2044,10 @@ body.no-mock .mock-badge { display: none; }
 .ai-prov-head .btn { margin-left: 2px; }
 .ai-prov-logo { width: 30px; height: 30px; flex: none; border-radius: 8px; display: grid; place-items: center; background: var(--accent-soft); color: var(--accent); font-size: 11px; font-weight: 700; letter-spacing: .2px; }
 .ai-prov-main { flex: 1; min-width: 0; }
+/* 供应商次序：上移 / 下移。端点那颗 disabled（不隐藏 —— 位置固定，列表才不跳） */
+.ai-prov-order { display: inline-flex; gap: 1px; flex: none; }
+.ai-prov-order .icon-btn:disabled { opacity: .3; cursor: default; }
+.ai-prov-order .icon-btn:disabled:hover { background: transparent; color: var(--ink-2); }
 .ai-prov-main b { display: block; font-size: var(--fs-sm); }
 .ai-prov-main small { display: block; margin-top: 1px; color: var(--muted); font: 10.5px var(--font-mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ai-prov-models { display: flex; flex-wrap: wrap; gap: 5px; padding: 7px 11px; border-top: 1px dashed var(--border); background: var(--surface-inset); }

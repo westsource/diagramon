@@ -43,8 +43,18 @@ window.DGM = window.DGM || {};
    */
   const msgsByDoc = new Map();
 
+  /** 桶的键：**没有活动文档时也有一份桶**（"从无到有"生成的那段对话就住在这里）。
+   *
+   *  以前这个回退只写在 `bucket()` 里，别的按 docId 直接 `msgsByDoc.get(...)` 的地方
+   *  拿不到它 —— 「没有标签页 → AI 生成 → 应用到编辑器」时过继会话就成了空操作，
+   *  新标签页里对话直接消失（关掉标签页又出现，因为那份桶还在）。键的规矩只能有一处。
+   */
+  function bucketKey(docId) {
+    return docId || "__none__";
+  }
+
   function bucket(docId) {
-    const key = docId || "__none__";
+    const key = bucketKey(docId);
     let b = msgsByDoc.get(key);
     if (!b) {
       b = { chat: [], vision: [], review: [] };
@@ -212,6 +222,13 @@ window.DGM = window.DGM || {};
       `<div class="msg-head"><span class="who">${esc(t(mine ? "ai.you" : "ai.assistant"))}</span>` +
       (!mine && m.used ? `<span class="badge-used">${esc(m.used.model)} · ${esc(m.used.tokens)} tok</span>` : "") +
       `</div>`;
+    // 「拷贝源码」：这条回复**全部**产出的源码一次拷走（多个代码块拼起来，无代码块则拷正文）。
+    // 代码卡上的「复制」只给单块；这里给的是整条回复，位置固定，不用先找卡片。
+    if (!mine && replySource(m)) {
+      const copyBtn = h("button", "mini-btn msg-copy", `${icon("copy", "ico-sm")}${esc(t("ai.op.copy"))}`);
+      $(".msg-head", body).appendChild(copyBtn);
+      copyBtn.addEventListener("click", () => copyText(replySource(m)));
+    }
     n.append(ava, body);
     if (m.image) {
       const th = h("div", "thumb");
@@ -1038,7 +1055,7 @@ window.DGM = window.DGM || {};
           // 会话过继（S2）：产物落进新标签页，这段对话就该跟着它走 —— 否则"从无到有"
           // 生成完，对话留在旧文档（多半还是未保存的），关掉就没了。
           // 必须在 loadActive() **之前**复制：切换后 render() 读的是新文档的桶。
-          if (fromId && fromId !== created.id) adoptConversation(fromId, created.id);
+          if (fromId !== created.id) adoptConversation(fromId, created.id);
           DGM.editor.loadActive();
           d = created;
         }
@@ -1092,10 +1109,19 @@ window.DGM = window.DGM || {};
     lastApplied = null;
   }
 
-  function copyText(text) {
-    const done = () => DGM.toast({ icon: "copy", title: t("ai.copied"), sub: "" });
-    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(done).catch(done);
-    else done();
+  /** 拷贝一段文本，并把**真实结果**告诉用户（写不进剪贴板时不再假装成功）。 */
+  async function copyText(text) {
+    const ok = await (DGM.clip ? DGM.clip.write(text) : Promise.resolve(false));
+    if (ok) DGM.toast({ icon: "copy", title: t("ai.copied"), sub: "" });
+    else DGM.toast({ icon: "alert", title: t("ai.copyFail"), sub: "", warn: true });
+  }
+
+  /** 这条回复的**源码**：有围栏就取围栏里的正文（多个块按空行拼接），否则退回原文。
+   *  与代码卡上的「复制」不同 —— 那个只复制单块，这里给的是"这条回复产出的源码"。 */
+  function replySource(m) {
+    const blocks = m.intent === "explain" ? [] : splitFences(m.text || "").blocks;
+    if (blocks.length) return blocks.map((b) => b.code).join("\n\n");
+    return (m.text || "").trim();
   }
 
   /* ------------------------------------------------------------------ 模型下拉 */
@@ -1281,22 +1307,35 @@ window.DGM = window.DGM || {};
     }
   }
 
-  /** 把 `fromId` 的会话**复制**给 `toId`（AI 应用产物另开标签页时调用，S2）。
+  /** 把 `fromId` 的会话过继给 `toId`（AI 应用产物另开标签页时调用，S2）。
    *
-   *  为什么复制而不是移动：旧文档里那段提问仍然是它的上下文，历史不该凭空消失；
+   *  有文档时是**复制**：旧文档里那段提问仍然是它的上下文，历史不该凭空消失；
    *  文本很小，重复一份比"猜用户想去哪"安全。消息对象要逐个浅拷贝 ——
    *  两个桶共享同一批对象的话，之后任何一边的改动（比如 `applied` 标记）都会串场。
    *
+   *  没有文档时（`fromId` 为空，即"没有任何标签页"下直接生成）是**移动**：
+   *  无主桶背后没有文档，留着只会在关掉所有标签页后让同一段对话原样冒出来。
+   *
    *  时机：必须在 `editor.loadActive()` **之前**调用 —— 切换后 `render()` 读的就是
-   *  新文档的桶，先切后复制会闪一帧空对话。
+   *  新文档的桶，先切后过继会闪一帧空对话。
    */
   function adoptConversation(fromId, toId) {
-    const src = msgsByDoc.get(fromId);
-    if (!src || !toId || fromId === toId) return;
+    if (!toId) return;
+    const fromKey = bucketKey(fromId);
+    const toKey = bucketKey(toId);
+    if (fromKey === toKey) return;
+    const src = msgsByDoc.get(fromKey);
+    if (!src) return;
+    if (!src.chat.length && !src.vision.length && !src.review.length) return;
     const copy = { chat: [], vision: [], review: [] };
-    for (const k of Object.keys(copy)) copy[k] = src[k].map((x) => ({ ...x }));
-    msgsByDoc.set(toId, copy);
+    // 归属一起改：过继后的消息属于新文档，后续「重新生成 / 编辑重发 / 落盘」都按 `m.doc`
+    // 找桶 —— 留在旧归属上，这些操作会写回旧文档（没有文档时更是写进无主桶）。
+    for (const k of Object.keys(copy)) copy[k] = src[k].map((x) => ({ ...x, doc: toId }));
+    msgsByDoc.set(toKey, copy);
     convLoaded.add(toId); // 已就绪：别让 ensureConversation 再拿磁盘上的空会话覆盖它
+    // 无主桶是**移动**，不是复制：它背后没有文档，留着只会在"关掉所有标签页"时
+    // 让同一段对话原样冒出来（用户看到的就是"应用后消失、关标签页又出现"的鬼影）。
+    if (!fromId) msgsByDoc.delete(fromKey);
     persistConversation(toId);
   }
 

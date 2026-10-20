@@ -269,6 +269,9 @@ window.DGM = window.DGM || {};
       title: t("dlg.convert.done", { name: state.fmtById(dir.to).name }),
       sub: t("dlg.convert.doneSub", { file: created.name }),
     });
+    // 成功必须有 `ok: true`：`applyAsCanvas` 用 `res.ok` 判成败，旧返回里没这个字段 ⇒
+    // 画布明明落地了，界面却弹"转换失败：…"（reason 还是空的）。
+    return { ok: true, doc: created };
   }
 
   async function convertTo(presetTo) {
@@ -560,7 +563,7 @@ window.DGM = window.DGM || {};
 
     const rows = providers.length
       ? providers
-          .map((p) => {
+          .map((p, pi) => {
             const list = models.filter((m) => m.provider_id === p.id);
             const pendingKey = !!draftKeys[p.id];
             const keyLabel = pendingKey
@@ -584,6 +587,10 @@ window.DGM = window.DGM || {};
           <span class="ai-prov-logo">${esc(providerInitials(p.name))}</span>
           <div class="ai-prov-main"><b>${esc(p.name)}</b><small>${esc(p.base_url)}</small></div>
           <span class="key-tag ${keyOk ? "ok" : "off"}">${esc(keyLabel)}</span>
+          <span class="ai-prov-order">
+            <button class="icon-btn" data-act="pmove:${esc(p.id)}:-1" title="${esc(t("set.ai.moveUp"))}" ${pi === 0 ? "disabled" : ""}>${icon("up", "ico-sm")}</button>
+            <button class="icon-btn" data-act="pmove:${esc(p.id)}:1" title="${esc(t("set.ai.moveDown"))}" ${pi === providers.length - 1 ? "disabled" : ""}>${icon("down", "ico-sm")}</button>
+          </span>
           <button class="btn sm" data-act="refresh:${esc(p.id)}" ${refreshingProvider === p.id ? "disabled" : ""}>${icon("refresh", "ico-sm")}${esc(refreshingProvider === p.id ? t("set.ai.refreshing") : t("set.ai.refreshModels"))}</button>
           <button class="icon-btn" data-act="delprov:${esc(p.id)}" title="${esc(t("set.ai.removeProvider"))}">${icon("trash", "ico-sm")}</button>
         </div>
@@ -657,7 +664,7 @@ window.DGM = window.DGM || {};
           name: meta.name,
           provider: m.provider,
           base_url: m.base_url,
-          max_tokens: m.max_tokens || 4096,
+          max_tokens: m.max_tokens || 500000,
           temperature: m.temperature || 0.2,
           idle_timeout_s: m.idle_timeout_s == null ? null : m.idle_timeout_s,
           has_key: !!m.has_key,
@@ -797,7 +804,7 @@ window.DGM = window.DGM || {};
     const id = "p" + Date.now().toString(36);
     ai.providers.push({
       id, name: displayName, provider: meta.provider, base_url: base,
-      max_tokens: 4096, temperature: 0.2, idle_timeout_s: null, has_key: false, key_hint: "",
+      max_tokens: 500000, temperature: 0.2, idle_timeout_s: null, has_key: false, key_hint: "",
     });
     for (const model of picked) {
       ai.models.push({ id: id + ":" + model, provider_id: id, model, name: model, has_key: false, key_hint: "" });
@@ -845,6 +852,23 @@ window.DGM = window.DGM || {};
     delete draftKeys[id];
     removedProviders.add(id);
     if (!ai.models.some((m) => m.id === ai.default_model)) ai.default_model = (ai.models[0] || {}).id || "";
+    renderSettings("ai");
+  }
+
+  /** 调整供应商次序（上移 / 下移一位）。
+   *
+   *  次序**就是** `ai.providers` 的数组序 —— 不另立名次字段：设置页的卡片、
+   *  AI 面板与菜单栏的模型下拉分组、「默认模型」下拉都按这个序排，移动一次三处一起变。
+   *  端点处按钮直接 disabled（`pi` 由渲染时给），所以这里只需再挡一次越界。
+   */
+  function moveProvider(id, dir) {
+    const ai = draftAi || state.ai();
+    const list = ai.providers || [];
+    const i = list.findIndex((x) => x.id === id);
+    const j = i + dir;
+    if (!dir || i < 0 || j < 0 || j >= list.length) return;
+    const [moved] = list.splice(i, 1);
+    list.splice(j, 0, moved);
     renderSettings("ai");
   }
 
@@ -1006,6 +1030,10 @@ window.DGM = window.DGM || {};
       if (act === "pcancel") { providerForm = null; renderSettings("ai"); return; }
       if (act === "padd") return addProviderFromForm();
       if (act.startsWith("refresh:")) { refreshProvider(act.slice(8)); return; }
+      if (act.startsWith("pmove:")) {
+        const [, pid, dir] = act.split(":");
+        return moveProvider(pid, Number(dir) || 0);
+      }
       if (act.startsWith("delprov:")) return removeProvider(act.slice(8));
       if (act.startsWith("delmodel:")) return removeDraftModel(act.slice(9));
       if (act === "memory") {

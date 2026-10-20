@@ -182,7 +182,14 @@ window.DGM = window.DGM || {};
       const providers = state.ai().providers || [];
       const byId = {};
       providers.forEach((p) => (byId[p.id] = p));
-      const local = (state.ai().models || []).map((m) => {
+      // 本地模型**按供应商次序**排：设置页里上移/下移改的是 `ai.providers` 的数组序，
+      // 而 `ai.models` 是"添加时的插入序"—— 直接按 models 排，用户排好的次序在下拉里不生效。
+      // 找不到所属供应商的（供应商已被删）排在最后，仍然可见、可见即可删。
+      const models = state.ai().models || [];
+      const ordered = [];
+      providers.forEach((p) => models.forEach((m) => m.provider_id === p.id && ordered.push(m)));
+      models.forEach((m) => !byId[m.provider_id] && ordered.push(m));
+      const local = ordered.map((m) => {
         const p = byId[m.provider_id];
         return {
           ...m,

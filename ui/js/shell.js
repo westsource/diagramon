@@ -27,6 +27,48 @@ window.DGM = window.DGM || {};
   const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   DGM.dom = { $, $$, h, esc };
 
+  /** 把纯文本写进系统剪贴板，返回**是否真的写成功**（调用方据此说真话）。
+   *
+   *  为什么不能只用 `navigator.clipboard.writeText`：WebView2 在窗口失焦、权限被拒、
+   *  或页面不在前台时会直接 reject；旧调用是 `.then(done).catch(done)` ——
+   *  失败也照弹"已复制"，用户粘出来是空的。次序：
+   *  同步 `execCommand`（用户点击手势里最稳） → 异步 API → Tauri 剪贴板插件。
+   */
+  async function copyToClipboard(text) {
+    const s = String(text == null ? "" : text);
+    if (!s) return false;
+    try {
+      const prev = document.activeElement;
+      const box = document.createElement("textarea");
+      box.value = s;
+      box.setAttribute("readonly", "");
+      box.style.cssText = "position:fixed;left:-9999px;top:0;opacity:0";
+      document.body.appendChild(box);
+      box.select();
+      const ok = document.execCommand("copy");
+      box.remove();
+      if (prev && prev.focus) prev.focus();
+      if (ok) return true;
+    } catch (e) {
+      /* 落到下一级 */
+    }
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(s);
+        return true;
+      }
+    } catch (e) {
+      /* 落到下一级 */
+    }
+    try {
+      await ipc.invoke("plugin:clipboard-manager|write_text", { text: s, label: null });
+      return true;
+    } catch (e) {
+      return false;
+    }
+  }
+  DGM.clip = { write: copyToClipboard };
+
   const el = {
     titlebar: $("#titlebar"),
     brandVer: $("#brand-ver"),

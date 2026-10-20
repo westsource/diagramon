@@ -92,7 +92,7 @@ pub(crate) fn migrate_ai_providers(s: &mut Settings, creds: &dyn CredentialStore
                     name: legacy_provider_name(&kind, &base),
                     provider: kind,
                     base_url: base,
-                    max_tokens: if s.ai.models[i].max_tokens == 0 { 4096 } else { s.ai.models[i].max_tokens },
+                    max_tokens: if s.ai.models[i].max_tokens == 0 { 500_000 } else { s.ai.models[i].max_tokens },
                     temperature: if s.ai.models[i].temperature == 0.0 { 0.2 } else { s.ai.models[i].temperature },
                     idle_timeout_s: s.ai.models[i].idle_timeout_s,
                     has_key: false,
