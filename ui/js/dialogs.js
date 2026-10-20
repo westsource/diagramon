@@ -595,7 +595,7 @@ window.DGM = window.DGM || {};
         <details class="ai-prov-adv">
           <summary>${esc(t("set.ai.advanced"))}</summary>
           <div class="ai-prov-adv-grid">
-            <label>${esc(t("set.ai.maxTokens"))}<input type="number" min="1" max="200000" data-pmax="${esc(p.id)}" value="${p.max_tokens}"></label>
+            <label>${esc(t("set.ai.maxTokens"))}<input type="number" min="1" max="1000000" data-pmax="${esc(p.id)}" value="${p.max_tokens}"></label>
             <label>${esc(t("set.ai.temperature"))}<input type="number" min="0" max="2" step="0.1" data-ptemp="${esc(p.id)}" value="${p.temperature}"></label>
             <label title="${esc(t("set.ai.idleTimeoutHint"))}">${esc(t("set.ai.idleTimeout"))}<input type="number" min="15" max="1800" step="5" data-pidle="${esc(p.id)}" value="${p.idle_timeout_s == null ? "" : p.idle_timeout_s}" placeholder="${esc(t("set.ai.idleTimeoutAuto"))}"></label>
           </div>
@@ -733,6 +733,7 @@ window.DGM = window.DGM || {};
       <div class="ai-add" role="dialog" aria-label="${esc(t("set.ai.addProvider"))}">
         <div class="ai-add-head">${icon("sparkles", "ico-sm")}<b>${esc(t("set.ai.addProvider"))}</b><span class="sp"></span><button class="icon-btn" data-act="pcancel">${icon("close", "ico-sm")}</button></div>
         <div class="ai-add-body">
+          <label class="field"><span>${esc(t("set.ai.providerName"))}</span><input id="ap-name" value="${esc(f.name || "")}" spellcheck="false" placeholder="${esc(providerMeta(f.base).name)}"><span class="hint">${esc(t("set.ai.providerNameHint"))}</span></label>
           <label class="field"><span>${esc(t("set.ai.baseUrl"))}</span><input id="ap-base" value="${esc(f.base)}" spellcheck="false" placeholder="https://api.example.com/v1"><span class="hint">${esc(t("set.ai.baseUrlHint"))}</span></label>
           <label class="field"><span>${esc(t("set.ai.apiKey"))}</span><input id="ap-key" type="password" value="${esc(f.key)}" spellcheck="false" placeholder="${esc(t("set.ai.keyOptional"))}"><span class="hint">${esc(t("set.ai.keyHint"))}</span></label>
           <div class="staging-note">${icon("info", "ico-sm")}<span>${t("set.ai.saveTiming")}</span></div>
@@ -750,15 +751,16 @@ window.DGM = window.DGM || {};
   }
 
   function openProviderForm() {
-    providerForm = { base: "https://api.openai.com/v1", key: "", models: null, busy: false, err: "" };
+    providerForm = { base: "https://api.openai.com/v1", name: "", key: "", models: null, busy: false, err: "" };
     renderSettings("ai");
   }
 
   async function fetchProviderForm() {
     if (!providerForm) return;
     const base = ($("#ap-base") || {}).value || "";
+    const name = ($("#ap-name") || {}).value || "";
     const key = ($("#ap-key") || {}).value || "";
-    providerForm = { ...providerForm, base: base.trim(), key, busy: true, err: "" };
+    providerForm = { ...providerForm, base: base.trim(), name: name.trim(), key, busy: true, err: "" };
     renderSettings("ai");
     try {
       const meta = providerMeta(providerForm.base);
@@ -790,9 +792,11 @@ window.DGM = window.DGM || {};
       return;
     }
     const meta = providerMeta(base);
+    const typedName = (($("#ap-name") || {}).value || providerForm.name || "").trim();
+    const displayName = typedName || meta.name;
     const id = "p" + Date.now().toString(36);
     ai.providers.push({
-      id, name: meta.name, provider: meta.provider, base_url: base,
+      id, name: displayName, provider: meta.provider, base_url: base,
       max_tokens: 4096, temperature: 0.2, idle_timeout_s: null, has_key: false, key_hint: "",
     });
     for (const model of picked) {
@@ -1027,7 +1031,7 @@ window.DGM = window.DGM || {};
       if (def && def.value) draftAi.default_model = def.value;
       $$("[data-pmax]", pane).forEach((inp) => {
         const p = (draftAi.providers || []).find((x) => x.id === inp.dataset.pmax);
-        if (p) p.max_tokens = Math.max(1, Number(inp.value) || p.max_tokens);
+        if (p) p.max_tokens = Math.min(1_000_000, Math.max(1, Number(inp.value) || p.max_tokens));
       });
       $$("[data-ptemp]", pane).forEach((inp) => {
         const p = (draftAi.providers || []).find((x) => x.id === inp.dataset.ptemp);

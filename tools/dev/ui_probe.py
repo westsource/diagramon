@@ -1294,10 +1294,12 @@ def main() -> int:
             "  const n0 = cards(), s0 = st();"
             "  [...document.querySelectorAll('[data-act]')].find(b => b.dataset.act === 'addprov').click(); await wait(150);"
             "  document.querySelector('#ap-base').value = 'https://api.deepseek.com/v1';"
+            "  document.querySelector('#ap-name').value = '自定义供应商';"
             "  document.querySelector('#ap-key').value = 'sk-probe';"
             "  [...document.querySelectorAll('[data-act]')].find(b => b.dataset.act === 'pfetch').click(); await wait(500);"
             "  const listed = document.querySelectorAll('#ap-models input').length;"
             "  [...document.querySelectorAll('[data-act]')].find(b => b.dataset.act === 'padd').click(); await wait(250);"
+            "  const custom = [...document.querySelectorAll('.ai-prov-main b')].pop().textContent;"
             "  const n1 = cards();"
             "  [...document.querySelectorAll('[data-act]')].find(b => b.dataset.act === 'save').click(); await wait(300);"
             "  const s1 = st();"
@@ -1307,7 +1309,7 @@ def main() -> int:
             "  [...document.querySelectorAll('[data-act]')].find(b => b.dataset.act === 'save').click(); await wait(300);"
             "  const s2 = st();"
             "  DGM.dialogs.close();"
-            "  return JSON.stringify({ n0, n1, s0, s1, s2, listed });"
+            "  return JSON.stringify({ n0, n1, s0, s1, s2, listed, custom });"
             "})()"
         )
         log(f"供应商 Add/Remove: {model_check}")
@@ -1315,6 +1317,8 @@ def main() -> int:
             mc = json.loads(model_check or "{}")
             if mc.get("listed", 0) < 1:
                 fails.append(f"拉取模型后清单是空的：{mc.get('listed')}")
+            if mc.get("custom") != "自定义供应商":
+                fails.append(f"供应商自定义名称没保留：{mc.get('custom')!r}")
             if mc.get("n1") != mc.get("n0", -99) + 1:
                 fails.append(f"点「加入列表」后供应商卡片没 +1：{mc.get('n0')}→{mc.get('n1')}（草稿渲染断了）")
             if mc.get("s1") != mc.get("s0", -99) + 1:
