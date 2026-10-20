@@ -1111,16 +1111,21 @@ window.DGM = window.DGM || {};
    */
   function groupModelItems(toItem) {
     const all = state.modelChoices();
-    const groups = [
-      ["gateway", t("ai.group.gateway")],
-      ["local", t("ai.group.local")],
-    ];
+    const groups = new Map();
+    for (const m of all) {
+      const key = m.group || "local";
+      if (!groups.has(key)) {
+        groups.set(key, {
+          label: key === "gateway" ? t("ai.group.gateway") : m.groupLabel || t("ai.group.local"),
+          items: [],
+        });
+      }
+      groups.get(key).items.push(m);
+    }
     const out = [];
-    for (const [key, title] of groups) {
-      const list = all.filter((m) => (m.group === "gateway" ? "gateway" : "local") === key);
-      if (!list.length) continue;
-      out.push({ label2: title });
-      list.forEach((m) => out.push(toItem(m)));
+    for (const g of groups.values()) {
+      out.push({ label2: g.label });
+      g.items.forEach((m) => out.push(toItem(m)));
     }
     return out;
   }

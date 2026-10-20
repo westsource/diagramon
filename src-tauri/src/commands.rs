@@ -443,27 +443,64 @@ pub fn convert_text(req: ConvertRequest) -> Result<ConvertOutcome, String> {
 
 /* ---------------- 凭据（密钥永不回传前端） ---------------- */
 
-/// 写某个 BYOK 模型的密钥。
-///
-/// **键名的唯一真源在 Rust**（`state::credential_key`）—— 前端不许自己拼前缀。
-/// 2026-10-14 的 bug 就是这么来的：设置对话框拿**原始 id** 去 `cred_set`，而读取端
-/// （`hydrate_models` / `resolve_target`）查的是 `ai-model:{id}` —— 于是"填了密钥仍显示
-/// 未配置、一调用就报缺少 API Key"（BYOK 整条路都不可用）。新模型也一样能写：
-/// 这里只要 id，不必先落进 settings。
+/// 写某个供应商的密钥。**键名唯一真源在 Rust**（`state::provider_credential_key`）。
 #[tauri::command]
-pub fn ai_model_key_set(state: State<'_, Arc<AppState>>, model_id: String, secret: String) -> R<()> {
+pub fn ai_provider_key_set(
+    state: State<'_, Arc<AppState>>,
+    provider_id: String,
+    secret: String,
+) -> R<()> {
     state
         .creds
-        .set(&credential_key(&model_id), secret.trim())
+        .set(&crate::state::provider_credential_key(&provider_id), secret.trim())
         .map_err(|e| e.to_string())
 }
 
-/// 删某个模型的密钥（模型被删掉时顺手清，别在凭据库里留孤儿）。
+/// 删某个供应商的密钥（供应商被删掉时顺手清，别在凭据库里留孤儿）。
 #[tauri::command]
-pub fn ai_model_key_delete(state: State<'_, Arc<AppState>>, model_id: String) -> R<()> {
+pub fn ai_provider_key_delete(state: State<'_, Arc<AppState>>, provider_id: String) -> R<()> {
     state
         .creds
-        .delete(&credential_key(&model_id))
+        .delete(&crate::state::provider_credential_key(&provider_id))
+        .map_err(|e| e.to_string())
+}
+
+/// 拉取供应商的模型列表。`api_key` 只用于**尚未保存**的新供应商；已保存的传
+/// `provider_id`，这里从凭据库取，前端拿不到密钥。
+#[tauri::command]
+pub async fn ai_provider_models(
+    state: State<'_, Arc<AppState>>,
+    provider: String,
+    base_url: String,
+    api_key: Option<String>,
+    provider_id: Option<String>,
+) -> R<Vec<String>> {
+    // 已保存的供应商**只信 settings 里的地址**：避免一把已存密钥被改地址后发到别的主机。
+    let (provider, base_url, key) = match provider_id.as_deref() {
+        Some(id) => {
+            let found = {
+                let s = state.settings();
+                s.ai
+                    .providers
+                    .iter()
+                    .find(|p| p.id == id)
+                    .map(|p| (p.provider.clone(), p.base_url.clone()))
+            };
+            let (kind, base) = found.ok_or_else(|| format!("供应商不存在：{id}"))?;
+            let key = state
+                .creds
+                .get(&crate::state::provider_credential_key(id))
+                .map_err(|e| e.to_string())?;
+            (kind, base, key)
+        }
+        None => {
+            let key = api_key.map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+            (provider, base_url, key)
+        }
+    };
+    let client = state.http_for_idle(ai::provider::idle_timeout_for("openai", None));
+    ai::provider::list_models(&client, &provider, &base_url, key.as_deref())
+        .await
         .map_err(|e| e.to_string())
 }
 
@@ -476,25 +513,44 @@ fn resolve_model(state: &AppState, model_id: &str) -> R<AiModel> {
         .iter()
         .find(|m| m.id == model_id)
         .cloned()
-        .ok_or_else(|| format!("模型不存在：{model_id}（先在「AI 设置」里新增一个）"))
+        .ok_or_else(|| format!("模型不存在：{model_id}（先在「AI 设置」里添加供应商）"))
 }
 
 /// 解析这次对话用哪个模型。**两条来源互不混用**，靠 id 前缀分流：
 ///   - `gw:<别名>` → 云网关（密钥 = 当前 access token，base_url 由服务地址推导）；
 ///   - 其它 → 本地 BYOK（`settings.ai.models`，密钥在凭据库）。
-///
-/// 分流**只有这一处**：下游（`build_body` / SSE 解析 / 取消 / usage）对两条来源完全一样，
-/// 因为网关在客户端眼里就是一个 OpenAI 兼容 provider。
-///
-/// 网关那条**不在本地兜底取密钥**：没登录就直说没登录，不要拿一段过期字符串去撞 401。
 async fn resolve_target(state: &AppState, model_id: &str) -> R<ai::Resolved> {
     if let Some(alias) = model_id.strip_prefix(app_ipc::GATEWAY_MODEL_PREFIX) {
         return crate::cloud::gateway_resolved(state, alias).await;
     }
 
     let model = resolve_model(state, model_id)?;
-    let api_key = if model.provider == "ollama" {
+    let s = state.settings();
+    let provider = s.ai.providers.iter().find(|p| p.id == model.provider_id).cloned();
+    // 旧设置（没有供应商）：按模型行自带的字段继续可用。
+    let (kind, base_url, max_tokens, temperature, idle_timeout_s) = match &provider {
+        Some(p) => (
+            p.provider.clone(),
+            p.base_url.clone(),
+            p.max_tokens,
+            p.temperature,
+            p.idle_timeout_s,
+        ),
+        None => (
+            model.provider.clone(),
+            model.base_url.clone(),
+            model.max_tokens,
+            model.temperature,
+            model.idle_timeout_s,
+        ),
+    };
+    let api_key = if kind == "ollama" {
         None
+    } else if let Some(p) = &provider {
+        state
+            .creds
+            .get(&crate::state::provider_credential_key(&p.id))
+            .map_err(|e| e.to_string())?
     } else {
         state
             .creds
@@ -502,16 +558,13 @@ async fn resolve_target(state: &AppState, model_id: &str) -> R<ai::Resolved> {
             .map_err(|e| e.to_string())?
     };
     Ok(ai::Resolved {
-        provider: model.provider.clone(),
-        base_url: model.base_url.clone(),
+        provider: kind.clone(),
+        base_url,
         model: model.model.clone(),
         api_key,
-        // BYOK 这两个值是用户自己配的，必须原样下发（网关那条相反：交给服务端钳）
-        max_tokens: Some(model.max_tokens),
-        temperature: Some(model.temperature),
-        // 空闲上限按**这个模型**解析（留空 = 自动：ollama 300s / 其它 90s）——
-        // 它决定 `ai_chat` 用哪个客户端实例（reqwest 的 read_timeout 只能建在客户端上）
-        idle_timeout: ai::provider::idle_timeout_for(&model.provider, model.idle_timeout_s),
+        max_tokens: Some(max_tokens),
+        temperature: Some(temperature),
+        idle_timeout: ai::provider::idle_timeout_for(&kind, idle_timeout_s),
     })
 }
 

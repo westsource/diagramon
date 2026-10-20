@@ -449,7 +449,21 @@ digraph Pipeline {
     _hydrateCreds() {
       const ai = this.settings && this.settings.ai;
       if (!ai || !Array.isArray(ai.models)) return;
+      const byId = {};
+      for (const p of ai.providers || []) {
+        byId[p.id] = p;
+        const secret = this._cred["ai-provider:" + p.id];
+        p.has_key = p.provider === "ollama" || !!secret;
+        const s = String(secret || "");
+        p.key_hint = s ? s.slice(0, 3) + "…" + s.slice(-4) : "";
+      }
       for (const m of ai.models) {
+        const p = byId[m.provider_id];
+        if (p) {
+          m.has_key = p.has_key;
+          m.key_hint = p.key_hint;
+          continue;
+        }
         const secret = this._cred[m.id];
         m.has_key = m.provider === "ollama" || !!secret;
         const s = String(secret || "");
@@ -524,12 +538,13 @@ digraph Pipeline {
         panels: { activitybar: true, sidebar: false, sidebar_view: "explorer", ai: true, bottom: true, bottom_tab: "problems", sidebar_w: 236, ai_w: 344, panel_h: 168, split_src: 33 },
         editor: { font_size: 13, debounce_ms: 350, lint: true, per_doc_view: true, default_view: "split", autosave: true, autosave_ms: 5000, restrict_to_workspace: false },
         ai: {
-          // 全是**本地 BYOK**。曾经这里放过一条名叫「diagram-fast（云网关）」的假条目，
-          // base_url 指着 {服务}/v1/ai —— 那是云网关没接线时用 BYOK 冒充的写法，
-          // 现在网关是真通道了，留着只会让人以为"网关模型要自己填 key"。
+          providers: [
+            { id: "p-byok-1", name: "OpenAI", provider: "openai", base_url: "https://api.openai.com/v1", max_tokens: 8192, temperature: 0.7, has_key: false, key_hint: "" },
+            { id: "p-byok-2", name: "Ollama (local)", provider: "ollama", base_url: "http://localhost:11434", max_tokens: 4096, temperature: 0.3, has_key: true, key_hint: "" },
+          ],
           models: [
-            { id: "byok-1", name: "BYOK · gpt-4o", provider: "openai", base_url: "https://api.openai.com/v1", model: "gpt-4o", max_tokens: 8192, temperature: 0.7, has_key: false, key_hint: "" },
-            { id: "byok-2", name: "BYOK · 本地 Ollama", provider: "ollama", base_url: "http://localhost:11434", model: "qwen3:8b", max_tokens: 4096, temperature: 0.3, has_key: true, key_hint: "" },
+            { id: "byok-1", provider_id: "p-byok-1", model: "gpt-4o", name: "gpt-4o", has_key: false, key_hint: "" },
+            { id: "byok-2", provider_id: "p-byok-2", model: "qwen3:8b", name: "qwen3:8b", has_key: true, key_hint: "" },
           ],
           default_model: "byok-1",
           vision_notice_accepted: false,
@@ -1046,12 +1061,17 @@ digraph Pipeline {
           // mock：不落盘，只回报目标路径
           return args.path || null;
 
-        case "ai_model_key_set":
-          this._cred[args.modelId] = String(args.secret || "");
+        case "ai_provider_models":
+          return args.provider === "ollama"
+            ? ["llama3.3:70b", "qwen3:8b"]
+            : ["gpt-4.1", "gpt-4.1-mini", "o4-mini"];
+
+        case "ai_provider_key_set":
+          this._cred["ai-provider:" + args.providerId] = String(args.secret || "");
           return null;
 
-        case "ai_model_key_delete":
-          delete this._cred[args.modelId];
+        case "ai_provider_key_delete":
+          delete this._cred["ai-provider:" + args.providerId];
           return null;
 
         case "ai_chat":
@@ -1340,6 +1360,17 @@ digraph Pipeline {
       if (probePrompt.includes("[mem]")) {
         const leaked = JSON.stringify(req).includes("长期偏好");
         return leaked ? "客户端注入了记忆：是" : "客户端注入了记忆：否";
+      }
+      // 「调整配色」→ 官网 hero 截图夹具（与「渲染失败」同款自然语言键）：
+      // 回一段"已按业务分区上色"的完成话术。正文**不代图** —— 上过色的正文由
+      // 截图脚本（tools/dev/readme_shots.py 的 BUS_SAMPLE）预先放进文档，
+      // 对话与画面因此互洽：AI 说改完了，预览里就是改完的样子。
+      if (probePrompt.includes("调整配色")) {
+        return (
+          "已按业务情况调整配色：生产侧用绿色系（数据产生），接入层用蓝色系（传输接入），" +
+          "消费侧用紫色系（应用消费），Kafka 核心事件总线单独用琥珀色强调，外部共享保持灰色。\n\n" +
+          "改动已应用到当前文档，预览已同步刷新；哪个分区的颜色不合适，随时再说。"
+        );
       }
       // `[remember]` / `[mem]` 的回复保持很短：探针要发好几轮，回复长了一轮就要等 6 秒
       if (probePrompt.includes("[remember]") || probePrompt.includes("[mem]")) {

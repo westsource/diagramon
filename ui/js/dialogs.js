@@ -19,6 +19,10 @@ window.DGM = window.DGM || {};
 
   /* 打开中的对话框若有未完成的输入（AI tab 的草稿模型），存这里 */
   let draftAi = null;
+  let draftKeys = {};
+  let providerForm = null;
+  let refreshingProvider = "";
+  let removedProviders = new Set();
 
   /* ------------------------------------------------------------------ 外壳 */
 
@@ -541,13 +545,11 @@ window.DGM = window.DGM || {};
   }
 
   function pAI() {
-    // 渲染必须读**草稿**：add/remove 改的是 draftAi，而这一页按表单值回写。
-    // 曾经由 state.ai() 渲染 ⇒ 点「Add model」后行数不变、草稿里的新模型根本不显示，
-    // 用户看到的就是"点了没反应"（2026-10-12 实测确认）。
+    // 渲染必须读**草稿**：新增/删除改的是 draftAi，而这一页按表单值回写。
     const ai = draftAi || state.ai();
+    ensureDraftProviders(ai);
+    const providers = ai.providers || [];
     const models = ai.models || [];
-    // 「本地一个模型都没有」时那句提示要**跟着云状态走**：云网关接好之后，
-    // "本版本只能用 BYOK" 就成了假话（会把已登录用户当成没登录）。
     const gwN = state.gatewayModels().length;
     const gwTip = state.cloud.status.signed_in
       ? gwN
@@ -555,50 +557,77 @@ window.DGM = window.DGM || {};
         : t("set.ai.gatewayNoEntitlement")
       : t("set.ai.gatewaySignedOut");
     const gwTipWarn = !state.cloud.status.signed_in || gwN === 0;
-    const rows = models.length
-      ? models
-          .map(
-            (m) => `
-      <div class="model-row" data-id="${esc(m.id)}">
-        <div class="mr-head"><b>${esc(m.name)}</b><span class="chip">${esc(m.provider)}</span>
-          <span class="key-tag ${m.has_key ? "ok" : "off"}">${m.has_key ? esc(t("set.ai.keyStored", { hint: m.key_hint })) : esc(t("set.ai.keyMissing"))}</span>
-          <span class="sp"></span>
-          <button class="icon-btn" data-act="del:${esc(m.id)}" title="${esc(t("set.ai.removeModel"))}">${icon("trash", "ico-sm")}</button>
-        </div>
-        <div class="mr-grid">
-          <label>${esc(t("set.ai.modelName"))}<input type="text" data-f="name" value="${esc(m.name)}"></label>
-          <label>${esc(t("set.ai.provider"))}<input type="text" data-f="provider" value="${esc(m.provider)}" title="${esc(t("set.ai.providerHint"))}"></label>
-          <label>${esc(t("set.ai.baseUrl"))}<input type="text" data-f="base_url" value="${esc(m.base_url)}"></label>
-          <label>${esc(t("set.ai.modelId"))}<input type="text" data-f="model" value="${esc(m.model)}" placeholder="${esc(t("set.ai.modelIdPh"))}"></label>
-          <label>${esc(t("set.ai.maxTokens"))}<input type="number" data-f="max_tokens" value="${m.max_tokens}"></label>
-          <label>${esc(t("set.ai.temperature"))}<input type="number" step="0.1" data-f="temperature" value="${m.temperature}"></label>
-          <label title="${esc(t("set.ai.idleTimeoutHint"))}">${esc(t("set.ai.idleTimeout"))}<input type="number" min="15" max="1800" step="5" data-f="idle_timeout_s" value="${m.idle_timeout_s == null ? "" : m.idle_timeout_s}" placeholder="${esc(t("set.ai.idleTimeoutAuto"))}"></label>
-          <label class="wide">${esc(t("set.ai.apiKey"))}<input type="password" data-f="__key" placeholder="${m.has_key ? esc(t("set.ai.keyStored", { hint: m.key_hint })) : esc(t("set.ai.keyMissing"))}"></label>
-        </div>
-      </div>`,
-          )
-          .join("")
-      : `<div class="callout${gwTipWarn ? " warn" : ""}">${icon("key")}<span>${esc(gwTip)}<br>${esc(t("set.ai.noModelsLocal"))}</span></div>`;
 
-    // 「默认模型」要**把网关别名也列出来**：它可能正指向某个别名，
-    // 只列本地那份会让这个 select 空着选不中 —— 而这一页是按表单值回写的，
-    // 一旦保存就会把用户的默认静默改成列表里的第一个本地模型。
-    // 本地那组用**草稿**：刚加还没保存的模型也得能选，否则同样会被静默改掉。
-    const choices = state
-      .modelChoices()
-      .filter((m) => m.group !== "local")
-      .concat((ai.models || []).map((m) => ({ ...m, group: "local", vision: null })));
-    const groupOpts = (g, label) => {
-      const list = choices.filter((m) => m.group === g);
-      return list.length
-        ? `<optgroup label="${esc(label)}">${list.map((m) => `<option value="${esc(m.id)}" ${m.id === ai.default_model ? "selected" : ""}>${esc(m.name)}</option>`).join("")}</optgroup>`
-        : "";
-    };
-    const defaultOpts = groupOpts("gateway", t("ai.group.gateway")) + groupOpts("local", t("ai.group.local"));
+    const rows = providers.length
+      ? providers
+          .map((p) => {
+            const list = models.filter((m) => m.provider_id === p.id);
+            const pendingKey = !!draftKeys[p.id];
+            const keyLabel = pendingKey
+              ? t("set.ai.keyPending")
+              : p.provider === "ollama"
+                ? t("set.ai.keyNotNeeded")
+                : p.has_key
+                  ? t("set.ai.keyStored", { hint: p.key_hint })
+                  : t("set.ai.keyMissing");
+            const keyOk = pendingKey || p.provider === "ollama" || p.has_key;
+            const chips = list.length
+              ? list
+                  .map(
+                    (m) => `<span class="ai-model-chip" title="${esc(m.model)}"><code>${esc(m.model)}</code><button class="ai-chip-x" data-act="delmodel:${esc(m.id)}" title="${esc(t("set.ai.removeModel"))}">×</button></span>`,
+                  )
+                  .join("")
+              : `<span class="hint">${esc(t("set.ai.noProviderModels"))}</span>`;
+            return `
+      <div class="ai-prov" data-pid="${esc(p.id)}">
+        <div class="ai-prov-head">
+          <span class="ai-prov-logo">${esc(providerInitials(p.name))}</span>
+          <div class="ai-prov-main"><b>${esc(p.name)}</b><small>${esc(p.base_url)}</small></div>
+          <span class="key-tag ${keyOk ? "ok" : "off"}">${esc(keyLabel)}</span>
+          <button class="btn sm" data-act="refresh:${esc(p.id)}" ${refreshingProvider === p.id ? "disabled" : ""}>${icon("refresh", "ico-sm")}${esc(refreshingProvider === p.id ? t("set.ai.refreshing") : t("set.ai.refreshModels"))}</button>
+          <button class="icon-btn" data-act="delprov:${esc(p.id)}" title="${esc(t("set.ai.removeProvider"))}">${icon("trash", "ico-sm")}</button>
+        </div>
+        <div class="ai-prov-models">${chips}</div>
+        <div class="ai-prov-key">
+          <input type="password" data-key="${esc(p.id)}" placeholder="${esc(t("set.ai.keyReplace", { state: keyState(p) }))}" spellcheck="false">
+          <span class="hint">${esc(t("set.ai.keyReplaceHint"))}</span>
+        </div>
+        <details class="ai-prov-adv">
+          <summary>${esc(t("set.ai.advanced"))}</summary>
+          <div class="ai-prov-adv-grid">
+            <label>${esc(t("set.ai.maxTokens"))}<input type="number" min="1" max="200000" data-pmax="${esc(p.id)}" value="${p.max_tokens}"></label>
+            <label>${esc(t("set.ai.temperature"))}<input type="number" min="0" max="2" step="0.1" data-ptemp="${esc(p.id)}" value="${p.temperature}"></label>
+            <label title="${esc(t("set.ai.idleTimeoutHint"))}">${esc(t("set.ai.idleTimeout"))}<input type="number" min="15" max="1800" step="5" data-pidle="${esc(p.id)}" value="${p.idle_timeout_s == null ? "" : p.idle_timeout_s}" placeholder="${esc(t("set.ai.idleTimeoutAuto"))}"></label>
+          </div>
+        </details>
+      </div>`;
+          })
+          .join("")
+      : `<div class="callout${gwTipWarn ? " warn" : ""}">${icon("key")}<span>${esc(gwTip)}<br>${esc(t("set.ai.noProviders"))}</span></div>`;
+
+    const gwChoices = state.modelChoices().filter((m) => m.group === "gateway");
+    const opt = (m) => `<option value="${esc(m.id)}" ${m.id === ai.default_model ? "selected" : ""}>${esc(m.name)}</option>`;
+    const defaultOpts =
+      (gwChoices.length ? `<optgroup label="${esc(t("ai.group.gateway"))}">${gwChoices.map(opt).join("")}</optgroup>` : "") +
+      providers
+        .map((p) => {
+          const list = models.filter((m) => m.provider_id === p.id);
+          return list.length ? `<optgroup label="${esc(p.name)}">${list.map(opt).join("")}</optgroup>` : "";
+        })
+        .join("") +
+      (ai.default_model && !models.some((m) => m.id === ai.default_model) && !gwChoices.some((m) => m.id === ai.default_model)
+        ? `<option value="${esc(ai.default_model)}" selected>${esc(ai.default_model)}</option>`
+        : "");
+
     return `
-      <div class="field"><label>${esc(t("set.ai.models"))}</label>
-        <div class="model-list" id="model-list">${rows}</div>
-        <div class="btn-row mt"><button class="btn sm" data-act="add">${icon("plus")}${esc(t("set.ai.addModel"))}</button><span class="hint">${esc(t("set.ai.addModelHint"))}</span></div></div>
+      <div class="field">
+        <div class="row-head"><label>${esc(t("set.ai.providers"))}</label><span class="sp"></span>
+          <button class="btn sm" data-act="addprov">${icon("plus", "ico-sm")}${esc(t("set.ai.addProvider"))}</button></div>
+        <div class="staging-note">${icon("info", "ico-sm")}<span>${t("set.ai.stagingHint")}</span></div>
+        <div class="callout${gwTipWarn ? " warn" : ""}">${icon("cloud")}<span>${esc(gwTip)}</span></div>
+        <div class="ai-prov-list">${rows}</div>
+      </div>
+      ${providerForm ? providerFormHTML() : ""}
       <div class="field"><label>${esc(t("set.ai.defaultModel"))}</label><select data-act="noop" id="ai-default">${defaultOpts}</select><span class="hint">${esc(t("set.ai.defaultModelHint"))}</span></div>
       ${switchRow(!!ai.context_from_doc, t("set.ai.contextFromDoc"), null, "ctxdoc")}
       ${switchRow(!!ai.render_retry, t("set.ai.renderRetry"), "set.ai.renderRetryHint", "retry")}
@@ -609,6 +638,217 @@ window.DGM = window.DGM || {};
       <div class="field"><label>${esc(t("set.ai.memory"))}</label>
         <div class="btn-row"><button class="btn sm" data-act="memory">${icon("sparkles")}${esc(t("set.ai.memoryManage"))}</button>
         <span class="hint">${esc(t("set.ai.memoryManageHint"))}</span></div></div>`;
+  }
+
+  /** 兼容旧设置 / mock：没有 providers 时按 `(provider, base_url)` 现场分组。 */
+  function ensureDraftProviders(ai) {
+    ai.providers = ai.providers || [];
+    ai.models = ai.models || [];
+    if (!ai.models.length) return;
+    let next = ai.providers.length + 1;
+    for (const m of ai.models) {
+      if (m.provider_id && ai.providers.some((p) => p.id === m.provider_id)) continue;
+      if (!m.provider || !m.base_url) continue;
+      let p = ai.providers.find((x) => x.provider === m.provider && x.base_url === m.base_url);
+      if (!p) {
+        const meta = providerMeta(m.base_url);
+        p = {
+          id: "p-legacy-" + next++,
+          name: meta.name,
+          provider: m.provider,
+          base_url: m.base_url,
+          max_tokens: m.max_tokens || 4096,
+          temperature: m.temperature || 0.2,
+          idle_timeout_s: m.idle_timeout_s == null ? null : m.idle_timeout_s,
+          has_key: !!m.has_key,
+          key_hint: m.key_hint || "",
+        };
+        ai.providers.push(p);
+      }
+      m.provider_id = p.id;
+    }
+  }
+
+  function providerMeta(baseUrl) {
+    let host = "";
+    let port = "";
+    try {
+      const u = new URL(baseUrl);
+      host = (u.hostname || "").toLowerCase();
+      port = u.port || "";
+    } catch (_) {
+      /* 半截输入：留给用户改 */
+    }
+    const ollama = (host === "localhost" || host === "127.0.0.1") && (port === "11434" || !port);
+    const known = {
+      "api.openai.com": "OpenAI",
+      "api.deepseek.com": "DeepSeek",
+      "api.siliconflow.cn": "SiliconFlow",
+      "api.anthropic.com": "Anthropic",
+    };
+    if (ollama) return { provider: "ollama", name: "Ollama (local)" };
+    const name =
+      known[host] ||
+      (host
+        ? host
+            .replace(/^www\./, "")
+            .replace(/^api\./, "")
+            .split(".")[0]
+            .replace(/^./, (c) => c.toUpperCase())
+        : "Custom");
+    return { provider: "openai", name };
+  }
+
+  function providerInitials(name) {
+    const chars = Array.from(String(name || "?").trim());
+    return (chars.slice(0, 2).join("") || "?").toUpperCase();
+  }
+
+  function keyState(p) {
+    return p.provider === "ollama"
+      ? t("set.ai.keyNotNeeded")
+      : p.has_key
+        ? t("set.ai.keyConfigured")
+        : t("set.ai.keyMissing");
+  }
+
+  function providerFormHTML() {
+    const f = providerForm;
+    const models = f.models || [];
+    const list = models.length
+      ? `<div class="ai-add-models" id="ap-models">${models
+          .map(
+            (id) => `<label class="ai-add-model"><input type="checkbox" data-mid="${esc(id)}" checked><code>${esc(id)}</code></label>`,
+          )
+          .join("")}</div>`
+      : "";
+    const status = f.busy
+      ? `<div class="callout">${icon("refresh", "ico-sm")}<span>${esc(t("set.ai.fetching"))}</span></div>`
+      : f.err
+        ? `<div class="callout warn">${icon("alert", "ico-sm")}<span>${esc(f.err)}</span></div>`
+        : models.length
+          ? `<div class="callout">${icon("check", "ico-sm")}<span>${esc(t("set.ai.fetchOk", { n: models.length }))}</span></div>`
+          : "";
+    return `<div class="ai-add-mask">
+      <div class="ai-add" role="dialog" aria-label="${esc(t("set.ai.addProvider"))}">
+        <div class="ai-add-head">${icon("sparkles", "ico-sm")}<b>${esc(t("set.ai.addProvider"))}</b><span class="sp"></span><button class="icon-btn" data-act="pcancel">${icon("close", "ico-sm")}</button></div>
+        <div class="ai-add-body">
+          <label class="field"><span>${esc(t("set.ai.baseUrl"))}</span><input id="ap-base" value="${esc(f.base)}" spellcheck="false" placeholder="https://api.example.com/v1"><span class="hint">${esc(t("set.ai.baseUrlHint"))}</span></label>
+          <label class="field"><span>${esc(t("set.ai.apiKey"))}</span><input id="ap-key" type="password" value="${esc(f.key)}" spellcheck="false" placeholder="${esc(t("set.ai.keyOptional"))}"><span class="hint">${esc(t("set.ai.keyHint"))}</span></label>
+          <div class="staging-note">${icon("info", "ico-sm")}<span>${t("set.ai.saveTiming")}</span></div>
+          ${status}
+          ${list}
+        </div>
+        <div class="ai-add-foot">
+          <button class="btn ghost" data-act="pcancel">${esc(t("common.cancel"))}</button>
+          <span class="sp"></span>
+          <button class="btn" data-act="pfetch" ${f.busy ? "disabled" : ""}>${esc(f.busy ? t("set.ai.fetching") : t("set.ai.fetchModels"))}</button>
+          <button class="btn primary" data-act="padd" ${models.length ? "" : "disabled"}>${esc(t("set.ai.addToList"))}</button>
+        </div>
+      </div>
+    </div>`;
+  }
+
+  function openProviderForm() {
+    providerForm = { base: "https://api.openai.com/v1", key: "", models: null, busy: false, err: "" };
+    renderSettings("ai");
+  }
+
+  async function fetchProviderForm() {
+    if (!providerForm) return;
+    const base = ($("#ap-base") || {}).value || "";
+    const key = ($("#ap-key") || {}).value || "";
+    providerForm = { ...providerForm, base: base.trim(), key, busy: true, err: "" };
+    renderSettings("ai");
+    try {
+      const meta = providerMeta(providerForm.base);
+      const models = await DGM.ipc.invoke("ai_provider_models", {
+        provider: meta.provider,
+        baseUrl: providerForm.base,
+        apiKey: providerForm.key || null,
+      });
+      providerForm = { ...providerForm, busy: false, models };
+    } catch (e) {
+      providerForm = { ...providerForm, busy: false, err: String((e && e.message) || e) };
+    }
+    renderSettings("ai");
+  }
+
+  function addProviderFromForm() {
+    if (!providerForm || !providerForm.models) return;
+    const ai = draftAi || state.ai();
+    const base = providerForm.base.trim().replace(/\/+$/, "");
+    if (ai.providers.some((p) => p.base_url.replace(/\/+$/, "") === base)) {
+      providerForm = { ...providerForm, err: t("set.ai.providerExists") };
+      renderSettings("ai");
+      return;
+    }
+    const picked = $$("#ap-models input:checked").map((x) => x.dataset.mid);
+    if (!picked.length) {
+      providerForm = { ...providerForm, err: t("set.ai.pickOneModel") };
+      renderSettings("ai");
+      return;
+    }
+    const meta = providerMeta(base);
+    const id = "p" + Date.now().toString(36);
+    ai.providers.push({
+      id, name: meta.name, provider: meta.provider, base_url: base,
+      max_tokens: 4096, temperature: 0.2, idle_timeout_s: null, has_key: false, key_hint: "",
+    });
+    for (const model of picked) {
+      ai.models.push({ id: id + ":" + model, provider_id: id, model, name: model, has_key: false, key_hint: "" });
+    }
+    if (providerForm.key.trim()) draftKeys[id] = providerForm.key.trim();
+    if (!ai.default_model) ai.default_model = id + ":" + picked[0];
+    providerForm = null;
+    renderSettings("ai");
+  }
+
+  async function refreshProvider(id) {
+    const ai = draftAi || state.ai();
+    const p = (ai.providers || []).find((x) => x.id === id);
+    if (!p || refreshingProvider) return;
+    refreshingProvider = id;
+    renderSettings("ai");
+    try {
+      const ids = await DGM.ipc.invoke("ai_provider_models", {
+        provider: p.provider, baseUrl: p.base_url, providerId: p.id,
+      });
+      const old = ai.models.filter((m) => m.provider_id === id);
+      const next = ids.map(
+        (model) =>
+          old.find((m) => m.model === model) || {
+            id: id + ":" + model, provider_id: id, model, name: model, has_key: p.has_key, key_hint: p.key_hint,
+          },
+      );
+      ai.models = ai.models.filter((m) => m.provider_id !== id).concat(next);
+      if (!ai.models.some((m) => m.id === ai.default_model) && next.length) ai.default_model = next[0].id;
+      p.has_key = p.provider === "ollama" || p.has_key;
+    } catch (e) {
+      DGM.toast({ icon: "alert", title: t("set.ai.refreshFailed"), sub: String((e && e.message) || e), warn: true });
+    }
+    refreshingProvider = "";
+    renderSettings("ai");
+  }
+
+  function removeProvider(id) {
+    const ai = draftAi || state.ai();
+    const p = (ai.providers || []).find((x) => x.id === id);
+    if (!p) return;
+    if (!window.confirm(t("set.ai.removeProviderConfirm", { name: p.name }))) return;
+    ai.providers = ai.providers.filter((x) => x.id !== id);
+    ai.models = ai.models.filter((m) => m.provider_id !== id);
+    delete draftKeys[id];
+    removedProviders.add(id);
+    if (!ai.models.some((m) => m.id === ai.default_model)) ai.default_model = (ai.models[0] || {}).id || "";
+    renderSettings("ai");
+  }
+
+  function removeDraftModel(id) {
+    const ai = draftAi || state.ai();
+    ai.models = ai.models.filter((m) => m.id !== id);
+    if (ai.default_model === id) ai.default_model = (ai.models[0] || {}).id || "";
+    renderSettings("ai");
   }
 
   function pConvert() {
@@ -643,17 +883,25 @@ window.DGM = window.DGM || {};
 
   const PANES = { appearance: pAppearance, editor: pEditor, ai: pAI, convert: pConvert, cloud: pCloud };
 
-  /** 打开设置窗口（新会话）：AI 页签的草稿以**当前设置**为准。
-   *  add/remove model 走的是 renderSettings() 原地重画 —— 千万别从这里进，
-   *  否则这一行会把刚加/删的草稿吞掉（Add model 曾因此完全无效：点了没反应）。 */
   function settings(tab) {
     const cur = tab || "appearance";
     draftAi = JSON.parse(JSON.stringify(state.ai()));
+    draftKeys = {};
+    removedProviders = new Set();
+    providerForm = null;
+    refreshingProvider = "";
     renderSettings(cur);
   }
 
   /** 用现有 draftAi 重画设置窗口（add/remove 改完草稿后调它，草稿不丢）。 */
   function renderSettings(cur) {
+    const pane0 = $(".dlg-pane");
+    if (cur === "ai" && pane0) {
+      $$("[data-key]", pane0).forEach((inp) => {
+        const v = String(inp.value || "").trim();
+        if (v) draftKeys[inp.dataset.key] = v;
+      });
+    }
     openDialog(
       head(t("dlg.settings.title"), "settings") +
         `<div class="dialog-body has-tabs">
@@ -749,8 +997,13 @@ window.DGM = window.DGM || {};
         if (seg) $$(".seg button", seg).forEach((x) => x.classList.toggle("on", x === btn));
         return;
       }
-      if (act === "add") return addModel();
-      if (act.startsWith("del:")) return removeModel(act.slice(4));
+      if (act === "addprov") return openProviderForm();
+      if (act === "pfetch") { fetchProviderForm(); return; }
+      if (act === "pcancel") { providerForm = null; renderSettings("ai"); return; }
+      if (act === "padd") return addProviderFromForm();
+      if (act.startsWith("refresh:")) { refreshProvider(act.slice(8)); return; }
+      if (act.startsWith("delprov:")) return removeProvider(act.slice(8));
+      if (act.startsWith("delmodel:")) return removeDraftModel(act.slice(9));
       if (act === "memory") {
         close();
         DGM.dialogs.memory();
@@ -761,77 +1014,53 @@ window.DGM = window.DGM || {};
     });
   }
 
-  function addModel() {
-    if (!draftAi) draftAi = JSON.parse(JSON.stringify(state.ai()));
-    const id = "m" + Date.now().toString(36);
-    draftAi.models = draftAi.models || [];
-    draftAi.models.push({ id, name: t("common.new") + " " + (draftAi.models.length + 1), provider: "openai", base_url: "", model: "", max_tokens: 4096, temperature: 0.2, idle_timeout_s: null, has_key: false, key_hint: "" });
-    if (!draftAi.default_model) draftAi.default_model = id;
-    renderSettings("ai"); // 原地重画：draftAi 带着新模型，绝不能走 settings()（会重置草稿）
-    // 重新渲染后滚动到新条目
-    setTimeout(() => {
-      const list = $("#model-list");
-      if (list && list.lastElementChild) list.lastElementChild.scrollIntoView({ block: "nearest" });
-    }, 0);
-  }
-
-  function removeModel(id) {
-    if (!draftAi) draftAi = JSON.parse(JSON.stringify(state.ai()));
-    draftAi.models = (draftAi.models || []).filter((m) => m.id !== id);
-    if (draftAi.default_model === id) draftAi.default_model = (draftAi.models[0] || {}).id || "";
-    renderSettings("ai"); // 同上
-  }
-
-  /** 收集 AI 页签里手改的字段 + 需要写凭据库的密钥，然后一次性落盘。 */
+  /** 收集供应商密钥 + 默认模型，然后一次性落盘（密钥写凭据库，其余写设置）。 */
   async function saveSettings(cur) {
     const pane = $(".dlg-pane");
     if (cur === "ai" && pane) {
       draftAi = draftAi || JSON.parse(JSON.stringify(state.ai()));
-      const byId = {};
-      (draftAi.models || []).forEach((m) => (byId[m.id] = m));
-      const keyWrites = [];
-      $$(".model-row", pane).forEach((row) => {
-        const id = row.dataset.id;
-        const m = byId[id];
-        if (!m) return;
-        $$("[data-f]", row).forEach((inp) => {
-          const f = inp.dataset.f;
-          if (f === "__key") {
-            if (inp.value) keyWrites.push({ id, secret: inp.value });
-            return;
-          }
-          if (f === "max_tokens") m.max_tokens = Number(inp.value) || m.max_tokens;
-          else if (f === "temperature") m.temperature = Number(inp.value) || 0;
-          // 留空 = 自动（Rust 侧 `ai::provider::idle_timeout_for` 决定：ollama 300s / 其它 90s）。
-          // 这里只做"空 vs 数字"的翻译，范围由 Rust 钳（15..=1800）—— 前端不藏第二份口径。
-          else if (f === "idle_timeout_s") {
-            const v = String(inp.value || "").trim();
-            const n = Math.round(Number(v));
-            m.idle_timeout_s = v && Number.isFinite(n) && n > 0 ? n : null;
-          }
-          else m[f] = inp.value;
-        });
+      $$("[data-key]", pane).forEach((inp) => {
+        const v = String(inp.value || "").trim();
+        if (v) draftKeys[inp.dataset.key] = v;
       });
       const def = $("#ai-default");
       if (def && def.value) draftAi.default_model = def.value;
-
-      // 先写密钥（失败不阻断保存其它设置）。键名由 Rust 算（`ai_model_key_set`）——
-      // 前端不许自己拼前缀：曾经这里传原始 id，而读取端查的是 `ai-model:{id}`，
-      // 于是"填了密钥仍显示未配置、一调用就报缺少 API Key"（2026-10-14 修）。
-      for (const w of keyWrites) {
+      $$("[data-pmax]", pane).forEach((inp) => {
+        const p = (draftAi.providers || []).find((x) => x.id === inp.dataset.pmax);
+        if (p) p.max_tokens = Math.max(1, Number(inp.value) || p.max_tokens);
+      });
+      $$("[data-ptemp]", pane).forEach((inp) => {
+        const p = (draftAi.providers || []).find((x) => x.id === inp.dataset.ptemp);
+        if (p) p.temperature = Math.min(2, Math.max(0, Number(inp.value) || 0));
+      });
+      $$("[data-pidle]", pane).forEach((inp) => {
+        const p = (draftAi.providers || []).find((x) => x.id === inp.dataset.pidle);
+        const v = String(inp.value || "").trim();
+        const n = Math.round(Number(v));
+        if (p) p.idle_timeout_s = v && Number.isFinite(n) && n > 0 ? n : null;
+      });
+      // 旧字段仍写回模型：设置文件保持自描述。
+      for (const m of draftAi.models || []) {
+        const p = (draftAi.providers || []).find((x) => x.id === m.provider_id);
+        if (!p) continue;
+        m.provider = p.provider;
+        m.base_url = p.base_url;
+        m.max_tokens = p.max_tokens;
+        m.temperature = p.temperature;
+        m.idle_timeout_s = p.idle_timeout_s;
+      }
+      for (const [id, secret] of Object.entries(draftKeys)) {
         try {
-          await DGM.ipc.invoke("ai_model_key_set", { modelId: w.id, secret: w.secret });
+          await DGM.ipc.invoke("ai_provider_key_set", { providerId: id, secret });
         } catch (e) {
           DGM.toast({ icon: "alert", title: t("set.ai.apiKey"), sub: (e && e.message) || String(e), warn: true });
         }
       }
-      // 删掉的模型顺手清密钥，别在凭据库里留孤儿
-      const kept = new Set((draftAi.models || []).map((m) => m.id));
-      for (const m of state.ai().models || []) {
-        if (!kept.has(m.id)) {
-          await DGM.ipc.invoke("ai_model_key_delete", { modelId: m.id }).catch(() => {});
-        }
+      for (const id of removedProviders) {
+        await DGM.ipc.invoke("ai_provider_key_delete", { providerId: id }).catch(() => {});
       }
+      draftKeys = {};
+      removedProviders = new Set();
       await state.patchSettings({ ai: draftAi });
     }
     close();

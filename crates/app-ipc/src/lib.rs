@@ -230,28 +230,47 @@ impl Default for EditorPrefs {
     }
 }
 
-/// 单个 AI 模型配置。`key_hint` 是掩码（如 `sk-…1234`），**密钥本体永不回传前端**。
+/// 一个用户配置的模型供应商（BYOK）：地址 + 密钥 + 该供应商的默认生成参数。
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AiModel {
+pub struct AiProvider {
     pub id: String,
     pub name: String,
     /// openai | ollama | custom
     pub provider: String,
     pub base_url: String,
-    pub model: String,
     pub max_tokens: u32,
     pub temperature: f32,
-    /// 空闲超时（秒）：多久收不到一个字节就判定这条流死了。
-    ///
-    /// **留空 = 自动**：本地 `ollama` 300s，`openai` / `custom` 90s（见
-    /// `ai::provider::idle_timeout_for`）。只对 BYOK 有意义 —— 云网关那条路不读它
-    /// （服务端自己发心跳），单位秒，填了会被钳到 `15..=1800`。
     #[serde(default)]
     pub idle_timeout_s: Option<u32>,
-    /// 由 Rust 依凭据库**现算**后下发；前端回传时允许省略
     #[serde(default)]
     pub has_key: bool,
-    /// 掩码（`sk-…1234`）；同上，前端回传时允许省略
+    #[serde(default)]
+    pub key_hint: String,
+}
+
+/// 单个 AI 模型配置。`key_hint` 是掩码（如 `sk-…1234`），**密钥本体永不回传前端**。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AiModel {
+    pub id: String,
+    /// 指向 `AiPrefs.providers[].id`。旧设置里为空，加载时迁移。
+    #[serde(default)]
+    pub provider_id: String,
+    pub model: String,
+    #[serde(default)]
+    pub name: String,
+    /// 以下是 **v3.8.4 及以前的遗留字段**：只用于把旧设置迁移成供应商。
+    #[serde(default)]
+    pub provider: String,
+    #[serde(default)]
+    pub base_url: String,
+    #[serde(default)]
+    pub max_tokens: u32,
+    #[serde(default)]
+    pub temperature: f32,
+    #[serde(default)]
+    pub idle_timeout_s: Option<u32>,
+    #[serde(default)]
+    pub has_key: bool,
     #[serde(default)]
     pub key_hint: String,
 }
@@ -259,6 +278,7 @@ pub struct AiModel {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AiPrefs {
+    pub providers: Vec<AiProvider>,
     pub models: Vec<AiModel>,
     pub default_model: String,
     pub vision_notice_accepted: bool,
@@ -280,6 +300,7 @@ pub struct AiPrefs {
 impl Default for AiPrefs {
     fn default() -> Self {
         Self {
+            providers: Vec::new(),
             models: Vec::new(),
             default_model: String::new(),
             vision_notice_accepted: false,
@@ -1026,6 +1047,9 @@ pub mod commands {
     pub const EXPORT_WRITE: &str = "export_write";
     pub const AI_MODEL_KEY_SET: &str = "ai_model_key_set";
     pub const AI_MODEL_KEY_DELETE: &str = "ai_model_key_delete";
+    pub const AI_PROVIDER_MODELS: &str = "ai_provider_models";
+    pub const AI_PROVIDER_KEY_SET: &str = "ai_provider_key_set";
+    pub const AI_PROVIDER_KEY_DELETE: &str = "ai_provider_key_delete";
     pub const CONVERT_TEXT: &str = "convert_text";
     pub const AI_CHAT: &str = "ai_chat";
     pub const AI_CANCEL: &str = "ai_cancel";

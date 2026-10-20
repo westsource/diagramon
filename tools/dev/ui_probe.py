@@ -1109,7 +1109,7 @@ def main() -> int:
             "  const out = {};"
             "  await DGM.state.cloudLogout(); await wait(250);"
             "  out.outGw = DGM.state.gatewayModels().length;"
-            "  out.outLocal = DGM.state.modelChoices().filter(m => m.group === 'local').length;"
+            "  out.outLocal = DGM.state.modelChoices().filter(m => String(m.group).indexOf('provider:') === 0).length;"
             "  await DGM.state.cloudLogin('probe@example.com', 'secret'); await wait(400);"
             "  out.inGw = DGM.state.gatewayModels().map(m => m.id);"
             "  out.inDefault = DGM.state.ai().default_model;"
@@ -1158,19 +1158,19 @@ def main() -> int:
                 fails.append(f"登录后没自动选中第一个网关模型: {g.get('inDefault')}")
             if g.get("current") != "gw:glm-5.2":
                 fails.append(f"当前模型没落到网关别名上: {g.get('current')}")
-            want_groups = ["Diagramon 云网关", "我的模型"]
+            want_groups = ["Diagramon 云网关", "OpenAI", "Ollama (local)"]
             if g.get("labels") != want_groups:
                 fails.append(f"AI 面板下拉没有两组小标题（应为 {want_groups}）: {g.get('labels')}")
             rows = g.get("rows") or []
             if not rows or "GLM-5.2" not in rows[0]:
                 fails.append(f"下拉里网关组没排在最前: {rows}")
-            if not any("BYOK" in r for r in rows):
+            if not any("gpt-4o" in r for r in rows):
                 fails.append(f"下拉里没有本地那组: {rows}")
             if "GLM-5.2" not in (g.get("checked") or ""):
                 fails.append(f"下拉没把网关默认模型标成选中: {g.get('checked')}")
             if g.get("subLabels") != want_groups:
                 fails.append(f"AI 菜单的模型子菜单没有分组（label2 没透传？）: {g.get('subLabels')}")
-            if not any("BYOK" in r for r in (g.get("subRows") or [])):
+            if not any("gpt-4o" in r for r in (g.get("subRows") or [])):
                 fails.append(f"AI 菜单子菜单里没有本地那组: {g.get('subRows')}")
             if g.get("afterLogoutGw") != 0:
                 fails.append(f"登出后网关模型没清空: {g.get('afterLogoutGw')}")
@@ -1284,40 +1284,45 @@ def main() -> int:
         ev("(async () => { DGM.dialogs.close(); await new Promise(r => setTimeout(r, 80)); return 1; })()")
         ev(f"DGM.i18n.setLang({json.dumps(lang0)}); DGM.i18n.apply(); 1")
 
-        # 自定义模型：Add/Remove 必须真的改变行数并落到 settings。
-        # 历史 bug 形态：pAI 用 state 渲染而草稿写在 draftAi 里，add/remove 改完草稿重画
-        # 又被 settings() 重置 —— 「Add model 点了没反应」，坏了很多版没人发现。
+        # 供应商：添加 → 拉模型 → 加入草稿 → 保存落盘 → 删除并保存。
         model_check = ev(
             "(async () => {"
-            "  const rows = () => document.querySelectorAll('#model-list .model-row').length;"
-            "  const st = () => (DGM.state.settings.ai.models || []).length;"
-            "  DGM.dialogs.settings('ai');"
-            "  await new Promise(r => setTimeout(r, 150));"
-            "  const n0 = rows(), s0 = st();"
-            "  [...document.querySelectorAll('[data-act]')].find(b => b.dataset.act === 'add').click();"
-            "  await new Promise(r => setTimeout(r, 150));"
-            "  const n1 = rows();"
-            "  [...document.querySelectorAll('[data-act^=\"del:\"]')].pop().click();"
-            "  await new Promise(r => setTimeout(r, 150));"
-            "  const n2 = rows();"
-            "  [...document.querySelectorAll('[data-act]')].find(b => b.dataset.act === 'save').click();"
-            "  await new Promise(r => setTimeout(r, 200));"
+            "  const wait = (ms) => new Promise(r => setTimeout(r, ms));"
+            "  const cards = () => document.querySelectorAll('.ai-prov').length;"
+            "  const st = () => (DGM.state.settings.ai.providers || []).length;"
+            "  DGM.dialogs.settings('ai'); await wait(180);"
+            "  const n0 = cards(), s0 = st();"
+            "  [...document.querySelectorAll('[data-act]')].find(b => b.dataset.act === 'addprov').click(); await wait(150);"
+            "  document.querySelector('#ap-base').value = 'https://api.deepseek.com/v1';"
+            "  document.querySelector('#ap-key').value = 'sk-probe';"
+            "  [...document.querySelectorAll('[data-act]')].find(b => b.dataset.act === 'pfetch').click(); await wait(500);"
+            "  const listed = document.querySelectorAll('#ap-models input').length;"
+            "  [...document.querySelectorAll('[data-act]')].find(b => b.dataset.act === 'padd').click(); await wait(250);"
+            "  const n1 = cards();"
+            "  [...document.querySelectorAll('[data-act]')].find(b => b.dataset.act === 'save').click(); await wait(300);"
             "  const s1 = st();"
+            "  DGM.dialogs.settings('ai'); await wait(200);"
+            "  window.confirm = () => true;"
+            "  [...document.querySelectorAll('[data-act^=\"delprov:\"]')].pop().click(); await wait(200);"
+            "  [...document.querySelectorAll('[data-act]')].find(b => b.dataset.act === 'save').click(); await wait(300);"
+            "  const s2 = st();"
             "  DGM.dialogs.close();"
-            "  return JSON.stringify({ n0, n1, n2, s0, s1 });"
+            "  return JSON.stringify({ n0, n1, s0, s1, s2, listed });"
             "})()"
         )
-        log(f"自定义模型 Add/Remove: {model_check}")
+        log(f"供应商 Add/Remove: {model_check}")
         try:
             mc = json.loads(model_check or "{}")
+            if mc.get("listed", 0) < 1:
+                fails.append(f"拉取模型后清单是空的：{mc.get('listed')}")
             if mc.get("n1") != mc.get("n0", -99) + 1:
-                fails.append(f"点 Add model 后行数没 +1：{mc.get('n0')}→{mc.get('n1')}（草稿渲染断了）")
-            if mc.get("n2") != mc.get("n0"):
-                fails.append(f"删掉刚加的模型后行数没回到原值：{mc.get('n2')}")
-            if mc.get("s1") != mc.get("s0"):
-                fails.append(f"保存后 settings 里模型数变了（应只加又删）：{mc.get('s0')}→{mc.get('s1')}")
+                fails.append(f"点「加入列表」后供应商卡片没 +1：{mc.get('n0')}→{mc.get('n1')}（草稿渲染断了）")
+            if mc.get("s1") != mc.get("s0", -99) + 1:
+                fails.append(f"保存后 settings 里供应商没 +1：{mc.get('s0')}→{mc.get('s1')}")
+            if mc.get("s2") != mc.get("s0"):
+                fails.append(f"删掉刚加的供应商后没回到原值：{mc.get('s0')}→{mc.get('s2')}")
         except Exception as e:
-            fails.append(f"自定义模型断言解析失败：{e} / {model_check}")
+            fails.append(f"供应商断言解析失败：{e} / {model_check}")
 
         close_alive = ev(
             "(() => { const b = document.querySelector('#win-close'); "
@@ -2294,13 +2299,13 @@ def main() -> int:
         idle = ev(
             "(async () => {"
             "  const open = async () => { DGM.dialogs.settings('ai'); await new Promise(r => setTimeout(r, 200)); };"
-            "  const box = () => { const rows = document.querySelectorAll('#model-list .model-row');"
-            "    return rows.length ? rows[rows.length - 1].querySelector('[data-f=\"idle_timeout_s\"]') : null; };"
+            "  const box = () => { const ps = document.querySelectorAll('.ai-prov [data-pidle]');"
+            "    return ps.length ? ps[ps.length - 1] : null; };"
             "  const put = (v) => { const b = box(); if (!b) return 'missing'; b.value = v; return b.value; };"
             "  const save = async () => { [...document.querySelectorAll('[data-act]')].find(b => b.dataset.act === 'save').click();"
             "    await new Promise(r => setTimeout(r, 260)); };"
-            "  const stored = () => { const ms = DGM.state.settings.ai.models || [];"
-            "    return ms.length ? (ms[ms.length - 1].idle_timeout_s === undefined ? 'undefined' : ms[ms.length - 1].idle_timeout_s) : 'no-model'; };"
+            "  const stored = () => { const ps = DGM.state.settings.ai.providers || [];"
+            "    return ps.length ? (ps[ps.length - 1].idle_timeout_s === undefined ? 'undefined' : ps[ps.length - 1].idle_timeout_s) : 'no-provider'; };"
             "  await open();"
             "  const initial = put('45');"
             "  await save();"

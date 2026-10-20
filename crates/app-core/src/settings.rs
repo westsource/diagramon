@@ -79,10 +79,11 @@ mod tests {
         s.panels.sidebar = true;
         s.ai.models.push(app_ipc::AiModel {
             id: "m1".into(),
+            provider_id: String::new(),
+            model: "qwen".into(),
             name: "本地".into(),
             provider: "ollama".into(),
             base_url: "http://localhost:11434".into(),
-            model: "qwen".into(),
             max_tokens: 4096,
             temperature: 0.7,
             idle_timeout_s: None,

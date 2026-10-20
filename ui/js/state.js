@@ -179,7 +179,20 @@ window.DGM = window.DGM || {};
         // **null 与 false 必须分开**：本地模型画个"不支持识图"是我们在替用户下结论。
         vision: !!m.supports_vision,
       }));
-      const local = (state.ai().models || []).map((m) => ({ ...m, group: "local", vision: null }));
+      const providers = state.ai().providers || [];
+      const byId = {};
+      providers.forEach((p) => (byId[p.id] = p));
+      const local = (state.ai().models || []).map((m) => {
+        const p = byId[m.provider_id];
+        return {
+          ...m,
+          name: m.name || m.model,
+          group: p ? "provider:" + p.id : "local",
+          groupLabel: p ? p.name : t("ai.group.local"),
+          has_key: p ? p.provider === "ollama" || p.has_key : !!m.has_key,
+          vision: null,
+        };
+      });
       return gw.concat(local);
     },
     hasModels() {

@@ -1216,31 +1216,34 @@ window.DGM = window.DGM || {};
       }
       ok("ai_cancel 的参数能被解析（多词参数两侧一致）", cancelErr.includes("结束"), cancelErr.slice(0, 60));
 
-      // BYOK 密钥的键名必须**只有一处**在算：写走 `ai_model_key_set`（Rust 加
-      // `ai-model:` 前缀），读走 `hydrate_models` 查同一把键。曾经前端拿原始 id 去写、
-      // Rust 拿前缀去读 —— 于是"填了密钥仍显示未配置、一调用就报缺少 API Key"
-      // （2026-10-14 修，BYOK 整条路当时都不可用）。这里把这条配对钉住；
-      // 用完恢复原有模型列表，别动用户的配置。
+      // BYOK 密钥的键名必须**只有一处**在算：写走 `ai_provider_key_set`（Rust 加
+      // `ai-provider:` 前缀），读走 `hydrate_models` 查同一把键。这里把这条配对钉住；
+      // 用完恢复原有配置，别动用户的模型/供应商。
       let keyPair = null;
       const beforeKey = await invoke("settings_get");
-      const origModels = (beforeKey.ai && beforeKey.ai.models) || [];
+      const origAi = beforeKey.ai || {};
+      const origProviders = origAi.providers || [];
+      const origModels = origAi.models || [];
       try {
         const probeId = "selftest-key-probe";
-        await invoke("ai_model_key_set", { modelId: probeId, secret: "sk-selftest" });
+        await invoke("ai_provider_key_set", { providerId: probeId, secret: "sk-selftest" });
         const patched = await invoke("settings_patch", {
           patch: {
             ai: {
+              providers: origProviders.concat([
+                { id: probeId, name: "selftest", provider: "openai", base_url: "https://example.invalid/v1", max_tokens: 16, temperature: 0 },
+              ]),
               models: origModels.concat([
-                { id: probeId, name: "selftest", provider: "openai", base_url: "https://example.invalid/v1", model: "x", max_tokens: 16, temperature: 0 },
+                { id: "selftest-model-probe", provider_id: probeId, model: "x", name: "selftest" },
               ]),
             },
           },
         });
-        const probe = (patched.ai.models || []).find((m) => m.id === probeId);
+        const probe = (patched.ai.models || []).find((m) => m.id === "selftest-model-probe");
         keyPair = probe ? !!probe.has_key : null;
-        await invoke("ai_model_key_delete", { modelId: probeId });
+        await invoke("ai_provider_key_delete", { providerId: probeId });
       } finally {
-        await invoke("settings_patch", { patch: { ai: { models: origModels } } });
+        await invoke("settings_patch", { patch: { ai: { providers: origProviders, models: origModels } } });
       }
       ok("BYOK 密钥写/读同一把键（填了密钥即显示已配置）", keyPair === true, String(keyPair));
 

@@ -199,6 +199,69 @@ pub fn normalize_base_url(raw: &str) -> String {
     s.trim_end_matches('/').to_string()
 }
 
+/// 拉取供应商的模型列表（BYOK 设置页用）。
+///
+/// OpenAI 兼容走 `GET {base}/models`；Ollama 走 `GET {base}/api/tags`。
+/// **密钥只在本函数内使用，不落盘**；已保存的供应商由命令层从凭据库取。
+pub async fn list_models(
+    client: &reqwest::Client,
+    provider: &str,
+    base_url: &str,
+    api_key: Option<&str>,
+) -> Result<Vec<String>, ChatError> {
+    let base = normalize_base_url(base_url);
+    if base.is_empty() {
+        return Err(ChatError::Protocol("Base URL 为空".into()));
+    }
+    let ollama = provider == "ollama";
+    if !ollama && api_key.map(str::trim).filter(|s| !s.is_empty()).is_none() {
+        return Err(ChatError::MissingKey);
+    }
+    let url = if ollama { format!("{base}/api/tags") } else { format!("{base}/models") };
+    let mut req = client.get(url).timeout(Duration::from_secs(20));
+    if let Some(key) = api_key.map(str::trim).filter(|s| !s.is_empty()) {
+        req = req.bearer_auth(key);
+    }
+    let resp = req.send().await.map_err(|e| ChatError::Network(e.to_string()))?;
+    let status = resp.status();
+    let text = resp.text().await.map_err(|e| ChatError::Network(e.to_string()))?;
+    if !status.is_success() {
+        return Err(ChatError::Http { status: status.as_u16(), body: truncate(&text, 300) });
+    }
+    let v: Value =
+        serde_json::from_str(&text).map_err(|e| ChatError::Protocol(format!("模型列表不是 JSON：{e}")))?;
+    let mut ids: Vec<String> = if ollama {
+        v["models"]
+            .as_array()
+            .map(|a| {
+                a.iter()
+                    .filter_map(|m| m["name"].as_str().or_else(|| m["model"].as_str()))
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_default()
+    } else {
+        v["data"]
+            .as_array()
+            .map(|a| {
+                a.iter()
+                    .filter_map(|m| m["id"].as_str())
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    ids.retain(|s| !s.trim().is_empty());
+    ids.sort();
+    ids.dedup();
+    if ids.is_empty() {
+        return Err(ChatError::Protocol(
+            "上游没有返回任何模型（检查 Base URL 是否指向 OpenAI 兼容接口）".into(),
+        ));
+    }
+    Ok(ids)
+}
+
 /// 构造请求体（单独抽出来是为了能在没有网络的情况下测）。
 ///
 /// `max_tokens` / `temperature` 为 `None` 时**不放这两个键**（不是放 0）——

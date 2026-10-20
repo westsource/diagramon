@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Instant;
 
 use app_core::Session;
-use app_ipc::{Settings, WorkspaceInfo};
+use app_ipc::{AiProvider, Settings, WorkspaceInfo};
 use platform::{AppPaths, CredentialStore};
 
 /// 现在（毫秒）。**毫秒是前后端唯一的单位**：前端 `Date.now()`、`RecentEntry.opened_at`
@@ -62,9 +62,106 @@ pub struct AppState {
     pub vision: crate::vision::Frames,
 }
 
+/// 旧版只有 `ai.models`，每行自带 provider/base_url/密钥。
+/// 这里把相同的 `(provider, base_url)` 合成一个供应商，并把模型密钥搬到供应商键下。
+pub(crate) fn migrate_ai_providers(s: &mut Settings, creds: &dyn CredentialStore) -> bool {
+    let mut changed = false;
+    let mut next = s.ai.providers.len() + 1;
+    for i in 0..s.ai.models.len() {
+        if !s.ai.models[i].provider_id.is_empty() {
+            continue;
+        }
+        let kind = s.ai.models[i].provider.clone();
+        let base = s.ai.models[i].base_url.clone();
+        if kind.is_empty() || base.is_empty() {
+            continue;
+        }
+        let existing = s
+            .ai
+            .providers
+            .iter()
+            .find(|p| p.provider == kind && p.base_url == base)
+            .map(|p| p.id.clone());
+        let provider_id = match existing {
+            Some(id) => id,
+            None => {
+                let id = format!("p-legacy-{next}");
+                next += 1;
+                s.ai.providers.push(AiProvider {
+                    id: id.clone(),
+                    name: legacy_provider_name(&kind, &base),
+                    provider: kind,
+                    base_url: base,
+                    max_tokens: if s.ai.models[i].max_tokens == 0 { 4096 } else { s.ai.models[i].max_tokens },
+                    temperature: if s.ai.models[i].temperature == 0.0 { 0.2 } else { s.ai.models[i].temperature },
+                    idle_timeout_s: s.ai.models[i].idle_timeout_s,
+                    has_key: false,
+                    key_hint: String::new(),
+                });
+                id
+            }
+        };
+        s.ai.models[i].provider_id = provider_id;
+        changed = true;
+    }
+    for p in &s.ai.providers {
+        if matches!(creds.get(&provider_credential_key(&p.id)), Ok(Some(_))) {
+            continue;
+        }
+        for m in s.ai.models.iter().filter(|m| m.provider_id == p.id) {
+            if let Ok(Some(secret)) = creds.get(&credential_key(&m.id)) {
+                let _ = creds.set(&provider_credential_key(&p.id), &secret);
+                break;
+            }
+        }
+    }
+    changed
+}
+
+fn legacy_provider_name(kind: &str, base_url: &str) -> String {
+    if kind == "ollama" {
+        return "Ollama（本机）".to_string();
+    }
+    let host = base_url
+        .split("://")
+        .nth(1)
+        .unwrap_or(base_url)
+        .split('/')
+        .next()
+        .unwrap_or("")
+        .rsplit('@')
+        .next()
+        .unwrap_or("")
+        .split(':')
+        .next()
+        .unwrap_or("");
+    match host {
+        "api.openai.com" => "OpenAI".to_string(),
+        "api.deepseek.com" => "DeepSeek".to_string(),
+        "api.siliconflow.cn" => "硅基流动".to_string(),
+        "" => "自定义".to_string(),
+        other => {
+            let label = other
+                .trim_start_matches("www.")
+                .trim_start_matches("api.")
+                .split('.')
+                .next()
+                .unwrap_or("自定义");
+            let mut chars = label.chars();
+            match chars.next() {
+                Some(c) => c.to_uppercase().collect::<String>() + chars.as_str(),
+                None => "自定义".to_string(),
+            }
+        }
+    }
+}
+
 impl AppState {
     pub fn new(paths: AppPaths, creds: Arc<dyn CredentialStore>) -> Self {
-        let settings = app_core::settings::load(&paths.settings_file());
+        let mut settings = app_core::settings::load(&paths.settings_file());
+        if migrate_ai_providers(&mut settings, creds.as_ref()) {
+            let _ = app_core::settings::save(&paths.settings_file(), &settings);
+        }
         // 默认池的空闲档 = BYOK 的默认档（90s，见 `ai::provider::idle_timeout_for`）：
         // 云网关、以及没填空闲超时的 openai / custom 模型都落到这一档。
         let http = http_client(ai::provider::idle_timeout_for("openai", None));
@@ -140,7 +237,24 @@ impl AppState {
     /// 交给前端之前，把密钥状态**现算**一遍：
     /// 磁盘上的 `has_key` 可能是别的机器留下的，只有凭据库说了算。
     pub fn hydrate_models(&self, s: &mut Settings) {
+        for p in &mut s.ai.providers {
+            match self.creds.get(&provider_credential_key(&p.id)) {
+                Ok(Some(secret)) => {
+                    p.has_key = true;
+                    p.key_hint = platform::mask(&secret);
+                }
+                _ => {
+                    p.has_key = false;
+                    p.key_hint = String::new();
+                }
+            }
+        }
         for m in &mut s.ai.models {
+            if let Some(p) = s.ai.providers.iter().find(|p| p.id == m.provider_id) {
+                m.has_key = p.has_key;
+                m.key_hint = p.key_hint.clone();
+                continue;
+            }
             match self.creds.get(&credential_key(&m.id)) {
                 Ok(Some(secret)) => {
                     m.has_key = true;
@@ -272,9 +386,14 @@ fn http_client(idle: std::time::Duration) -> reqwest::Client {
         .unwrap_or_default()
 }
 
-/// 一个模型对应一条凭据记录（键名固定，便于删除时清理）。
+/// 一个模型对应一条凭据记录（**v3.8.4 及以前**；现在只用于迁移时读取旧键）。
 pub fn credential_key(model_id: &str) -> String {
     format!("ai-model:{model_id}")
+}
+
+/// 一个供应商对应一条凭据记录（密钥填一次，模型共用）。
+pub fn provider_credential_key(provider_id: &str) -> String {
+    format!("ai-provider:{provider_id}")
 }
 
 /// 云网关令牌在凭据库里的键名。**令牌永不回前端**（cloud.rs 的头注释）。
