@@ -76,6 +76,7 @@ pub(crate) fn migrate_ai_providers(s: &mut Settings, creds: &dyn CredentialStore
         if kind.is_empty() || base.is_empty() {
             continue;
         }
+        let session_header = ai::provider::is_opencode_base(&base);
         let existing = s
             .ai
             .providers
@@ -95,6 +96,8 @@ pub(crate) fn migrate_ai_providers(s: &mut Settings, creds: &dyn CredentialStore
                     max_tokens: if s.ai.models[i].max_tokens == 0 { 500_000 } else { s.ai.models[i].max_tokens },
                     temperature: if s.ai.models[i].temperature == 0.0 { 0.2 } else { s.ai.models[i].temperature },
                     idle_timeout_s: s.ai.models[i].idle_timeout_s,
+                    // 旧配置没有这个字段：按地址识别 opencode，迁移后即可用
+                    session_header,
                     has_key: false,
                     key_hint: String::new(),
                 });

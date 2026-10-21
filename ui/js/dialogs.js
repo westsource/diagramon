@@ -667,6 +667,7 @@ window.DGM = window.DGM || {};
           max_tokens: m.max_tokens || 500000,
           temperature: m.temperature || 0.2,
           idle_timeout_s: m.idle_timeout_s == null ? null : m.idle_timeout_s,
+          session_header: !!meta.session_header,
           has_key: !!m.has_key,
           key_hint: m.key_hint || "",
         };
@@ -692,8 +693,9 @@ window.DGM = window.DGM || {};
       "api.deepseek.com": "DeepSeek",
       "api.siliconflow.cn": "SiliconFlow",
       "api.anthropic.com": "Anthropic",
+      "opencode.ai": "OpenCode",
     };
-    if (ollama) return { provider: "ollama", name: "Ollama (local)" };
+    if (ollama) return { provider: "ollama", name: "Ollama (local)", session_header: false };
     const name =
       known[host] ||
       (host
@@ -703,7 +705,9 @@ window.DGM = window.DGM || {};
             .split(".")[0]
             .replace(/^./, (c) => c.toUpperCase())
         : "Custom");
-    return { provider: "openai", name };
+    // OpenCode Go 要求每个请求带 x-opencode-session；UI 自动勾选，用户仍可取消。
+    const session_header = host === "opencode.ai" || host.endsWith(".opencode.ai");
+    return { provider: "openai", name, session_header };
   }
 
   function providerInitials(name) {
@@ -743,6 +747,7 @@ window.DGM = window.DGM || {};
           <label class="field"><span>${esc(t("set.ai.providerName"))}</span><input id="ap-name" value="${esc(f.name || "")}" spellcheck="false" placeholder="${esc(providerMeta(f.base).name)}"><span class="hint">${esc(t("set.ai.providerNameHint"))}</span></label>
           <label class="field"><span>${esc(t("set.ai.baseUrl"))}</span><input id="ap-base" value="${esc(f.base)}" spellcheck="false" placeholder="https://api.example.com/v1"><span class="hint">${esc(t("set.ai.baseUrlHint"))}</span></label>
           <label class="field"><span>${esc(t("set.ai.apiKey"))}</span><input id="ap-key" type="password" value="${esc(f.key)}" spellcheck="false" placeholder="${esc(t("set.ai.keyOptional"))}"><span class="hint">${esc(t("set.ai.keyHint"))}</span></label>
+          <label class="field check"><input id="ap-session" type="checkbox" ${f.sessionHeader || providerMeta(f.base).session_header ? "checked" : ""}><span>${esc(t("set.ai.sessionHeader"))}</span><span class="hint">${esc(t("set.ai.sessionHeaderHint"))}</span></label>
           <div class="staging-note">${icon("info", "ico-sm")}<span>${t("set.ai.saveTiming")}</span></div>
           ${status}
           ${list}
@@ -758,7 +763,7 @@ window.DGM = window.DGM || {};
   }
 
   function openProviderForm() {
-    providerForm = { base: "https://api.openai.com/v1", name: "", key: "", models: null, busy: false, err: "" };
+    providerForm = { base: "https://api.openai.com/v1", name: "", key: "", models: null, busy: false, err: "", sessionHeader: false };
     renderSettings("ai");
   }
 
@@ -804,7 +809,9 @@ window.DGM = window.DGM || {};
     const id = "p" + Date.now().toString(36);
     ai.providers.push({
       id, name: displayName, provider: meta.provider, base_url: base,
-      max_tokens: 500000, temperature: 0.2, idle_timeout_s: null, has_key: false, key_hint: "",
+      max_tokens: 500000, temperature: 0.2, idle_timeout_s: null,
+      session_header: !!($("#ap-session") || {}).checked,
+      has_key: false, key_hint: "",
     });
     for (const model of picked) {
       ai.models.push({ id: id + ":" + model, provider_id: id, model, name: model, has_key: false, key_hint: "" });

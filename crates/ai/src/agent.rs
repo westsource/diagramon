@@ -19,7 +19,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use serde_json::{json, Value};
 
-use crate::provider::{build_body_with_tools, text_of, truncate, ChatError, Resolved};
+use crate::provider::{apply_identity, build_body_with_tools, text_of, truncate, ChatError, Resolved};
 
 /// 箱装的 future。
 ///
@@ -214,7 +214,7 @@ impl Completer for HttpCompleter<'_> {
             }
 
             let body = build_body_with_tools(r, &messages, &tools, false);
-            let mut request = self.client.post(r.endpoint()).json(&body);
+            let mut request = apply_identity(self.client.post(r.endpoint()).json(&body), r);
             if let Some(key) = r.api_key.as_deref() {
                 if !key.trim().is_empty() {
                     request = request.bearer_auth(key.trim());

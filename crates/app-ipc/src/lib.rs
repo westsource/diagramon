@@ -242,6 +242,12 @@ pub struct AiProvider {
     pub temperature: f32,
     #[serde(default)]
     pub idle_timeout_s: Option<u32>,
+    /// 每个请求带 `x-opencode-session`（OpenCode Go 一类上游需要）。
+    ///
+    /// 默认为 false；UI 在识别到 `opencode.ai` 时自动勾选。解析模型时还会再按
+    /// `base_url` 自动判定一次，保证旧配置不用重新添加也能用。
+    #[serde(default)]
+    pub session_header: bool,
     #[serde(default)]
     pub has_key: bool,
     #[serde(default)]

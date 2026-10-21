@@ -1055,6 +1055,9 @@ button.st:hover { background: var(--surface-3); }
 }
 .field input:focus, .field select:focus, .field textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
 .field .hint { font-size: var(--fs-xs); color: var(--faint); }
+/* 复选框行：标签与说明横排，别被 .field 的竖排拉成三行 */
+.field.check { flex-direction: row; align-items: center; flex-wrap: wrap; gap: 6px 8px; }
+.field.check input { width: auto; margin: 0; }
 .field-row { display: flex; gap: 10px; }
 .field-row > .field { flex: 1; }
 

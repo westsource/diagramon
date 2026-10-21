@@ -63,6 +63,10 @@ pub struct Resolved {
     /// （`AppState::http_for_idle`），再把它连同客户端一起交给 `stream_chat` / `chat_once`。
     /// 值由 [`idle_timeout_for`] 从模型配置解析而来。
     pub idle_timeout: Duration,
+    /// 是否在每个请求上带 `x-opencode-session`（OpenCode Go 要求）。
+    pub session_header: bool,
+    /// 稳定会话号；`None`/空串时不发。同一对话应始终相同，上游才能命中缓存。
+    pub session_id: Option<String>,
 }
 
 impl Resolved {
@@ -186,6 +190,41 @@ pub enum ChatError {
     Protocol(String),
 }
 
+/// 给直连上游用的自有 UA（OpenCode 明确要求别用通用 SDK/HTTP 库名）。
+pub const USER_AGENT: &str = concat!("diagramon/", env!("CARGO_PKG_VERSION"));
+
+/// 这个 Base URL 是否指向 OpenCode Go（含其子域）。
+///
+/// 只做 host 判断，不解析路径：`https://opencode.ai/zen/go/v1`、
+/// `https://www.opencode.ai/v1` 都算；自定义反代请用供应商设置里的复选框。
+pub fn is_opencode_base(base_url: &str) -> bool {
+    let s = base_url.trim().to_ascii_lowercase();
+    let rest = s.split("://").nth(1).unwrap_or(&s);
+    let host = rest.split('/').next().unwrap_or("");
+    let host = host.rsplit('@').next().unwrap_or(host); // 去掉可能的 userinfo
+    let host = host.split(':').next().unwrap_or("");
+    host == "opencode.ai" || host.ends_with(".opencode.ai")
+}
+
+/// 给请求加上自有 UA / 会话头。只对直连上游生效；云网关由服务端自己生成。
+pub(crate) fn apply_identity_parts(
+    req: reqwest::RequestBuilder,
+    session_header: bool,
+    session_id: Option<&str>,
+) -> reqwest::RequestBuilder {
+    let req = req.header(reqwest::header::USER_AGENT, USER_AGENT);
+    match (session_header, session_id) {
+        (true, Some(id)) if !id.trim().is_empty() => {
+            req.header("x-opencode-session", id.trim())
+        }
+        _ => req,
+    }
+}
+
+pub(crate) fn apply_identity(req: reqwest::RequestBuilder, r: &Resolved) -> reqwest::RequestBuilder {
+    apply_identity_parts(req, r.session_header, r.session_id.as_deref())
+}
+
 /// 用户在 Base URL 里多填的路径要清掉 —— 旧客户端也做这件事，
 /// 否则 `/v1/chat/completions` + `/chat/completions` 会拼成 404。
 pub fn normalize_base_url(raw: &str) -> String {
@@ -208,6 +247,8 @@ pub async fn list_models(
     provider: &str,
     base_url: &str,
     api_key: Option<&str>,
+    session_header: bool,
+    session_id: Option<&str>,
 ) -> Result<Vec<String>, ChatError> {
     let base = normalize_base_url(base_url);
     if base.is_empty() {
@@ -218,7 +259,13 @@ pub async fn list_models(
         return Err(ChatError::MissingKey);
     }
     let url = if ollama { format!("{base}/api/tags") } else { format!("{base}/models") };
-    let mut req = client.get(url).timeout(Duration::from_secs(20));
+    // 模型列表也可能走同一套上游网关：带自有 UA / 可选的会话头（OpenCode 的 /models
+    // 目前不强制，但带上无害，且反代可能要求）。
+    let mut req = apply_identity_parts(
+        client.get(url).timeout(Duration::from_secs(20)),
+        session_header,
+        session_id,
+    );
     if let Some(key) = api_key.map(str::trim).filter(|s| !s.is_empty()) {
         req = req.bearer_auth(key);
     }
@@ -342,7 +389,7 @@ where
 
     let url = r.endpoint();
     let body = build_body(r, &messages, true);
-    let req = client.post(&url).json(&body);
+    let req = apply_identity(client.post(&url).json(&body), r);
     // 流式请求**不能继承**客户端的 300s 总超时：思考型模型一条流跑 5 分钟+很正常，
     // 撞上它会被硬掐成"error decoding response body"（真机实录 2026-10-16：改图流
     // 恰在 300s 整断掉，服务端 ai_usage 记 299.9s cancelled）。这里放宽成 30 分钟
@@ -576,7 +623,7 @@ pub async fn chat_once(
 
     let url = r.endpoint();
     let body = build_body(r, &messages, false);
-    let mut req = client.post(&url).json(&body);
+    let mut req = apply_identity(client.post(&url).json(&body), r);
     if let Some(key) = r.api_key.as_deref() {
         if !key.trim().is_empty() {
             req = req.bearer_auth(key.trim());
@@ -617,6 +664,8 @@ mod tests {
             max_tokens: Some(4096),
             temperature: Some(0.7),
             idle_timeout: idle_timeout_for("openai", None),
+            session_header: false,
+            session_id: None,
         }
     }
 
@@ -946,5 +995,94 @@ mod tests {
         let (text, u) = run_stream(url).unwrap();
         assert_eq!(text, "前半句", "已经收到的正文不能丢");
         assert_eq!(u.finish, Finish::Interrupted);
+    }
+
+    #[test]
+    fn opencode_base_detection_is_host_based() {
+        assert!(is_opencode_base("https://opencode.ai/zen/go/v1"));
+        assert!(is_opencode_base("https://www.opencode.ai/v1"));
+        assert!(is_opencode_base("http://opencode.ai:8080/v1"));
+        assert!(!is_opencode_base("https://api.openai.com/v1"));
+        assert!(!is_opencode_base("https://opencode.ai.example.com/v1"));
+        assert!(!is_opencode_base(""));
+    }
+
+    /// 只回固定 JSON/SSE 的极小服务端，同时把收到的请求头留下来。
+    fn capture_server(
+        body: &'static str,
+        content_type: &'static str,
+    ) -> (String, std::sync::Arc<std::sync::Mutex<String>>) {
+        use std::io::{Read, Write};
+        use std::sync::{Arc, Mutex};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let seen = Arc::new(Mutex::new(String::new()));
+        let sink = seen.clone();
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut s) = stream else { continue };
+                let mut buf = [0u8; 8192];
+                let n = Read::read(&mut s, &mut buf).unwrap_or(0);
+                *sink.lock().unwrap() = String::from_utf8_lossy(&buf[..n]).to_string();
+                let head = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                );
+                let _ = s.write_all(head.as_bytes());
+                let _ = s.write_all(body.as_bytes());
+                let _ = s.flush();
+            }
+        });
+        (format!("http://{addr}"), seen)
+    }
+
+    #[test]
+    fn opencode_session_header_is_sent_only_when_enabled() {
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let (base, seen) = capture_server("{\"data\":[{\"id\":\"m1\"}]}", "application/json");
+        let ids = rt
+            .block_on(list_models(
+                &reqwest::Client::new(),
+                "openai",
+                &base,
+                Some("sk-x"),
+                true,
+                Some("sid-1"),
+            ))
+            .unwrap();
+        assert_eq!(ids, vec!["m1"]);
+        let req = seen.lock().unwrap().to_ascii_lowercase();
+        assert!(req.contains("x-opencode-session: sid-1"), "{req}");
+        assert!(req.contains("user-agent: diagramon/"), "{req}");
+
+        let (base2, seen2) = capture_server("{\"data\":[{\"id\":\"m2\"}]}", "application/json");
+        rt.block_on(list_models(
+            &reqwest::Client::new(), "openai", &base2, Some("sk-x"), false, Some("sid-1"),
+        ))
+        .unwrap();
+        let req2 = seen2.lock().unwrap().to_ascii_lowercase();
+        assert!(!req2.contains("x-opencode-session"), "{req2}");
+    }
+
+    #[test]
+    fn stream_chat_carries_the_session_header() {
+        let (base, seen) = capture_server(
+            "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\n\
+             data: [DONE]\n\n",
+            "text/event-stream",
+        );
+        let r = Resolved {
+            base_url: base,
+            session_header: true,
+            session_id: Some("sid-2".into()),
+            ..openai()
+        };
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let (text, _reasoning, _usage) = rt
+            .block_on(stream_chat(&reqwest::Client::new(), &r, vec![], &AtomicBool::new(false), |_| {}))
+            .unwrap();
+        assert_eq!(text, "ok");
+        let req = seen.lock().unwrap().to_ascii_lowercase();
+        assert!(req.contains("x-opencode-session: sid-2"), "{req}");
     }
 }

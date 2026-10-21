@@ -476,7 +476,7 @@ pub async fn ai_provider_models(
     provider_id: Option<String>,
 ) -> R<Vec<String>> {
     // 已保存的供应商**只信 settings 里的地址**：避免一把已存密钥被改地址后发到别的主机。
-    let (provider, base_url, key) = match provider_id.as_deref() {
+    let (provider, base_url, key, session_header, session_key) = match provider_id.as_deref() {
         Some(id) => {
             let found = {
                 let s = state.settings();
@@ -484,24 +484,34 @@ pub async fn ai_provider_models(
                     .providers
                     .iter()
                     .find(|p| p.id == id)
-                    .map(|p| (p.provider.clone(), p.base_url.clone()))
+                    .map(|p| (p.provider.clone(), p.base_url.clone(), p.session_header))
             };
-            let (kind, base) = found.ok_or_else(|| format!("供应商不存在：{id}"))?;
+            let (kind, base, header) = found.ok_or_else(|| format!("供应商不存在：{id}"))?;
             let key = state
                 .creds
                 .get(&crate::state::provider_credential_key(id))
                 .map_err(|e| e.to_string())?;
-            (kind, base, key)
+            let header = header || ai::provider::is_opencode_base(&base);
+            (kind, base, key, header, id.to_string())
         }
         None => {
             let key = api_key.map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
-            (provider, base_url, key)
+            let header = ai::provider::is_opencode_base(&base_url);
+            (provider, base_url, key, header, "unsaved".to_string())
         }
     };
+    let session_id = session_header.then(|| client_session_id(state.inner(), &session_key, "models"));
     let client = state.http_for_idle(ai::provider::idle_timeout_for("openai", None));
-    ai::provider::list_models(&client, &provider, &base_url, key.as_deref())
-        .await
-        .map_err(|e| e.to_string())
+    ai::provider::list_models(
+        &client,
+        &provider,
+        &base_url,
+        key.as_deref(),
+        session_header,
+        session_id.as_deref(),
+    )
+    .await
+    .map_err(|e| e.to_string())
 }
 
 /* ---------------- AI ---------------- */
@@ -514,6 +524,16 @@ fn resolve_model(state: &AppState, model_id: &str) -> R<AiModel> {
         .find(|m| m.id == model_id)
         .cloned()
         .ok_or_else(|| format!("模型不存在：{model_id}（先在「AI 设置」里添加供应商）"))
+}
+
+/// 给需要会话头的上游生成**稳定**会话号：同一设备 + 同一文档 + 同一供应商每轮都相同，
+/// 上游才能命中 prompt 缓存（OpenCode Go 的缓存读价远低于输入价）。
+fn client_session_id(state: &AppState, provider_key: &str, scope: &str) -> String {
+    let device = state.settings().cloud.device_id.clone();
+    let who = if device.trim().is_empty() { "local" } else { device.trim() };
+    let scope = if scope.trim().is_empty() { "no-doc" } else { scope };
+    let seed = format!("diagramon:client:{who}:{scope}:{provider_key}");
+    uuid::Uuid::new_v5(&uuid::Uuid::NAMESPACE_URL, seed.as_bytes()).to_string()
 }
 
 /// 解析这次对话用哪个模型。**两条来源互不混用**，靠 id 前缀分流：
@@ -557,6 +577,12 @@ async fn resolve_target(state: &AppState, model_id: &str) -> R<ai::Resolved> {
             .get(&credential_key(&model.id))
             .map_err(|e| e.to_string())?
     };
+    // 会话头：显式开关或地址识别（旧配置没有开关，靠地址自动生效）。
+    let provider_key = provider.as_ref().map(|p| p.id.clone()).unwrap_or_else(|| model.id.clone());
+    let session_header =
+        provider.as_ref().map(|p| p.session_header).unwrap_or(false)
+            || ai::provider::is_opencode_base(&base_url);
+    let session_id = session_header.then(|| client_session_id(state, &provider_key, &active_doc_key(state)));
     Ok(ai::Resolved {
         provider: kind.clone(),
         base_url,
@@ -565,6 +591,8 @@ async fn resolve_target(state: &AppState, model_id: &str) -> R<ai::Resolved> {
         max_tokens: Some(max_tokens),
         temperature: Some(temperature),
         idle_timeout: ai::provider::idle_timeout_for(&kind, idle_timeout_s),
+        session_header,
+        session_id,
     })
 }
 
@@ -574,6 +602,18 @@ async fn resolve_target(state: &AppState, model_id: &str) -> R<ai::Resolved> {
 fn note_session_error(app: &AppHandle, err: &str) {
     if err.contains(crate::cloud::ERR_SESSION_EXPIRED) {
         let _ = app.emit(events::CLOUD_CHANGED, ());
+    }
+}
+
+/// 错误文案：OpenCode 一类上游的 400 会只回一段 JSON；补一句"该怎么做"。
+fn ai_error_text(err: &ai::ChatError) -> String {
+    let text = err.to_string();
+    if text.contains("MissingSessionID") {
+        format!(
+            "{text}\n提示：该上游要求 x-opencode-session。请在供应商设置里勾选「发送会话头」，或改用云网关。"
+        )
+    } else {
+        text
     }
 }
 
@@ -709,7 +749,7 @@ pub async fn ai_chat(
             Err(e) => {
                 let _ = app.emit(
                     events::AI_FAILED,
-                    AiFailed { request_id: request_id.clone(), message: e.to_string() },
+                    AiFailed { request_id: request_id.clone(), message: ai_error_text(&e) },
                 );
             }
         }
@@ -867,7 +907,7 @@ pub async fn ai_agent_run(
             Err(e) => {
                 let _ = app.emit(
                     events::AI_FAILED,
-                    AiFailed { request_id: request_id.clone(), message: e.to_string() },
+                    AiFailed { request_id: request_id.clone(), message: ai_error_text(&e) },
                 );
             }
         }
