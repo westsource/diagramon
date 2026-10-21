@@ -238,7 +238,14 @@ pub struct AiProvider {
     /// openai | ollama | custom
     pub provider: String,
     pub base_url: String,
-    pub max_tokens: u32,
+    /// 生成上限。**`None` = 不发这个键**，交给上游按所选模型自己的默认/上限决定。
+    ///
+    /// 为什么留空是默认：各家上限不同（实测 `[1, 393216]`、`262144`、…），而上游的
+    /// `/v1/models` 不回上限，客户端无从知道；填大了严格型上游会直接 400 拒掉整轮
+    /// （真机：`Invalid max_tokens value, the valid range of max_tokens is [1, 393216]`），
+    /// 填小了宽容型上游会静默截断。所以"不填"才是唯一对每个模型都正确的值。
+    #[serde(default)]
+    pub max_tokens: Option<u32>,
     pub temperature: f32,
     #[serde(default)]
     pub idle_timeout_s: Option<u32>,
@@ -270,7 +277,7 @@ pub struct AiModel {
     #[serde(default)]
     pub base_url: String,
     #[serde(default)]
-    pub max_tokens: u32,
+    pub max_tokens: Option<u32>,
     #[serde(default)]
     pub temperature: f32,
     #[serde(default)]

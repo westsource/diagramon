@@ -14,6 +14,6 @@ pub use prompt::{
     HISTORY_MAX_TURNS, MEMORY_EXTRACT_MAX, MEMORY_EXTRACT_SYSTEM,
 };
 pub use provider::{
-    build_body, build_body_with_tools, chat_once, normalize_base_url, stream_chat, ChatError, Chunk,
-    Finish, Resolved, Usage,
+    build_body, build_body_with_tools, chat_once, max_tokens_ceiling, normalize_base_url,
+    stream_chat, with_max_tokens_ceiling, ChatError, Chunk, Finish, Resolved, Usage,
 };

@@ -19,7 +19,34 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use serde_json::{json, Value};
 
-use crate::provider::{apply_identity, build_body_with_tools, text_of, truncate, ChatError, Resolved};
+use crate::provider::{
+    apply_identity, build_body_with_tools, text_of, truncate, with_max_tokens_ceiling, ChatError,
+    Resolved,
+};
+
+/// 发一次非流式请求。抽出来只为让"超限自愈"能原样再发一次同一个形状。
+async fn post(
+    client: &reqwest::Client,
+    r: &Resolved,
+    body: Value,
+) -> Result<reqwest::Response, ChatError> {
+    let mut request = apply_identity(client.post(r.endpoint()).json(&body), r);
+    if let Some(key) = r.api_key.as_deref() {
+        if !key.trim().is_empty() {
+            request = request.bearer_auth(key.trim());
+        }
+    }
+    request.send().await.map_err(|e| ChatError::Network(e.to_string()))
+}
+
+/// 非 2xx 收成 `ChatError::Http`（与 `provider::chat_once` 同一口径：截 600 字符）。
+///
+/// 截断长度够用：超限报文是 `… valid range of max_tokens is [1, 393216]`，约 250 字符。
+async fn http_error(resp: reqwest::Response) -> ChatError {
+    let status = resp.status().as_u16();
+    let text = resp.text().await.unwrap_or_default();
+    ChatError::Http { status, body: truncate(&text, 600) }
+}
 
 /// 箱装的 future。
 ///
@@ -213,19 +240,27 @@ impl Completer for HttpCompleter<'_> {
                 return Err(ChatError::MissingKey);
             }
 
-            let body = build_body_with_tools(r, &messages, &tools, false);
-            let mut request = apply_identity(self.client.post(r.endpoint()).json(&body), r);
-            if let Some(key) = r.api_key.as_deref() {
-                if !key.trim().is_empty() {
-                    request = request.bearer_auth(key.trim());
+            let mut resolved = r.clone();
+            let mut resp =
+                post(self.client, &resolved, build_body_with_tools(&resolved, &messages, &tools, false))
+                    .await?;
+            if !resp.status().is_success() {
+                let err = http_error(resp).await;
+                // 与对话那条路同一套自愈（见 `provider::with_max_tokens_ceiling`）：
+                // 这里**只重发这一步**，已经跑完的步数与工具结果原样留在 `messages` 里。
+                let Some(fixed) = with_max_tokens_ceiling(&resolved, &err) else {
+                    return Err(err);
+                };
+                resolved = fixed;
+                resp = post(
+                    self.client,
+                    &resolved,
+                    build_body_with_tools(&resolved, &messages, &tools, false),
+                )
+                .await?;
+                if !resp.status().is_success() {
+                    return Err(http_error(resp).await);
                 }
-            }
-
-            let resp = request.send().await.map_err(|e| ChatError::Network(e.to_string()))?;
-            let status = resp.status();
-            if !status.is_success() {
-                let text = resp.text().await.unwrap_or_default();
-                return Err(ChatError::Http { status: status.as_u16(), body: truncate(&text, 600) });
             }
             let payload: Value = resp.json().await.map_err(|e| ChatError::Protocol(e.to_string()))?;
 
@@ -475,5 +510,106 @@ mod tests {
             .unwrap();
         assert_eq!(out.steps, 1);
         assert_eq!(out.stop, StopReason::Final);
+    }
+
+    /// 工具循环里的 `max_tokens` 超限自愈：第一次 400（带范围说明）→ **只重发这一步**，
+    /// 第二次请求体里必须换成上游给的上限，循环照常收束。
+    #[test]
+    fn http_completer_heals_a_rejected_max_tokens_once() {
+        use std::io::{Read, Write};
+        use std::sync::{Arc, Mutex};
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let seen: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let sink = seen.clone();
+        std::thread::spawn(move || {
+            for stream in listener.incoming().take(2) {
+                let Ok(mut s) = stream else { continue };
+                let mut buf = vec![0u8; 16384];
+                let n = Read::read(&mut s, &mut buf).unwrap_or(0);
+                sink.lock().unwrap().push(String::from_utf8_lossy(&buf[..n]).to_string());
+                let first = sink.lock().unwrap().len() == 1;
+                let (status, body) = if first {
+                    ("400 Bad Request", "{\"error\":{\"message\":\"Invalid max_tokens value, the valid range of max_tokens is [1, 393216]\"}}")
+                } else {
+                    ("200 OK", "{\"choices\":[{\"message\":{\"content\":\"好的\"}}]}")
+                };
+                let resp = format!(
+                    "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = s.write_all(resp.as_bytes());
+            }
+        });
+
+        let client = reqwest::Client::new();
+        let r = Resolved {
+            provider: "openai".into(),
+            base_url: format!("http://{addr}/v1"),
+            model: "m".into(),
+            api_key: Some("sk-x".into()),
+            max_tokens: Some(393220), // 与真机那份 settings 一样：比上限大 4
+            temperature: Some(0.2),
+            idle_timeout: std::time::Duration::from_secs(90),
+            session_header: false,
+            session_id: None,
+        };
+        let completer = HttpCompleter { client: &client, resolved: &r };
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let out = rt.block_on(completer.complete(vec![user("hi")], vec![])).unwrap();
+        assert_eq!(out.text, "好的");
+        assert!(out.tool_calls.is_empty());
+
+        let seen = seen.lock().unwrap();
+        assert_eq!(seen.len(), 2, "应当只重发一次");
+        assert!(seen[0].contains("393220"), "第一次发的是配置里的值：{}", seen[0]);
+        assert!(seen[1].contains("393216"), "第二次必须换成上游给的上限：{}", seen[1]);
+        assert!(!seen[1].contains("393220"), "旧值不该留在重发里：{}", seen[1]);
+    }
+
+    /// 报文里没有范围说明（opencode Go 实测偶尔只回模型名）时**不许猜**：
+    /// 原样报错，且不产生第二次请求（那是一次白跑的计费调用）。
+    #[test]
+    fn http_completer_does_not_retry_an_unparseable_rejection() {
+        use std::io::{Read, Write};
+        use std::sync::{Arc, Mutex};
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let hits = Arc::new(Mutex::new(0u32));
+        let sink = hits.clone();
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut s) = stream else { continue };
+                *sink.lock().unwrap() += 1;
+                let mut buf = vec![0u8; 8192];
+                let _ = Read::read(&mut s, &mut buf);
+                let body = "{\"model\":\"deepseek-v4.1-flash\"}";
+                let resp = format!(
+                    "HTTP/1.1 400 Bad Request\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = s.write_all(resp.as_bytes());
+            }
+        });
+
+        let client = reqwest::Client::new();
+        let r = Resolved {
+            provider: "openai".into(),
+            base_url: format!("http://{addr}/v1"),
+            model: "m".into(),
+            api_key: Some("sk-x".into()),
+            max_tokens: Some(393220),
+            temperature: Some(0.2),
+            idle_timeout: std::time::Duration::from_secs(90),
+            session_header: false,
+            session_id: None,
+        };
+        let completer = HttpCompleter { client: &client, resolved: &r };
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let err = rt.block_on(completer.complete(vec![user("hi")], vec![])).unwrap_err();
+        assert!(matches!(err, ChatError::Http { status: 400, .. }), "{err:?}");
+        assert_eq!(*hits.lock().unwrap(), 1, "解析不出上限就不该重发");
     }
 }

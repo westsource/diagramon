@@ -545,8 +545,15 @@ async fn resolve_target(state: &AppState, model_id: &str) -> R<ai::Resolved> {
     }
 
     let model = resolve_model(state, model_id)?;
-    let s = state.settings();
-    let provider = s.ai.providers.iter().find(|p| p.id == model.provider_id).cloned();
+    // **guard 只能活在这个块里**：下面 `client_session_id` 会再取一次 `state.settings()`，
+    // 而它是 `std::sync::Mutex`（不可重入）—— 同一个线程二次加锁会**永久自锁**。
+    // 一旦自锁，guard 永远不释放，之后**所有** `settings_*` 命令（连设置窗口）一起挂死。
+    // 触发条件是 `session_header == true`，也就是 opencode.ai 那类地址：
+    // 界面表现是 AI 面板"正在等待模型…"永不结束 + 设置窗口点不动（真机复现 2026-10-21）。
+    let provider = {
+        let s = state.settings();
+        s.ai.providers.iter().find(|p| p.id == model.provider_id).cloned()
+    };
     // 旧设置（没有供应商）：按模型行自带的字段继续可用。
     let (kind, base_url, max_tokens, temperature, idle_timeout_s) = match &provider {
         Some(p) => (
@@ -588,7 +595,7 @@ async fn resolve_target(state: &AppState, model_id: &str) -> R<ai::Resolved> {
         base_url,
         model: model.model.clone(),
         api_key,
-        max_tokens: Some(max_tokens),
+        max_tokens,
         temperature: Some(temperature),
         idle_timeout: ai::provider::idle_timeout_for(&kind, idle_timeout_s),
         session_header,
@@ -611,6 +618,11 @@ fn ai_error_text(err: &ai::ChatError) -> String {
     if text.contains("MissingSessionID") {
         format!(
             "{text}\n提示：该上游要求 x-opencode-session。请在供应商设置里勾选「发送会话头」，或改用云网关。"
+        )
+    } else if let Some(n) = ai::max_tokens_ceiling(err) {
+        // 走到这里说明那次自愈重试也没过（或报文里没有可解析的范围）。
+        format!(
+            "{text}\n提示：该模型允许的 max_tokens 上限是 {n}。把这个供应商的「最大 Tokens」改成 ≤ {n}，或留空交给上游默认。"
         )
     } else {
         text
@@ -682,9 +694,26 @@ pub async fn ai_chat(
         // 空闲档决定用哪个客户端实例（reqwest 的 read_timeout 只能在 ClientBuilder 上设）；
         // 云网关解析出的就是默认档，取回的是同一个默认池。
         let http = st.http_for_idle(resolved.idle_timeout);
+        // 自愈会换掉 `max_tokens`，之后的每次重发都用换过的那份
+        let mut resolved = resolved;
         // messages 先 clone 进第一次调用：401 重试要用原来的再发一遍
         let mut result =
             ai::stream_chat(&http, &resolved, messages.clone(), &cancel, on_delta).await;
+
+        // `max_tokens` 超限自愈：严格型上游（DeepSeek 官方 / opencode Go …）对超限是
+        // **直接 400 拒掉整轮**，报文里带着它自己的上限。400 一定发生在读到任何增量之前，
+        // 所以用那个上限重发一次是零计费风险的 —— 用户不必去设置里猜一个能过的数。
+        // 只重试一次、**不回写 settings**（那个值整个供应商共用，回写会把一个模型的上限
+        // 变成全家的上限），再错就把原样错误交给界面。
+        if let Err(e) = &result {
+            if let Some(fixed) = ai::with_max_tokens_ceiling(&resolved, e) {
+                resolved = fixed;
+                let on_delta_heal = delta_forwarder(app.clone(), request_id.clone());
+                result =
+                    ai::stream_chat(&http, &resolved, messages.clone(), &cancel, on_delta_heal)
+                        .await;
+            }
+        }
 
         // 网络类失败（请求没送达 / 一帧未到就断）**自动重试一次**。走到 `Network` 就
         // 意味着用户一个字都没收到 —— 收到正文后断流会原样交付（Ok），收到思考后断流
@@ -1226,7 +1255,16 @@ pub async fn ai_memory_extract(
         serde_json::json!({ "role": "system", "content": ai::MEMORY_EXTRACT_SYSTEM }),
         serde_json::json!({ "role": "user", "content": ai::memory_extract_user(&prompt, &reply) }),
     ];
-    let Ok((text, _usage)) = ai::chat_once(&st.http_for_idle(resolved.idle_timeout), &resolved, messages).await else {
+    // 与对话那条路同一套自愈：记忆提取是**静默**的（失败一律不打扰用户），
+    // 但一条超限的 `max_tokens` 会让它每次都白跑一次真实调用。
+    let client = st.http_for_idle(resolved.idle_timeout);
+    let mut attempt = ai::chat_once(&client, &resolved, messages.clone()).await;
+    if let Err(e) = &attempt {
+        if let Some(fixed) = ai::with_max_tokens_ceiling(&resolved, e) {
+            attempt = ai::chat_once(&client, &fixed, messages).await;
+        }
+    }
+    let Ok((text, _usage)) = attempt else {
         return Ok(memory_list(&st, &id));
     };
 
@@ -1256,4 +1294,127 @@ pub async fn ai_memory_extract(
         let _ = app_core::memory::save(&dir, &items);
     }
     Ok(memory_list(&st, &id))
+}
+
+#[cfg(test)]
+mod resolve_tests {
+    use super::*;
+    use platform::{AppPaths, PlaintextStore};
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::time::Duration;
+
+    /// 最小 AppState：一个"地址就是 opencode.ai"的供应商 + 一个模型。
+    ///
+    /// 地址刻意用 opencode 那类，因为自锁的触发条件正是"按地址自动开会话头"
+    /// （`ai::provider::is_opencode_base`）—— 别的上游走不到那条路。
+    fn state_with_opencode_provider(base_url: &str) -> Arc<AppState> {
+        let dir = std::env::temp_dir().join(format!("dgm-resolve-{}-{}", std::process::id(), base_url.len()));
+        let paths = AppPaths { config_dir: dir.join("cfg"), data_dir: dir.join("data") };
+        std::fs::create_dir_all(&paths.config_dir).unwrap();
+        let mut s = Settings::default();
+        s.ai.providers.push(app_ipc::AiProvider {
+            id: "p-open".into(),
+            name: "opencode".into(),
+            provider: "openai".into(),
+            base_url: base_url.into(),
+            max_tokens: None,
+            temperature: 0.2,
+            idle_timeout_s: None,
+            session_header: false, // 靠地址识别，与真机那份设置一致
+            has_key: true,
+            key_hint: "oc_…".into(),
+        });
+        s.ai.models.push(AiModel {
+            id: "p-open:m".into(),
+            provider_id: "p-open".into(),
+            model: "deepseek-v4.1-flash".into(),
+            name: "deepseek-v4.1-flash".into(),
+            provider: String::new(),
+            base_url: String::new(),
+            max_tokens: None,
+            temperature: 0.2,
+            idle_timeout_s: None,
+            has_key: true,
+            key_hint: "oc_…".into(),
+        });
+        app_core::settings::save(&paths.settings_file(), &s).unwrap();
+        let creds = Arc::new(PlaintextStore::new(paths.credentials_dir()));
+        Arc::new(AppState::new(paths, creds))
+    }
+
+    /// 回归（真机 2026-10-21）：`session_header == true` 时 `resolve_target` **自己把自己
+    /// 锁死** —— settings 的 guard 活到函数末尾，而 `client_session_id` 又去 `state.settings()`
+    /// （`std::sync::Mutex` 不可重入 ⇒ 同线程二次加锁永久阻塞）。后果不是"这一次请求失败"，
+    /// 而是：AI 面板永远停在"正在等待模型…"、前端 `await invoke("ai_chat")` 永不结算、
+    /// 并且**之后所有 `settings_*` 命令（连设置窗口）一起挂死**。
+    ///
+    /// 自锁的线程拉不回来，所以这里只能用超时断言，不能 join。
+    #[test]
+    fn resolve_target_with_a_session_header_provider_does_not_self_deadlock() {
+        let st = state_with_opencode_provider("https://opencode.ai/zen/go/v1");
+        let (tx, rx) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            let got = tauri::async_runtime::block_on(resolve_target(&st, "p-open:m"))
+                .map(|r| (r.session_header, r.session_id.is_some(), r.base_url, r.max_tokens));
+            let _ = tx.send(got);
+        });
+        match rx.recv_timeout(Duration::from_secs(10)) {
+            Ok(Ok((header, has_id, base, max_tokens))) => {
+                assert!(header, "opencode 地址必须自动开会话头");
+                assert!(has_id, "开了会话头就必须给出稳定会话号");
+                assert_eq!(base, "https://opencode.ai/zen/go/v1");
+                assert_eq!(max_tokens, None, "留空 = 不发这个键");
+            }
+            Ok(Err(e)) => panic!("resolve_target 失败：{e}"),
+            Err(_) => panic!("resolve_target 10 秒没返回：settings 被自锁（guard 未释放 + 二次加锁）"),
+        }
+        drop(worker);
+    }
+
+    /// 同一条路在普通上游上也必须照常返回（别为了修自锁把会话头一起关掉）。
+    #[test]
+    fn resolve_target_without_a_session_header_still_resolves() {
+        let st = state_with_opencode_provider("https://api.deepseek.com");
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let got = tauri::async_runtime::block_on(resolve_target(&st, "p-open:m"))
+                .map(|r| (r.session_header, r.session_id.is_some()));
+            let _ = tx.send(got);
+        });
+        match rx.recv_timeout(Duration::from_secs(10)) {
+            Ok(Ok((header, has_id))) => {
+                assert!(!header);
+                assert!(!has_id);
+            }
+            Ok(Err(e)) => panic!("resolve_target 失败：{e}"),
+            Err(_) => panic!("resolve_target 10 秒没返回"),
+        }
+    }
+
+    /// 自锁那种情况一旦发生，**后续任何 settings 命令都会跟着挂** —— 这条把"连带伤害"
+    /// 也钉住：解析完一个带会话头的供应商之后，settings 必须还能拿到锁。
+    #[test]
+    fn settings_lock_is_free_after_resolving_a_session_header_provider() {
+        let st = state_with_opencode_provider("https://opencode.ai/zen/go/v1");
+        let st2 = st.clone();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tauri::async_runtime::block_on(resolve_target(&st2, "p-open:m"));
+            let _ = tx.send(());
+        });
+        assert!(rx.recv_timeout(Duration::from_secs(10)).is_ok(), "resolve_target 没返回，自锁了");
+        let done = Arc::new(AtomicBool::new(false));
+        let flag = done.clone();
+        let st3 = st.clone();
+        std::thread::spawn(move || {
+            let guard = st3.settings(); // 拿得到就说明锁是自由的
+            drop(guard);
+            flag.store(true, Ordering::SeqCst);
+        });
+        let t0 = std::time::Instant::now();
+        while !done.load(Ordering::SeqCst) && t0.elapsed() < Duration::from_secs(5) {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(done.load(Ordering::SeqCst), "settings 的锁没释放：之后所有 settings_* 命令都会挂");
+    }
 }

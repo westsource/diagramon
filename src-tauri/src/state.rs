@@ -88,12 +88,15 @@ pub(crate) fn migrate_ai_providers(s: &mut Settings, creds: &dyn CredentialStore
             None => {
                 let id = format!("p-legacy-{next}");
                 next += 1;
+                // 旧设置里 `0` 表示"没填过"：老代码把它补成 500000（一个必然被严格型
+                // 上游拒掉的值），现在一律当作"留空 = 不发这个键"。
+                let legacy_max_tokens = s.ai.models[i].max_tokens.filter(|n| *n > 0);
                 s.ai.providers.push(AiProvider {
                     id: id.clone(),
                     name: legacy_provider_name(&kind, &base),
                     provider: kind,
                     base_url: base,
-                    max_tokens: if s.ai.models[i].max_tokens == 0 { 500_000 } else { s.ai.models[i].max_tokens },
+                    max_tokens: legacy_max_tokens,
                     temperature: if s.ai.models[i].temperature == 0.0 { 0.2 } else { s.ai.models[i].temperature },
                     idle_timeout_s: s.ai.models[i].idle_timeout_s,
                     // 旧配置没有这个字段：按地址识别 opencode，迁移后即可用
@@ -191,6 +194,10 @@ impl AppState {
         lock(&self.session)
     }
 
+    /// 取设置。**不可重入**：`std::sync::Mutex` 没有可重入语义，guard 还活着的同一段代码里
+    /// 再调一次就是**同线程二次加锁 ⇒ 永久自锁**，而且之后所有 `settings_*` 命令一起挂死。
+    /// 要读多处就一次读出来，或者用块把 guard 圈住（`resolve_target` 踩过一次，
+    /// 见那里的注释与 `resolve_tests` 里的回归测试）。
     pub fn settings(&self) -> MutexGuard<'_, Settings> {
         lock(&self.settings)
     }

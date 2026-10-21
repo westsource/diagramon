@@ -602,10 +602,11 @@ window.DGM = window.DGM || {};
         <details class="ai-prov-adv">
           <summary>${esc(t("set.ai.advanced"))}</summary>
           <div class="ai-prov-adv-grid">
-            <label>${esc(t("set.ai.maxTokens"))}<input type="number" min="1" max="1000000" data-pmax="${esc(p.id)}" value="${p.max_tokens}"></label>
+            <label title="${esc(t("set.ai.maxTokensHint"))}">${esc(t("set.ai.maxTokens"))}<input type="number" min="1" max="1000000" data-pmax="${esc(p.id)}" value="${p.max_tokens == null ? "" : p.max_tokens}" placeholder="${esc(t("set.ai.maxTokensAuto"))}"></label>
             <label>${esc(t("set.ai.temperature"))}<input type="number" min="0" max="2" step="0.1" data-ptemp="${esc(p.id)}" value="${p.temperature}"></label>
             <label title="${esc(t("set.ai.idleTimeoutHint"))}">${esc(t("set.ai.idleTimeout"))}<input type="number" min="15" max="1800" step="5" data-pidle="${esc(p.id)}" value="${p.idle_timeout_s == null ? "" : p.idle_timeout_s}" placeholder="${esc(t("set.ai.idleTimeoutAuto"))}"></label>
           </div>
+          <span class="hint">${esc(t("set.ai.maxTokensHint"))}</span>
         </details>
       </div>`;
           })
@@ -664,7 +665,7 @@ window.DGM = window.DGM || {};
           name: meta.name,
           provider: m.provider,
           base_url: m.base_url,
-          max_tokens: m.max_tokens || 500000,
+          max_tokens: m.max_tokens || null,
           temperature: m.temperature || 0.2,
           idle_timeout_s: m.idle_timeout_s == null ? null : m.idle_timeout_s,
           session_header: !!meta.session_header,
@@ -809,7 +810,7 @@ window.DGM = window.DGM || {};
     const id = "p" + Date.now().toString(36);
     ai.providers.push({
       id, name: displayName, provider: meta.provider, base_url: base,
-      max_tokens: 500000, temperature: 0.2, idle_timeout_s: null,
+      max_tokens: null, temperature: 0.2, idle_timeout_s: null,
       session_header: !!($("#ap-session") || {}).checked,
       has_key: false, key_hint: "",
     });
@@ -1066,7 +1067,21 @@ window.DGM = window.DGM || {};
       if (def && def.value) draftAi.default_model = def.value;
       $$("[data-pmax]", pane).forEach((inp) => {
         const p = (draftAi.providers || []).find((x) => x.id === inp.dataset.pmax);
-        if (p) p.max_tokens = Math.min(1_000_000, Math.max(1, Number(inp.value) || p.max_tokens));
+        if (!p) return;
+        const raw = String(inp.value == null ? "" : inp.value).trim();
+        // 留空 = 不发这个键：交给上游按所选模型自己的默认/上限决定。
+        // 各家上限不同、`/v1/models` 又不回上限，客户端填不出一个"对所有模型都对"的数；
+        // 填大了严格型上游会 400 拒掉整轮（对话那条路会自愈一次，这里不该再制造这种请求）。
+        if (!raw) {
+          p.max_tokens = null;
+          return;
+        }
+        const n = Math.round(Number(raw));
+        if (!Number.isFinite(n) || n < 1 || n > 1_000_000) {
+          DGM.toast({ icon: "alert", title: t("set.ai.maxTokensBad"), sub: "", warn: true });
+          return; // 保留原值，不静默夹取
+        }
+        p.max_tokens = n;
       });
       $$("[data-ptemp]", pane).forEach((inp) => {
         const p = (draftAi.providers || []).find((x) => x.id === inp.dataset.ptemp);

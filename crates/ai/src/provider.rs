@@ -365,6 +365,40 @@ pub fn build_body_with_tools(r: &Resolved, messages: &[Value], tools: &[Value], 
     body
 }
 
+/// 上游把"`max_tokens` 超出所选模型上限"写成 400，报文里带一句可解析的范围说明。
+/// 取出它给的上限 N；报文里没有这句话（实测 opencode Go 偶尔只回 `{"model":"…"}`）就返回 `None`。
+///
+/// 为什么靠报文而不是靠本地表：`GET /v1/models` 只回 `id/object/created/owned_by`，
+/// 每个模型的真实上限客户端拿不到 —— 而 DeepSeek 官方与 opencode Go 都会回
+/// `Invalid max_tokens value, the valid range of max_tokens is [1, 393216]`（实测 2026-10-21）。
+/// 上游改措辞就命中不了：那时退化成原来的报错，不会更糟。
+pub fn max_tokens_ceiling(err: &ChatError) -> Option<u32> {
+    let ChatError::Http { status: 400, body } = err else { return None };
+    let at = body.find("valid range of max_tokens is")?;
+    let rest = &body[at..];
+    let open = rest.find('[')?;
+    let close = rest[open..].find(']')? + open;
+    // `[1, 393216]` → 取上界
+    rest[open + 1..close].split(',').nth(1)?.trim().parse().ok().filter(|n| *n > 0)
+}
+
+/// 由一次失败构造"用上游给的上限重发一次"的参数；不是这类失败就 `None`。
+///
+/// **只能在读到任何增量之前调用**：`stream_chat` 的 400 发生在读流之前，天然满足；
+/// 已经出过正文/思考的错误绝不能重发（重复计费，见 [`ChatError::Interrupted`]）。
+///
+/// 返回的新参数**不回写 settings**：那个值挂在整个供应商上、多个模型共用，
+/// 回写会把"先失败的那个模型的上限"变成全家上限（见 `AiProvider::max_tokens`）。
+pub fn with_max_tokens_ceiling(r: &Resolved, err: &ChatError) -> Option<Resolved> {
+    let ceiling = max_tokens_ceiling(err)?;
+    if r.max_tokens == Some(ceiling) {
+        return None; // 已经是这个值：重发只会再错一次
+    }
+    let mut next = r.clone();
+    next.max_tokens = Some(ceiling);
+    Some(next)
+}
+
 /// 流式对话。每收到一段增量就回调一次 `on_delta`（正文与思考分开报）；`cancel` 置位时立刻中止。
 ///
 /// 返回 `(正文, 思考, 用量)` —— 思考单独返回，界面据此在"还没有正文"的那段时间里显示进度，
@@ -995,6 +1029,64 @@ mod tests {
         let (text, u) = run_stream(url).unwrap();
         assert_eq!(text, "前半句", "已经收到的正文不能丢");
         assert_eq!(u.finish, Finish::Interrupted);
+    }
+
+    /// 上游超限报文的真实形态（2026-10-21 实测：opencode Go 与 DeepSeek 官方都是这句）。
+    #[test]
+    fn max_tokens_ceiling_reads_the_real_upstream_message() {
+        let err = ChatError::Http {
+            status: 400,
+            body: "{\"error\":{\"param\":null,\"type\":\"invalid_request_error\",\"code\":\"invalid_request_error\",\"message\":\"Upstream request failed: [invalid_request_error] Invalid max_tokens value, the valid range of max_tokens is [1, 393216] (request_id: 0a5a9336-7888-4593-b6e2-169b5e54041a)\"}}".into(),
+        };
+        assert_eq!(max_tokens_ceiling(&err), Some(393216));
+    }
+
+    /// 没有范围说明就别猜：opencode Go 实测**偶尔只回模型名**，那时必须老实放弃。
+    #[test]
+    fn max_tokens_ceiling_gives_up_without_a_range() {
+        let bare = ChatError::Http { status: 400, body: "{\"model\":\"deepseek-v4.1-flash\"}".into() };
+        assert_eq!(max_tokens_ceiling(&bare), None);
+        let other = ChatError::Http { status: 400, body: "{\"error\":{\"message\":\"bad request\"}}".into() };
+        assert_eq!(max_tokens_ceiling(&other), None);
+        // 非 400、非 HTTP 的失败一律不碰（503 是端点不可用，改参数没用）
+        let srv = ChatError::Http { status: 503, body: "valid range of max_tokens is [1, 8]".into() };
+        assert_eq!(max_tokens_ceiling(&srv), None);
+        assert_eq!(max_tokens_ceiling(&ChatError::Cancelled), None);
+    }
+
+    /// 自愈只准改 `max_tokens`；已经等于上限时不重发（重发只会再错一次）。
+    #[test]
+    fn with_max_tokens_ceiling_rewrites_only_max_tokens() {
+        let err = ChatError::Http {
+            status: 400,
+            body: "Invalid max_tokens value, the valid range of max_tokens is [1, 393216]".into(),
+        };
+        let r = openai(); // max_tokens: Some(4096)
+        let fixed = with_max_tokens_ceiling(&r, &err).unwrap();
+        assert_eq!(fixed.max_tokens, Some(393216));
+        assert_eq!(r.max_tokens, Some(4096), "原参数不该被就地改掉");
+        assert_eq!(fixed.model, r.model);
+        assert_eq!(fixed.base_url, r.base_url);
+        assert_eq!(fixed.session_id, r.session_id);
+        assert_eq!(fixed.idle_timeout, r.idle_timeout);
+
+        let already = Resolved { max_tokens: Some(393216), ..openai() };
+        assert!(with_max_tokens_ceiling(&already, &err).is_none());
+        let blank = Resolved { max_tokens: None, ..openai() };
+        assert_eq!(with_max_tokens_ceiling(&blank, &err).unwrap().max_tokens, Some(393216));
+        let bare = ChatError::Http { status: 400, body: "{\"model\":\"x\"}".into() };
+        assert!(with_max_tokens_ceiling(&openai(), &bare).is_none());
+    }
+
+    /// 自愈后的请求体真带上了新上限（不是只改了结构体）。
+    #[test]
+    fn healed_parameters_change_the_request_body() {
+        let err = ChatError::Http {
+            status: 400,
+            body: "the valid range of max_tokens is [1, 393216]".into(),
+        };
+        let fixed = with_max_tokens_ceiling(&openai(), &err).unwrap();
+        assert_eq!(build_body(&fixed, &[], true)["max_tokens"], 393216);
     }
 
     #[test]

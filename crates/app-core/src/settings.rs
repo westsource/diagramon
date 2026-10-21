@@ -84,7 +84,7 @@ mod tests {
             name: "本地".into(),
             provider: "ollama".into(),
             base_url: "http://localhost:11434".into(),
-            max_tokens: 4096,
+            max_tokens: Some(4096),
             temperature: 0.7,
             idle_timeout_s: None,
             has_key: false,
