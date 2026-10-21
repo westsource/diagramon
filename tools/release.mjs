@@ -238,6 +238,135 @@ async function uploadAsset(releaseId, file) {
   }
 }
 
+// ── Gitee 国内更新镜像 ────────────────────────────────────────────────────
+//
+// Gitee 只承担"国内能下到的安装包 + 一份清单"，不传便携 ZIP / .sig：
+// 单附件 ≤100 MiB、单仓库附件总量 ≤1 GiB，保留最近 3 个安装包。
+const GITEE_UPLOAD_TIMEOUT_S = 900;
+const GITEE_KEEP_INSTALLERS = 3;
+
+function giteeUrl(path) {
+  return `https://gitee.com/api/v5/repos/${CFG.repo}/${path}`;
+}
+function cnManifestFile() { return join(TMP_DIR, `latest-cn-${VERSION}.json`); }
+function cnSetupUrl() {
+  return `https://gitee.com/${CFG.repo}/releases/download/${TAG}/${basename(setupExe())}`;
+}
+function giteeAttachments(releaseId) {
+  return curlJson({
+    url: giteeUrl(`releases/${releaseId}/attach_files?access_token=${giteeToken()}`),
+    proxy: null,
+  }).json || [];
+}
+function deleteGiteeAttachment(releaseId, asset) {
+  log(`  删 Gitee 旧附件 ${asset.name}（id ${asset.id}）`);
+  curlJson({
+    method: "DELETE",
+    url: giteeUrl(`releases/${releaseId}/attach_files/${asset.id}?access_token=${giteeToken()}`),
+    proxy: null,
+    expect: [200, 204],
+  });
+}
+async function uploadGiteeAsset(releaseId, file) {
+  const name = basename(file);
+  if (opts.dryRun) { log(`  （--dry-run：上传 Gitee ${name}）`); return; }
+  // 重跑时先删同名残留：Gitee 同名附件会直接报错
+  for (const a of giteeAttachments(releaseId).filter((x) => x.name === name)) {
+    deleteGiteeAttachment(releaseId, a);
+  }
+  const mb = (statSync(file).size / 1048576).toFixed(2);
+  const args = [
+    "-sS", "-X", "POST", "--max-time", String(GITEE_UPLOAD_TIMEOUT_S),
+    "-F", `file=@${file}`,
+    `${giteeUrl(`releases/${releaseId}/attach_files`)}?access_token=${giteeToken()}`,
+    "-w", "\\n%{http_code}",
+  ];
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    if (attempt > 1) {
+      warn("Gitee 上传失败，重试一次（先删同名残留）");
+      for (const a of giteeAttachments(releaseId).filter((x) => x.name === name)) {
+        deleteGiteeAttachment(releaseId, a);
+      }
+    }
+    log(`▸ 上传 Gitee ${name}（${mb} MiB）`);
+    const t0 = Date.now();
+    const r = capture("curl", args);
+    const code = Number(r.out.trimEnd().split("\n").pop());
+    if (code === 200 || code === 201) {
+      log(`  ✓ 已上传（${((Date.now() - t0) / 1000).toFixed(0)}s）`);
+      return;
+    }
+    const why = Number.isFinite(code) && code ? `HTTP ${code}` : `curl 退出码 ${r.code}`;
+    if (attempt === 2) die(`Gitee 上传 ${name} 失败（${why}）`);
+    warn(`Gitee 上传 ${name} 失败（${why}）`);
+  }
+}
+/** 生成 `latest-cn.json`：与 GitHub 的 `latest.json` 同版本、同签名，只换下载 URL。 */
+function writeCnManifest() {
+  const manifest = JSON.parse(readFileSync(manifestFile(), "utf8"));
+  const platform = manifest.platforms?.["windows-x86_64"];
+  if (!platform) die("latest.json 里没有 windows-x86_64 —— 无法生成 Gitee 清单");
+  const sig = readFileSync(sigFile(), "utf8").trim();
+  if (platform.signature !== sig) die("latest.json 的 signature 与本地 .sig 不一致");
+  platform.url = cnSetupUrl();
+  writeFileSync(cnManifestFile(), JSON.stringify(manifest, null, 2), "utf8");
+  log(`  ✓ 生成 ${basename(cnManifestFile())}（url → Gitee）`);
+  return manifest;
+}
+/** 只保留最近 N 个带安装包的 Gitee Release；更老的删掉安装包与 latest-cn.json。 */
+function pruneGiteeInstallers() {
+  if (opts.dryRun) { log(`  （--dry-run：Gitee 附件保留最近 ${GITEE_KEEP_INSTALLERS} 个）`); return; }
+  const releases = curlJson({
+    url: giteeUrl(`releases?per_page=50&access_token=${giteeToken()}`),
+    proxy: null,
+  }).json || [];
+  const withSetup = releases
+    .filter((r) => !r.prerelease && !r.draft && (r.assets || []).some((a) => a.name.endsWith("-setup.exe")))
+    .sort((a, b) => Date.parse(b.created_at || 0) - Date.parse(a.created_at || 0));
+  for (const rel of withSetup.slice(GITEE_KEEP_INSTALLERS)) {
+    let atts = [];
+    try { atts = giteeAttachments(rel.id); } catch (e) { warn(`读 Gitee 附件失败（${rel.tag_name}）：${e.message}`); continue; }
+    for (const a of atts) {
+      if (a.name.endsWith("-setup.exe") || a.name === "latest-cn.json") {
+        try { deleteGiteeAttachment(rel.id, a); } catch (e) { warn(`删 Gitee 附件失败（${a.name}）：${e.message}`); }
+      }
+    }
+  }
+  log(`  ✓ 已按保留 ${GITEE_KEEP_INSTALLERS} 个安装包清理 Gitee`);
+}
+/** 回读 Gitee：附件存在、清单签名与本地一致、安装包字节数一致。 */
+function verifyGitee(releaseId) {
+  const atts = giteeAttachments(releaseId);
+  const exe = atts.find((a) => a.name === basename(setupExe()));
+  const man = atts.find((a) => a.name === "latest-cn.json");
+  if (!exe) die(`Gitee 上缺 ${basename(setupExe())} —— 国内更新会断`);
+  if (!man) die("Gitee 上缺 latest-cn.json —— 国内清单无法下发");
+
+  const raw = capture("curl", ["-sSL", "--max-time", "120", man.browser_download_url]);
+  if (raw.code !== 0) die("回读 Gitee latest-cn.json 失败");
+  let pulled;
+  try { pulled = JSON.parse(raw.out); } catch { die(`Gitee 清单不是合法 JSON：${raw.out.slice(0, 120)}`); }
+  const local = readFileSync(sigFile(), "utf8").trim();
+  if (pulled.version !== VERSION) die(`Gitee 清单版本是 ${pulled.version}，不是 ${VERSION}`);
+  if (pulled.platforms?.["windows-x86_64"]?.signature !== local) die("Gitee 清单的 signature 与本地 .sig 不一致");
+  if (!String(pulled.platforms?.["windows-x86_64"]?.url || "").includes(`/releases/download/${TAG}/`)) {
+    die("Gitee 清单的下载 URL 没有指向本次 tag");
+  }
+  log(`✓ Gitee 清单 version=${pulled.version}，signature 与本地 .sig 一致`);
+
+  // Gitee 不支持 Range（会回 200 全文件），所以只取头：跟随重定向后取**最后一段**的 content-length
+  const hdrFile = join(TMP_DIR, `gitee-head-${VERSION}.txt`);
+  capture("curl", ["-sS", "-I", "-L", "--max-time", "180", "-D", hdrFile, "-o",
+    join(TMP_DIR, `gitee-head-${VERSION}.bin`), exe.browser_download_url]);
+  const hdrs = existsSync(hdrFile) ? readFileSync(hdrFile, "utf8") : "";
+  const cls = [...hdrs.matchAll(/^content-length:\s*(\d+)/gim)].map((m) => Number(m[1]));
+  const remoteSize = cls.length ? cls[cls.length - 1] : null;
+  const localSize = statSync(setupExe()).size;
+  if (remoteSize == null) warn("拿不到 Gitee 安装包长度，跳过字节数核对");
+  else if (remoteSize !== localSize) die(`Gitee 安装包 ${remoteSize} 字节 ≠ 本地 ${localSize} 字节`);
+  else log(`✓ Gitee 安装包字节数与本地一致（${localSize}）`);
+}
+
 // ── 工具函数 ──────────────────────────────────────────────────────────────
 function conf() { return JSON.parse(readFileSync(join(ROOT, "src-tauri", "tauri.conf.json"), "utf8")); }
 function nsisDir() { return join(ROOT, "target", "release", "bundle", "nsis"); }
@@ -514,7 +643,7 @@ async function publish() {
   if (opts.dryRun) {
     log(`  正文 ${body.length} 字符（含「# 中文」与「# English」，含安装包链接）`);
     if (opts.bodyOnly) log(`  计划（--body-only）：PATCH 两端 Release 的说明，不动附件、不改发布状态`);
-    else log(`  计划：GET /releases/tags/${TAG} →（无则复用同 tag 的草稿，再没有才 POST 建草稿）→ 删同名旧附件 → 上传 ${opts.portable ? 4 : 3} 个 → PATCH draft=false`);
+    else log(`  计划：GitHub 草稿 → 删同名旧附件 → 上传 ${opts.portable ? 4 : 3} 个 → Gitee 创建/更新 → 上传安装包 + latest-cn.json → 回读校验 → 清理旧附件（保留 ${GITEE_KEEP_INSTALLERS} 个）→ **最后** PATCH GitHub draft=false`);
     log(`  计划：Gitee GET/PATCH /releases/tags/${TAG}（更新必须带 tag_name，正文不含附件）`);
     return;
   }
@@ -576,24 +705,37 @@ async function publish() {
     const files = [setupExe(), sigFile(), manifestFile()];
     if (opts.portable) files.push(portableZip());
     for (const f of files) await uploadAsset(id, f);
-    // 正式发布：latest 只认已发布
-    curlJson({ method: "PATCH", url: `https://api.github.com/repos/${CFG.repo}/releases/${id}`, body: bodyFile, token: ghToken(), proxy: CFG.ghProxy });
-    log("  ✓ GitHub Release 已正式发布（draft=false）");
+    // ⚠️ 这里**不能**立刻 draft=false：先让 Gitee 把安装包与 latest-cn.json 传完、校验通过，
+    // 再把 GitHub 正式发布。否则国内用户可能拿到一个指向 404 的清单，而 updater 不会回退。
   }
   log(`  GitHub: https://github.com/${CFG.repo}/releases/tag/${TAG}`);
 
-  // ── Gitee（不传附件，正文里放 GitHub 下载链接）
+  // ── Gitee（国内更新源：安装包 + latest-cn.json；不传便携 ZIP / .sig）
   const gFile = join(TMP_DIR, `gitee-${VERSION}.json`);
   writeFileSync(gFile, JSON.stringify({ tag_name: TAG, name: `Diagramon ${VERSION}`, body, target_commitish: "master", prerelease: false }), "utf8");
   const gTok = giteeToken();
   const cur = curlJson({ url: `https://gitee.com/api/v5/repos/${CFG.repo}/releases/tags/${TAG}?access_token=${gTok}`, expect: [200, 404] });
-  if (cur.json?.id) {
+  let giteeId = cur.json?.id;
+  if (giteeId) {
     // ⚠️ Gitee 的更新接口必须带 tag_name，否则 400 tag_name is missing
-    curlJson({ method: "PATCH", url: `https://gitee.com/api/v5/repos/${CFG.repo}/releases/${cur.json.id}?access_token=${gTok}`, body: gFile, proxy: null });
-    log(`  ✓ Gitee Release ${cur.json.id} 已更新说明`);
+    curlJson({ method: "PATCH", url: `https://gitee.com/api/v5/repos/${CFG.repo}/releases/${giteeId}?access_token=${gTok}`, body: gFile, proxy: null });
+    log(`  ✓ Gitee Release ${giteeId} 已更新说明`);
   } else {
     const created = curlJson({ method: "POST", url: `https://gitee.com/api/v5/repos/${CFG.repo}/releases?access_token=${gTok}`, body: gFile, proxy: null });
-    log(`  ✓ Gitee Release 已创建 id=${created.json?.id}`);
+    giteeId = created.json?.id;
+    log(`  ✓ Gitee Release 已创建 id=${giteeId}`);
+  }
+
+  if (!opts.dryRun) {
+    if (!giteeId) die("Gitee Release 没拿到 id —— 国内更新源无法建立");
+    writeCnManifest();
+    await uploadGiteeAsset(giteeId, setupExe());
+    await uploadGiteeAsset(giteeId, cnManifestFile());
+    pruneGiteeInstallers();
+    verifyGitee(giteeId);
+    // ── 最后才把 GitHub 草稿切成已发布（红线：Gitee 未就绪时不能先发）
+    curlJson({ method: "PATCH", url: `https://api.github.com/repos/${CFG.repo}/releases/${id}`, body: bodyFile, token: ghToken(), proxy: CFG.ghProxy });
+    log("  ✓ GitHub Release 已正式发布（draft=false）");
   }
 }
 
@@ -633,6 +775,24 @@ async function verify() {
   const want = [basename(setupExe()), basename(sigFile()), "latest.json", ...(opts.portable ? [basename(portableZip())] : [])];
   for (const w of want) if (!(rel.json.assets || []).some((a) => a.name === w && a.state === "uploaded")) die(`附件缺失或未完成：${w}`);
   log("✓ 四个附件齐全且状态 uploaded");
+
+  // ── Gitee 国内更新源（安装包 + latest-cn.json）
+  const gRel = curlJson({
+    url: `https://gitee.com/api/v5/repos/${CFG.repo}/releases/tags/${TAG}?access_token=${giteeToken()}`,
+    proxy: null,
+    expect: [200, 404],
+  });
+  if (gRel.json?.id) {
+    const atts = giteeAttachments(gRel.json.id);
+    if (atts.some((a) => a.name === "latest-cn.json")) {
+      verifyGitee(gRel.json.id);
+    } else {
+      warn("Gitee 上没有 latest-cn.json —— 国内更新清单尚未建立（旧版本或上传失败）");
+    }
+  } else {
+    warn(`Gitee 上找不到 ${TAG} 的 Release —— 国内更新源缺失`);
+  }
+
   log("");
   log(`全部完成。Release 页面：https://github.com/${CFG.repo}/releases/tag/${TAG}`);
 }

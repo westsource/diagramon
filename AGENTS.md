@@ -38,7 +38,7 @@ node tools/release.mjs --help
 3. **更新清单里绝不能放便携 ZIP** —— 更新器只认 PE/MSI，且**不要为此打开 `tauri-plugin-updater` 的 `zip` feature**（我们 `default-features=false`，开着反而更糟：它会把解压目录里的 `diagramon.exe` 当安装器执行）。
 4. **README 两条分支都要改、内容一字不差** —— `main` 上 `README.md`=英文 / `README.zh-CN.md`=中文；`gitee-master` 上 `README.md`=中文 / `README_EN.md`=英文（只换命名与顶部互链）。`gitee-master` 由脚本用 `checkout -B` 重建，**别用手工 `rebase`**。
 5. **Release 说明一律中英双语**，结构 `> 本页中英双语…` + `---` + `# 中文` + `---` + `# English`。
-6. **附件共四个**：`Diagramon_<版本>_x64-setup.exe` + `.sig` + `latest.json` + `Diagramon-<版本>-win-x64.zip`（**只传 GitHub**）。换产物要**先删旧同名附件**再传。Gitee 那边**不上传任何二进制**，正文放 GitHub 下载链接即可 —— 你在 Gitee Release 上看到的那 2 个附件（`v<版本>.zip` / `.tar.gz`）是**平台自动生成的源码包**，不是我们传的。**正文里必须有两个可点链接**（`{{setup_url}}` 与 `{{zip_url}}`）—— Gitee 不托管附件，正文缺哪个链接，Gitee 访客就拿不到哪个产物；脚本对这两条都会 `die()`。写说明请**从 `docs/release-notes/TEMPLATE.md` 复制**，别凭记忆写（v3.0.1/3.0.2 都曾因为漏抄「下载」表那两行而缺便携包链接）。
+6. **GitHub 附件四个 / Gitee 附件两个**：GitHub 传 `Diagramon_<版本>_x64-setup.exe` + `.sig` + `latest.json` + `Diagramon-<版本>-win-x64.zip`；Gitee **只传**安装包与 `latest-cn.json`（国内更新清单），**不传** `.sig` 与便携 ZIP（Gitee 是可选镜像，单附件 ≤100 MiB、单仓库附件总量 ≤1 GiB，脚本每次发版保留最近 3 个安装包）。换产物要**先删旧同名附件**再传。Gitee Release 上那 2 个 `v<版本>.zip` / `.tar.gz` 是**平台自动生成的源码包**，不是我们传的。**正文里必须有两个可点链接**（`{{setup_url}}` 与 `{{zip_url}}`）—— Gitee 正文缺哪个链接，访客就拿不到哪个产物；脚本对这两条都会 `die()`。发版顺序：**先传 Gitee（安装包 + `latest-cn.json`）并回读校验，最后才把 GitHub 草稿切成已发布** —— 否则国内清单会在一段时间内指向 404 或旧版本，而 updater 拿到可解析清单后不会再试 GitHub。写说明请**从 `docs/release-notes/TEMPLATE.md` 复制**，别凭记忆写（v3.0.1/3.0.2 都曾因为漏抄「下载」表那两行而缺便携包链接）。
 7. **发完必须回读**：`https://github.com/westsource/diagramon/releases/latest/download/latest.json` 的 `signature` 要与本地 `.sig` **逐字节一致**（`releases/latest` 只认**已发布**的 Release）。
 
 ### 双远端

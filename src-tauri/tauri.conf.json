@@ -81,9 +81,8 @@
     "updater": {
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEU2NDQ3OUFBRTE1NjMzOTkKUldTWk0xYmhxbmxFNWtpS1ZqQ21BQU55MXdtTUxReW52b3BOTWFrTzRJSHhBVTM2UWgvWENUZlIK",
       "endpoints": [
-        "https://github.com/westsource/diagramon/releases/latest/download/latest.json",
-        "https://www.diagramon.com/{{target}}/{{arch}}/{{current_version}}",
-        "https://diagramon.agentctxsync.com/{{target}}/{{arch}}/{{current_version}}"
+        "https://www.diagramon.com/updates/{{target}}/{{arch}}/{{current_version}}",
+        "https://github.com/westsource/diagramon/releases/latest/download/latest.json"
       ]
     }
   }

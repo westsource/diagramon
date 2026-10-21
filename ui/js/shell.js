@@ -1663,6 +1663,11 @@ window.DGM = window.DGM || {};
       return;
     }
     pendingUpdate = update;
+    // 记录**清单里的下载源**：国内应看到 Gitee，其余地区应看到 GitHub。
+    // updater 不告诉我们命中了哪个 endpoint，但 `url` 已经能说明问题。
+    const rj = update.rawJson || {};
+    const plat = (rj.platforms && (rj.platforms["windows-x86_64"] || rj.platforms.windows)) || {};
+    DGM.note(`update:found version=${update.version} url=${plat.url || "?"}`);
     status(t("update.available", { version: update.version }), "warn");
     if (quiet) renderStatus();
     else openUpdateDialog();
