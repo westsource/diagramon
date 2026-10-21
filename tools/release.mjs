@@ -248,7 +248,8 @@ const GITEE_KEEP_INSTALLERS = 3;
 function giteeUrl(path) {
   return `https://gitee.com/api/v5/repos/${CFG.repo}/${path}`;
 }
-function cnManifestFile() { return join(TMP_DIR, `latest-cn-${VERSION}.json`); }
+// Gitee 附件名必须固定为 `latest-cn.json`：服务端路由按这个名字找，不带版本号。
+function cnManifestFile() { return join(TMP_DIR, "latest-cn.json"); }
 function cnSetupUrl() {
   return `https://gitee.com/${CFG.repo}/releases/download/${TAG}/${basename(setupExe())}`;
 }
