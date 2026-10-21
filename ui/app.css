@@ -1145,7 +1145,9 @@ button.st:hover { background: var(--surface-3); }
 .pop-label { padding: 5px 9px 3px; font-size: 10px; letter-spacing: .5px; text-transform: uppercase; color: var(--faint); font-weight: 600; }
 
 /* toast */
-.toasts { position: fixed; right: 14px; bottom: calc(var(--statusbar-h) + 14px); z-index: 300; display: flex; flex-direction: column; gap: 8px; align-items: flex-end; }
+/* 右边缘要让开 AI 面板：面板铺满整列（底部就是输入区），toast 若贴在窗口右下角会压住
+   textarea 与发送键。--ai-w 在面板隐藏时是 0（body.no-ai），同一条规则自动退回 14px。 */
+.toasts { position: fixed; right: calc(var(--ai-w) + 14px); bottom: calc(var(--statusbar-h) + 14px); z-index: 300; display: flex; flex-direction: column; gap: 8px; align-items: flex-end; }
 .toast {
   display: flex; align-items: flex-start; gap: 9px;
   min-width: 240px; max-width: 380px;

@@ -2614,6 +2614,60 @@ def main() -> int:
             log(f"（断言 36 解析失败：{e}）")
             fails.append("断言 36 拿不到结果（对话历史「全部」链路可能没接上）")
 
+        # ---- 断言 37：toast 不许压住 AI 面板的输入区 ----
+        # 用户报（2026-10-21）：保存文件时的提示贴在窗口右下角，正好盖住 AI 面板底部的
+        # 输入框与发送键。toast 的右偏移必须让开整列 AI 面板（--ai-w），面板隐藏时退回 14px。
+        # 这里直接量两个矩形：面板开着时 toast 与 .ai-composer 不得相交；面板收起时 toast 仍贴右缘。
+        toast_geo = ev(
+            "(async () => {"
+            "  DGM.ai.focus('chat');"
+            "  await new Promise(r => setTimeout(r, 400));"
+            "  const mk = () => {"
+            "    const n = document.querySelector('.toasts .toast:last-child');"
+            "    if (!n) return null;"
+            "    const c = document.querySelector('#ai-pane .ai-composer');"
+            "    const tr = n.getBoundingClientRect(), cr = c.getBoundingClientRect();"
+            "    return {"
+            "      tr: [tr.left, tr.top, tr.right, tr.bottom],"
+            "      cr: [cr.left, cr.top, cr.right, cr.bottom],"
+            "      overlap: !(tr.right <= cr.left || tr.left >= cr.right || tr.bottom <= cr.top || tr.top >= cr.bottom)"
+            "    };"
+            "  };"
+            "  DGM.toast({ icon: 'save', title: '保存', sub: 'E:/tmp/probe.mmd' });"
+            "  await new Promise(r => setTimeout(r, 260));"
+            "  const shown = mk();"
+            "  document.querySelectorAll('.toasts .toast').forEach(n => n.remove());"
+            "  await DGM.state.patchSettings({ panels: { ai: false } });"
+            "  DGM.shell.render();"
+            "  await new Promise(r => setTimeout(r, 400));"
+            "  DGM.toast({ icon: 'save', title: '保存', sub: 'E:/tmp/probe.mmd' });"
+            "  await new Promise(r => setTimeout(r, 260));"
+            "  const hidden = mk();"
+            "  document.querySelectorAll('.toasts .toast').forEach(n => n.remove());"
+            "  await DGM.state.patchSettings({ panels: { ai: true } });"
+            "  DGM.shell.render();"
+            "  await new Promise(r => setTimeout(r, 250));"
+            "  return JSON.stringify({ shown, hidden, vw: window.innerWidth });"
+            "})()"
+        )
+        log(f"toast 与 AI 输入区: {toast_geo}")
+        try:
+            g = json.loads(toast_geo or "{}")
+            shown, hidden, vw = g.get("shown"), g.get("hidden"), g.get("vw") or 0
+            if not shown or not shown.get("cr") or shown["cr"][2] - shown["cr"][0] <= 0:
+                fails.append(f"AI 面板没打开或输入区没有尺寸，断言 37 无依据：{toast_geo}")
+            elif shown.get("overlap"):
+                fails.append(
+                    f"保存提示压住了 AI 输入区：toast {shown.get('tr')} 与 composer {shown.get('cr')} 相交"
+                )
+            if not hidden:
+                fails.append("AI 面板收起后 toast 没出现（断言 37）")
+            elif (hidden.get("tr") or [0, 0, 0, 0])[2] < vw - 30:
+                fails.append(f"AI 面板收起后 toast 没有贴回右缘：right={hidden.get('tr', [0, 0])[2]}，窗宽 {vw}")
+        except Exception as e:
+            log(f"（断言 37 解析失败：{e}）")
+            fails.append("断言 37 拿不到结果（toast 定位链路）")
+
         # 汇总启动期间的 console error / 异常
         for params in cdp.seen("Runtime.exceptionThrown"):
             d = params.get("exceptionDetails", {})
