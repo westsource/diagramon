@@ -629,12 +629,20 @@ function releaseBody() {
     .replaceAll("{{zip_size_mb}}", existsSync(portableZip()) ? mb(portableZip()) : "?");
   if (!body.includes("# 中文") || !body.includes("# English")) die("正文双语段缺失");
   if (!body.includes(setupUrl)) die("正文里没有安装包下载链接（模板里要写 {{setup_url}}）");
-  // 便携包链接同样必须**可点**：Gitee 不传附件，正文没链接等于拿不到便携版
+  // 便携包链接同样必须**可点**：Gitee 不传便携 ZIP，正文没链接等于拿不到便携版
   // （2026-10-12 就漏过一次：两个 zip 只在正文外当附件躺着）。
   if (opts.portable && !body.includes(zipUrl)) {
-    die(`正文里没有便携包下载链接（模板里要写 {{zip_url}}）—— Gitee 不传附件，没链接就拿不到 ${basename(portableZip())}`);
+    die(`正文里没有便携包下载链接（模板里要写 {{zip_url}}）—— Gitee 不传便携 ZIP，没链接就拿不到 ${basename(portableZip())}`);
   }
   return body;
+}
+
+/** Gitee 的正文：安装包链接换成 Gitee 自己的附件（国内可下），便携包仍指 GitHub。 */
+function giteeReleaseBody(body) {
+  return body.replaceAll(
+    `https://github.com/${CFG.repo}/releases/download/${TAG}/${basename(setupExe())}`,
+    cnSetupUrl(),
+  );
 }
 
 async function publish() {
@@ -659,7 +667,8 @@ async function publish() {
     const gRef = `https://gitee.com/api/v5/repos/${CFG.repo}/releases/tags/${TAG}?access_token=${gTok2}`;
     const g2 = curlJson({ url: gRef, expect: [200, 404] });
     const gBody = join(TMP_DIR, `gitee-body-only-${VERSION}.json`);
-    writeFileSync(gBody, JSON.stringify({ tag_name: TAG, name: `Diagramon ${VERSION}`, body }), "utf8");
+    const giteeBody = giteeReleaseBody(body);
+    writeFileSync(gBody, JSON.stringify({ tag_name: TAG, name: `Diagramon ${VERSION}`, body: giteeBody }), "utf8");
     if (g2.json?.id) {
       log(`  更新 Gitee Release id=${g2.json.id} 的说明`);
       curlJson({ method: "PATCH", url: `https://gitee.com/api/v5/repos/${CFG.repo}/releases/${g2.json.id}?access_token=${gTok2}`, body: gBody });
@@ -712,7 +721,8 @@ async function publish() {
 
   // ── Gitee（国内更新源：安装包 + latest-cn.json；不传便携 ZIP / .sig）
   const gFile = join(TMP_DIR, `gitee-${VERSION}.json`);
-  writeFileSync(gFile, JSON.stringify({ tag_name: TAG, name: `Diagramon ${VERSION}`, body, target_commitish: "master", prerelease: false }), "utf8");
+  const giteeBody = giteeReleaseBody(body);
+  writeFileSync(gFile, JSON.stringify({ tag_name: TAG, name: `Diagramon ${VERSION}`, body: giteeBody, target_commitish: "master", prerelease: false }), "utf8");
   const gTok = giteeToken();
   const cur = curlJson({ url: `https://gitee.com/api/v5/repos/${CFG.repo}/releases/tags/${TAG}?access_token=${gTok}`, expect: [200, 404] });
   let giteeId = cur.json?.id;
