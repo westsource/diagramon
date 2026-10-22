@@ -460,6 +460,12 @@ window.DGM = window.DGM || {};
     "conv.lookDefault": "文档未设置外观，按引擎内置默认渲染",
     "conv.layoutNotCarried": "布局引擎不参与转换：目标图按引擎默认布局重排",
     "conv.drawioFixedConfig": "drawio 内置导入器按固定配置渲染；文档级外观/布局不参与转换",
+    "conv.elkLabel": "用 ELK 重排",
+    "conv.elkHint": "drawio 自带的 ELK layered 引擎：回边与边交叉明显更少，大图更接近人工调完的样子",
+    "conv.elkApplied": "已按 ELK 重排（源文本顶部注入了 layout: elk）",
+    "conv.elkAlready": "源文件里本来就写了 layout: elk，本次按 ELK 重排",
+    "conv.elkSkippedConfig": "源文件已有 config 段，为避免重复键没有注入 layout: elk，本次按引擎默认布局",
+    "conv.elkSkippedType": "ELK 重排只适用于流程图（flowchart / graph），本次按引擎默认布局",
     "preview.issuesBadge": "第 {line} 行：{msg}",
 
     /* ---- 底部面板 ---- */
@@ -1492,6 +1498,12 @@ window.DGM = window.DGM || {};
     "conv.lookDefault": "Document has no explicit look; rendered with the engine built-in default",
     "conv.layoutNotCarried": "Layout engine does not take part in conversion: the target is arranged by the engine default",
     "conv.drawioFixedConfig": "drawio's built-in importer renders with a fixed configuration; document look/layout do not take part",
+    "conv.elkLabel": "Re-layout with ELK",
+    "conv.elkHint": "drawio's own ELK layered engine: far fewer back-edge detours and edge crossings — large diagrams look much closer to hand-tuned",
+    "conv.elkApplied": "Re-laid out with ELK (injected `layout: elk` at the top of the source)",
+    "conv.elkAlready": "The source already declares `layout: elk`, so ELK was used",
+    "conv.elkSkippedConfig": "The source already has a `config` block; `layout: elk` was not injected to avoid a duplicate key, so the engine default was used",
+    "conv.elkSkippedType": "ELK re-layout only applies to flowcharts (flowchart / graph); the engine default was used",
     "preview.issuesBadge": "Line {line}: {msg}",
 
     "panel.problems": "Problems",

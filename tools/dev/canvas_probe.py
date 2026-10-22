@@ -304,6 +304,79 @@ function doBegin(w, done) {
           );
       })
       .then(function () {
+        // ── 「用 ELK 重排」（转换对话框的勾选）真的生效了吗 ──
+        //
+        // 这条**不能只看"转换成功"**：drawio 的 `applyMermaidElkPostPass` 里
+        // `ElkLayout.execute()` 外面包着 try/catch，ELK 不在或抛错时**静默回落 dagre**
+        // 且照样出图（见 design-ai-convert.md §2.1）。所以这里钉三个可判定的证据：
+        //
+        //   ① 边样式：`or()` 里 `useElkLayout && diagramType==="flowchart"` ⇒ 边走
+        //      `edgeStyle=orthogonalEdgeStyle;rounded=1;curved=0`。默认 dagre 是 `curved=1`。
+        //      这一条证明 **config 确实抵达了导入器**（layout: elk 被认出来了）。
+        //   ② 几何变了：同一份源、只差一个 frontmatter，节点的 x/y 集合必须**不同**。
+        //      这一条证明 **ELK 真的重排了**（不是匹配到 config 却仍走 dagre）。
+        //   ③ 两个条件同时成立才算过 —— 只有 ① 说明配置到了但布局没换；只有 ②
+        //      可能是别的原因改了坐标（比如导入器版本差异），不足以证明是 ELK。
+        //
+        // 用同一段源做对照（B0 现状 vs B1 注入 elk），diff 只可能来自那个 frontmatter。
+        var ELK_SRC = "---\\nconfig:\\n  layout: elk\\n---\\n" + MERMAID_SRC;
+        function geomOf(xml) {
+          // 取出所有顶点的 x/y（顺序无关，排序后拼串比较）
+          // 注意：这段是 Python 三引号里的 JS 源码，正则里不要用反斜杠转义类
+          //（Python 会把它们当成无效转义并告警），一律用字符类代替。
+          var out = [];
+          var re = /<mxGeometry[^>]*x="(-?[0-9.]+)"[^>]*y="(-?[0-9.]+)"/g;
+          var m;
+          while ((m = re.exec(xml))) out.push(m[1] + "," + m[2]);
+          return out.sort().join("|");
+        }
+        function loadAndExport(src) {
+          seen.length = 0;
+          return new Promise(function (res) {
+            w.__apply(JSON.stringify({
+              action: "load",
+              autosave: 1,
+              descriptor: { format: "mermaid", data: src, wrap: true },
+            }));
+            // 先探一次路（导入器异步），再正式取
+            waitFor(function () {
+              return firstOf(function (e) {
+                return e.event === "export" && String(e.format).toLowerCase() === "xml";
+              });
+            }, 3000, "探路").then(function () {}, function () {}).then(function () {
+              seen.length = 0;
+              w.__apply(JSON.stringify({ action: "export", format: "xml" }));
+              return waitFor(function () {
+                return firstOf(function (e) {
+                  return e.event === "export" && String(e.format).toLowerCase() === "xml"
+                    && (e.xml || "").indexOf("DIAGRAMON_MERMAID_PROBE") >= 0;
+                });
+              }, 40000, "导出");
+            }).then(
+              function (ex) { res(ex.xml || ""); },
+              function () { res(""); },
+            );
+          });
+        }
+
+        return loadAndExport(MERMAID_SRC).then(function (xmlB0) {
+          return loadAndExport(ELK_SRC).then(function (xmlB1) {
+            if (!xmlB0 || !xmlB1) {
+              say("ELK 对照：有一轮没取到 XML，无法判定", true);
+              return;
+            }
+            var orth0 = /edgeStyle=orthogonalEdgeStyle/.test(xmlB0);
+            var orth1 = /edgeStyle=orthogonalEdgeStyle/.test(xmlB1);
+            var g0 = geomOf(xmlB0);
+            var g1 = geomOf(xmlB1);
+            say("ELK 对照：B0（默认）边为直角路由 = " + orth0 + "；B1（注入 layout: elk）边为直角路由 = " + orth1);
+            say("ELK 对照：注入后边样式被切成 orthogonalEdgeStyle（证明 config 抵达导入器）", !orth1 || orth0);
+            say("ELK 对照：注入后节点几何确实变了（证明 ELK 真的重排，不是静默回落 dagre）", !g1 || g0 === g1,
+                g0 === g1 ? "两轮几何完全相同" : "");
+          });
+        });
+      })
+      .then(function () {
         if (typeof w.__hostZoom === "function") say("缩放读数可用（__hostZoom → " + w.__hostZoom() + "）");
         else say("承载页未暴露 __hostZoom", true);
         if (typeof w.__hostFit === "function") say("适应视图钩子可用（__hostFit）");
@@ -796,6 +869,13 @@ def main() -> int:
             "--disable-backgrounding-occluded-windows",
             "--disable-renderer-backgrounding",
             "--disable-features=CalculateNativeWinOcclusion",
+            # 受限会话（agent 沙箱 / 作业对象）里 Chrome 的渲染子进程会启动即崩，
+            # 症状是本函数后面那句「连不上调试端口（30s）」—— 端口根本没监听。
+            # 与 check.mjs 的 DGM_BROWSER_EXTRA_ARGS=--no-sandbox 是同一个成因。
+            # 普通桌面不需要它，所以只在 DGM_PROBE_NO_SANDBOX=1 时加。
+            *(["--no-sandbox", "--disable-dev-shm-usage"]
+              if os.environ.get("DGM_PROBE_NO_SANDBOX") == "1"
+              else []),
             f"--user-data-dir={profile}",
             f"--remote-debugging-port={page_port}",
             "about:blank",

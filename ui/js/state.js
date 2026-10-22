@@ -121,6 +121,9 @@ window.DGM = window.DGM || {};
       zenPrev: null,
       status: { text: "", kind: "" },
       dirtyPromptOpen: false,
+      // 转换对话框的「用 ELK 重排」勾选：瞬态，不落盘。
+      // 记住它只是免得每次转换都要重新勾 —— 它不是产品级偏好。
+      convElk: false,
     },
 
     /* ---------------- 查询helpers ---------------- */

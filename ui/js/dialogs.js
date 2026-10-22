@@ -137,6 +137,54 @@ window.DGM = window.DGM || {};
     return DGM.ipc.invoke("convert_text", { req: { from, to, source } });
   }
 
+  /**
+   * 给 Mermaid 源注入 `layout: elk`，让 **drawio 自己的** ELK layered 引擎重排。
+   *
+   * 为什么是文本注入而不是传配置：`canvas.js` 送进 drawio 的是 descriptor 协议
+   * （`{format:"mermaid", data:源}`），**协议里没有配置位**。而 drawio 的导入器
+   * 会从源文本的 frontmatter / `%%{init}%%` 合并 config，并且
+   * `EditorUi.isMermaidElkFlowchart()` 用正则
+   * `/(?:^|\n)\s*layout\s*:\s*["']?elk\b/i` 匹配**行首**的 `layout: elk`
+   * 来决定是否走 `applyMermaidElkPostPass`（真正的 ElkLayout layered + GREEDY 环消除）。
+   * 注意 `%%{init:{"layout":"elk"}}%%` **匹配不上**那个正则（`layout` 前面是 `{"`
+   * 而不是行首空白），所以必须用 frontmatter 形态。
+   *
+   * 三种情况如实分开，不静默失败：
+   *   - 源里已经写了 `layout: elk` → 原样返回（本来就会走 ELK）；
+   *   - 源里已有 frontmatter 且带 `config:` → **不注入**，交给调用方如实说明
+   *     （再插一个 `config:` 键会变成重复键，YAML 解析可能整份失败）；
+   *   - 其余 → 常规注入。
+   *
+   * 只对 `flowchart` / `graph` 注入：drawio 的 ELK 后处理只认这两种，
+   * 对时序图之类注入反而会改变边样式却没换来重排。
+   */
+  function buildElkSource(source) {
+    const text = String(source || "");
+    if (/(?:^|\n)\s*layout\s*:\s*["']?elk\b/i.test(text)) {
+      return { text, applied: false, already: true, reason: "" };
+    }
+    if (!/(?:^|\n)\s*(?:flowchart|graph)\b/i.test(text)) {
+      return { text, applied: false, already: false, reason: "notFlowchart" };
+    }
+    const fm = /^---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/.exec(text);
+    if (fm) {
+      if (/(?:^|\n)\s*config\s*:/i.test(fm[1])) {
+        return { text, applied: false, already: false, reason: "hasConfig" };
+      }
+      // 已有 frontmatter：在它的键下面补一段 config，保住用户原来的元信息
+      const openEnd = text.indexOf("\n") + 1;
+      const head = text.slice(0, openEnd);
+      const rest = text.slice(openEnd);
+      return { text: head + "config:\n  layout: elk\n" + rest, applied: true, already: false, reason: "" };
+    }
+    return {
+      text: "---\nconfig:\n  layout: elk\n---\n" + text,
+      applied: true,
+      already: false,
+      reason: "",
+    };
+  }
+
   /** 归一化的方向查询结果：引擎给谁、正文（rust 才有）、保真度说明、错误。 */
   async function planOf(from, to, source) {
     try {
@@ -162,16 +210,23 @@ window.DGM = window.DGM || {};
    * 返回值是 `{ doc, notes }`：`notes` 是**这次转换的保真度说明**（与 Rust 方向共用同一套展示），
    * 目前只有一条 —— 上游把整张图兜底成了一块位图（见 `bitmapFallbackNote`）。
    */
-  async function convertViaEngine(to, source, srcDoc, dir) {
+  async function convertViaEngine(to, source, srcDoc, dir, opts2) {
     const doc = await state.newDoc(to);
     if (!doc) return null;
     // 文档级外观（look）只对 Excalidraw 链有效：m2e 的 config 会平铺进内置 mermaid 的
-    // initialize。drawio 的内置导入器不可配置（descriptor 协议没有配置位），opts 传了也
-    // 拿不到 —— 所以 drawio 不传、notes 里如实说明。布局（elk）两条链都不透传：
-    // layout-elk 是 mermaid ^12 的包，引擎内置的 mermaid 版本不配，一律按默认 dagre。
+    // initialize。drawio 的内置导入器不收配置位，但**可以走源文本的 frontmatter**
+    // （见 buildElkSource）—— 那是它自己的 ELK 引擎，与 mermaid ^12 的 layout-elk 包无关。
     const look = DGM.preview && DGM.preview.effectiveLook ? DGM.preview.effectiveLook(srcDoc) : null;
     const opts = to === "excalidraw" && look && look !== "auto" ? { mermaid: { look } } : null;
-    DGM.canvas.setPendingConversion(to, source, opts);
+
+    // drawio + 用户勾了「用 ELK 重排」：把 layout: elk 注入源文本
+    let payload = source;
+    let elk = null;
+    if (to === "drawio" && opts2 && opts2.elk) {
+      elk = buildElkSource(source);
+      payload = elk.text;
+    }
+    DGM.canvas.setPendingConversion(to, payload, opts);
     await DGM.preview.render(); // 触发 show → 把源码交给引擎
     const body = await DGM.canvas.waitForBody(to, doc.body || "");
     if (!body) {
@@ -193,7 +248,11 @@ window.DGM = window.DGM || {};
       );
       notes.push(t("conv.layoutNotCarried"));
     } else if (to === "drawio") {
-      notes.push(t("conv.drawioFixedConfig"));
+      if (elk && elk.applied) notes.push(t("conv.elkApplied"));
+      else if (elk && elk.already) notes.push(t("conv.elkAlready"));
+      else if (elk && elk.reason === "hasConfig") notes.push(t("conv.elkSkippedConfig"));
+      else if (elk && elk.reason === "notFlowchart") notes.push(t("conv.elkSkippedType"));
+      else notes.push(t("conv.drawioFixedConfig"));
     }
     return { doc: doc, notes: notes };
   }
@@ -334,6 +393,14 @@ window.DGM = window.DGM || {};
         ? ""
         : t("conv.viaEngine", { engine: state.fmtById(sel.to).name });
 
+    // 「用 ELK 重排」只对 mermaid → drawio 有意义：drawio 自带的 ELK layered
+    // 能明显减少边交叉与回边绕行，而这个能力只能靠源文本 frontmatter 触发
+    // （见 buildElkSource）。记忆用户的勾选，跨对话框保持。
+    const elkOn = sel.from === "mermaid" && sel.to === "drawio" && state.ui.convElk === true;
+    const elkRow = sel.from === "mermaid" && sel.to === "drawio"
+      ? `<div class="switch${elkOn ? " on" : ""}" data-switch="conv-elk"><span class="track"></span><span class="txt">${esc(t("conv.elkLabel"))}<small>${esc(t("conv.elkHint"))}</small></span></div>`
+      : "";
+
     openDialog(
       head(t("dlg.convert.titleTo", { from: state.docFmt(d).name, to: state.fmtById(sel.to).name }), "swap") +
         `<div class="dialog-body">
@@ -348,6 +415,7 @@ window.DGM = window.DGM || {};
             <div class="conv-col"><h4>${esc(t("dlg.convert.pickTarget"))}</h4><div class="tgts">${targets}</div></div>
             <div class="conv-col"><h4>${esc(t("dlg.convert.preview"))} <span class="meta">${esc(meta)}</span></h4>${previewHtml}</div>
           </div>
+          ${elkRow}
           <div class="callout warn">${icon("alert")}<span>${t("dlg.convert.oneway", { name: esc(d.name) })}</span></div>
         </div>` +
         foot(hint,
@@ -355,6 +423,14 @@ window.DGM = window.DGM || {};
           `<button class="btn primary" data-act="go"${canGo ? "" : " disabled"}>${icon("swap")}${esc(t("dlg.convert.go"))}</button>`),
       true,
     );
+    // 开关就地翻转：不重开对话框（重开会把用户刚选的格式重置）
+    const elkSw = document.querySelector('[data-switch="conv-elk"]');
+    if (elkSw) {
+      elkSw.addEventListener("click", () => {
+        state.ui.convElk = !(state.ui.convElk === true);
+        elkSw.classList.toggle("on", state.ui.convElk);
+      });
+    }
     wire((act) => {
       if (act.startsWith("sel:")) {
         close();
@@ -362,14 +438,15 @@ window.DGM = window.DGM || {};
         return;
       }
       if (act === "go") {
+        const useElk = state.ui.convElk === true;
         close();
-        runConvert(d, sel, plan);
+        runConvert(d, sel, plan, { elk: useElk });
       }
     });
   }
 
   /** 真正执行转换。`plan` 是弹窗里那次询问的结果（复用，不重复问）。 */
-  async function runConvert(srcDoc, dir, plan) {
+  async function runConvert(srcDoc, dir, plan, opts) {
     const p = plan || (await planOf(dir.from, dir.to, srcDoc.body));
     if (p.error) {
       DGM.toast({ icon: "alert", title: t("dlg.convert.notImpl"), sub: p.error, warn: true });
@@ -387,7 +464,7 @@ window.DGM = window.DGM || {};
       created = via && via.doc;
       extraNotes = (via && via.notes) || [];
     } else if (p.engine !== "none") {
-      const via = await convertViaEngine(dir.to, srcDoc.body, srcDoc, dir);
+      const via = await convertViaEngine(dir.to, srcDoc.body, srcDoc, dir, opts);
       created = via && via.doc;
       extraNotes = (via && via.notes) || [];
     } else {
