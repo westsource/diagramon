@@ -780,16 +780,17 @@ window.DGM = window.DGM || {};
       else setSidebarView("account");
     });
     bar.appendChild(acct);
-    const keys = h("button", "act");
-    keys.innerHTML = icon("keyboard");
-    keys.title = t("mi.shortcuts") + "  Ctrl+K Ctrl+S";
-    keys.addEventListener("click", () => DGM.dialogs.keys());
-    bar.appendChild(keys);
+    // 顺序：账户 → 设置 → 键盘快捷键（设置靠内、快捷键贴底；2026-10-21 用户要求换位）
     const st = h("button", "act");
     st.innerHTML = icon("settings");
     st.title = t("common.settings");
     st.addEventListener("click", () => DGM.dialogs.settings("appearance"));
     bar.appendChild(st);
+    const keys = h("button", "act");
+    keys.innerHTML = icon("keyboard");
+    keys.title = t("mi.shortcuts") + "  Ctrl+K Ctrl+S";
+    keys.addEventListener("click", () => DGM.dialogs.keys());
+    bar.appendChild(keys);
   }
 
   /* ------------------------------------------------------------------ 状态栏 */
