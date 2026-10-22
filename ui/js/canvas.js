@@ -370,7 +370,11 @@ window.DGM = window.DGM || {};
     if (e.loadedDoc === doc.id) return true;
     e.loadedDoc = doc.id;
     e.lastApplied = doc.body || "";
-    e.ready = false; // 新文档要等新一轮 init
+    // **不要把 `e.ready` 置回 false**：承载页的 `init`/`ready` 每个 iframe 只发一次
+    // （drawio 是启动握手，Excalidraw 是 mount 完成），换文档**不会**重发。
+    // 曾经的写法是"新文档要等新一轮 init"，结果第二次载入的指令全被塞进 `pending`
+    // 再也没人 flush —— 表现就是「转第二个文件，画布还是第一个的图」。
+    // 就绪状态只由 `init`/`ready` 事件置 true，`teardown` 删实例时随之丢失。
     e.pending.length = 0;
 
     // 转换：这次载入的不是正文，而是 Mermaid 源码（交给引擎自己的导入器）
@@ -421,6 +425,9 @@ window.DGM = window.DGM || {};
     if (e.frame && e.frame.parentNode) e.frame.parentNode.removeChild(e.frame);
     delete hosts[format];
     if (activeFormat === format) activeFormat = null;
+    // 待用的转换载荷是模块级单例、且按 format 匹配：实例都没了还留着它，
+    // 下次新建的同格式文档会被当成"这次载入的是 Mermaid 源码"而误灌旧内容。
+    if (pendingConversion && pendingConversion.format === format) pendingConversion = null;
   }
 
   /**
