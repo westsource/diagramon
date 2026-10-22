@@ -477,7 +477,7 @@ fn parse_operand(text: &str, start: usize) -> Option<(Operand, usize)> {
 /// * 不以引号开头时照旧收第一个 `close`（`D[it's fine]` 这种带撇号的标签不能被当成引号）。
 fn find_close(tail: &str, close: &str) -> Option<usize> {
     let head = tail.trim_start();
-    let Some(q) = head.chars().next().filter(|c| *c == '"' || *c == '\'') else {
+    let Some(q) = head.chars().next().filter(|c| *c == '"') else {
         return tail.find(close);
     };
     for (at, c) in head.char_indices().skip(1) {
@@ -1815,10 +1815,17 @@ mod tests {
     }
 
     /// 撇号开头的普通标签不能被当成「引号包裹」。
+    /// 撇号不是引号起始：`A['quoted] --> B` 必须整段当成标签（含撇号），
+    /// 不能把 `'` 当引号起点导致标签被截断/边丢失。
     #[test]
     fn a_plain_label_starting_with_an_apostrophe_is_fine() {
         let c = mermaid_to_dot("flowchart TD\n    A['quoted] --> B\n").unwrap();
-        assert!(c.body.contains("quoted"), "{}", c.body);
+        // 标签必须完整保留撇号与右侧（`'quoted` 不能在半截 `'` 处被吞）。
+        assert!(c.body.contains("'quoted"), "标签要整段保留撇号: {}", c.body);
+        // 节点与边都要完整，不能被吞。
+        assert!(c.body.contains("A [label="), "节点 A 的标签要保留: {}", c.body);
+        assert!(c.body.contains("B ["), "节点 B 不能丢: {}", c.body);
+        assert!(c.body.contains("A -> B;"), "边不能丢: {}", c.body);
     }
 
     /// 带 BOM 的源文件要能解析（Windows 记事本默认就这么存）。
