@@ -149,6 +149,11 @@ fn parse(src: &str) -> Result<(String, Vec<Stmt>), String> {
     let mut saw_header = false;
 
     for (idx, raw) in src.lines().enumerate() {
+        // 首行的 BOM 要去掉：Windows 记事本存 UTF-8 默认带 BOM，而 `\u{feff}` 不是
+        // `char::is_whitespace`，`trim()` 去不掉 ⇒ 头部会被读成「﻿flowchart」，
+        // 报「只支持 Mermaid flowchart」这种看着莫名其妙的错。（`convert_dot` 早就处理了，
+        // 这里当初漏了；语料里带 BOM 的那批文件正好全被这条挡住。）
+        let raw = raw.strip_prefix('\u{feff}').unwrap_or(raw);
         let line = raw.trim();
         if line.is_empty() || line.starts_with("%%") {
             continue;
@@ -444,7 +449,7 @@ fn parse_operand(text: &str, start: usize) -> Option<(Operand, usize)> {
     let tail: String = chars[inner_start..].iter().collect();
     // 注意：`find` 给的是**字节**下标，而这里的游标 `ci` 是**字符**下标。
     // 中文一个字符 3 字节，混用会直接错位（踩过：整条语句被判成「尾部有没解析完的内容」）。
-    let close_at = tail.find(close)?;
+    let close_at = find_close(&tail, close)?;
     let label_raw = &tail[..close_at];
     let label = strip_one_quote_pair(label_raw.trim()).to_string();
     let next_ci = inner_start + tail[..close_at + close.len()].chars().count();
@@ -457,6 +462,37 @@ fn parse_operand(text: &str, start: usize) -> Option<(Operand, usize)> {
         },
         char_to_byte(text, next_ci),
     ))
+}
+
+/// 在标签正文里找节点闭合符号。
+///
+/// 为什么不能直接 `find(close)`：真实语料里 `D["直接返回缓存 byte[]"]` 这样的标签很常见，
+/// 正文里带 `]`。直接找会把标签从中间截断，剩下的 `（O(1)，无 CLI 调用）"]` 留在语句尾部，
+/// 整条边被判成「尾部有没解析完的内容」而转换失败（语料实测：15 份里 4 份因此挂掉）。
+///
+/// 规则：
+/// * 标签**以引号开头**时，收尾引号之后的那个才是节点闭合（`"说了""]` 里两个引号，
+///   只有紧跟 `]` 的那个算收尾，前一个是标签正文里的引号）。
+///   找不到这样的收尾就退回普通查找 —— 语法不对时让它按原样报错，别吞掉。
+/// * 不以引号开头时照旧收第一个 `close`（`D[it's fine]` 这种带撇号的标签不能被当成引号）。
+fn find_close(tail: &str, close: &str) -> Option<usize> {
+    let head = tail.trim_start();
+    let Some(q) = head.chars().next().filter(|c| *c == '"' || *c == '\'') else {
+        return tail.find(close);
+    };
+    for (at, c) in head.char_indices().skip(1) {
+        if c != q {
+            continue;
+        }
+        let after = &head[at + c.len_utf8()..];
+        let after = after.trim_start();
+        if after.starts_with(close) {
+            // 换算回 `tail` 里的下标（trim_start 只影响前缀，这里用 head 的相对位置重找）
+            let closed_at = tail.len() - after.len();
+            return Some(closed_at);
+        }
+    }
+    tail.find(close)
 }
 
 /// 两端**各剥一个**引号。
@@ -1750,6 +1786,36 @@ mod tests {
         assert!(c.body.contains(r#"label="说了\""#), "{}", c.body);
         let c2 = mermaid_to_dot("flowchart LR\n    A[第一行<br/>第二行] --> B\n").unwrap();
         assert!(c2.body.contains("第一行\\n第二行"), "{}", c2.body);
+    }
+
+    /// 标签正文里带闭合符号（`byte[]`）时不能把标签从中截断。
+    ///
+    /// 真实语料（`design/用户点击复制或保存图片流程图.mmd`）里就有
+    /// `C -->|是| D["直接返回缓存 byte[]<br/>（O(1)，无 CLI 调用）"]`，
+    /// 直接 `find(']')` 会截在 `byte[` 后面，整条边报「尾部有没解析完的内容」。
+    #[test]
+    fn a_label_may_contain_the_closing_bracket() {
+        let src = "flowchart TD\n    C -->|是| D[\"缓存 byte[]，无调用\"] --> E\n";
+        let c = mermaid_to_dot(src).unwrap();
+        assert!(c.body.contains("缓存 byte[]，无调用"), "标签被截断了：{}", c.body);
+        assert!(c.body.contains("C -> D"), "{}", c.body);
+        assert!(c.body.contains("D -> E"), "{}", c.body);
+        // 边标签也要在
+        assert!(c.body.contains("是"), "{}", c.body);
+    }
+
+    /// 撇号开头的普通标签不能被当成「引号包裹」。
+    #[test]
+    fn a_plain_label_starting_with_an_apostrophe_is_fine() {
+        let c = mermaid_to_dot("flowchart TD\n    A['quoted] --> B\n").unwrap();
+        assert!(c.body.contains("quoted"), "{}", c.body);
+    }
+
+    /// 带 BOM 的源文件要能解析（Windows 记事本默认就这么存）。
+    #[test]
+    fn a_leading_bom_does_not_break_the_header() {
+        let c = mermaid_to_dot("\u{feff}flowchart TD\n    A --> B\n").unwrap();
+        assert!(c.body.contains("A -> B;"), "{}", c.body);
     }
 
     /// 分派：mermaid → dot 走 Rust，引擎型方向点名引擎，不谎称「不支持」。
