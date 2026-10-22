@@ -1383,19 +1383,29 @@ impl D2Emit {
     fn emit_node(&self, out: &mut String, id: &str, indent: usize) {
         let pad = "    ".repeat(indent);
         let (label, shape) = self.label_of.get(id).cloned().unwrap_or((None, Shape::Box));
+        let mut wrote = false;
         if let Some(l) = &label {
             let _ = writeln!(out, "{pad}{}: {}", d2_id(id), d2_str(l));
+            wrote = true;
         }
         if let Some(s) = shape.d2_shape() {
             let _ = writeln!(out, "{pad}{}.shape: {s}", d2_id(id));
+            wrote = true;
         }
         if let Some(cls) = self.node_class.get(id) {
             let _ = writeln!(out, "{pad}{}.class: {}", d2_id(id), d2_id(cls));
+            wrote = true;
         }
         if let Some(kv) = self.node_styles.get(id) {
             for (k, v) in kv {
                 let _ = writeln!(out, "{pad}{}.style.{k}: {v}", d2_id(id));
             }
+            wrote = true;
+        }
+        // 上面四项都空时一行都没写，但节点本体仍要声明 —— D2 里写个裸 id 就是声明。
+        // 否则孤立节点（无边、无标签、默认方框）会整段消失（B3：D2 导出静默丢节点）。
+        if !wrote {
+            let _ = writeln!(out, "{pad}{}", d2_id(id));
         }
     }
 
@@ -1953,6 +1963,35 @@ mod tests {
         let c = convert(Mermaid, D2, "flowchart TD\n    A --> B\n").unwrap();
         assert!(c.body.contains("direction: down"));
         assert!(convert(Mermaid, D2, "sequenceDiagram\n    A->>B: hi\n").is_err(), "非 flowchart 要报错");
+    }
+
+    /// B3：D2 导出不得静默丢节点。孤立节点（无边、无标签、默认方框）也必须出现在产物里。
+    ///
+    /// 这是回归测试：修之前 `emit_node` 四项全空时一行不写，`Z` 会整个消失且 notes 不提示。
+    #[test]
+    fn d2_does_not_drop_isolated_nodes() {
+        // 裸节点
+        let c = mermaid_to_d2("flowchart TD\n    A --> B\n    Z\n").unwrap();
+        assert!(c.body.contains("Z"), "裸节点 Z 未出现在 D2 产物：\n{}", c.body);
+        // 空方括号
+        let c = mermaid_to_d2("flowchart TD\n    A --> B\n    Z[]\n").unwrap();
+        assert!(c.body.contains("Z"), "空方括号 Z[] 被丢：\n{}", c.body);
+        // 空引号标签
+        let c = mermaid_to_d2("flowchart TD\n    A --> B\n    Z[\"\"]\n").unwrap();
+        assert!(c.body.contains("Z"), "空引号标签 Z[\"\"] 被丢：\n{}", c.body);
+        // subgraph 内的孤立节点
+        let c = mermaid_to_d2("flowchart TD\n    A --> B\n    subgraph g\n        L\n        M\n    end\n").unwrap();
+        let inside = c.body;
+        assert!(inside.contains("L"), "subgraph 内孤立节点 L 被丢：\n{}", inside);
+        assert!(inside.contains("M"), "subgraph 内孤立节点 M 被丢：\n{}", inside);
+    }
+
+    /// B3 对照组：有标签 / 有非默认形状的节点必须照旧保留（不能被裸 id 逻辑弄乱）。
+    #[test]
+    fn d2_keeps_labeled_and_shaped_nodes() {
+        let c = mermaid_to_d2("flowchart TD\n    A --> B\n    Z[\"说明\"]\n    O{决策}\n").unwrap();
+        assert!(c.body.contains("Z: \"说明\"") || c.body.contains("Z"), "有标签节点 Z：\n{}", c.body);
+        assert!(c.body.contains("O.shape: diamond"), "决策节点 O 的形状丢了：\n{}", c.body);
     }
 
     /// 生成物要能真的被 graphviz 跑（结构层面：括号配平、语句以分号收尾）。
