@@ -1572,6 +1572,10 @@ table.kv td .chip { vertical-align: middle; }
 .hist-list { display: flex; flex-direction: column; gap: 6px; }
 .hist-row { display: flex; gap: 12px; align-items: center; padding: 9px 11px; text-align: left; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); }
 .hist-row:hover { border-color: var(--accent-line); background: var(--accent-soft); }
+/* 「文件打开历史」的续载哨兵：滚进可视区自动续一页（IntersectionObserver）；
+   浏览器没这个 API 时它就是可点的「加载更多」。虚线框 = 明确告诉用户"这还不是全部"。 */
+.hist-more { padding: 9px 11px; text-align: center; font-size: var(--fs-xs); color: var(--muted); border: 1px dashed var(--border); border-radius: var(--radius); cursor: pointer; }
+.hist-more:hover { color: var(--ink); border-color: var(--accent-line); }
 /* 历史会话里的一条对话轮次（`hist-row` 原本是"最近文档"按钮，这里复用容器、换内层）。
    正文可能很长，所以顶对齐 + 换行，而不是像文件行那样单行居中。 */
 .hist-turn { align-items: flex-start; }

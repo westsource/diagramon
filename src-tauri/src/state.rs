@@ -278,11 +278,13 @@ impl AppState {
         }
     }
 
-    /// 记一条最近打开（去重、置顶、上限 50）。
+    /// 记一条最近打开（去重、置顶）。
     ///
-    /// 上限从 10 提到 50：界面上的短名单（欢迎页 5 条、菜单 6 条、侧栏 8 条）之外
-    /// 还有「文件打开历史」窗口要看更早的 —— 只留 10 条的话那个窗口没有意义。
-    /// 50 条 × 一条几十字节，settings.json 的体积可以忽略。
+    /// **不设上限**（2026-10-22 用户要求）：以前截断到 50 条，展不开更早的记录。现在按路径去重、
+    /// 新记录插到最前，条数只受"用户真的打开过多少个不同文件"约束。
+    /// 界面上的短名单（欢迎页 5 条、菜单 6 条、侧栏 8 条）照旧只取前几条；
+    /// 「文件打开历史」窗口按页懒加载，不再一次渲染整表。
+    /// 一条几十字节 × 去重后的文件数，settings.json 的体积可以忽略。
     pub fn remember_recent(&self, path: &str, name: &str, format: app_ipc::FormatId) {
         let mut s = self.settings();
         s.recent.retain(|r| r.path != path);
@@ -295,7 +297,6 @@ impl AppState {
                 opened_at: now_ms(),
             },
         );
-        s.recent.truncate(50);
         let snapshot = s.clone();
         drop(s);
         let _ = self.persist_settings(&snapshot);

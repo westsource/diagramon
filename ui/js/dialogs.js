@@ -1501,6 +1501,9 @@ window.DGM = window.DGM || {};
     }
   }
 
+  /** 「文件打开历史」一页挂多少行。一行约 40px，100 条足够填满 66vh 的可视区好几屏。 */
+  const RECENT_PAGE = 100;
+
   /**
    * 「文件打开历史」：`settings.recent` 的**完整列表**（打开时间倒序 + 过滤框）。
    *
@@ -1509,51 +1512,115 @@ window.DGM = window.DGM || {};
    * 「更多…（含搜索过滤）」与 Ctrl+R 打开的是 `history()`，那是 **AI 会话历史**
    * （用户 2026-10-18 报的）。
    *
+   * **记录条数不设上限**（2026-10-22），所以列表是**懒加载**的：一次只挂 `RECENT_PAGE` 行，
+   * 哨兵滚进可视区再续一页。过滤在内存里对整表做，过滤后重新从第一页渲染。
+   *
    * 行的点击复用 `DGM.shell.openPath`（欢迎页 / 侧栏同一个入口）：已在标签页里的文档会
    * 切过去，没打开的从磁盘读进来 —— 不另开第二条打开路径。
    */
   function fileHistory() {
     const all = ((state.settings && state.settings.recent) || []).slice();
-    const rowsHtml = (list) =>
-      list.length
-        ? list
-            .map((r) => {
-              const fmt = (r.format || "").toString();
-              return (
-                `<button class="hist-row" data-act="open" data-path="${esc(r.path)}" title="${esc(r.path)}">` +
-                `<span class="fmt-dot" style="background:var(--fmt-${esc(fmt)})"></span>` +
-                `<span class="hr-main"><b>${esc(r.name)}</b><span>${esc(r.path)}</span></span>` +
-                `<span class="hr-side">${esc(openedWhen(r.opened_at))}</span></button>`
-              );
-            })
-            .join("")
-        : `<div class="callout">${icon("clock")}<span>${esc(t("mi.recentEmpty"))}</span></div>`;
+    const rowHtml = (r) => {
+      const fmt = (r.format || "").toString();
+      return (
+        `<button class="hist-row" data-act="open" data-path="${esc(r.path)}" title="${esc(r.path)}">` +
+        `<span class="fmt-dot" style="background:var(--fmt-${esc(fmt)})"></span>` +
+        `<span class="hr-main"><b>${esc(r.name)}</b><span>${esc(r.path)}</span></span>` +
+        `<span class="hr-side">${esc(openedWhen(r.opened_at))}</span></button>`
+      );
+    };
     openDialog(
       head(t("dlg.recent.title"), "clock") +
         `<div class="dialog-body">` +
         `<div class="field"><input type="text" id="recent-filter" placeholder="${esc(t("dlg.recent.search"))}"></div>` +
-        `<div class="hist-list" id="recent-rows">${rowsHtml(all)}</div>` +
+        `<div class="hist-list" id="recent-rows"></div>` +
         `</div>` +
         foot(t("dlg.recent.note"), `<button class="btn ghost" data-close>${esc(t("common.close"))}</button>`),
       true,
     );
     const box = $("#recent-filter");
     const rows = $("#recent-rows");
-    if (box && rows) {
-      box.addEventListener("input", () => {
-        const q = box.value.trim().toLowerCase();
-        // 只换列表、不重绘输入框：整块重绘会把光标踢出过滤框
-        rows.innerHTML = rowsHtml(
-          q
-            ? all.filter(
-                (r) => (r.name || "").toLowerCase().includes(q) || (r.path || "").toLowerCase().includes(q),
-              )
-            : all,
+    if (!box || !rows) return;
+    // 记录条数已不设上限 ⇒ 不能把整表一次性挂进 DOM（几千行会卡住开窗）。
+    // 只挂第一页，滚到底部附近再续一页；过滤后重新从第一页开始。
+    const bodyEl = rows.closest(".dialog-body");
+    let list = all;
+    let shown = 0;
+    let more = null; // 续载哨兵：还有剩余时才存在
+    let io = null;
+
+    function syncMore() {
+      const left = list.length - shown;
+      if (left <= 0) {
+        if (more) {
+          if (io) io.unobserve(more);
+          more.remove();
+          more = null;
+        }
+        return;
+      }
+      if (!more) {
+        rows.insertAdjacentHTML(
+          "beforeend",
+          `<div class="hist-more" id="recent-more" data-act="more">${esc(t("dlg.recent.more", { n: left }))}</div>`,
         );
-      });
-      box.focus();
+        more = $("#recent-more");
+        if (io && more) io.observe(more);
+        return;
+      }
+      more.textContent = t("dlg.recent.more", { n: left });
     }
+
+    function appendPage() {
+      if (shown >= list.length) return;
+      const page = list.slice(shown, shown + RECENT_PAGE);
+      shown += page.length;
+      const html = page.map(rowHtml).join("");
+      if (more) more.insertAdjacentHTML("beforebegin", html);
+      else rows.insertAdjacentHTML("beforeend", html);
+      syncMore();
+    }
+
+    function reset() {
+      shown = 0;
+      if (more) {
+        if (io) io.unobserve(more);
+        more = null;
+      }
+      if (!list.length) {
+        rows.innerHTML = `<div class="callout">${icon("clock")}<span>${esc(t("mi.recentEmpty"))}</span></div>`;
+        return;
+      }
+      rows.innerHTML = "";
+      appendPage();
+    }
+
+    // 懒加载：哨兵进入可视区（root 用对话框自己的滚动容器）就续一页。
+    // 没有 IntersectionObserver 时退化成"点一下加载更多"—— 哨兵带着 data-act="more"。
+    if ("IntersectionObserver" in window) {
+      io = new IntersectionObserver(
+        (ents) => {
+          if (!more || !more.isConnected) return;
+          if (ents.some((e) => e.isIntersecting)) appendPage();
+        },
+        { root: bodyEl, rootMargin: "160px" },
+      );
+    }
+
+    reset();
+    box.addEventListener("input", () => {
+      const q = box.value.trim().toLowerCase();
+      // 只换列表、不重绘输入框：整块重绘会把光标踢出过滤框
+      list = q
+        ? all.filter(
+            (r) => (r.name || "").toLowerCase().includes(q) || (r.path || "").toLowerCase().includes(q),
+          )
+        : all;
+      reset();
+    });
+    box.focus();
     wire((act, el) => {
+      if (act === "more") return appendPage();
       if (act !== "open" || !el.dataset.path) return;
       const path = el.dataset.path;
       close();
