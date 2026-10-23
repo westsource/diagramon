@@ -185,6 +185,32 @@ window.DGM = window.DGM || {};
     };
   }
 
+  /**
+   * drawio 内置 mermaid 导入器解析不了 `A("标签(IP)")` 这种**圆角**形状：标签里带 `(` / `)`
+   * 会让它的括号匹配错位，标签被撕碎、残留串到下一个节点，整片几何全乱（已用真实语料复现）。
+   *
+   * 处置：仅在标签里确有 `(` / `)` 时，把 `("...")` 改写为 `(["..."])`（双圆角/胶囊形状），
+   * 让括号被 `[...]` 包住、导入器不再错位；**没有括号的圆角保持原样**，尽量少改用户意图。
+   *
+   * 正则只匹配 `("...")`：`(` 后紧跟着引号（圆角形状），不会误中 `(["..."])`、`(("..."))`、
+   * `[["..."]]` 等其它形状。返回 `{ text, rebuilt }`，`rebuilt=true` 表示发生过改写，
+   * 调用方据此加一条保真度说明。
+   */
+  function rebuildParenShapes(source) {
+    const text = String(source || "");
+    const re = /\(("(?:[^"\\]|\\.)*")\)/g;
+    let rebuilt = false;
+    const out = text.replace(re, (m, q) => {
+      // q 是带引号的标签文本，例如 "带宽<br>(172.16.0.1)"
+      if (/[()]/.test(q)) {
+        rebuilt = true;
+        return "([\"" + q.slice(1, -1) + "\"])"; // ("...") → (["..."])
+      }
+      return m;
+    });
+    return { text: out, rebuilt };
+  }
+
   /** 归一化的方向查询结果：引擎给谁、正文（rust 才有）、保真度说明、错误。 */
   async function planOf(from, to, source) {
     try {
@@ -219,11 +245,17 @@ window.DGM = window.DGM || {};
     const look = DGM.preview && DGM.preview.effectiveLook ? DGM.preview.effectiveLook(srcDoc) : null;
     const opts = to === "excalidraw" && look && look !== "auto" ? { mermaid: { look } } : null;
 
-    // drawio + 用户勾了「用 ELK 重排」：把 layout: elk 注入源文本
+    // drawio：先把"圆角里带括号"的形状改写掉（修复导入器括号错位，见 rebuildParenShapes），
+    // 再做可选的 ELK 注入（注入基于改写后的文本，顺序不能反）。
     let payload = source;
     let elk = null;
+    let parenRebuilt = null;
+    if (to === "drawio") {
+      parenRebuilt = rebuildParenShapes(source);
+      payload = parenRebuilt.text;
+    }
     if (to === "drawio" && opts2 && opts2.elk) {
-      elk = buildElkSource(source);
+      elk = buildElkSource(payload);
       payload = elk.text;
     }
     DGM.canvas.setPendingConversion(to, payload, opts);
@@ -248,6 +280,7 @@ window.DGM = window.DGM || {};
       );
       notes.push(t("conv.layoutNotCarried"));
     } else if (to === "drawio") {
+      if (parenRebuilt && parenRebuilt.rebuilt) notes.push(t("conv.parenShapesRebuilt"));
       if (elk && elk.applied) notes.push(t("conv.elkApplied"));
       else if (elk && elk.already) notes.push(t("conv.elkAlready"));
       else if (elk && elk.reason === "hasConfig") notes.push(t("conv.elkSkippedConfig"));

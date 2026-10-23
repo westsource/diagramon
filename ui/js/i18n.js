@@ -466,6 +466,7 @@ window.DGM = window.DGM || {};
     "conv.elkAlready": "源文件里本来就写了 layout: elk，本次按 ELK 重排",
     "conv.elkSkippedConfig": "源文件已有 config 段，为避免重复键没有注入 layout: elk，本次按引擎默认布局",
     "conv.elkSkippedType": "ELK 重排只适用于流程图（flowchart / graph），本次按引擎默认布局",
+    "conv.parenShapesRebuilt": "部分圆角节点标签含括号，已按双圆角形状处理，以绕开 drawio 导入器的括号解析缺陷",
     "preview.issuesBadge": "第 {line} 行：{msg}",
 
     /* ---- 底部面板 ---- */
@@ -1504,6 +1505,7 @@ window.DGM = window.DGM || {};
     "conv.elkAlready": "The source already declares `layout: elk`, so ELK was used",
     "conv.elkSkippedConfig": "The source already has a `config` block; `layout: elk` was not injected to avoid a duplicate key, so the engine default was used",
     "conv.elkSkippedType": "ELK re-layout only applies to flowcharts (flowchart / graph); the engine default was used",
+    "conv.parenShapesRebuilt": "Rounded nodes whose labels contain parentheses were rebuilt as stadium shapes, to work around the drawio importer's parenthesis-parsing defect",
     "preview.issuesBadge": "Line {line}: {msg}",
 
     "panel.problems": "Problems",
