@@ -1,0 +1,8 @@
+flowchart TD
+    subgraph g1[内网]
+        A[web] --> B[adm]
+    end
+    subgraph g2[外网]
+        C[lb] --> D[nat]
+    end
+    A --> C

@@ -1,0 +1,5 @@
+digraph G {
+    AI1 -> EDGE [label="直连"]
+    graph -> strict
+    rankdir=LR
+}

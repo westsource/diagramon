@@ -23,4 +23,8 @@ pub mod session;
 pub mod settings;
 pub mod workspace;
 
+/// C1 转换器正确性回归集（语料在 `testdata/`，仅测试用）。
+#[cfg(test)]
+mod convert_regression;
+
 pub use session::{Entry, Session};

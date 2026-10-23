@@ -39,6 +39,69 @@ def log(msg: str = "") -> None:
     print(msg, flush=True)
 
 
+# C2 画布生命周期回归用的承载页**协议桩**（见 ui_probe 主流程里的断言 C-L1~C-L3）。
+#
+# 为什么用桩而不是真引擎：C2 要验的是 `ui/js/canvas.js` 的**生命周期逻辑** ——
+# ready 状态是否被误重置、切换/关闭后会不会残留旧载荷 —— 这正是 v3.8.12/.13
+# 连修两次的根因。真 drawio 引擎在 headless 下又重又晃；而 canvas.js 与承载页的
+# 唯一接口就是 `__hostQueue` / `__apply`（契约写在 tools/drawio-host/host.html 注释里），
+# 用一个按同一契约应答的桩就能**确定性地**驱动并判定这三条路径。
+# 桩行为对齐真实承载页：ready 只发一次、load 后异步回 flush/export、descriptor 走引擎转换。
+CANVAS_STUB_HOST = """<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8"></head><body><script>
+(function () {
+  var queue = [];
+  window.__hostQueue = queue;
+  // 驱动侧（宿主窗口）可以直接改这个数组断言「最后一次收到谁」，不必依赖引擎。
+  window.__lastLoad = "";
+  // 记录收到过的动作序列（type → 载荷摘要），供「切标签不残留」断言核对。
+  window.__actions = [];
+  // 模拟真实承载页的**启动握手**：ready 在页面加载后**自行**发一次（不受 load 驱动），
+  // drawio 是这么做的，canvas.js 也正是靠它把 pending 里的指令 flush 下去 ——
+  // 若像旧实现那样只在收到 load 后才发 ready，就复刻了「第二次载入卡在 pending」的死锁。
+  setTimeout(function () {
+    if (!window.__readySent) {
+      window.__readySent = true;
+      window.__hostQueue.push(JSON.stringify({ event: "ready" }));
+    }
+  }, 20);
+  window.__apply = function (str) {
+    var msg;
+    try { msg = JSON.parse(str); } catch (e) { msg = { action: "raw", data: str }; }
+    window.__actions.push({ action: msg.action, xml: msg.xml || "", data: (msg.descriptor && msg.descriptor.data) || "" });
+    if (msg.action === "load") {
+      if (msg.xml) window.__lastLoad = msg.xml;
+      if (msg.descriptor) window.__lastLoad = msg.descriptor.data;   // 引擎转换：记录待转源码
+      if (msg.descriptor) {
+        // 模拟「Mermaid 源码经引擎导入器转成 mxfile」：把源码包进 xml 里带标记回来。
+        setTimeout(function () {
+          window.__hostQueue.push(JSON.stringify({
+            event: "export", format: "xml",
+            xml: '<mxfile><diagram>DBG:' + msg.descriptor.data + '</diagram></mxfile>',
+          }));
+        }, 30);
+      }
+    } else if (msg.action === "export") {
+      setTimeout(function () {
+        window.__hostQueue.push(JSON.stringify({
+          event: "export", format: "xml",
+          xml: '<mxfile><diagram>DBG:' + (window.__lastLoad || "") + '</diagram></mxfile>',
+        }));
+      }, 20);
+    } else if (msg.action === "setScene") {
+      window.__lastLoad = msg.scene || "";
+      setTimeout(function () {
+        window.__hostQueue.push(JSON.stringify({ event: "scene", elements: [], appState: {}, files: {} }));
+      }, 20);
+    } else if (msg.action === "getScene") {
+      setTimeout(function () {
+        window.__hostQueue.push(JSON.stringify({ event: "scene", elements: [], appState: {}, files: {} }));
+      }, 20);
+    }
+  };
+})();
+</script></body></html>"""
+
+
 def serve_ui() -> tuple[ThreadingHTTPServer, int]:
     # 原型按需用到的**随包资产**（在 ui/ 之外）。真实应用由 `dgm://` 协议按
     # `crates/assets::resolve` 提供；这里只映射用得上的那几个 —— ELK 离线包是
@@ -46,6 +109,14 @@ def serve_ui() -> tuple[ThreadingHTTPServer, int]:
     # 启动预热与"切到 elk"两条路都要能真的 import 到它。
     mounts = ("mermaid-elk",)
     assets_root = (ROOT / "assets").resolve()
+    # C2 画布生命周期回归：把 drawio / excalidraw 的承载页临时换成协议桩。
+    #（真机里这两个路径由 crates/assets::resolve 指到汇出的承载页；这里页内
+    #  没有它们，直接由桩应答，避免加载重引擎 —— 目的见 CANVAS_STUB_HOST 注释。）
+    canvas_stubs = {
+        "/drawio/host.html": CANVAS_STUB_HOST,
+        "/excalidraw/index.html": CANVAS_STUB_HOST,
+        "/excalidraw/": CANVAS_STUB_HOST,
+    }
 
     class H(SimpleHTTPRequestHandler):
         def __init__(self, *a, **kw):
@@ -59,6 +130,20 @@ def serve_ui() -> tuple[ThreadingHTTPServer, int]:
                     if str(p).startswith(str(assets_root)):
                         return str(p)
             return super().translate_path(path)
+
+        def do_GET(self):  # noqa: N802
+            path = self.path.split("?", 1)[0].split("#", 1)[0]
+            for prefix, body in canvas_stubs.items():
+                if path == prefix:
+                    data = body.encode("utf-8")
+                    self.send_response(200)
+                    self.send_header("content-type", "text/html; charset=utf-8")
+                    self.send_header("cache-control", "no-store")
+                    self.send_header("content-length", str(len(data)))
+                    self.end_headers()
+                    self.wfile.write(data)
+                    return
+            return super().do_GET()
 
         def log_message(self, *args):  # 静音
             pass
@@ -1230,6 +1315,110 @@ def main() -> int:
                     fails.append(f"{fmt} 用户没写后缀时应补 .{ext}，实际落盘路径 {row.get('saved')}")
         except Exception as e:
             fails.append(f"保存扩展名推荐断言解析失败：{e} / {save_check}")
+
+        # ================= 断言 C-L1~C-L3：画布生命周期回归（C2） =================
+        # 目标：把 v3.8.12/.13 连修两次的同一根因（画布「就绪状态」被误重置 → 旧载荷
+        # 串到下一次转换）变成自动断言。三条路径对齐架构方案 C2：
+        #   C-L1 连续转换两次：对同一正文 A 转画布 → 换正文 B 再转 → 画布必须是 B（A 不残留）
+        #   C-L2 两个画布标签来回切：drawio 与 excalidraw 各一份，来回切 → 各自画布内容对得上、不互串
+        #   C-L3 关闭标签后残留载荷：teardown 后 host 实例清理干净、无挂起载荷，再开同格式不继承旧 payload
+        #
+        # 驱动方式：直接用 DGM.canvas 的公开 API（show / teardown / isReady / loadedDoc），
+        # 配合上面 serve_ui 的协议桩（真实承载页接口 __apply / __hostQueue 的确定性替身）。
+        # 断言读桩里 `window.__lastLoad`（最后一次收到的载荷）+ `__actions` 序列，
+        # 以及 DGM.canvas 的内部状态，正撞「第二次载入卡在 pending」原 bug。
+        canvas_lc = ev(
+            "(async () => {"
+            "  const wait = (ms) => new Promise(r => setTimeout(r, ms));"
+            "  const out = {};"
+            "  const cv = DGM.canvas;"
+            "  const stubOf = (fmt) => {"
+            "    const e = document.querySelector('#canvas-host iframe.canvas-' + fmt);"
+            "    return e ? e.contentWindow : null;"
+            "  };"
+            # 先清掉可能残留的画布实例，从干净状态开始
+            "  for (const f of ['drawio','excalidraw']) { if (cv.supports(f)) cv.teardown(f); }"
+            "  await wait(100);"
+            "  cv.init({ container: document.getElementById('canvas-host') });"
+            #
+            "  const dA = await DGM.state.newDoc('drawio');"
+            "  DGM.state.setBody(dA.id, 'A_MARKER_PROBE');"
+            "  const dB = await DGM.state.newDoc('drawio');"
+            "  DGM.state.setBody(dB.id, 'B_MARKER_PROBE');"
+            "  const dX = await DGM.state.newDoc('excalidraw');"
+            "  DGM.state.setBody(dX.id, '{}');"
+            #
+            # ---- C-L1 连续转换两次（次次都是新的一版，旧的不得残留）----
+            "  cv.show(dA); await wait(150);"
+            "  out.lc1_first = stubOf('drawio') && (stubOf('drawio').__lastLoad || '');"
+            "  cv.show(dB); await wait(150);"
+            "  out.lc1_second = stubOf('drawio') && (stubOf('drawio').__lastLoad || '');"
+            #
+            # ---- C-L2 两个画布标签来回切（格式甲/格式乙，各认各的）----
+            "  const dw = stubOf('drawio');"
+            "  const beforeSwitchDrawio = dw ? dw.__lastLoad : '';"
+            "  cv.show(dX); await wait(150);"                                   # 切到 excalidraw
+            "  const ex = stubOf('excalidraw');"
+            "  out.lc2_ex = ex ? ex.__lastLoad : '';"
+            "  out.lc2_drawioUnchanged = (stubOf('drawio') ? stubOf('drawio').__lastLoad : '') === beforeSwitchDrawio;"
+            "  cv.show(dA); await wait(150);"                                  # 切回 drawio
+            "  out.lc2_drawioBack = stubOf('drawio') ? stubOf('drawio').__lastLoad : '';"
+            #
+            # ---- C-L3 关闭标签后残留载荷（teardown 清理 + 重开不继承旧 payload）----
+            "  cv.teardown('drawio'); await wait(100);"
+            "  out.lc3_gone = !!document.querySelector('#canvas-host iframe.canvas-drawio');"
+            "  out.lc3_loaded = cv.loadedDoc('drawio');"
+            "  out.lc3_ready = cv.isReady('drawio');"
+            "  const dC = await DGM.state.newDoc('drawio');"
+            "  DGM.state.setBody(dC.id, 'C_MARKER_PROBE');"
+            "  cv.show(dC); await wait(150);"
+            "  out.lc3_reopen = stubOf('drawio') ? stubOf('drawio').__lastLoad : '';"
+            # 诊断：为什么桩没收到载荷（iframe 在不在 / __apply 有没有 / 动作序列空了没）
+            "  const dbgF = document.querySelector('#canvas-host iframe.canvas-drawio');"
+            "  out.lc_dbg = {"
+            "    supportsDrawio: cv.supports('drawio'),"
+            "    drawioFrame: !!dbgF,"
+            "    frameCount: document.querySelectorAll('#canvas-host iframe').length,"
+            "    applyType: dbgF ? typeof dbgF.contentWindow.__apply : 'no-frame',"
+            "    actions: dbgF ? (dbgF.contentWindow.__actions || []).length : -1,"
+            "    lastAction: dbgF && dbgF.contentWindow.__actions && dbgF.contentWindow.__actions.length"
+            "      ? JSON.stringify(dbgF.contentWindow.__actions[dbgF.contentWindow.__actions.length - 1]) : ''"
+            "  };"
+            # 复原：清掉画布实例，别影响后面的截图/断言
+            "  for (const f of ['drawio','excalidraw']) cv.teardown(f);"
+            "  return JSON.stringify(out);"
+            "})()"
+        )
+        log(f"画布生命周期（C2）: {canvas_lc}")
+        try:
+            cl = json.loads(canvas_lc or "{}")
+        except Exception:
+            cl = {}
+        # C-L1：第二次 show 后桩里必须是 B，而不是还停在 A —— 这正是"旧载荷串到下次"的判别式
+        if not str(cl.get("lc1_first", "")).find("A_MARKER_PROBE") >= 0:
+            fails.append(f"画布第一次载入没收到 A：{cl.get('lc1_first')!r}")
+        if not str(cl.get("lc1_second", "")).find("B_MARKER_PROBE") >= 0:
+            fails.append(f"画布第二次载入没收到 B（旧 A 残留 / 卡在 pending）：{cl.get('lc1_second')!r}")
+        if str(cl.get("lc1_second", "")).find("A_MARKER_PROBE") >= 0:
+            fails.append(f"画布第二次载入仍带着 A 的载荷（就绪状态被误重置）：{cl.get('lc1_second')!r}")
+        # C-L2：excalidraw 收自己的场景（它的正文 '{}'），drawio 切走再切回内容不变、不串
+        if not str(cl.get("lc2_ex", "")):
+            fails.append(f"excalidraw 画布没有收到任何载荷：{cl.get('lc2_ex')!r}")
+        if "A_MARKER_PROBE" in str(cl.get("lc2_ex", "")) or "B_MARKER_PROBE" in str(cl.get("lc2_ex", "")):
+            fails.append(f"excalidraw 画布串进了 drawio 的载荷：{cl.get('lc2_ex')!r}")
+        if cl.get("lc2_drawioUnchanged") is not True:
+            fails.append(f"切到 excalidraw 时 drawio 画布内容被改了（串图）：{cl.get('lc2_drawioUnchanged')}")
+        if not str(cl.get("lc2_drawioBack", "")).find("A_MARKER_PROBE") >= 0:
+            fails.append(f"切回 drawio 后画布不是 A：{cl.get('lc2_drawioBack')!r}")
+        # C-L3：teardown 后实例清理干净，重开不继承旧 payload
+        if cl.get("lc3_gone") is not False:
+            fails.append("关闭标签后 drawio 承载 iframe 还在（teardown 没删实例）")
+        if cl.get("lc3_loaded") is not None:
+            fails.append(f"关闭标签后 loadedDoc 没清：{cl.get('lc3_loaded')!r}")
+        if cl.get("lc3_ready") is not False:
+            fails.append("关闭标签后 isReady 仍为 true（就绪状态没随实例丢失）")
+        if not str(cl.get("lc3_reopen", "")).find("C_MARKER_PROBE") >= 0:
+            fails.append(f"重开同格式画布继承了旧 payload：{cl.get('lc3_reopen')!r}")
 
         # ---- 追加截图：保存到云端窗口 / 登录窗口（留证用，不参与判定） ----
         # 截图走"先把视口撑到 1680×1000 再截"：`captureBeyondViewport` 在本机
