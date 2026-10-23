@@ -214,7 +214,6 @@
     if (!combo) {
       return;
     }
-
     event.preventDefault();
     event.stopPropagation();
     report('hotkey', { combo: combo });
@@ -269,12 +268,14 @@
     if (msg.action === 'loadMermaid') {
       // msg.mermaid（可选）：外壳侧的 Mermaid 渲染配置（如 {look:'handDrawn'}），
       // convertMermaid 会把它平铺进 m2e 内置 mermaid 的 initialize —— 文档级外观因此沿用到转换。
+      // （subgraph 转成整张位图的上游缺陷已在 `tools/excalidraw-entry/entry.jsx` 的
+      //   convertMermaid 里修掉，这里不需要再包一层。）
       return window.ExcalidrawApp.convertMermaid(msg.source, msg.mermaid).then(function (converted) {
         const elements = converted.elements || [];
         messages.pending = { elements: elements };
         out.api.updateScene({ elements: elements });
-        // 同样走 addFiles；`converted.files` 一定要带到：上游对不支持的语法（如 subgraph）会
-        // 兜底成**一整张位图**，位图就在 files 里 —— 漏了它，画布上只剩一个悬空 fileId 的 image 元素。
+        // 同样走 addFiles；`converted.files` 一定要带到：上游兜底成整张位图时，位图就在 files 里 ——
+        // 漏了它，画布上只剩一个悬空 fileId 的 image 元素。
         applyFiles(converted.files || {});
         suppressEchoes(elements);
         ensureViewportVisible();

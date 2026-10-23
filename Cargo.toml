@@ -1,4 +1,4 @@
-# Diagramon dev3.0 —— Rust + Tauri 2 工作区
+﻿# Diagramon dev3.0 —— Rust + Tauri 2 工作区
 #
 # 按 design/ui-proto/（界面原型与设计说明）重建：AI 画图是第一公民，
 # 四种格式（Mermaid / Graphviz DOT / drawio / Excalidraw）共用一套工作区与画布手势。
@@ -23,7 +23,7 @@ members = [
 ]
 
 [workspace.package]
-version = "3.8.13"
+version = "3.8.14"
 edition = "2021"
 license = "Apache-2.0"
 repository = "https://github.com/westsource/diagramon"

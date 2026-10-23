@@ -8,7 +8,7 @@
 | 用例 | 断言 | 对应过的 bug |
 |---|---|---|
 | A 正常图 | 元素 id **就是 mermaid 节点 id**（`A` / `B` 在列） | 入口用 `regenerateIds: true` 把语义锚点换成了随机串 |
-| B subgraph | 退化成单个 `image` 时，**位图的 fileId 必须能解析到文件** | 入口丢 `parsed.files` ⇒ 画布上是一块悬空 fileId 的空图 |
+| B subgraph | 带 `subgraph` 的图必须产出**多个结构化元素**（矩形/箭头/文本），不许退化成单个 `image` 位图 | ①（旧）入口丢 `parsed.files` ⇒ 悬空 fileId 的空图；②（2026-10-23）上游 m2e 用裸 id 找 subgraph，而 mermaid 渲染出的 id 带渲染序号前缀 ⇒ `SubGraph element not found` ⇒ 静默退化成整张位图、整份文件不可编辑 |
 | C 带图片文档 | `setScene` 的 files 进画布、也能被 `getScene` 带回来 | 承载页只给 elements ⇒ 打开含图片的 `.excalidraw` 渲染不出图片（与 mermaid 无关） |
 | D 换文档 | 再 `setScene` 一份无附件文档后，回报的 files **必须为空** | 附件按格式常驻单例 ⇒ 上一份文档的图片被写进新文档正文 |
 | F look 透传 | `loadMermaid` 消息带的 `mermaid` 配置**真的进 m2e**（`{look:'handDrawn'}`）且照常出元素 | 转换沿用文档外观的配置链（2026-10-19）；断链时静默回退默认样式 |
@@ -70,7 +70,7 @@ PNG_1PX = ("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJ"
 
 SESSION = [
     {"name": "A 正常图 · id 保留", "src": "flowchart TD\n    A --> B\n"},
-    {"name": "B subgraph · 位图兜底", "src": "flowchart TD\n    A --> B\n    subgraph 分组\n        B\n    end\n"},
+    {"name": "B subgraph · 结构化（不再退化位图）", "src": "flowchart TD\n    A --> B\n    subgraph 分组\n        B\n    end\n"},
 ]
 
 EXPR = """
@@ -422,6 +422,12 @@ def main() -> int:
          "--window-size=1400,900",
          "--disable-background-timer-throttling", "--disable-backgrounding-occluded-windows",
          "--disable-renderer-backgrounding", "--disable-features=CalculateNativeWinOcclusion",
+         # 受限会话（agent 沙箱 / 作业对象）里 Chrome 的渲染子进程会启动即崩，
+         # 症状是后面那句「连不上 CDP 端口（30s）」—— 端口根本没监听。
+         # 与 check.mjs 的 DGM_BROWSER_EXTRA_ARGS=--no-sandbox 同一个成因；
+         # 普通桌面不需要，所以只在 DGM_PROBE_NO_SANDBOX=1 时加。
+         *(["--no-sandbox", "--disable-dev-shm-usage"]
+           if os.environ.get("DGM_PROBE_NO_SANDBOX") == "1" else []),
          f"--user-data-dir={profile}", f"--remote-debugging-port={page_port}", "about:blank"],
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
@@ -522,15 +528,17 @@ def main() -> int:
         elif "A" not in a["ids"] or "B" not in a["ids"]:
             failures.append(f"A：上游 id 没保留（拿到 {a['ids']}）")
 
-        b = by.get("B subgraph · 位图兜底")
+        b = by.get("B subgraph · 结构化（不再退化位图）")
         if not b:
             failures.append("B：用例缺失")
-        elif b["types"] != ["image"]:
-            failures.append(f"B：预期退化成单个 image，实际 {b['types']}（上游可能已支持 subgraph，请更新断言）")
-        elif not b["imagesResolved"]:
-            failures.append(f"B：位图 fileId 解析不到文件（files={b['fileIds']}，元素要的是 {b['imageFileIds']}）")
-        elif b["bytes"] < 100:
-            failures.append(f"B：位图字节过少（{b['bytes']}），像是空的")
+        elif b["types"] == ["image"]:
+            failures.append(
+                f"B：subgraph 又退化成单个位图了（{b['types']}）—— 上游 id 错配的补丁可能丢了"
+            )
+        elif len(b["types"]) < 2 or b["count"] < 5:
+            failures.append(f"B：subgraph 应产出多个结构化元素，实际 {b['count']} 个 {b['types']}")
+        elif b["imageFileIds"]:
+            failures.append(f"B：不该有 image 元素，实际 {b['imageFileIds']}")
 
         c1 = by.get("C setScene 带图片")
         if not c1 or "img1" not in c1["fileIds"]:

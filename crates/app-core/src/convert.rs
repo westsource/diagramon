@@ -71,6 +71,13 @@ struct Operand {
     id: String,
     label: Option<String>,
     shape: Shape,
+    /// 内联类名：`A["x"]:::cls` 里的 `cls`（可多个，逗号分隔）。
+    ///
+    /// Mermaid 允许把 class 直接写在节点上，效果与 `class A cls` 完全一致。
+    /// **不认它会让整份文件转不出来**：`:::` 被当成"尾部没解析完的内容"，
+    /// 用户拿到的是「第 26 行：语句尾部有没解析完的内容」这种与真实原因无关的报错
+    /// （真实语料实测：带 `:::` 的部署图 100% 失败）。
+    classes: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -412,13 +419,16 @@ fn parse_operand(text: &str, start: usize) -> Option<(Operand, usize)> {
 
     // 裸 id（subgraph 里常见：单独一行的 `L`）
     if ci >= chars.len() || !matches!(chars[ci], '[' | '(' | '{' | '>') {
+        // 裸 id 也可能带内联类名（`A:::cls`），那它在解析里算"没有形状"的一个操作数
+        let (classes, end_ci) = parse_inline_classes(&chars, ci);
         return Some((
             Operand {
                 id,
                 label: None,
                 shape: Shape::Box,
+                classes,
             },
-            char_to_byte(text, ci),
+            char_to_byte(text, end_ci),
         ));
     }
 
@@ -454,14 +464,64 @@ fn parse_operand(text: &str, start: usize) -> Option<(Operand, usize)> {
     let label = strip_one_quote_pair(label_raw.trim()).to_string();
     let next_ci = inner_start + tail[..close_at + close.len()].chars().count();
 
+    // 形状闭合之后还可能跟内联类名（`A["x"]:::cls`），一起吃掉
+    let (classes, end_ci) = parse_inline_classes(&chars, next_ci);
+
     Some((
         Operand {
             id,
             label: if label.is_empty() { None } else { Some(label) },
             shape,
+            classes,
         },
-        char_to_byte(text, next_ci),
+        char_to_byte(text, end_ci),
     ))
+}
+
+/// 吃掉节点后面的内联类名：`:::cls` / `:::a,b`（Mermaid 允许一个节点挂多个类）。
+///
+/// 返回（类名列表, 字符游标）。没有 `:::` 时原样返回 (空, 传入的游标)。
+///
+/// 为什么值得单独一个函数：`:::` 后面紧跟的类名可能为中文/带数字，
+/// 而 `is_id_char` 不吃 `-`，所以这里按"读到空白或 `;` 或箭头为止"来收，
+/// 与 `class A cls` 那条语句的语义保持一致（那边是按逗号切）。
+fn parse_inline_classes(chars: &[char], start: usize) -> (Vec<String>, usize) {
+    if start + 3 > chars.len() {
+        return (Vec::new(), start);
+    }
+    // 必须正好是三个冒号；两个冒号（`A:x`）在 Mermaid 里是别的语义，不在这里吃
+    if !(chars[start] == ':' && chars[start + 1] == ':' && chars[start + 2] == ':') {
+        return (Vec::new(), start);
+    }
+    let mut ci = start + 3;
+    let mut out: Vec<String> = Vec::new();
+    let mut cur = String::new();
+    while ci < chars.len() {
+        let c = chars[ci];
+        if c.is_whitespace() || c == ';' {
+            break;
+        }
+        // 箭头 / 连线开头就停（`A["x"]:::c --> B` 里 `:::` 后面不该把 `-->` 吃进类名）
+        if c == '-' || c == '=' || c == '<' || c == '&' {
+            break;
+        }
+        if c == ',' {
+            let name = cur.trim();
+            if !name.is_empty() {
+                out.push(name.to_string());
+            }
+            cur.clear();
+            ci += 1;
+            continue;
+        }
+        cur.push(c);
+        ci += 1;
+    }
+    let name = cur.trim();
+    if !name.is_empty() {
+        out.push(name.to_string());
+    }
+    (out, ci)
 }
 
 /// 在标签正文里找节点闭合符号。
@@ -751,6 +811,8 @@ pub fn mermaid_to_dot(src: &str) -> Result<Conversion, String> {
     let mut edges: Vec<(String, String, Link)> = Vec::new();
     let mut class_styles: HashMap<String, Vec<String>> = HashMap::new();
     let mut node_styles: HashMap<String, Vec<String>> = HashMap::new();
+    // 节点上内联写的类名（`A["x"]:::cls`）：先收着，等 classDef 全收齐再合并
+    let mut inline_classes: HashMap<String, Vec<String>> = HashMap::new();
     let mut dropped_keys: Vec<String> = Vec::new();
     let mut used_shapes: Vec<Shape> = Vec::new();
     // 用到的圆圈 / 叉端点（DOT 没有对应形状，要记进 notes）
@@ -822,6 +884,14 @@ pub fn mermaid_to_dot(src: &str) -> Result<Conversion, String> {
                     } else {
                         label_of.entry(op.id.clone()).or_insert((None, Shape::Box));
                     }
+                    // 内联类名（`A["x"]:::cls`）：与 `class A cls` 等价，先挂到 node_styles，
+                    // 等所有 classDef 都收齐后再合并（classDef 可能写在这些节点之后）。
+                    for cls in &op.classes {
+                        inline_classes
+                            .entry(op.id.clone())
+                            .or_default()
+                            .push(cls.clone());
+                    }
                     if op.shape != Shape::Box && !used_shapes.contains(&op.shape) {
                         used_shapes.push(op.shape);
                     }
@@ -845,7 +915,17 @@ pub fn mermaid_to_dot(src: &str) -> Result<Conversion, String> {
         return Err("subgraph 没有配对的 `end`".into());
     }
 
-    /* ---------- 第二遍：按归属分组输出 ---------- */
+    // 内联类名与 `class A cls` 同语义：现在 classDef 与节点都收齐了，按名字合并进 node_styles。
+    // 找不到同名 classDef 就跳过（等价于 Mermaid 里挂了个未定义的类 —— 那里也不报错）。
+    for (id, names) in &inline_classes {
+        for name in names {
+            if let Some(attrs) = class_styles.get(name) {
+                node_styles.entry(id.clone()).or_default().extend(attrs.iter().cloned());
+            }
+        }
+    }
+
+    /* ---------- 第三遍：按归属分组输出 ---------- */
     let mut out = String::new();
     let _ = writeln!(out, "digraph G {{");
     let _ = writeln!(out, "    rankdir={direction};");
@@ -1115,6 +1195,9 @@ pub fn mermaid_to_d2(src: &str) -> Result<Conversion, String> {
     let mut edges: Vec<(String, String, Link)> = Vec::new();
     let mut node_styles: HashMap<String, Vec<(String, String)>> = HashMap::new();
     let mut node_class: HashMap<String, String> = HashMap::new();
+    // 一个节点写了多个内联类名（`A:::a,b`）时记下来：D2 的 `.class` 是单值，
+    // 只取第一个，其余如实进 notes（不静默丢）。
+    let mut notes_inline_multi_class = false;
     let mut container_direction: HashMap<usize, String> = HashMap::new();
     let mut used_shapes: Vec<Shape> = Vec::new();
     let mut used_families: Vec<Family> = Vec::new();
@@ -1170,6 +1253,14 @@ pub fn mermaid_to_d2(src: &str) -> Result<Conversion, String> {
                         label_of.insert(op.id.clone(), (op.label.clone(), op.shape));
                     } else {
                         label_of.entry(op.id.clone()).or_insert((None, Shape::Box));
+                    }
+                    // 内联类名（`A["x"]:::cls`）：与 `class A cls` 等价。
+                    // D2 的 `.class` 是单值属性 ⇒ 多类时只取第一个，并记进 notes 如实说明。
+                    if let Some(first) = op.classes.first() {
+                        if op.classes.len() > 1 {
+                            notes_inline_multi_class = true;
+                        }
+                        node_class.entry(op.id.clone()).or_insert_with(|| first.clone());
                     }
                     if op.shape != Shape::Box && !used_shapes.contains(&op.shape) {
                         used_shapes.push(op.shape);
@@ -1281,6 +1372,12 @@ pub fn mermaid_to_d2(src: &str) -> Result<Conversion, String> {
             }
             _ => {}
         }
+    }
+    if notes_inline_multi_class {
+        notes.push(
+            "节点上的多个内联类名（`:::a,b`）：D2 的 `.class` 只能挂一个，只保留了第一个"
+                .to_string(),
+        );
     }
     if !dropped_keys.is_empty() {
         dropped_keys.sort();
@@ -1675,6 +1772,55 @@ mod tests {
         let c = mermaid_to_dot("flowchart TD\n    C <-- 是 --> D\n").unwrap();
         assert!(c.body.contains("C -> D [label=\"是\", dir=both];"), "{}", c.body);
         assert!(mermaid_to_d2("flowchart TD\n    C <-- 是 --> D\n").unwrap().body.contains("C <-> D: \"是\""));
+    }
+
+    /// 节点上的**内联类名** `:::cls`：与 `class A cls` 完全等价。
+    ///
+    /// 真实语料（`service/var/例子-智控平台应用部署…​.mmd`）里 11 个节点用这种写法，
+    /// 修复前**整份文件转不出来**：`:::` 没进词法，被当成「第 26 行：语句尾部有没
+    /// 解析完的内容」，用户看到的是与真实原因无关的报错。三个断言各钉一件事：
+    /// ① 能转（不再报末尾残留）；② 样式真的挂上了；③ 声明时是裸 id 也要认。
+    #[test]
+    fn inline_class_suffix_is_parsed_and_applied() {
+        let src = "flowchart LR\n    classDef user fill:#dbeafe,stroke:#2563eb\n    A([开始]):::user\n    B[中间]:::user --> C[结束]\n";
+
+        let c = mermaid_to_dot(src).unwrap();
+        // ① 不再报「尾部有没解析完的内容」（能到这一步就是转成功了）
+        assert!(c.body.contains("digraph"), "{}", c.body);
+        // ② 样式挂到两个节点上（fill 是 #dbeafe）
+        let dbeafe = c.body.matches("dbeafe").count();
+        assert!(dbeafe >= 2, "内联类名没生效，只出现 {} 次 fillColor：{}", dbeafe, c.body);
+        // ③ 裸 id + `:::`（B 那一行是 `B[中间]:::user`，A 是 `A([开始]):::user`，两者都要挂上）
+
+        let d = mermaid_to_d2(src).unwrap();
+        assert!(d.body.contains("classes: {"), "{}", d.body);
+        // D2 侧：节点挂 `.class`
+        assert!(d.body.contains("A.class: user"), "{}", d.body);
+        assert!(d.body.contains("B.class: user"), "{}", d.body);
+    }
+
+    /// `:::a,b` 多类名：DOT 全挂上；D2 的 `.class` 是单值，只挂第一个并**如实进 notes**。
+    #[test]
+    fn inline_multiple_classes() {
+        let src = "flowchart LR\n    classDef a fill:#111111\n    classDef b fill:#222222\n    X[叶子]:::a,b\n";
+        let c = mermaid_to_dot(src).unwrap();
+        assert!(c.body.contains("111111") && c.body.contains("222222"), "DOT 两个类都该挂上：{}", c.body);
+        let d = mermaid_to_d2(src).unwrap();
+        assert!(d.body.contains("X.class: a"), "{}", d.body);
+        assert!(
+            d.notes.iter().any(|n| n.contains("内联类名")),
+            "多类名被截断却没进 notes：{:?}",
+            d.notes
+        );
+    }
+
+    /// `:::` 后面跟着箭头时，不能把箭头吃进类名（`A["x"]:::c --> B`）。
+    #[test]
+    fn inline_class_does_not_swallow_the_arrow() {
+        let src = "flowchart LR\n    classDef c fill:#333333\n    A[\"x\"]:::c --> B\n";
+        let c = mermaid_to_dot(src).unwrap();
+        assert!(c.body.contains("A -> B"), "箭头被类名吃掉了：{}", c.body);
+        assert!(c.body.contains("333333"), "类名没挂上：{}", c.body);
     }
 
     /// `o--o` / `x--x`：两端分别是圆圈与叉，DOT / D2 都没有对应端点形状 ——

@@ -7,7 +7,7 @@
 #   react / react-dom     Excalidraw 的 peerDependencies（打进 bundle，不做 external）
 #   esbuild               打包器本身，跟着 pin 一起装
 excalidraw=0.18.1
-mermaid-to-excalidraw=2.2.2
+mermaid-to-excalidraw=2.3.0
 mermaid=11.17.2
 react=18.3.1
 react-dom=18.3.1

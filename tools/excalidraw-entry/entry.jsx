@@ -156,6 +156,60 @@ export async function exportPng(options) {
 }
 
 /**
+ * 修上游的 subgraph id 错配（mermaid-to-excalidraw 2.2.2 / 2.3.0 都有，路径不同、结果一样）。
+ *
+ * 症状：任何带 `subgraph` 的 flowchart 转成 Excalidraw 都是**一整张位图**（只有 1 个 image
+ * 元素、不可编辑）。控制台里能抓到 `Error processing Mermaid diagram: Error: SubGraph
+ * element not found` —— 上层 catch 住后走 graphImage 兜底，所以界面上"转换成功"、只是没形状。
+ *
+ * 根因（本机实测钉死）：m2e 的 parseSubGraph 用
+ *   `containerEl.querySelector('[id="BIZ"]')`
+ * 去找 subgraph 对应的 SVG 元素，而 mermaid 渲染出来的真实 id 是**带前缀**的
+ * `mermaid-to-excalidraw-<n>-BIZ`（`<n>` 每次渲染还会变）。精确匹配必然落空 ⇒ 抛错。
+ * 实测证据：注入查询日志后，m2e 依次问了
+ *   `[id="mermaid-to-excalidraw-0"]`（命中）、`[id="BIZ"]`（未命中），
+ * 而同一份 SVG 里的真实 id 是 `mermaid-to-excalidraw-0-BIZ`。
+ *
+ * 修法：转换期间临时给 `Element.prototype.querySelector` 加一层"精确失败就按 id 后缀再找
+ * 一次"的兜底，结束（含抛错）立刻还原。为什么后缀而不是前缀：前缀里的渲染序号每次都变，
+ * 只有 `-<subgraphId>` 这段稳定；`[id$="-BIZ"]` 也不会误命中节点（节点 id 形如
+ * `…-flowchart-A-0`）。实测同一段带 subgraph 的源：修前 1 个位图元素，修后 10 个结构化
+ * 元素（4 rectangle + 2 arrow + 4 text）。
+ *
+ * **必须是 async 并 await `fn()`**：`parseMermaidToExcalidraw` 是异步的，若只写
+ * `try { return fn() } finally { 还原 }`，`finally` 会在 Promise 兑现**之前**就执行 ——
+ * 补丁等于没装（第一版就踩了这个，现象是"补丁进了产物但转换结果没变"）。
+ *
+ * 这里改而不是在承载页里改：承载页与探针都经这个入口，放在这里一处生效。
+ */
+async function withSubgraphIdFallback(fn) {
+  const proto = Element.prototype;
+  const original = proto.querySelector;
+  proto.querySelector = function (selector) {
+    const hit = original.call(this, selector);
+    if (hit) {
+      return hit;
+    }
+    // 只对 m2e 那种 `[id="X"]` 形式兜底（X 里不含引号/反斜杠）
+    if (typeof selector === "string") {
+      const m = /^\[id="([^"\\]+)"\]$/.exec(selector);
+      if (m) {
+        const alt = original.call(this, `[id$="-${m[1]}"]`);
+        if (alt) {
+          return alt;
+        }
+      }
+    }
+    return hit;
+  };
+  try {
+    return await fn();
+  } finally {
+    proto.querySelector = original;
+  }
+}
+
+/**
  * Mermaid 源码 -> Excalidraw 元素。
  * @param {string} source
  * @param {object} [config] 透传给 mermaid-to-excalidraw
@@ -168,7 +222,7 @@ export async function convertMermaid(source, config) {
     throw new Error("convertMermaid: mermaid source is empty");
   }
   await loadMermaidBundle();
-  const parsed = await parseMermaidToExcalidraw(source, config);
+  const parsed = await withSubgraphIdFallback(() => parseMermaidToExcalidraw(source, config));
   // **id 要保留**：上游骨架里的 `id` 就是 Mermaid 的节点 id（`"A"`），而 Excalidraw 把标签
   // 拆成**独立 text 元素**、不与矩形绑定 —— 一旦换成随机 id，"哪个矩形是哪个节点"就只能靠
   // 文字与坐标反推。代价是多次导入同一张图会撞 id：那由调用方加前缀解决（本应用是整份替换，
@@ -176,7 +230,7 @@ export async function convertMermaid(source, config) {
   const elements = convertToExcalidrawElements(parsed.elements, {
     regenerateIds: false,
   });
-  // **files 要原样带出**：上游碰到不支持的语法（实测 subgraph 必现）不是报错，而是把整张图
-  // 渲染成一张位图放进 `files[fileId]`。丢了它 = 用户看到一块空白画布且没有任何提示。
+  // **files 要原样带出**：上游碰到真正不支持的语法不是报错，而是把整张图渲染成一张位图
+  // 放进 `files[fileId]`。丢了它 = 用户看到一块空白画布且没有任何提示。
   return { elements: elements, files: parsed.files || {} };
 }
