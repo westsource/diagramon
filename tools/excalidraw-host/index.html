@@ -36,9 +36,12 @@
 //   1) 把 Excalidraw 挂到 #root；
 //   2) 把画布变更（onChange）压进 window.__hostQueue，由 C# 侧轮询取走 —— 与 drawio 那条通道
 //      形状一致（宿主只要能执行脚本就能工作，不依赖 WebView 包装层的事件）；
-//   3) 暴露 window.__apply 供 C# 侧下发指令：setScene / loadMermaid / fit / getScene / export。
+//   3) 暴露 window.__apply 供 C# 侧下发指令：setScene / loadMermaid / fit / getScene / getOutline / select / export。
 //      loadMermaid 消息可带 `mermaid` 字段（Mermaid 渲染配置，如 {look:'handDrawn'}），
 //      会被平铺进 m2e 内置 mermaid 的 initialize —— 文档级外观沿用就靠它；不带 = 引擎默认。
+//      getOutline（C5-①）：取画布结构树 —— 回报 `report('outline', {tree, count})`，
+//      tree = {kind:'root', children:[{kind:'group'|'node',...}]}，分组按 groupIds 嵌套。
+//      select（C5-③）：侧栏大纲点击叶子 → 选中（appState.selectedElementIds）+ scrollToContent 定位。
 // 视口钩子另有一组（宿主执行自己的脚本调）：__hostZoom（当前缩放读数）/ __hostZoomBy（放大缩小
 // 一档）/ __hostFit（应用级「适应视图」—— 把内容整体放进视口）。
 // 内容真相始终是标签页里的 JSON 文本；本页只负责视图与事件。
@@ -302,6 +305,59 @@
         appState: filterAppState(out.api.getAppState()),
         files: files,
       });
+      return true;
+    }
+
+    if (msg.action === 'getOutline') {
+      // C5-①：取画布**结构树**（供侧栏画布大纲渲染，本轮只取数据、不做侧栏/跳转）。
+      // 不改画布、不消费事件；把非删除元素的 groupIds（外层→内层）反解成分组树，
+      // 叶子 = 图形节点。空分组语义：组只因元素携带其 id 而生，故每个组至少含一个
+      // 后代元素；「空的分组桶」在画布里本就不存在，天然满足 AC5-3（不凭空造空组）。
+      const elements = (out.api.getSceneElements() || []).filter(function (e) { return e && !e.isDeleted; });
+      const groups = {};
+      const root = { kind: 'root', children: [] };
+      function groupNode(id) {
+        if (!groups[id]) groups[id] = { kind: 'group', id: id, name: '分组 ' + id.slice(0, 4), children: [] };
+        return groups[id];
+      }
+      elements.forEach(function (e) {
+        const leaf = { kind: 'node', id: e.id, name: (e.text || e.type || e.id), type: e.type };
+        const gs = Array.isArray(e.groupIds) ? e.groupIds.filter(Boolean) : [];
+        if (!gs.length) { root.children.push(leaf); return; }
+        let parent = null;
+        for (let i = 0; i < gs.length; i++) {
+          const g = groupNode(gs[i]);
+          if (parent) {
+            if (!parent.children.some(function (c) { return c.kind === 'group' && c.id === g.id; })) parent.children.push(g);
+          } else if (!root.children.some(function (c) { return c.kind === 'group' && c.id === g.id; })) {
+            root.children.push(g);
+          }
+          parent = g;
+        }
+        parent.children.push(leaf);
+      });
+      report('outline', { tree: root, count: elements.length });
+      return true;
+    }
+
+    if (msg.action === 'select') {
+      // C5-③：侧栏画布大纲点击叶子 → 选中并定位到该元素。
+      // Excalidraw 的选中态在 appState.selectedElementIds（{ id: true }）；
+      // 定位用 scrollToContent 把目标元素滚进视口（不缩放，避免每次点击跳变比例）。
+      const ids = Array.isArray(msg.ids) ? msg.ids : [];
+      if (!ids.length) return true;
+      const sel = {};
+      ids.forEach(function (id) { sel[id] = true; });
+      try {
+        const all = out.api.getSceneElements() || [];
+        const picked = all.filter(function (e) { return sel[e.id]; });
+        if (picked.length && typeof out.api.scrollToContent === 'function') {
+          out.api.scrollToContent(picked, { fitToContent: false });
+        }
+      } catch (e) {
+        /* 定位失败不影响选中 */
+      }
+      out.api.updateScene({ appState: { selectedElementIds: sel } });
       return true;
     }
 

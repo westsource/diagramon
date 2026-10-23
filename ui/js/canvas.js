@@ -139,10 +139,14 @@ window.DGM = window.DGM || {};
     if (w) w.resolve(payload);
   }
 
+  // C5-①：画布大纲的极简请求/回调（不用 waiters 机制，单发单收）。
+  // `getOutline(format)` 发 getOutline 前挂上这个回调，承载页回 report('outline') 时由
+  // handleEvent 的 "outline" 分支取出并清空。
+  let pendingOutline = null;
+
   function report(message, err) {
     const text = err && err.message ? `${message}：${err.message}` : message;
-    state.pushOutput(text, "warn");
-    if (DGM.toast) DGM.toast({ icon: "alert", title: t("canvas.title"), sub: text, warn: true });
+    state.pushOutput(text, "warn");    if (DGM.toast) DGM.toast({ icon: "alert", title: t("canvas.title"), sub: text, warn: true });
   }
 
   /* ------------------------------------------------------------------ 回收事件 */
@@ -195,6 +199,15 @@ window.DGM = window.DGM || {};
 
       case "hotkey":
         forwardHotkey(msg.combo);
+        break;
+
+      // C5-①：承载页回的结构树（report('outline', {tree})），交给挂起的 getOutline 调用
+      case "outline":
+        if (pendingOutline) {
+          const fn = pendingOutline;
+          pendingOutline = null;
+          fn(msg.tree || null);
+        }
         break;
 
       default:
@@ -551,6 +564,48 @@ window.DGM = window.DGM || {};
     }
   }
 
+  /**
+   * C5-①：取画布结构树（供侧栏大纲渲染）。
+   * 向承载页发 `{action:'getOutline'}`，等 `report('outline')` 回来解析成树。
+   * 承载页未就绪时命令会被承载页入队、ready 后再重放；万一一直不 ready，
+   * 由这里的超时兜底 resolve(null)（不让调用方的 Promise 永久挂起）。
+   * @param {string} format
+   * @param {number} [timeoutMs=5000]
+   * @returns {Promise<object|null>} tree（{kind:'root', children:[...]}）或 null
+   */
+  function getOutline(format, timeoutMs) {
+    const ms = typeof timeoutMs === "number" ? timeoutMs : 5000;
+    return new Promise((resolve) => {
+      let done = false;
+      const finish = (tree) => {
+        if (done) return;
+        done = true;
+        if (pendingOutline === finish) pendingOutline = null;
+        resolve(tree);
+      };
+      // 并发重入：上一次还没回就再发，用新的回调覆盖旧的（画布大纲按需点开，几乎不会并发）
+      pendingOutline = finish;
+      try {
+        send(format, { action: "getOutline" });
+      } catch (err) {
+        finish(null);
+        return;
+      }
+      setTimeout(() => finish(null), ms);
+    });
+  }
+
+  /**
+   * C5-③：在画布上选中（并尽可能定位）指定元素。侧栏画布大纲点击叶子时调用。
+   * 承载页未就绪时 send 会排队/丢弃，不抛错。
+   * @param {string} format
+   * @param {string[]} ids
+   */
+  function select(format, ids) {
+    if (!Array.isArray(ids) || !ids.length) return;
+    send(format, { action: "select", ids: ids });
+  }
+
   function init(opts) {
     container = opts.container;
   }
@@ -565,6 +620,8 @@ window.DGM = window.DGM || {};
     exportPng,
     loadMermaid,
     setPendingConversion,
+    getOutline,
+    select,
     syncThemeAll,
     hostZoom,
     hostFit,

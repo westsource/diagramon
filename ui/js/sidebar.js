@@ -838,6 +838,70 @@ window.DGM = window.DGM || {};
 
   const KIND_ICON = { node: "diagram", edge: "swap", cluster: "layers", element: "layers" };
 
+  // C5-②：画布型大纲 —— 从承载页 getOutline 取结构树渲染进侧栏。
+  // 分组 = 可折叠父节点（默认展开，点击切换，会话内记住折叠态）；叶子 = 图形节点显示名字；
+  // 未分组节点在根；空组也显示。本轮**不做点击跳转（C5-③）与结构变更重算（C5-④）**。
+  // viewOutline 是同步返回 box 的，这里铺一层：先返回 box，异步取树后填进 box，避免挂住 UI。
+  function renderCanvasOutline(box, d) {
+    const fmt = d.format;
+    box.appendChild(tip(esc(t("side.outline.loading"))));
+
+    const timeoutMs = 5000;
+    const timer = new Promise((resolve) => setTimeout(() => resolve(null), timeoutMs));
+    // 失败/超时兜底：拿不到树（承载页未就绪等）显示 empty，不挂住侧栏。5s 超时。
+    Promise.race([DGM.canvas.getOutline(fmt), timer])
+      .then((tree) => {
+        box.innerHTML = "";
+        box.appendChild(tip(esc(t("side.outline.tip"))));
+        if (!tree || !tree.children || !tree.children.length) {
+          box.appendChild(tip(esc(t("side.outline.empty"))));
+          return;
+        }
+        renderCanvasNodes(box, tree.children, fmt);
+      })
+      .catch(() => {
+        box.innerHTML = "";
+        box.appendChild(tip(esc(t("side.outline.tip"))));
+        box.appendChild(tip(esc(t("side.outline.empty"))));
+      });
+  }
+
+  function renderCanvasNodes(box, nodes, fmt) {
+    nodes.forEach((n) => {
+      if (n.kind === "group") {
+        const sec = h("div", "side-section" + (collapsed.has("olc:" + n.id) ? " collapsed" : ""));
+        const hd = h("h4", "", `${icon("chevD", "ico-sm chev")}${esc(n.name || n.id)}<span class="meta">${tailCount(n, 0)}</span>`);
+        const list = h("div", "side-list");
+        if (n.children && n.children.length) renderCanvasNodes(list, n.children, fmt);
+        hd.addEventListener("click", () => {
+          sec.classList.toggle("collapsed");
+          if (collapsed.has("olc:" + n.id)) collapsed.delete("olc:" + n.id);
+          else collapsed.add("olc:" + n.id);
+        });
+        sec.append(hd, list);
+        box.appendChild(sec);
+      } else {
+        // 叶子：图形节点（画布元素）。C5-③：点击在画布上选中并定位到该元素。
+        const row = h("button", "outline-row");
+        const ic = KIND_ICON.node;
+        row.innerHTML = `${icon(ic, "ico-sm")}<span class="nm">${esc(n.name || n.id)}</span><span class="kind">${esc(n.type || "")}</span>`;
+        row.title = t("side.outline.kind.node") || n.type || "";
+        row.addEventListener("click", () => {
+          if (!fmt || !DGM.canvas || typeof DGM.canvas.select !== "function") return;
+          DGM.canvas.select(fmt, [n.id]);
+        });
+        box.appendChild(row);
+      }
+    });
+  }
+
+  // 统计某分组（含其所有后代）的叶子数量，显示在折叠行右侧的 meta 里。
+  function tailCount(n, acc) {
+    let c = acc;
+    (n.children || []).forEach((ch) => { c += ch.kind === "group" ? tailCount(ch, 0) : 1; });
+    return c;
+  }
+
   function viewOutline() {
     const box = h("div");
     const d = state.activeDoc();
@@ -847,7 +911,7 @@ window.DGM = window.DGM || {};
     }
     box.appendChild(tip(esc(t("side.outline.tip"))));
     if (state.isCanvasDoc(d)) {
-      box.appendChild(tip(esc(t("side.outline.canvas"))));
+      renderCanvasOutline(box, d);
       return box;
     }
     const groups = state.outlineByDoc[d.id];

@@ -1019,6 +1019,40 @@ window.DGM = window.DGM || {};
     return s.replace(/[.\s]+$/, "") + ((fmt.exts && fmt.exts[0]) || "");
   }
 
+  /**
+   * 超大图预警（C4-③）：文本型文档超过 guard 阈值（400KB / 5000 行）时，
+   * 打开/保存前先问一句，而不是等渲染/落盘时才卡住。
+   * 阈值只读 state.appInfo.limits（唯一真源在 app-core::guard），前端只比数字、不藏第二份。
+   * 返回 true = 可继续（低于阈值、已确认过、或用户点了「仍要…」）；false = 用户取消（中止本次操作）。
+   * kind: "open" | "save"
+   * 会话记忆：同一文档同一种操作的确认只问一次（本次会话不再打扰，AC4-3）。
+   */
+  const bigDocOk = new Set(); // key: `${id}:${kind}`，用户点过「仍要…」就放行不再问
+  async function confirmBigDoc(d, kind) {
+    const l = (state.appInfo && state.appInfo.limits) || {};
+    const maxLines = l.preview_max_lines;
+    const maxBytes = l.preview_max_bytes;
+    if (!maxLines || !maxBytes) return true; // 取不到阈值 = 不设防，放行
+    const body = (d && d.body) || "";
+    const lines = body.split("\n").length;
+    if (!(lines > maxLines || body.length > maxBytes)) return true; // 低于阈值不弹，不打扰常规使用
+    const key = d.id + ":" + kind;
+    if (bigDocOk.has(key)) return true; // 本次会话已确认过，不重复打扰
+    const kb = Math.round(body.length / 1024);
+    const why = lines > maxLines
+      ? t("preview.guard.tooManyLines", { n: lines, max: maxLines })
+      : t("preview.guard.tooBig", { n: kb, max: Math.round(maxBytes / 1024) });
+    const goKey = kind === "open" ? "preview.guard.openGo" : "preview.guard.saveGo";
+    const ok = await DGM.dialogs.confirm({
+      title: t("preview.guard.openTitle"),
+      icon: "info",
+      body: esc(why),
+      ok: t(goKey),
+    });
+    if (ok) bigDocOk.add(key); // 记住本次会话内不再问
+    return ok;
+  }
+
   async function saveActive(as) {
     const d = state.activeDoc();
     if (!d) return;
@@ -1047,6 +1081,8 @@ window.DGM = window.DGM || {};
       else return; // 用户取消
     }
     try {
+      // 超大图预警（C4-③）：文本型超阈值先问一句，用户取消则中止保存
+      if (!state.isCanvasDoc(d) && !(await confirmBigDoc(d, "save"))) return;
       const doc = await state.saveDoc(d.id, as || !d.path, path);
       if (doc) {
         status(t("status.saved", { name: doc.name }), "ok");
@@ -1067,10 +1103,17 @@ window.DGM = window.DGM || {};
       paths = ["E:/OpenCode/diagramon/docs/flows/支付回调.mmd"];
     }
     if (!paths.length) return;
+    const before = new Set(state.docs.map((dd) => dd.id));
     try {
       await state.openPaths(paths);
       const d = state.activeDoc();
       if (d) {
+        // 超大图预警（C4-③）：打开的是文本型且超阈值 → 可「仍要打开」继续，或取消关闭本次打开的文档
+        if (!state.isCanvasDoc(d) && !(await confirmBigDoc(d, "open"))) {
+          const opened = state.docs.filter((dd) => !before.has(dd.id));
+          for (const dd of opened) await state.closeDoc(dd.id);
+          return;
+        }
         state.refreshRecent(d);
         status(t("status.opened", { name: d.name }));
         DGM.editor.loadActive();
