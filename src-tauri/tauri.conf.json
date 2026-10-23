@@ -74,6 +74,9 @@
     "windows": {
       "webviewInstallMode": {
         "type": "downloadBootstrapper"
+      },
+      "nsis": {
+        "installerHooks": "nsis/installer.nsh"
       }
     }
   },
