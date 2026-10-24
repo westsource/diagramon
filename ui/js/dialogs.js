@@ -506,6 +506,29 @@ window.DGM = window.DGM || {};
     }
     if (!created) return;
     finishConvert(created, dir, srcDoc, (p.notes || []).concat(extraNotes));
+    // 两段对账（只读提示，不阻塞、不改结果）：B 段（引擎生成 drawio/Excalidraw）的
+    // 缺失是表达力差异，AI 修不好，所以**只提示**；数不出来就什么都不说。
+    void noteReconcile(srcDoc, created, dir);
+  }
+
+  /** 转换完成后比一次节点/边数量，少了就如实提示。失败静默（对账是增值，不该弹错）。 */
+  async function noteReconcile(srcDoc, created, dir) {
+    if (!DGM.reconcile || !created) return;
+    try {
+      const dst = state.doc(created.id);
+      if (!dst || !dst.body) return;
+      const r = await DGM.reconcile.run({
+        srcFormat: srcDoc.format,
+        srcBody: srcDoc.body,
+        dstFormat: dir.to,
+        dstBody: dst.body,
+      });
+      const detail = DGM.reconcile.describe(r);
+      if (r.judge !== "notice" || !detail) return;
+      state.pushOutput(t("conv.reconcileNotice", { detail }), "warn");
+    } catch (e) {
+      /* 静默 */
+    }
   }
 
   /* ================================================================== 识图 */

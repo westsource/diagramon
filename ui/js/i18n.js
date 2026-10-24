@@ -517,6 +517,7 @@ window.DGM = window.DGM || {};
     /* ---- 转换方向（可用给实现方式，不可用给理由） ---- */
     "conv.title": "转换",
     "conv.notes": "保真度说明（转换有损，逐条列清）",
+    "conv.reconcileNotice": "转换结果比源图{detail}（引擎表达力差异，原因见转换说明）",
     "conv.viaEngine": "预览要跑引擎，这一步不本地预演；点「转换」直接开成新标签页",
     "conv.engineEmpty": "画布没有返回内容（引擎可能还在初始化，稍后再试）",
     "conv.bitmapFallback": "这份 Mermaid 上游转换器不支持（实测 subgraph 必现），已把整张图渲染成一张位图：图是完整可看的，但形状不能单独编辑。想要可单独编辑的图形，可改选 drawio 作为目标格式，或从源码里去掉 subgraph。",
@@ -1560,6 +1561,7 @@ window.DGM = window.DGM || {};
 
     "conv.title": "Convert",
     "conv.notes": "Fidelity notes (conversion is lossy — listed item by item)",
+    "conv.reconcileNotice": "The result has {detail} compared with the source (an engine expressiveness gap — see the conversion notes)",
     "conv.viaEngine": "A preview here would have to run the engine, so this step does not fake one; \"Convert\" opens the result in a new tab",
     "conv.engineEmpty": "The canvas returned no content (the engine may still be starting — try again)",
     "conv.bitmapFallback": "The upstream converter does not support this Mermaid (subgraph always triggers it in our tests), so the whole diagram was rasterised into a single bitmap: you can see it in full, but the shapes cannot be edited individually. For editable shapes, convert to drawio instead, or remove the subgraph from the source.",
