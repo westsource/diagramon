@@ -2980,6 +2980,87 @@ def main() -> int:
                     f"{_caret.get('line')}:{_caret.get('col')}（{c3_jump!r}）"
                 )
 
+        # ---- AI 增强转换：校验层 / 对账层 / 入口门禁 ----
+        # 这三块都是纯前端判定，不调模型就能测；模型那条链（回灌、止损）在下面单独验门禁。
+        def enh_json(expr: str, label: str):
+            raw = ev(expr)
+            if not raw:
+                fails.append(f"增强 {label}：拿不到结果")
+                return None
+            try:
+                return json.loads(raw)
+            except Exception:
+                fails.append(f"增强 {label}：返回值不是 JSON：{str(raw)[:200]}")
+                return None
+
+        # ① 校验层：真错误要带真实行列，合法文档不能假红
+        v_bad = enh_json(
+            '(async () => { const r = await DGM.validate.run("mermaid", "flowchart TD\\n  A[x --> B[y\\n");'
+            ' return JSON.stringify(r); })()',
+            "validate 错例",
+        )
+        if v_bad is not None:
+            if v_bad.get("ok") or not v_bad.get("issues"):
+                fails.append(f"增强 validate 应判失败：{v_bad!r}")
+            else:
+                _i = v_bad["issues"][0]
+                if _i.get("line") != 2:
+                    fails.append(f"增强 validate 行号不对：{_i!r}")
+                if not _i.get("fingerprint"):
+                    fails.append(f"增强 validate 缺 fingerprint（止损依赖它）：{_i!r}")
+
+        v_ok = enh_json(
+            '(async () => { const r = await DGM.validate.run("mermaid", "flowchart TD\\n  A[x] --> B[y]\\n");'
+            ' return JSON.stringify(r); })()',
+            "validate 合法例",
+        )
+        if v_ok is not None and (not v_ok.get("ok") or v_ok.get("degraded")):
+            fails.append(f"增强 validate 合法文档应通过且未降级：{v_ok!r}")
+
+        # ② 对账：DOT → DOT（文本目标 = A 段），少 1 个节点必须判 fail
+        rc = enh_json(
+            '(async () => { const r = await DGM.reconcile.run({'
+            ' srcFormat: "dot", srcBody: "digraph G {\\n a -> b;\\n c;\\n}",'
+            ' dstFormat: "dot", dstBody: "digraph G {\\n a -> b;\\n}" });'
+            ' return JSON.stringify(r); })()',
+            "reconcile A 段缺失",
+        )
+        if rc is not None and rc.get("judge") != "fail":
+            fails.append(f"增强 reconcile 少节点应判 fail（A 段）：{rc!r}")
+
+        # ③ 入口门禁：默认关时必须不给入口；打开后画布目标仍不给（AI 不产几何）
+        # 用 try/catch 包一层：断言失败时要能看见**为什么**（否则只剩"拿不到结果"）
+        gate_off = enh_json(
+            '(async () => { try {'
+            ' const d = DGM.state.activeDoc() || (await DGM.state.newDoc("mermaid"));'
+            ' return JSON.stringify({ has: !!DGM.enhance, gate: DGM.enhance.eligible(d, "mermaid", true) });'
+            ' } catch (e) { return JSON.stringify({ error: String((e && e.stack) || e) }); } })()',
+            "门禁（默认关）",
+        )
+        if gate_off is not None:
+            if gate_off.get("error"):
+                fails.append(f"增强门禁（默认关）抛错：{gate_off['error'][:300]}")
+            elif gate_off.get("gate", {}).get("ok"):
+                fails.append(f"增强入口默认关却出现（应 why=disabled）：{gate_off!r}")
+
+        gate_canvas = enh_json(
+            '(async () => { try { await DGM.state.patchSettings({ ai: { enhance_enabled: true } });'
+            ' const d = DGM.state.activeDoc() || (await DGM.state.newDoc("mermaid"));'
+            ' return JSON.stringify({ gate: DGM.enhance.eligible(d, "drawio", true) });'
+            ' } catch (e) { return JSON.stringify({ error: String((e && e.stack) || e) }); } })()',
+            "门禁（画布目标）",
+        )
+        if gate_canvas is not None:
+            if gate_canvas.get("error"):
+                fails.append(f"增强门禁（画布目标）抛错：{gate_canvas['error'][:300]}")
+            elif gate_canvas.get("gate", {}).get("ok"):
+                fails.append(f"增强入口不该给画布目标（AI 不产几何）：{gate_canvas!r}")
+            elif gate_canvas.get("gate", {}).get("why") not in ("canvas-target", "no-model"):
+                fails.append(f"增强入口画布目标理由异常：{gate_canvas!r}")
+
+        # 收尾：把开关还原，别把探针改过的设置留给后面（以及真机）
+        ev('(async () => { await DGM.state.patchSettings({ ai: { enhance_enabled: false } }); return 1; })()')
+
         log("")
         if fails:
             for f in fails:

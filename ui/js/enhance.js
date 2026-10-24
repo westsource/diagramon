@@ -14,6 +14,8 @@
  */
 (function () {
   const DGM = (window.DGM = window.DGM || {});
+  const state = DGM.state;
+  const t = (k, v) => DGM.i18n.t(k, v);
 
   const TEXT_OUT = { mermaid: true, dot: true, d2: true };
 
