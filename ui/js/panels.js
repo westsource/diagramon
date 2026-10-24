@@ -106,6 +106,22 @@ window.DGM = window.DGM || {};
     return box;
   }
 
+  /** 转换记录的状态：AI 增强有成功/止损/回退/取消/失败，普通转换仍是成功/部分成功。 */
+  function convStatus(c) {
+    if (c.kind !== "ai-enhance") {
+      return c.ok
+        ? { cls: "ok", icon: "check", label: t("panel.convert.ok") }
+        : { cls: "bad", icon: "alert", label: t("panel.convert.partial") };
+    }
+    if (c.ok) return { cls: "ok", icon: "check", label: t("panel.convert.ok") };
+    if (c.state === "canceled") return { cls: "bad", icon: "alert", label: t("panel.convert.canceled") };
+    if (c.state === "same-error") return { cls: "bad", icon: "alert", label: t("panel.convert.aiStopped") };
+    if (c.fallback === "local" || c.fallback === "attempt") {
+      return { cls: "bad", icon: "alert", label: t("panel.convert.aiFallback") };
+    }
+    return { cls: "bad", icon: "alert", label: t("panel.convert.aiFailed") };
+  }
+
   function viewConvert() {
     const box = h("div");
     if (!state.logs.convert.length) {
@@ -115,13 +131,28 @@ window.DGM = window.DGM || {};
     for (const c of state.logs.convert) {
       const src = state.fmtById(c.from);
       const dst = state.fmtById(c.to);
+      const st = convStatus(c);
+      const ai = c.kind === "ai-enhance";
       const row = h("div", "conv-log");
       row.innerHTML =
-        `<span class="t">${esc(c.t)}</span>` +
+        `<span class="t">${esc(c.t)}${ai ? `<span class="ai-badge">${esc(t("panel.convert.ai"))}</span>` : ""}</span>` +
         `<span class="pair"><span class="chip ${src.id}">${esc(src.name)}</span>${icon("chevR", "ico-sm")}<span class="chip ${dst.id}">${esc(dst.name)}</span></span>` +
-        `<span class="st ${c.ok ? "ok" : "bad"}">${icon(c.ok ? "check" : "alert", "ico-sm")}${esc(c.ok ? t("panel.convert.ok") : t("panel.convert.partial"))}</span>` +
+        `<span class="st ${st.cls}">${icon(st.icon, "ico-sm")}${esc(st.label)}</span>` +
         `<span class="doc">${esc(c.doc || "")}</span>` +
         `<span class="note">${esc(c.note || "")}</span>`;
+      if (c.docId) {
+        row.classList.add("click");
+        row.tabIndex = 0;
+        row.title = t("panel.convert.open");
+        const open = () => goto(c.docId);
+        row.addEventListener("click", open);
+        row.addEventListener("keydown", (e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            open();
+          }
+        });
+      }
       box.appendChild(row);
     }
     return box;

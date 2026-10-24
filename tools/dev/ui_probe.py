@@ -496,6 +496,44 @@ def main() -> int:
             if av.get(name) != "alive":
                 fails.append(f"弹出锚点 {name} 点击后菜单没存活（点了没反应复现）")
 
+        # ---- 断言 5c：转换对话框切换目标格式不能整屏闪（overlay 不得被隐藏）----
+        # 旧实现：点目标 -> close() -> convertTo() 重开，遮罩 hidden 翻两次，用户看到闪屏。
+        conv_flash = ev(
+            "(async () => {"
+            "  const ov = document.getElementById('overlay-dialog');"
+            "  const d = await DGM.state.newDoc('mermaid');"
+            "  await DGM.dialogs.convertTo();"
+            "  const opened = !ov.hidden;"
+            "  const hides = [];"
+            "  const obs = new MutationObserver(() => { if (ov.hidden) hides.push(1); });"
+            "  obs.observe(ov, { attributes: true, attributeFilter: ['hidden'] });"
+            "  const tgt = document.querySelector('[data-act=\"sel:dot\"]');"
+            "  let clicked = false;"
+            "  if (tgt) { tgt.click(); clicked = true; await new Promise(r => setTimeout(r, 300)); }"
+            "  obs.disconnect();"
+            "  const selected = !!document.querySelector('[data-act=\"sel:dot\"].on');"
+            "  const hidden = ov.hidden;"
+            "  DGM.dialogs.close();"
+            "  await DGM.state.closeDoc(d.id);"
+            "  return JSON.stringify({ opened, clicked, hides: hides.length, hidden, selected });"
+            "})()"
+        )
+        log(f"转换目标切换: {conv_flash}")
+        try:
+            cf = json.loads(conv_flash or "{}")
+            if not cf.get("opened"):
+                fails.append("转换对话框没打开，无法验证切换目标")
+            if not cf.get("clicked"):
+                fails.append("转换对话框里找不到 sel:dot 目标按钮")
+            if (cf.get("hides") or 0) != 0:
+                fails.append(f"切换目标时遮罩被隐藏了 {cf.get('hides')} 次（闪屏）")
+            if cf.get("hidden"):
+                fails.append("切换目标后转换对话框被关掉了")
+            if not cf.get("selected"):
+                fails.append("切换目标后 sel:dot 没有选中态")
+        except Exception as e:
+            fails.append(f"切换目标断言解析失败：{e} / {conv_flash}")
+
         # ---- 断言 6：侧栏 / AI 面板宽度拖拽（CDP 派发真实鼠标序列）----
         def drag_gutter(gid: str, dx: float, dy: float) -> None:
             ev("document.activeElement && document.activeElement.blur && document.activeElement.blur()")
@@ -788,6 +826,38 @@ def main() -> int:
             "})()"
         )
         drain(0.2)
+
+        # ---- 断言 12.1：有图时重新打开 AI 面板，页签必须自动落到「改图」----
+        # 用户报：明明已经打开了图，AI 窗口仍然停在上次选的「对话生成」。
+        # 这里先把页签强行设成 chat，再收起面板，然后点活动栏的 AI 按钮重新打开。
+        ai_tab = ev(
+            "(async () => {"
+            "  const wait = (ms) => new Promise(r => setTimeout(r, ms));"
+            "  DGM.state.ui.aiTab = 'chat';"
+            "  await DGM.state.patchSettings({ panels: { ai: false } });"
+            "  await wait(250);"
+            "  document.querySelector('.act.is-ai').click();"
+            "  await wait(350);"
+            "  const on = document.querySelector('#ai-tabs .ai-tab.on');"
+            "  return JSON.stringify({"
+            "    hasDoc: !!DGM.state.activeDoc(),"
+            "    tab: on ? on.dataset.ai : '',"
+            "    visible: !document.body.classList.contains('no-ai')"
+            "  });"
+            "})()"
+        )
+        log(f"有图时打开 AI 页签: {ai_tab}")
+        try:
+            at = json.loads(ai_tab or "{}")
+            if not at.get("hasDoc"):
+                fails.append("断言 12.1 无依据：当前没有活动文档")
+            if not at.get("visible"):
+                fails.append("活动栏 AI 按钮没有重新打开面板")
+            if at.get("tab") != "review":
+                fails.append(f"有图时打开 AI 面板没有自动切到改图：{at.get('tab')}")
+        except Exception as e:
+            log(f"（断言 12.1 解析失败：{e}）")
+            fails.append("断言 12.1 拿不到结果（AI 页签切换可能没接上）")
 
         # ---- 断言 13：设置窗口左右布局（页签列在左、内容在右）----
         cdp.call("Input.dispatchKeyEvent", {"type": "keyDown", "key": "Escape", "code": "Escape", "windowsVirtualKeyCode": 27}, timeout=15)
@@ -1497,8 +1567,21 @@ def main() -> int:
             "  [...document.querySelectorAll('[data-act^=\"delprov:\"]')].pop().click(); await wait(200);"
             "  [...document.querySelectorAll('[data-act]')].find(b => b.dataset.act === 'save').click(); await wait(300);"
             "  const s2 = st();"
+            # retry_max：设置面板要能读/写 1–3，保存后重开仍回显同一个值。
+            "  DGM.dialogs.settings('ai'); await wait(200);"
+            "  const rm0 = (document.querySelector('#ai-retry-max') || {}).value || '';"
+            "  const rmSel = document.querySelector('#ai-retry-max');"
+            "  if (rmSel) rmSel.value = '1';"
+            "  [...document.querySelectorAll('[data-act]')].find(b => b.dataset.act === 'save').click(); await wait(300);"
+            "  const rmSaved = DGM.state.settings.ai.retry_max;"
+            "  DGM.dialogs.settings('ai'); await wait(200);"
+            "  const rm1 = (document.querySelector('#ai-retry-max') || {}).value || '';"
+            "  const rmSel2 = document.querySelector('#ai-retry-max');"
+            "  if (rmSel2) rmSel2.value = '3';"
+            "  [...document.querySelectorAll('[data-act]')].find(b => b.dataset.act === 'save').click(); await wait(300);"
+            "  const rmAfter = DGM.state.settings.ai.retry_max;"
             "  DGM.dialogs.close();"
-            "  return JSON.stringify({ n0, n1, s0, s1, s2, listed, custom });"
+            "  return JSON.stringify({ n0, n1, s0, s1, s2, listed, custom, rm0, rmSaved, rm1, rmAfter });"
             "})()"
         )
         log(f"供应商 Add/Remove: {model_check}")
@@ -1514,6 +1597,14 @@ def main() -> int:
                 fails.append(f"保存后 settings 里供应商没 +1：{mc.get('s0')}→{mc.get('s1')}")
             if mc.get("s2") != mc.get("s0"):
                 fails.append(f"删掉刚加的供应商后没回到原值：{mc.get('s0')}→{mc.get('s2')}")
+            if mc.get("rm0") not in ("1", "2", "3"):
+                fails.append(f"AI 设置里没有合法的 retry_max 选择框：{mc.get('rm0')!r}")
+            if mc.get("rmSaved") != 1:
+                fails.append(f"retry_max 保存没生效：{mc.get('rmSaved')!r}")
+            if mc.get("rm1") != "1":
+                fails.append(f"retry_max 重开没回显 1：{mc.get('rm1')!r}")
+            if mc.get("rmAfter") != 3:
+                fails.append(f"retry_max 未恢复为 3：{mc.get('rmAfter')!r}")
         except Exception as e:
             fails.append(f"供应商断言解析失败：{e} / {model_check}")
 
@@ -2070,6 +2161,96 @@ def main() -> int:
         except Exception as e:
             log(f"（断言 26.5 解析失败：{e}）")
             fails.append("断言 26.5 拿不到结果（外部文件上下文链路可能整个没接上）")
+
+        # ---- 断言 26.6：Explain 只读意图 + 单条消息操作 ----
+        # Explain 不能再出代码卡/应用按钮；消息操作栏要能删除整轮（user+assistant）。
+        explain_probe = ev(
+            "(async () => {"
+            "  const wait = (ms) => new Promise(r => setTimeout(r, ms));"
+            "  const d = await DGM.state.newDoc('mermaid');"
+            "  await DGM.state.setBodyNow(d.id, 'flowchart TD\\n  A[a] --> B[b]\\n');"
+            "  DGM.ai.focus('review'); await wait(200);"
+            "  DGM.ai.clear(); await wait(150);"
+            "  await DGM.ai.explain();"
+            "  for (let i = 0; i < 50 && DGM.state.ui.aiBusy; i++) await wait(100);"
+            "  await wait(200);"
+            "  const msgs = [...document.querySelectorAll('#ai-stream .msg')];"
+            "  const bot = [...msgs].reverse().find((m) => m.classList.contains('bot'));"
+            "  const cards = bot ? bot.querySelectorAll('.code-card').length : -1;"
+            "  const acts = bot ? bot.querySelectorAll('.msg-acts .msg-act').length : -1;"
+            "  const beforeDel = msgs.length;"
+            "  const del = bot && bot.querySelector('.msg-acts .msg-act:last-child');"
+            "  if (del) del.click();"
+            "  await wait(250);"
+            "  const afterDel = document.querySelectorAll('#ai-stream .msg').length;"
+            "  DGM.dialogs.close();"
+            "  await DGM.state.closeDoc(d.id);"
+            "  return JSON.stringify({ hasFn: typeof DGM.ai.explain === 'function', cards, acts, deleted: beforeDel - afterDel });"
+            "})()"
+        )
+        log(f"Explain / 消息操作: {explain_probe}")
+        try:
+            ep = json.loads(explain_probe or "{}")
+            if not ep.get("hasFn"):
+                fails.append("DGM.ai.explain 不存在")
+            if ep.get("cards") != 0:
+                fails.append(f"Explain 回复仍渲染了代码卡：{ep.get('cards')}")
+            if (ep.get("acts") or 0) < 2:
+                fails.append(f"消息操作栏没有重试/删除按钮：{ep.get('acts')}")
+            if ep.get("deleted") != 2:
+                fails.append(f"删除整轮没有同时移除 user+assistant：{ep.get('deleted')}")
+        except Exception as e:
+            log(f"（断言 26.6 解析失败：{e}）")
+            fails.append("断言 26.6 拿不到结果（Explain 或消息操作链路可能没接上）")
+
+        # ---- 断言 26.7：识图 Ctrl+V 粘贴 ----
+        # 用合成 paste 事件喂一张 1×1 PNG，验证全局监听、FileReader、压缩/缩略图链路。
+        vision_probe = ev(
+            "(async () => {"
+            "  const wait = (ms) => new Promise(r => setTimeout(r, ms));"
+            "  DGM.dialogs.vision(); await wait(250);"
+            "  const dz = document.querySelector('.dropzone');"
+            "  const b64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=';"
+            "  const bin = atob(b64);"
+            "  const bytes = new Uint8Array(bin.length);"
+            "  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);"
+            "  const file = new File([bytes], 'probe.png', { type: 'image/png' });"
+            "  const evt = new Event('paste', { bubbles: true });"
+            "  Object.defineProperty(evt, 'clipboardData', { value: { items: [{ type: 'image/png', getAsFile: () => file }] } });"
+            "  document.dispatchEvent(evt);"
+            "  for (let i = 0; i < 30 && dz && !dz.classList.contains('picked'); i++) await wait(100);"
+            "  const picked = !!(dz && dz.classList.contains('picked'));"
+            "  const hasImg = !!(dz && dz.querySelector('img'));"
+            "  const count1 = (DGM.state.ui.aiAttachments || []).length;"
+            "  document.dispatchEvent(evt);"
+            "  await wait(500);"
+            "  const count2 = (DGM.state.ui.aiAttachments || []).length;"
+            "  const multiText = !!(dz && dz.textContent.indexOf('2 张') >= 0);"
+            "  DGM.dialogs.close(); await wait(100);"
+            "  const closed = document.getElementById('overlay-dialog').hidden;"
+            "  stateUiAttachmentReset();"
+            "  return JSON.stringify({ picked, hasImg, count1, count2, multiText, closed });"
+            "  function stateUiAttachmentReset() { try { DGM.state.ui.aiAttachments = []; DGM.ai.render(); } catch (e) {} }"
+            "})()"
+        )
+        log(f"识图粘贴: {vision_probe}")
+        try:
+            vp = json.loads(vision_probe or "{}")
+            if not vp.get("picked"):
+                fails.append("Ctrl+V 粘贴没有把图片放进识图 dropzone")
+            if not vp.get("hasImg"):
+                fails.append("粘贴后 dropzone 没有缩略图")
+            if vp.get("count1") != 1:
+                fails.append(f"第一次粘贴后附件数不是 1：{vp.get('count1')}")
+            if vp.get("count2") != 2:
+                fails.append(f"第二次粘贴后附件数不是 2：{vp.get('count2')}")
+            if not vp.get("multiText"):
+                fails.append("两张图时 dropzone 没有显示“2 张”提示")
+            if not vp.get("closed"):
+                fails.append("识图弹窗关闭后遮罩没有隐藏")
+        except Exception as e:
+            log(f"（断言 26.7 解析失败：{e}）")
+            fails.append("断言 26.7 拿不到结果（识图粘贴链路可能没接上）")
 
         # ---- 断言 27：会话按文档持久化（写盘 → 读回 → 按文档分开） ----
         # 阶段三之前：`conversations_dir()` 全仓零读写（只建了个空目录），而对话框的说明
@@ -2986,6 +3167,8 @@ def main() -> int:
             raw = ev(expr)
             if not raw:
                 fails.append(f"增强 {label}：拿不到结果")
+                if errors:
+                    log(f"  最近 eval/console 错误：{' | '.join(errors[-3:])[:800]}")
                 return None
             try:
                 return json.loads(raw)
@@ -3057,6 +3240,77 @@ def main() -> int:
                 fails.append(f"增强入口不该给画布目标（AI 不产几何）：{gate_canvas!r}")
             elif gate_canvas.get("gate", {}).get("why") not in ("canvas-target", "no-model"):
                 fails.append(f"增强入口画布目标理由异常：{gate_canvas!r}")
+
+        # ④ 失败落点：本地有确定性结果时，必须开**目标格式**标签页写本地结果，
+        # 不能把目标格式正文写进源格式标签页（3.9.2 的缺陷）。
+        # 用 mock 的 askOnce/validate/reconcile 强制「两轮同错」，不碰真实模型。
+        fallback = enh_json(
+            '(async () => {'
+            ' const S = DGM.state;'
+            ' const savedAsk = DGM.ai.askOnce;'
+            ' const savedVal = DGM.validate.run;'
+            ' const savedRec = DGM.reconcile.run;'
+            ' const savedHas = S.hasModels;'
+            ' const savedNotice = !!S.ai().enhance_notice_seen;'
+            ' const made = [];'
+            ' try {'
+            '  await S.patchSettings({ ai: { enhance_enabled: true, enhance_notice_seen: true } });'
+            '  S.hasModels = () => true;'
+            '  const src = await S.newDoc("mermaid");'
+            '  made.push(src.id);'
+            '  await S.setBodyNow(src.id, "flowchart TD\\n  A[a] --> B[b]\\n");'
+            '  const plan = { engine: "rust", text: "digraph G {\\n  a -> b;\\n}\\n", notes: ["测试有损"], error: "" };'
+            '  DGM.ai.askOnce = async () => "```dot\\ndigraph G {\\n  a -> b;\\n  c;\\n}\\n```";'
+            '  DGM.validate.run = async () => ({ ok: true, issues: [], degraded: false });'
+            '  DGM.reconcile.run = async () => ({ judge: "fail", missingNodes: 1, missingEdges: 0, extraNodes: 0, extraEdges: 0, message: "少 1 个节点" });'
+            '  const r = await DGM.enhance.run({ srcDoc: src, to: "dot", plan, notes: plan.notes, lossy: true });'
+            '  const got = r && r.doc ? S.doc(r.doc.id) : null;'
+            '  if (got) made.push(got.id);'
+            '  const rec = (S.logs.convert || []).find((x) => x.kind === "ai-enhance");'
+            '  return JSON.stringify({ hasDoc: !!(r && r.doc), reason: r && r.reason, format: got && got.format, body: got && got.body, expectFormat: "dot", expectBody: plan.text, rec: rec ? { kind: rec.kind, state: rec.state, calls: rec.calls, rounds: rec.rounds, fallback: rec.fallback, hasDocId: !!rec.docId } : null });'
+            ' } catch (e) {'
+            '  return JSON.stringify({ error: String((e && e.stack) || e) });'
+            ' } finally {'
+            '  DGM.ai.askOnce = savedAsk;'
+            '  DGM.validate.run = savedVal;'
+            '  DGM.reconcile.run = savedRec;'
+            '  S.hasModels = savedHas;'
+            '  await S.patchSettings({ ai: { enhance_enabled: false, enhance_notice_seen: savedNotice } });'
+            '  for (const id of made) { try { await S.closeDoc(id); } catch (e) {} }'
+            ' }'
+            '})()',
+            "失败回退",
+        )
+        if fallback is not None:
+            if fallback.get("error"):
+                fails.append(f"增强失败回退抛错：{fallback['error'][:300]}")
+            elif not fallback.get("hasDoc"):
+                fails.append(f"增强失败后没有本地结果标签页：{fallback!r}")
+            else:
+                if fallback.get("reason") != "same-error":
+                    fails.append(f"增强同错两轮应提前止损，实际 reason={fallback.get('reason')!r}")
+                if fallback.get("format") != fallback.get("expectFormat"):
+                    fails.append(
+                        f"增强失败回退格式错：期望 {fallback.get('expectFormat')}，"
+                        f"实际 {fallback.get('format')}（{fallback!r}）"
+                    )
+                elif fallback.get("body") != fallback.get("expectBody"):
+                    fails.append(
+                        "增强失败回退正文不是本地确定性结果："
+                        f"期望 {fallback.get('expectBody')!r}，实际 {fallback.get('body')!r}"
+                    )
+                else:
+                    rec = fallback.get("rec")
+                    if not rec:
+                        fails.append("增强失败回退没有写转换记录")
+                    elif rec.get("kind") != "ai-enhance":
+                        fails.append(f"增强转换记录 kind 不对：{rec!r}")
+                    elif rec.get("state") != "same-error" or rec.get("fallback") != "local":
+                        fails.append(f"增强转换记录状态不对：{rec!r}")
+                    elif rec.get("calls") != 2 or rec.get("rounds") != 1 or not rec.get("hasDocId"):
+                        fails.append(f"增强转换记录计数/关联不对：{rec!r}")
+                    else:
+                        log("增强失败回退：目标格式标签页 + 本地确定性正文 + 转换记录 ✓")
 
         # 收尾：把开关还原，别把探针改过的设置留给后面（以及真机）
         ev('(async () => { await DGM.state.patchSettings({ ai: { enhance_enabled: false } }); return 1; })()')

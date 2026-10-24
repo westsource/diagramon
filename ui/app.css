@@ -739,7 +739,11 @@ body.no-ai #ai-gutter { display: none; }
 .msg-head .who { font-weight: 600; color: var(--ink-2); }
 .msg-head .badge-used { font-size: 10px; color: var(--ai); background: var(--ai-soft); padding: 0 5px; border-radius: 999px; border: 1px solid var(--ai-line); }
 /* 回复头的「拷贝源码」：贴右缘，不跟 used 徽标挤在左边 */
-.msg-head .msg-copy { margin-left: auto; }
+.msg-head .msg-copy { margin-left: 6px; }
+.msg-head .msg-acts { margin-left: auto; display: inline-flex; align-items: center; gap: 2px; opacity: .25; transition: opacity .12s; }
+.msg:hover .msg-head .msg-acts, .msg:focus-within .msg-head .msg-acts { opacity: 1; }
+.msg-head .msg-act { padding: 0 2px; color: var(--muted); }
+.msg-head .msg-act:hover { color: var(--fg); }
 
 .bubble {
   position: relative;
@@ -1428,6 +1432,21 @@ table.spec td .kbd { font: var(--fs-xs) var(--font-mono); color: var(--ink-2); b
 .conv-log .st.bad { color: var(--warn); }
 .conv-log .doc { color: var(--ink-2); }
 .conv-log .note { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.conv-log.click { cursor: pointer; }
+.conv-log.click:hover { background: var(--surface); }
+.conv-log .ai-badge {
+  display: inline-block;
+  margin-left: 5px;
+  padding: 0 4px;
+  border: 1px solid var(--ai-line);
+  border-radius: 3px;
+  background: var(--ai-soft);
+  color: var(--ai);
+  font-family: var(--font-ui);
+  font-size: 9px;
+  line-height: 13px;
+  vertical-align: 1px;
+}
 
 /* AI 用量 */
 .usage { font-family: var(--font-ui); }

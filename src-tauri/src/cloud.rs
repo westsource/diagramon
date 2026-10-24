@@ -620,5 +620,6 @@ pub async fn gateway_resolved(state: &AppState, alias: &str) -> R<ai::Resolved> 
         // 会话头由服务端按 user+alias 生成；客户端不要叠一个自己的。
         session_header: false,
         session_id: None,
+        extra_headers: Vec::new(),
     })
 }

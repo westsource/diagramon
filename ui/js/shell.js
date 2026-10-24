@@ -655,6 +655,9 @@ window.DGM = window.DGM || {};
 
   async function togglePanel(key, extra) {
     const p = state.panels();
+    const opening = !p[key];
+    // 打开 AI 面板时按当前文档重新推导页签：有图落「改图」，无图落「对话生成」。
+    if (key === "ai" && opening && DGM.ai && DGM.ai.onPanelOpen) DGM.ai.onPanelOpen();
     const patch = { panels: Object.assign({}, { [key]: !p[key] }, extra || {}) };
     await state.patchSettings(patch);
   }

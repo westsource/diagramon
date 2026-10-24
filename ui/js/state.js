@@ -108,8 +108,11 @@ window.DGM = window.DGM || {};
     // 瞬态界面状态
     ui: {
       zoom: 1,
-      aiTab: "chat",
-      aiAttachment: null,
+      // 未显式选页签时按当前文档推导：有图 = 改图，无图 = 对话生成。
+      // 不要在这里写死 "chat" —— 那会让“已经打开图后打开 AI”永远落在对话页。
+      aiTab: null,
+      // 识图对比最多 2 张；数组顺序就是上行顺序。
+      aiAttachments: [],
       // 附加的外部文件（AI 上下文）：拖进来 / 手填路径 / 选择文件都进这里。
       // **瞬态**（不落盘）：路径与内容都跟这次会话强相关，重启后重新指定更诚实。
       aiContextFiles: [],
@@ -173,7 +176,12 @@ window.DGM = window.DGM || {};
      *  两组形状刻意保持一致（id/name/group/has_key），这样两个选择器只需一次 map ——
      *  分组只决定"要不要画那条小标题"，不该让两处的取数逻辑分叉。 */
     modelChoices() {
-      const gw = state.gatewayModels().map((m) => ({
+      const rawGw = state.gatewayModels();
+      // `auto` 是服务端保留别名（按 has_image 选档），不依赖模型目录里是否列出。
+      const gwList = state.cloud.status.signed_in && !rawGw.some((m) => m.id === "auto")
+        ? [...rawGw, { id: "auto", display_name: t("ai.model.auto"), supports_vision: true }]
+        : rawGw;
+      const gw = gwList.map((m) => ({
         id: GW_PREFIX + m.id,
         name: m.display_name || m.id,
         group: "gateway",

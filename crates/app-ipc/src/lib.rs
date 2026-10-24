@@ -433,6 +433,8 @@ pub enum AiIntent {
     Generate,
     Vision,
     Review,
+    /// 只读解释：输出纯文本，不产出代码、不提供“应用/写入文档”。
+    Explain,
 }
 
 /// 一轮前序对话（发给上游的形态）。
@@ -477,14 +479,23 @@ pub struct AiChatRequest {
     /// 附加的外部文件（参考资料；可空）
     #[serde(default)]
     pub files: Vec<AiContextFile>,
-    /// `data:image/png;base64,…`（识图）
+    /// `data:image/png;base64,…`（识图；旧字段，保留兼容）。
     pub image_data_url: Option<String>,
+    /// 识图对比：一次最多 2 张（服务端上限也是 2）。新字段优先于 `image_data_url`。
+    #[serde(default)]
+    pub image_data_urls: Vec<String>,
     /// 前序轮次（**不含本轮**的 prompt / context）。
     ///
     /// 轮数与体积的裁剪**在 `crates/ai` 里做**（`fit_history`）—— 那一层带单测，
     /// 前端只负责如实把对话给出来，不各自猜一套策略。
     #[serde(default)]
     pub history: Vec<AiTurn>,
+    /// 归因场景（仅网关模型发送 `X-Diagramon-Scene`）。
+    #[serde(default)]
+    pub scene: Option<String>,
+    /// 上一次真实调用的账本 request id（仅网关模型发送 `X-Diagramon-Retry-Of`）。
+    #[serde(default)]
+    pub retry_of: Option<String>,
 }
 
 /// 事件名：`ai://delta` / `ai://thinking` / `ai://done` / `ai://failed`
@@ -546,6 +557,9 @@ pub struct AiDone {
     /// "输出到一半突然没有下文，也没有任何提示"（2026-10-18 线上实录）。
     #[serde(default)]
     pub finish: String,
+    /// 服务端账本行 id（仅网关流式请求有）；前端用它填下一次的 Retry-Of。
+    #[serde(default)]
+    pub ledger_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

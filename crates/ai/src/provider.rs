@@ -67,6 +67,9 @@ pub struct Resolved {
     pub session_header: bool,
     /// 稳定会话号；`None`/空串时不发。同一对话应始终相同，上游才能命中缓存。
     pub session_id: Option<String>,
+    /// 额外请求头（当前用于云网关的 `X-Diagramon-Scene` / `-Retry-Of`）。
+    /// BYOK 路径必须保持为空，避免把内部归因元数据送给第三方上游。
+    pub extra_headers: Vec<(String, String)>,
 }
 
 impl Resolved {
@@ -85,7 +88,7 @@ impl Resolved {
     }
 }
 
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct Usage {
     pub prompt_tokens: Option<u32>,
     pub completion_tokens: Option<u32>,
@@ -94,6 +97,9 @@ pub struct Usage {
     pub reasoning_tokens: Option<u32>,
     /// 这条流**是怎么结束的**。界面据此决定要不要说"上面这句是半截的"（见 `Finish`）。
     pub finish: Finish,
+    /// 服务端账本行 id（`X-Diagramon-Request-Id`）；BYOK/无该头时为 None。
+    /// 下一次自动修正用它填 `X-Diagramon-Retry-Of`。
+    pub ledger_id: Option<String>,
 }
 
 /// 流/响应的终态。
@@ -222,7 +228,11 @@ pub(crate) fn apply_identity_parts(
 }
 
 pub(crate) fn apply_identity(req: reqwest::RequestBuilder, r: &Resolved) -> reqwest::RequestBuilder {
-    apply_identity_parts(req, r.session_header, r.session_id.as_deref())
+    let mut req = apply_identity_parts(req, r.session_header, r.session_id.as_deref());
+    for (name, value) in &r.extra_headers {
+        req = req.header(name, value);
+    }
+    req
 }
 
 /// 用户在 Base URL 里多填的路径要清掉 —— 旧客户端也做这件事，
@@ -443,6 +453,13 @@ where
         let body = resp.text().await.unwrap_or_default();
         return Err(ChatError::Http { status: status.as_u16(), body: truncate(&body, 600) });
     }
+    // 服务端在流开始前就确定了账本行 id，并放在响应头里；自动修正要用它做 Retry-Of。
+    let ledger_id = resp
+        .headers()
+        .get("x-diagramon-request-id")
+        .and_then(|v| v.to_str().ok())
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty());
 
     let ollama = r.is_ollama();
     let mut resp = resp;
@@ -450,6 +467,7 @@ where
     let mut full = String::new();
     let mut reasoning = String::new();
     let mut usage = Usage::default();
+    usage.ledger_id = ledger_id;
     let mut saw_done = false;
 
     loop {
@@ -700,6 +718,7 @@ mod tests {
             idle_timeout: idle_timeout_for("openai", None),
             session_header: false,
             session_id: None,
+            extra_headers: Vec::new(),
         }
     }
 
@@ -1167,6 +1186,7 @@ mod tests {
             base_url: base,
             session_header: true,
             session_id: Some("sid-2".into()),
+            extra_headers: Vec::new(),
             ..openai()
         };
         let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
@@ -1176,5 +1196,28 @@ mod tests {
         assert_eq!(text, "ok");
         let req = seen.lock().unwrap().to_ascii_lowercase();
         assert!(req.contains("x-opencode-session: sid-2"), "{req}");
+    }
+
+    #[test]
+    fn stream_chat_carries_attribution_headers() {
+        let (base, seen) = capture_server(
+            "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\n\
+             data: [DONE]\n\n",
+            "text/event-stream",
+        );
+        let r = Resolved {
+            base_url: base,
+            extra_headers: vec![
+                ("X-Diagramon-Scene".into(), "convert.retry".into()),
+                ("X-Diagramon-Retry-Of".into(), "req-1".into()),
+            ],
+            ..openai()
+        };
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        rt.block_on(stream_chat(&reqwest::Client::new(), &r, vec![], &AtomicBool::new(false), |_| {}))
+            .unwrap();
+        let req = seen.lock().unwrap().to_ascii_lowercase();
+        assert!(req.contains("x-diagramon-scene: convert.retry"), "{req}");
+        assert!(req.contains("x-diagramon-retry-of: req-1"), "{req}");
     }
 }

@@ -73,10 +73,18 @@ window.DGM = window.DGM || {};
   const convLoaded = new Set();
   let unreadCount = 0;
   let selectionCtx = null; // 来自「让 AI 改这段」的选区
+  let editingTurn = null; // 「编辑后重发」的原始 user 消息；发送成功时替换它
   let bound = false;
 
   function tab() {
-    return state.ui.aiTab || "chat";
+    if (state.ui.aiTab) return state.ui.aiTab;
+    return state.activeDoc() ? "review" : "chat";
+  }
+
+  /** 面板从收起变为打开时调用：丢掉上一次的显式页签，让 `tab()` 重新按当前文档推导。
+   *  已经打开图还停在上次选的「对话生成」上，是用户明确反馈过的错位。 */
+  function onPanelOpen() {
+    state.ui.aiTab = null;
   }
 
   /** 待确认的记忆候选条。
@@ -229,12 +237,30 @@ window.DGM = window.DGM || {};
       $(".msg-head", body).appendChild(copyBtn);
       copyBtn.addEventListener("click", () => copyText(replySource(m)));
     }
+    if (!m.streaming && !m.err) {
+      const acts = h("span", "msg-acts");
+      const addAct = (key, iconName, fn) => {
+        const b = h("button", "mini-btn msg-act");
+        b.title = t(key);
+        b.innerHTML = icon(iconName, "ico-sm");
+        b.addEventListener("click", (e) => {
+          e.stopPropagation();
+          fn();
+        });
+        acts.appendChild(b);
+      };
+      if (mine) addAct("ai.op.edit", "code", () => editTurn(m));
+      else addAct("ai.op.retry", "refresh", () => retryTurn(m));
+      addAct("ai.op.delete", "trash", () => deleteTurn(m));
+      $(".msg-head", body).appendChild(acts);
+    }
     n.append(ava, body);
-    if (m.image) {
+    const imgs = m.images && m.images.length ? m.images : m.image ? [m.image] : [];
+    for (const img of imgs) {
       const th = h("div", "thumb");
       th.innerHTML =
-        `<span class="pic">${m.image.dataUrl ? `<img src="${esc(m.image.dataUrl)}" alt="">` : icon("image", "ico-lg")}</span>` +
-        `<span class="meta"><b>${esc(m.image.name)}</b><span>${esc(m.image.meta || "")}</span></span>`;
+        `<span class="pic">${img.dataUrl ? `<img src="${esc(img.dataUrl)}" alt="">` : icon("image", "ico-lg")}</span>` +
+        `<span class="meta"><b>${esc(img.name)}</b><span>${esc(img.meta || "")}</span></span>`;
       body.appendChild(th);
     }
 
@@ -255,7 +281,8 @@ window.DGM = window.DGM || {};
       body.appendChild(line);
     }
 
-    const parsed = splitFences(m.text || "");
+    const explain = m.intent === "explain";
+    const parsed = explain ? { text: m.text || "", blocks: [] } : splitFences(m.text || "");
     if (parsed.text) {
       const b = h("div", "bubble" + (m.streaming ? " streaming" : ""), esc(parsed.text).replace(/\n/g, "<br>"));
       b.dataset.req = m.req || "";
@@ -280,6 +307,78 @@ window.DGM = window.DGM || {};
       body.appendChild(done);
     }
     return n;
+  }
+
+  /** 一轮消息在桶里的范围：assistant 连同它前面的 user；user 连同它后面的 assistant。 */
+  function turnRange(list, m) {
+    const i = list.indexOf(m);
+    if (i < 0) return null;
+    if (m.role === "assistant") {
+      return i > 0 && list[i - 1].role === "user" ? [i - 1, i] : [i, i];
+    }
+    if (m.role === "user") {
+      return i + 1 < list.length && list[i + 1].role === "assistant" ? [i, i + 1] : [i, i];
+    }
+    return [i, i];
+  }
+
+  function removeTurn(m) {
+    const key = m.doc || (state.activeDoc() || {}).id;
+    const list = bucket(key)[m.m] || [];
+    const range = turnRange(list, m);
+    if (!range) return [];
+    const removed = list.splice(range[0], range[1] - range[0] + 1);
+    if (editingTurn && removed.includes(editingTurn)) editingTurn = null;
+    persistConversation(key);
+    render();
+    return removed;
+  }
+
+  function deleteTurn(m) {
+    const removed = removeTurn(m);
+    if (removed.length) DGM.toast({ icon: "trash", title: t("ai.op.deleted"), sub: "" });
+  }
+
+  function editTurn(m) {
+    const list = bucket(m.doc || (state.activeDoc() || {}).id)[m.m] || [];
+    const range = turnRange(list, m);
+    if (!range) return;
+    const user = list[range[0]];
+    if (!user || user.role !== "user") return;
+    editingTurn = user;
+    state.ui.aiTab = user.m;
+    focus(user.m);
+    const ta = input();
+    if (ta) {
+      ta.value = user.text || "";
+      syncSend();
+      ta.focus();
+    }
+  }
+
+  async function retryTurn(m) {
+    if (m.streaming) return;
+    const key = m.doc || (state.activeDoc() || {}).id;
+    const list = bucket(key)[m.m] || [];
+    const range = turnRange(list, m);
+    if (!range) return;
+    const user = list[range[0]];
+    const doc = state.doc(key);
+    const req = m.reqBody || {
+      request_id: newId(),
+      model_id: m.modelId || (state.currentModel() ? state.currentModel().id : ""),
+      intent: m.intent || (m.m === "vision" ? "vision" : m.m === "review" ? "review" : "generate"),
+      prompt: m.prompt || (user && user.text) || "",
+      format: (doc && doc.format) || "mermaid",
+      context: (doc && doc.body) || null,
+      files: [],
+      image_data_url: null,
+      history: [],
+    };
+    removeTurn(m);
+    if (!user) return;
+    state.ui.aiTab = m.m;
+    await dispatch({ ...req, request_id: newId() }, m.m, { ...user, id: newId() }, key);
   }
 
   function codeCard(blk, m) {
@@ -320,7 +419,7 @@ window.DGM = window.DGM || {};
       const b = e.target.closest("button");
       if (!b) return;
       if (b.dataset.a === "vision") DGM.ai.focus("vision");
-      else if (b.dataset.a === "ctx") DGM.ai.focus("review");
+      else if (b.dataset.a === "ctx") DGM.ai.explain();
       else input().focus();
     });
     return box;
@@ -356,7 +455,6 @@ window.DGM = window.DGM || {};
 
   function render() {
     const cur = tab();
-    state.ui.aiTab = cur;
     const stream = $("#ai-stream");
     if (!stream) return;
 
@@ -537,7 +635,6 @@ window.DGM = window.DGM || {};
     const box = $("#ai-attachments");
     if (!box) return;
     box.innerHTML = "";
-    const att = state.ui.aiAttachment;
     // 附加的外部文件（AI 上下文）：一行一个 chip，标题里给出**全路径**，
     // 截断过的如实标出来（别让用户以为模型看到了全文）。
     for (const f of ctxFiles()) {
@@ -555,19 +652,21 @@ window.DGM = window.DGM || {};
       chip.appendChild(x);
       box.appendChild(chip);
     }
-    if (att) {
-      const chip = h("div", "thumb");
-      chip.innerHTML =
-        `<span class="pic">${att.dataUrl ? `<img src="${att.dataUrl}" alt="">` : icon("image")}</span>` +
-        `<span class="meta"><b>${esc(att.name)}</b><span>${esc(att.meta || "")}</span></span>`;
-      const x = h("button", "icon-btn", icon("close", "ico-sm"));
-      x.title = t("ai.removeImage");
-      x.addEventListener("click", () => {
-        state.ui.aiAttachment = null;
-        render();
+    if (state.ui.aiAttachments && state.ui.aiAttachments.length) {
+      state.ui.aiAttachments.forEach((att, idx) => {
+        const chip = h("div", "thumb");
+        chip.innerHTML =
+          `<span class="pic">${att.dataUrl ? `<img src="${att.dataUrl}" alt="">` : icon("image")}</span>` +
+          `<span class="meta"><b>${esc(att.name)}</b><span>${esc(att.meta || "")}</span></span>`;
+        const x = h("button", "icon-btn", icon("close", "ico-sm"));
+        x.title = t("ai.removeImage");
+        x.addEventListener("click", () => {
+          state.ui.aiAttachments.splice(idx, 1);
+          render();
+        });
+        chip.appendChild(x);
+        box.appendChild(chip);
       });
-      chip.appendChild(x);
-      box.appendChild(chip);
     }
     if (selectionCtx) {
       const chip = h("div", "ai-chip", `${icon("code", "ico-sm")}<span>${esc(t("src.ai"))}</span>`);
@@ -624,14 +723,17 @@ window.DGM = window.DGM || {};
       DGM.toast({ icon: "alert", title: t("ai.attach"), sub: t("exp.rasterFail"), warn: true });
       return null;
     }
-    state.ui.aiAttachment = {
+    const att = {
       name: name || "image.png",
       dataUrl: out.dataUrl,
       meta: t("ai.vision.compress", { w: out.w, h: out.h }),
     };
+    const list = state.ui.aiAttachments || (state.ui.aiAttachments = []);
+    if (list.length >= 2) list.shift(); // 最多两张；第三次粘贴替换最早的一张
+    list.push(att);
     if (tab() !== "vision") state.ui.aiTab = "vision";
     render();
-    return state.ui.aiAttachment;
+    return att;
   }
 
   /** 框选屏幕一块区域 → 直接进识图 tab（Rust 冻结帧 + overlay，见 vision.rs）。 */
@@ -692,7 +794,8 @@ window.DGM = window.DGM || {};
     const cur = tab();
     const d = curDocForReq();
     const fmtId = d ? d.format : "mermaid";
-    const att = state.ui.aiAttachment;
+    const atts = state.ui.aiAttachments || [];
+    const att = atts[0] || null;
 
     if (cur === "vision" && !att) {
       DGM.toast({ icon: "image", title: t("ai.vision.pick"), sub: "", warn: true });
@@ -702,6 +805,13 @@ window.DGM = window.DGM || {};
     if (!text) {
       ta && ta.focus();
       return;
+    }
+    if (ta) ta.value = "";
+    // 「编辑后重发」：发送时才移除旧轮次，用户中途取消不会丢原对话。
+    if (editingTurn) {
+      const old = editingTurn;
+      editingTurn = null;
+      if (old && old.m === cur && old.doc === (d && d.id)) removeTurn(old);
     }
 
     // 上下文：改图用整篇正文；选择区优先；对话按设置决定
@@ -722,15 +832,50 @@ window.DGM = window.DGM || {};
       // 提示词里措辞不同 —— 别让模型把参考文件当成要重写的正文。
       files: ctxFiles().map((f) => ({ path: f.path, name: f.name, text: f.text, truncated: !!f.truncated })),
       image_data_url: cur === "vision" && att ? att.dataUrl : null,
+      image_data_urls: cur === "vision" ? atts.map((a) => a.dataUrl) : [],
       // 前序轮次：**在本轮 push 进 msgs 之前取**，所以天然不含本轮（见 historyFor）
       history: historyFor(cur, d && d.id),
+      scene: cur,
     };
 
-    if (ta) ta.value = "";
-    if (cur === "vision" && att) state.ui.aiAttachment = null;
+    if (cur === "vision" && atts.length) state.ui.aiAttachments = [];
     selectionCtx = null;
 
-    await dispatch(req, cur, { id: newId(), role: "user", text, image: cur === "vision" && att ? att : null });
+    await dispatch(req, cur, {
+      id: newId(),
+      role: "user",
+      text,
+      image: cur === "vision" ? att : null,
+      images: cur === "vision" ? atts : [],
+    });
+  }
+
+  /** 只读解释当前图表：独立 intent，不产出代码卡，也不走 apply。 */
+  async function explain() {
+    const d = state.activeDoc();
+    if (!d) {
+      DGM.toast({ icon: "info", title: t("ai.empty.ctx"), sub: t("status.noDoc") });
+      return;
+    }
+    if (!state.hasModels()) {
+      DGM.toast({ icon: "key", title: t("ai.needModel"), sub: "", warn: true });
+      DGM.dialogs.settings("ai");
+      return;
+    }
+    state.ui.aiTab = "review";
+    const req = {
+      request_id: newId(),
+      model_id: state.currentModel() ? state.currentModel().id : "",
+      intent: "explain",
+      prompt: t("ai.explain.prompt"),
+      format: d.format,
+      context: d.body,
+      files: [],
+      image_data_url: null,
+      history: [],
+      scene: "explain",
+    };
+    await dispatch(req, "review", { id: newId(), role: "user", text: t("ai.empty.ctx") }, d.id);
   }
 
   /** 把一个请求挂进某个 tab 并发出去：用户消息 + 占位气泡 + busy 标记 + 调 `ai_chat`。
@@ -757,19 +902,23 @@ window.DGM = window.DGM || {};
     const req = {
       request_id: newId(),
       model_id: (o.modelId || (state.currentModel() ? state.currentModel().id : "")) || "",
-      // review 的系统提示词本来就写死了"只做局部修改、保持结构、不要重写整张图"，
-      // 正是"按报错修正"该有的口径，不再另写一套。
-      intent: "review",
+      // 默认 review：它的系统提示词本来就写死了"只做局部修改、保持结构、不要重写整张图"，
+      // 正是"按报错修正"该有的口径。调用方要别的口径（如 Restyle）时显式传 `intent`。
+      intent: o.intent || "review",
       prompt: String(o.prompt || ""),
       format: o.format || (d ? d.format : "mermaid"),
       context: o.context == null ? null : o.context,
       files: [],
       image_data_url: null,
       history: [],
+      scene: o.scene || null,
+      retry_of: o.retryOf || null,
     };
     return new Promise((resolve, reject) => {
       pendingAsks.set(req.request_id, { resolve, reject });
-      dispatch(req, "review", { id: newId(), role: "user", text: o.userText || req.prompt }, o.docId || (d && d.id)).catch(
+      dispatch(req, "review", { id: newId(), role: "user", text: o.userText || req.prompt }, o.docId || (d && d.id), {
+        forceChat: !!o.forceChat,
+      }).catch(
         (e) => {
           pendingAsks.delete(req.request_id);
           reject(e);
@@ -778,7 +927,7 @@ window.DGM = window.DGM || {};
     });
   }
 
-  async function dispatch(req, cur, userMsg, docId) {
+  async function dispatch(req, cur, userMsg, docId, opts) {
     const owner = docId || (state.activeDoc() || {}).id || "";
     // `at` 落在这条消息上：会话持久化要按它排跨页签的展示顺序，
     // 落盘时再取 `Date.now()` 会让所有历史轮次挤在同一毫秒上。
@@ -794,6 +943,7 @@ window.DGM = window.DGM || {};
       streaming: true,
       req: req.request_id,
       m: cur,
+      intent: req.intent || "",
       at: Date.now(),
       doc: owner,
       // 记下这一轮的**来源与模型 id**：记忆提取要用它们（`m.used.model` 是展示名，不是 id）
@@ -801,14 +951,18 @@ window.DGM = window.DGM || {};
       modelId: req.model_id || "",
     };
     bucket(owner)[cur].push(bot);
+    bot.reqBody = req;
     state.ui.aiBusy = true;
     state.ui.aiRequestId = req.request_id;
     render();
 
     // 受控工具循环：开关开着且**不是识图**时改走 `ai_agent_run`（非流式多步 +
     // 工具活动事件）。识图那一路永远直连 —— 工具是为"画对图"设计的，看图用不上。
+    // 程序化调用（增强转换回灌）用 `forceChat` 强制直连：一轮一次调用，
+    // 否则工具循环会把"最多 4 次真实调用"的承诺变成未知次数，token 也记不全。
+    const forceChat = !!(opts && opts.forceChat);
     const cmd =
-      state.settings && state.settings.ai && state.settings.ai.tools_enabled && cur !== "vision"
+      !forceChat && state.settings && state.settings.ai && state.settings.ai.tools_enabled && cur !== "vision"
         ? "ai_agent_run"
         : "ai_chat";
 
@@ -914,7 +1068,7 @@ window.DGM = window.DGM || {};
     const ask = pendingAsks.get(ev && ev.request_id);
     if (ask) {
       pendingAsks.delete(ev.request_id);
-      ask.resolve(String(ev.text || (m && m.text) || ""));
+      ask.resolve({ text: String(ev.text || (m && m.text) || ""), ledgerId: ev.ledger_id || "" });
     }
     state.ui.aiBusy = false;
     state.ui.aiRequestId = null;
@@ -924,6 +1078,7 @@ window.DGM = window.DGM || {};
     }
     m.streaming = false;
     m.text = ev.text || m.text;
+    m.ledgerId = ev.ledger_id || "";
     const reasoningTokens = ev.reasoning_tokens || 0;
     m.used = {
       model: ev.model || "",
@@ -1068,6 +1223,8 @@ window.DGM = window.DGM || {};
       image_data_url: null,
       // 自动修正也是这条对话的延续，同样带上前序轮次
       history: historyFor(ctx.tab, ctx.convDoc),
+      scene: "convert.retry",
+      retry_of: ctx.retryOf || null,
     };
     ctx.reqId = req.request_id;
     // 在这一轮原本所在的 tab 里追加，用户看到的是"同一条对话里它自己修了一次"。
@@ -1131,6 +1288,8 @@ window.DGM = window.DGM || {};
         convDoc: (m && m.doc) || (d && d.id) || "",
         tried: false,
         reqId: null,
+        // 下一次自动修正要带 X-Diagramon-Retry-Of：账本 id 来自服务端响应头。
+        retryOf: (m && m.ledgerId) || null,
       };
     }
     render();
@@ -1244,6 +1403,8 @@ window.DGM = window.DGM || {};
 
   function focus(which) {
     if (which) state.ui.aiTab = which;
+    else state.ui.aiTab = null;
+    if (editingTurn && which && which !== editingTurn.m) editingTurn = null;
     if (!state.panels().ai) state.patchSettings({ panels: { ai: true } });
     unreadCount = 0;
     render();
@@ -1561,19 +1722,22 @@ window.DGM = window.DGM || {};
     render,
     bind,
     focus,
+    onPanelOpen,
     prefill,
     attachSelection,
     unread,
     clear,
     send: sendNow,
+    explain,
     cancel,
-    /** 程序化的一次调用：`{prompt, format, context, docId}` → Promise<回复正文>。 */
+    /** 程序化的一次调用：`{prompt, format, context, docId}` → Promise<{text, ledgerId}>。 */
     askOnce,
     applyLast,
     revertLast,
     popModels,
     modelItems: groupModelItems,
     pickImage,
+    attachDataUrl,
     compressImage,
     // 外部文件作为上下文（拖拽 / 手填路径 / 选择文件）：导出让自检与探针能直接驱动，
     // 不必去模拟操作系统的拖放事件。

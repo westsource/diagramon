@@ -600,6 +600,7 @@ async fn resolve_target(state: &AppState, model_id: &str) -> R<ai::Resolved> {
         idle_timeout: ai::provider::idle_timeout_for(&kind, idle_timeout_s),
         session_header,
         session_id,
+        extra_headers: Vec::new(),
     })
 }
 
@@ -648,6 +649,38 @@ fn delta_forwarder(app: tauri::AppHandle, request_id: String) -> impl FnMut(ai::
     }
 }
 
+/// 给网关请求补归因头。BYOK 一律不加：这些是服务端内部账本元数据，不该送给第三方上游。
+fn with_attribution(mut r: ai::Resolved, req: &AiChatRequest, gateway: bool) -> ai::Resolved {
+    if !gateway {
+        return r;
+    }
+    let push = |r: &mut ai::Resolved, name: &str, value: Option<&str>| {
+        if let Some(v) = value.map(str::trim).filter(|v| !v.is_empty()) {
+            r.extra_headers.push((name.to_string(), v.to_string()));
+        }
+    };
+    push(&mut r, "X-Diagramon-Scene", req.scene.as_deref());
+    push(&mut r, "X-Diagramon-Retry-Of", req.retry_of.as_deref());
+    r
+}
+
+/// 识图最多两张：新数组优先，旧单图字段作为兼容补进来；去掉重复值与空串。
+fn request_images(req: &AiChatRequest) -> Vec<String> {
+    let mut out: Vec<String> = req
+        .image_data_urls
+        .iter()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+    if let Some(one) = req.image_data_url.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        if !out.iter().any(|s| s == one) {
+            out.insert(0, one.to_string());
+        }
+    }
+    out.truncate(2);
+    out
+}
+
 /// 发起一次流式对话：立刻返回，内容经 `ai://delta` / `ai://done` / `ai://failed` 推进来。
 #[tauri::command]
 pub async fn ai_chat(
@@ -656,20 +689,23 @@ pub async fn ai_chat(
     req: AiChatRequest,
 ) -> R<bool> {
     let st = state.inner().clone();
-    let resolved = match resolve_target(&st, &req.model_id).await {
+    // 只有网关模型发归因头；BYOK 的 401 是用户自己的密钥坏了，重试没有意义
+    let gateway = req.model_id.starts_with(app_ipc::GATEWAY_MODEL_PREFIX);
+    let mut resolved = match resolve_target(&st, &req.model_id).await {
         Ok(r) => r,
         Err(e) => {
             note_session_error(&app, &e);
             return Err(e);
         }
     };
+    resolved = with_attribution(resolved, &req, gateway);
 
-    let messages = ai::build_messages_with_history(
+    let messages = ai::build_messages_with_history_images(
         req.format,
         req.intent,
         &req.prompt,
         req.context.as_deref(),
-        req.image_data_url.as_deref(),
+        &request_images(&req),
         &req.history,
         &req.files,
     );
@@ -688,6 +724,7 @@ pub async fn ai_chat(
     // 只有网关模型做 401 续期重试：BYOK 的 401 是用户自己的密钥坏了，重试没有意义
     let gateway = req.model_id.starts_with(app_ipc::GATEWAY_MODEL_PREFIX);
     let model_id = req.model_id.clone();
+    let attribution = req.clone();
     tauri::async_runtime::spawn(async move {
         let on_delta = delta_forwarder(app.clone(), request_id.clone());
 
@@ -734,7 +771,8 @@ pub async fn ai_chat(
             if let Err(ai::ChatError::Http { status: 401, .. }) = &result {
                 match crate::cloud::refresh_tokens(&st).await {
                     Ok(_) => {
-                        if let Ok(resolved2) = resolve_target(&st, &model_id).await {
+                        if let Ok(mut resolved2) = resolve_target(&st, &model_id).await {
+                            resolved2 = with_attribution(resolved2, &attribution, true);
                             let on_delta2 = delta_forwarder(app.clone(), request_id.clone());
                             let http2 = st.http_for_idle(resolved2.idle_timeout);
                             result = ai::stream_chat(&http2, &resolved2, messages, &cancel, on_delta2).await;
@@ -766,6 +804,7 @@ pub async fn ai_chat(
                         // 流是怎么结束的：`length` = 被输出上限截断，`interrupted` = 中途断流。
                         // 前端据此把"半句话"说清楚（以前这两个状态在界面上看不见）。
                         finish: usage.finish.as_str().to_string(),
+                        ledger_id: usage.ledger_id.clone(),
                     },
                 );
             }
@@ -859,24 +898,26 @@ pub async fn ai_agent_run(
     req: AiChatRequest,
 ) -> R<bool> {
     let st = state.inner().clone();
-    let resolved = match resolve_target(&st, &req.model_id).await {
+    let gateway = req.model_id.starts_with(app_ipc::GATEWAY_MODEL_PREFIX);
+    let mut resolved = match resolve_target(&st, &req.model_id).await {
         Ok(r) => r,
         Err(e) => {
             note_session_error(&app, &e);
             return Err(e);
         }
     };
+    resolved = with_attribution(resolved, &req, gateway);
 
     // 工具作用的对象是**当前活动文档**，与记忆的作用域同一来源（`session.payload().active`）
     let doc_id = st.session().payload().active.unwrap_or_default();
     let tools = crate::ai_tools::build(st.clone(), doc_id);
 
-    let messages = ai::build_messages_with_history(
+    let messages = ai::build_messages_with_history_images(
         req.format,
         req.intent,
         &req.prompt,
         req.context.as_deref(),
-        req.image_data_url.as_deref(),
+        &request_images(&req),
         &req.history,
         &req.files,
     );
@@ -924,6 +965,7 @@ pub async fn ai_agent_run(
                         // 工具循环是**非流式多步**，没有"流结束"这回事：终态留给上游解析，
                         // 这里如实报"这条路不给终态"（界面只对已知值动作，见 `AiDone.finish`）。
                         finish: String::new(),
+                        ledger_id: None,
                     },
                 );
             }

@@ -515,7 +515,7 @@ window.DGM = window.DGM || {};
     if (ai) {
       ai.addEventListener("click", () => {
         const sel = selectionText();
-        DGM.ai.focus("chat");
+        DGM.ai.focus("review");
         if (sel) DGM.ai.attachSelection(sel);
       });
     }

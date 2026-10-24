@@ -174,6 +174,7 @@ mod tests {
     fn ai_intent_and_format_deserialise_from_frontend_strings() {
         // 前端发的是小写字符串，契约必须认
         assert_eq!(serde_json::from_value::<AiIntent>(json!("vision")).unwrap(), AiIntent::Vision);
+        assert_eq!(serde_json::from_value::<AiIntent>(json!("explain")).unwrap(), AiIntent::Explain);
         assert_eq!(serde_json::from_value::<FormatId>(json!("excalidraw")).unwrap(), FormatId::Excalidraw);
     }
 }

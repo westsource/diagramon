@@ -17,6 +17,12 @@ window.DGM = window.DGM || {};
   const icon = DGM.icon;
   const { $, $$, h, esc } = DGM.dom;
 
+  /* 转换对话框的请求序号：目标是异步重算的，旧请求回来时不能覆盖新选择。
+   * `close()` 也会递增，用户关掉弹窗后挂起的 `convertTo` 不再把它重新打开。 */
+  let convertSeq = 0;
+  /** 当前对话框的退出清理（如识图弹窗的全局 paste 监听）。 */
+  let dialogCleanup = null;
+
   /* 打开中的对话框若有未完成的输入（AI tab 的草稿模型），存这里 */
   let draftAi = null;
   let draftKeys = {};
@@ -31,6 +37,10 @@ window.DGM = window.DGM || {};
   }
 
   function openDialog(html, wide) {
+    if (dialogCleanup) {
+      try { dialogCleanup(); } catch (e) { /* 清理失败不阻断新对话框 */ }
+      dialogCleanup = null;
+    }
     const d = $("#dialog");
     // `wide` 可以是 true（.wide）或一个类名（如 "settings"：比 .wide 更宽的那一档）
     d.className = "dialog" + (wide === true ? " wide" : wide ? ` ${wide}` : "");
@@ -40,6 +50,11 @@ window.DGM = window.DGM || {};
   }
 
   function close() {
+    convertSeq += 1;
+    if (dialogCleanup) {
+      try { dialogCleanup(); } catch (e) { /* 清理失败不阻断关闭 */ }
+      dialogCleanup = null;
+    }
     overlay().hidden = true;
     $("#dialog").innerHTML = "";
     $("#dialog").onclick = null;
@@ -405,6 +420,7 @@ window.DGM = window.DGM || {};
   }
 
   async function convertTo(presetTo) {
+    const seq = ++convertSeq;
     const d = state.activeDoc();
     if (!d) {
       DGM.toast({ icon: "info", title: t("dlg.convert.title"), sub: t("status.noDoc") });
@@ -431,6 +447,7 @@ window.DGM = window.DGM || {};
 
     // 后端说这个方向谁来做（一次询问，弹窗与执行都用它，避免两处判断不一致）
     const plan = await planOf(sel.from, sel.to, d.body);
+    if (seq !== convertSeq) return;
 
     const targets = dirs
       .map(
@@ -461,8 +478,9 @@ window.DGM = window.DGM || {};
     // 「让 AI 试试」：只在**真需要**的时候出现 —— 本地有损/有错、开关开着、配了模型、
     // 且目标是文本格式（AI 不产几何，画布目标一律不给这个入口）。
     const enhGate = DGM.enhance ? DGM.enhance.eligible(d, sel.to, plan.notes.length > 0 || !!plan.error) : { ok: false };
+    const retryMax = Math.max(1, Math.min(3, Number(state.ai().retry_max) || 3));
     const enhHtml = enhGate.ok
-      ? `<div class="callout">${icon("sparkles")}<span>${esc(t("enh.entryHint"))}</span></div>
+      ? `<div class="callout">${icon("sparkles")}<span>${esc(t("enh.entryHint", { max: retryMax, calls: retryMax + 1 }))}</span></div>
          <div class="btn-row"><button class="btn ai sm" data-act="enhance">${icon("sparkles")}${esc(t("enh.entry"))}</button></div>`
       : "";
     const newName = d.name.replace(/\.[^.]+$/, "") + (state.fmtById(sel.to).exts[0] || "." + sel.to);
@@ -517,13 +535,14 @@ window.DGM = window.DGM || {};
         return;
       }
       if (act.startsWith("sel:")) {
-        close();
+        // 不 close：关掉再开会把整个遮罩隐藏/显示一次，用户看到的就是闪屏。
+        // `convertTo` 会原地重排对话框；`convertSeq` 防止旧的 plan 结果覆盖新选择。
         convertTo(act.slice(4));
         return;
       }
       if (act === "enhance") {
         close();
-        if (DGM.enhance) DGM.enhance.run({ srcDoc: d, to: sel.to, notes: plan.notes, lossy: true });
+        if (DGM.enhance) DGM.enhance.run({ srcDoc: d, to: sel.to, plan, notes: plan.notes, lossy: true });
         return;
       }
       if (act === "go") {
@@ -592,7 +611,6 @@ window.DGM = window.DGM || {};
   function vision() {
     const d = state.activeDoc();
     const fmtId = d ? d.format : "mermaid";
-    let picked = null;
     const fmtOpts = state.formatList
       .map((f) => `<option value="${f.id}" ${f.id === fmtId ? "selected" : ""} ${f.ai ? "" : "disabled"}>${esc(f.name)}${f.ai ? "" : " " + esc(t("dlg.vision.canvasDisabled"))}</option>`)
       .join("");
@@ -629,15 +647,66 @@ window.DGM = window.DGM || {};
     );
 
     const dz = $(".dropzone");
+    const showPicked = () => {
+      const list = state.ui.aiAttachments || [];
+      if (!list.length) return;
+      const first = list[0];
+      dz.classList.add("picked");
+      dz.innerHTML =
+        `<span class="pic">${first.dataUrl ? `<img src="${first.dataUrl}" alt="">` : icon("image", "ico-lg")}</span>` +
+        `<b>${list.length > 1 ? esc(t("dlg.vision.multi", { n: list.length })) : esc(first.name)}</b>` +
+        `<small>${esc(first.meta || "")} · ${esc(t("dlg.vision.rePick"))}</small>`;
+    };
+    const readFile = (file) =>
+      new Promise((resolve, reject) => {
+        const fr = new FileReader();
+        fr.onload = () => resolve(String(fr.result || ""));
+        fr.onerror = () => reject(fr.error || new Error("read failed"));
+        fr.readAsDataURL(file);
+      });
+    const takeImage = async (file) => {
+      if (!file) return;
+      const isImage = /^image\//.test(file.type || "") || /\.(png|jpe?g|webp|gif)$/i.test(file.name || "");
+      if (!isImage) {
+        DGM.toast({ icon: "alert", title: t("dlg.vision.badType"), sub: "", warn: true });
+        return;
+      }
+      try {
+        const dataUrl = await readFile(file);
+        const att = await DGM.ai.attachDataUrl(dataUrl, file.name);
+        if (att) showPicked();
+      } catch (e) {
+        DGM.toast({ icon: "alert", title: t("dlg.vision.badType"), sub: String((e && e.message) || e), warn: true });
+      }
+    };
     dz.addEventListener("click", async () => {
       const img = await DGM.ai.pickImage();
       if (!img) return;
-      picked = state.ui.aiAttachment;
-      if (picked) {
-        dz.classList.add("picked");
-        dz.innerHTML = `<span class="pic">${picked.dataUrl ? `<img src="${picked.dataUrl}" alt="">` : icon("image", "ico-lg")}</span><b>${esc(picked.name)}</b><small>${esc(picked.meta || "")} · ${esc(t("dlg.vision.rePick"))}</small>`;
-      }
+      showPicked();
     });
+    dz.addEventListener("dragover", (e) => {
+      e.preventDefault();
+      dz.classList.add("over");
+    });
+    dz.addEventListener("dragleave", () => dz.classList.remove("over"));
+    dz.addEventListener("drop", (e) => {
+      e.preventDefault();
+      dz.classList.remove("over");
+      const file = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+      if (file) takeImage(file);
+    });
+    // Ctrl+V：识图弹窗打开期间监听文档（焦点可能在格式/模型下拉上，不一定在 dropzone）。
+    const onPaste = (e) => {
+      const items = Array.from((e.clipboardData && e.clipboardData.items) || []);
+      const it = items.find((x) => x.type && x.type.startsWith("image/"));
+      if (!it) return;
+      const file = it.getAsFile();
+      if (!file) return;
+      e.preventDefault();
+      takeImage(file);
+    };
+    document.addEventListener("paste", onPaste, true);
+    dialogCleanup = () => document.removeEventListener("paste", onPaste, true);
 
     wire((act) => {
       if (act === "shot") {
@@ -661,7 +730,6 @@ window.DGM = window.DGM || {};
         DGM.ai.focus("vision");
         if (modelId) state.patchSettings({ ai: { default_model: modelId } });
         DGM.ai.prefill(note && note.value ? note.value : t("ai.input.vision"), false);
-        if (picked) state.ui.aiAttachment = picked;
         DGM.ai.render();
         if (outFmt && outFmt !== fmtId && d) {
           DGM.toast({ icon: "info", title: state.fmtById(outFmt).name, sub: t("dlg.vision.fmtHint") });
@@ -680,8 +748,8 @@ window.DGM = window.DGM || {};
     { id: "cloud", label: "set.tab.cloud", icon: "cloud" },
   ];
 
-  function switchRow(on, label, subKey, act) {
-    return `<div class="switch${on ? " on" : ""}" data-switch="${act}"><span class="track"></span><span class="txt">${esc(label)}${subKey ? `<small>${esc(t(subKey))}</small>` : ""}</span></div>`;
+  function switchRow(on, label, subKey, act, subVars) {
+    return `<div class="switch${on ? " on" : ""}" data-switch="${act}"><span class="track"></span><span class="txt">${esc(label)}${subKey ? `<small>${esc(t(subKey, subVars))}</small>` : ""}</span></div>`;
   }
 
   function pAppearance() {
@@ -740,6 +808,7 @@ window.DGM = window.DGM || {};
     // 渲染必须读**草稿**：新增/删除改的是 draftAi，而这一页按表单值回写。
     const ai = draftAi || state.ai();
     ensureDraftProviders(ai);
+    const retryMax = Math.max(1, Math.min(3, Number(ai.retry_max) || 3));
     const providers = ai.providers || [];
     const models = ai.models || [];
     const gwN = state.gatewayModels().length;
@@ -828,7 +897,14 @@ window.DGM = window.DGM || {};
       <div class="field"><label>${esc(t("set.ai.defaultModel"))}</label><select data-act="noop" id="ai-default">${defaultOpts}</select><span class="hint">${esc(t("set.ai.defaultModelHint"))}</span></div>
       ${switchRow(!!ai.context_from_doc, t("set.ai.contextFromDoc"), null, "ctxdoc")}
       ${switchRow(!!ai.render_retry, t("set.ai.renderRetry"), "set.ai.renderRetryHint", "retry")}
-      ${switchRow(!!ai.enhance_enabled, t("set.ai.enhance"), "set.ai.enhanceHint", "enhance")}
+      ${switchRow(!!ai.enhance_enabled, t("set.ai.enhance"), "set.ai.enhanceHint", "enhance", { max: retryMax })}
+      <div class="field narrow">
+        <label for="ai-retry-max">${esc(t("set.ai.retryMax"))}</label>
+        <select id="ai-retry-max">
+          ${[1, 2, 3].map((n) => `<option value="${n}"${n === retryMax ? " selected" : ""}>${n}</option>`).join("")}
+        </select>
+        <span class="hint">${esc(t("set.ai.retryMaxHint"))}</span>
+      </div>
       ${switchRow(!!ai.tools_enabled, t("set.ai.tools"), "set.ai.toolsHint", "tools")}
       ${switchRow(!!ai.vision_notice_accepted, t("set.ai.visionNotice"), null, "vnotice")}
       ${switchRow(!!ai.memory_enabled, t("set.ai.memoryOn"), "set.ai.memoryOnHint", "memory")}
@@ -1256,6 +1332,11 @@ window.DGM = window.DGM || {};
       });
       const def = $("#ai-default");
       if (def && def.value) draftAi.default_model = def.value;
+      const retryMax = $("#ai-retry-max");
+      if (retryMax && draftAi) {
+        const n = Math.round(Number(retryMax.value));
+        draftAi.retry_max = Number.isFinite(n) ? Math.max(1, Math.min(3, n)) : 3;
+      }
       $$("[data-pmax]", pane).forEach((inp) => {
         const p = (draftAi.providers || []).find((x) => x.id === inp.dataset.pmax);
         if (!p) return;

@@ -554,6 +554,7 @@ mod tests {
             idle_timeout: std::time::Duration::from_secs(90),
             session_header: false,
             session_id: None,
+            extra_headers: Vec::new(),
         };
         let completer = HttpCompleter { client: &client, resolved: &r };
         let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
@@ -605,6 +606,7 @@ mod tests {
             idle_timeout: std::time::Duration::from_secs(90),
             session_header: false,
             session_id: None,
+            extra_headers: Vec::new(),
         };
         let completer = HttpCompleter { client: &client, resolved: &r };
         let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();

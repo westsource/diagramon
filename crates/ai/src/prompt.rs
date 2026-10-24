@@ -48,8 +48,18 @@ pub fn format_hint(id: FormatId) -> String {
     format!("目标格式：{}\n{}", format_name(id), format_rules(id))
 }
 
-/// 生成系统提示词。`intent` 决定任务是"从头画"、"看图还原"还是"局部改"。
+/// 生成系统提示词。`intent` 决定任务是"从头画"、"看图还原"、"局部改"还是"只读解释"。
 pub fn system_prompt(format: FormatId, intent: AiIntent) -> String {
+    // Explain 是只读意图：不注入格式语法，也不要求代码围栏 —— 否则模型会把图重新写一遍。
+    if intent == AiIntent::Explain {
+        return "你是 Diagramon 的图表分析助手。用户会给你一份图表源码，请只做解释，不要修改或重写图表。\n\n\
+                输出要求：\n\
+                1. 用 3–6 个 Markdown 小节/项目符号说明：这张图在描述什么、主链路怎么走、有哪些模块边界、哪些异常分支或设计风险值得注意；\n\
+                2. **不要输出任何代码块、不要输出 ``` 围栏、不要给可粘贴的图表源码**；\n\
+                3. 不要寒暄，不要重复用户原话，不要编造源码里没有的节点或连线；\n\
+                4. 如果源码不足以判断，明确说“从当前源码看不出来”，不要猜。"
+            .to_string();
+    }
     let head = match intent {
         AiIntent::Generate => format!(
             "你是 Diagramon 的图表助手。请把用户的描述画成 {} 图表。",
@@ -65,6 +75,8 @@ pub fn system_prompt(format: FormatId, intent: AiIntent) -> String {
              保留原有的节点 id 与结构，除非用户明确要求改。",
             format_name(format)
         ),
+        // 上面已提前返回；这里保持 match 穷尽，避免新增意图时静默落错分支。
+        AiIntent::Explain => unreachable!("Explain 已在函数开头单独处理"),
     };
     format!(
         "{head}\n\n{rules}\n\n输出要求：\n\
@@ -129,13 +141,26 @@ pub fn files_block(files: &[AiContextFile]) -> Option<(String, usize)> {
     Some((out, omitted))
 }
 
-/// 组装发给模型的 messages。
+/// 组装发给模型的 messages（单图兼容入口）。
 pub fn build_messages(
     format: FormatId,
     intent: AiIntent,
     prompt: &str,
     context: Option<&str>,
     image_data_url: Option<&str>,
+    files: &[AiContextFile],
+) -> Vec<serde_json::Value> {
+    let images: Vec<String> = image_data_url.into_iter().map(|s| s.to_string()).collect();
+    build_messages_with_images(format, intent, prompt, context, &images, files)
+}
+
+/// 组装 messages；`images` 为空时是纯文本，否则 content 走数组（一张或多张图）。
+fn build_messages_with_images(
+    format: FormatId,
+    intent: AiIntent,
+    prompt: &str,
+    context: Option<&str>,
+    images: &[String],
     files: &[AiContextFile],
 ) -> Vec<serde_json::Value> {
     use serde_json::json;
@@ -156,18 +181,14 @@ pub fn build_messages(
     }
     user_text.push_str(prompt.trim());
 
-    match image_data_url {
-        Some(url) => {
-            // 视觉档：content 走数组形态
-            messages.push(json!({
-                "role": "user",
-                "content": [
-                    { "type": "text", "text": user_text },
-                    { "type": "image_url", "image_url": { "url": url } }
-                ]
-            }));
+    if images.is_empty() {
+        messages.push(json!({ "role": "user", "content": user_text }));
+    } else {
+        let mut content = vec![json!({ "type": "text", "text": user_text })];
+        for url in images {
+            content.push(json!({ "type": "image_url", "image_url": { "url": url } }));
         }
-        None => messages.push(json!({ "role": "user", "content": user_text })),
+        messages.push(json!({ "role": "user", "content": content }));
     }
     messages
 }
@@ -237,16 +258,30 @@ pub fn build_messages_with_history(
     history: &[AiTurn],
     files: &[AiContextFile],
 ) -> Vec<serde_json::Value> {
+    let images: Vec<String> = image_data_url.into_iter().map(|s| s.to_string()).collect();
+    build_messages_with_history_images(format, intent, prompt, context, &images, history, files)
+}
+
+/// 多图版本：识图对比一次最多两张（服务端上限也是 2）。
+pub fn build_messages_with_history_images(
+    format: FormatId,
+    intent: AiIntent,
+    prompt: &str,
+    context: Option<&str>,
+    image_data_urls: &[String],
+    history: &[AiTurn],
+    files: &[AiContextFile],
+) -> Vec<serde_json::Value> {
     use serde_json::json;
 
-    let mut messages = build_messages(format, intent, prompt, context, image_data_url, files);
+    let messages = build_messages_with_images(format, intent, prompt, context, image_data_urls, files);
     let fitted = fit_history(history, HISTORY_MAX_TURNS, HISTORY_MAX_CHARS);
     if fitted.is_empty() {
         return messages;
     }
 
     let mut out: Vec<serde_json::Value> = Vec::with_capacity(messages.len() + fitted.len());
-    let mut rest = messages.drain(..);
+    let mut rest = messages.into_iter();
     if let Some(system) = rest.next() {
         out.push(system); // 系统提示词永远在最前
     }
@@ -515,12 +550,39 @@ mod tests {
     }
 
     #[test]
+    fn explain_prompt_forbids_code_output() {
+        let p = system_prompt(FormatId::Mermaid, AiIntent::Explain);
+        assert!(p.contains("不要输出任何代码块"), "Explain 必须禁止代码块：{p}");
+        assert!(p.contains("不要输出 ``` 围栏"), "Explain 必须禁止围栏：{p}");
+        assert!(!p.contains("只输出一段可直接粘贴的代码"), "Explain 不能复用代码生成口径：{p}");
+    }
+
+    #[test]
     fn vision_message_carries_image_as_content_array() {
         let m = build_messages(FormatId::Mermaid, AiIntent::Vision, "转成 mermaid", None, Some("data:image/png;base64,AAA"), &[]);
         assert_eq!(m.len(), 2);
         let content = m[1].get("content").unwrap();
         assert!(content.is_array(), "视觉请求的 content 必须是数组");
         assert_eq!(content[1]["type"], "image_url");
+    }
+
+    #[test]
+    fn vision_message_carries_two_images_in_order() {
+        let images = vec!["data:image/png;base64,AAA".to_string(), "data:image/png;base64,BBB".to_string()];
+        let m = build_messages_with_history_images(
+            FormatId::Mermaid,
+            AiIntent::Vision,
+            "对比这两张",
+            None,
+            &images,
+            &[],
+            &[],
+        );
+        let content = m[1].get("content").unwrap();
+        assert!(content.is_array());
+        assert_eq!(content.as_array().unwrap().len(), 3, "text + 两张图");
+        assert_eq!(content[1]["image_url"]["url"], images[0]);
+        assert_eq!(content[2]["image_url"]["url"], images[1]);
     }
 
     #[test]
