@@ -1066,6 +1066,21 @@ window.DGM = window.DGM || {};
     } catch (e) {
       state.issuesByDoc[id] = [];
     }
+    // C3-2：前端引擎校验（真实行列/语义）并入问题面板。
+    // 只并入引擎回报里 Rust 没在同一行报过的（避免重复）；引擎不可用/超大文档返回 [] 不假红。
+    try {
+      const d = state.doc(id);
+      if (d && DGM.engineLint) {
+        const eng = (await DGM.engineLint.issues(d)) || [];
+        if (eng.length) {
+          const rustLines = new Set(state.issuesByDoc[id].map((i) => i.line));
+          for (const e of eng) if (e && !rustLines.has(e.line)) state.issuesByDoc[id].push(e);
+          state.issuesByDoc[id].sort((a, b) => (a.line || 0) - (b.line || 0));
+        }
+      }
+    } catch (e) {
+      /* 引擎校验失败不阻塞问题面板 */
+    }
     emit("issues:changed");
   }
 

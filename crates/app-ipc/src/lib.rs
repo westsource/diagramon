@@ -144,6 +144,10 @@ pub struct Issue {
     pub severity: Severity,
     /// 1 起
     pub line: u32,
+    /// 1 起；`None` = 该问题来自无法给出精确列的实现（如旧行扫描器）。
+    /// 前端「问题」面板与行内标注只依赖 `line`，列号用于更精确的定位（C3）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub column: Option<u32>,
     pub message: String,
     pub hint: String,
 }

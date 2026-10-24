@@ -2899,6 +2899,56 @@ def main() -> int:
         ev("(async () => { DGM.dialogs.close(); await new Promise(r => setTimeout(r, 80)); return 1; })()")
         shot("ui-probe.png")
 
+        # ---- C3：引擎校验（真解析 → 真实行列）----
+        # C3-1 语料：mermaid 少一个右括号（错误在第 2 行）、DOT 连续箭头（错误在第 2 行）、
+        # 合法文档必须不报（不假红）。这三条锁住「引擎校验真的接到了问题面板数据链」。
+        def c3_issues(expr: str, label: str):
+            raw = ev(expr)
+            if not raw:
+                fails.append(f"C3 {label}：拿不到结果（engineLint 链路可能没接上）")
+                return None
+            try:
+                return json.loads(raw)
+            except Exception:
+                fails.append(f"C3 {label}：返回值不是 JSON：{str(raw)[:200]}")
+                return None
+
+        c3_mm = c3_issues(
+            '(async () => {'
+            ' const d = await DGM.state.newDoc("mermaid");'
+            ' DGM.state.setBodyNow(d.id, "flowchart TD\\n  A[x --> B[y\\n");'
+            ' return JSON.stringify(await DGM.engineLint.issues(DGM.state.doc(d.id)));'
+            '})()',
+            "mermaid 已知错误",
+        )
+        if c3_mm is not None:
+            if not (isinstance(c3_mm, list) and c3_mm and c3_mm[0].get("line") == 2
+                    and (c3_mm[0].get("column") or 0) >= 1):
+                fails.append(f"C3 mermaid 已知错误没报出真实行列：{c3_mm!r}")
+
+        c3_ok = c3_issues(
+            '(async () => {'
+            ' const d = await DGM.state.newDoc("mermaid");'
+            ' DGM.state.setBodyNow(d.id, "flowchart TD\\n  A[x] --> B[y]\\n");'
+            ' return JSON.stringify(await DGM.engineLint.issues(DGM.state.doc(d.id)));'
+            '})()',
+            "mermaid 合法文档",
+        )
+        if c3_ok not in (None, []):
+            fails.append(f"C3 mermaid 合法文档不应报问题（假红）：{c3_ok!r}")
+
+        c3_dot = c3_issues(
+            '(async () => {'
+            ' const d = await DGM.state.newDoc("dot");'
+            ' DGM.state.setBodyNow(d.id, "digraph G {\\n  a -> -> b\\n}");'
+            ' return JSON.stringify(await DGM.engineLint.issues(DGM.state.doc(d.id)));'
+            '})()',
+            "DOT 已知错误",
+        )
+        if c3_dot is not None:
+            if not (isinstance(c3_dot, list) and c3_dot and c3_dot[0].get("line") == 2):
+                fails.append(f"C3 DOT 已知错误没报出行号：{c3_dot!r}")
+
         log("")
         if fails:
             for f in fails:

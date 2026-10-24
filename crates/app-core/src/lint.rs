@@ -19,11 +19,23 @@ pub fn issues(format: FormatId, body: &str) -> Vec<Issue> {
 }
 
 fn err(line: u32, message: impl Into<String>, hint: impl Into<String>) -> Issue {
-    Issue { severity: Severity::Error, line, message: message.into(), hint: hint.into() }
+    Issue { severity: Severity::Error, line, column: None, message: message.into(), hint: hint.into() }
 }
 
 fn warn(line: u32, message: impl Into<String>, hint: impl Into<String>) -> Issue {
-    Issue { severity: Severity::Warning, line, message: message.into(), hint: hint.into() }
+    Issue { severity: Severity::Warning, line, column: None, message: message.into(), hint: hint.into() }
+}
+
+/// 带精确列号的问题（C3：真解析器能给出列时用这个，让定位更准）。
+#[allow(dead_code)]
+fn err_at(line: u32, column: u32, message: impl Into<String>, hint: impl Into<String>) -> Issue {
+    Issue {
+        severity: Severity::Error,
+        line,
+        column: Some(column),
+        message: message.into(),
+        hint: hint.into(),
+    }
 }
 
 /// 去掉 mermaid 的注释（`%%` 到行尾）与**引号内容**，避免把文本里的括号算进配对。

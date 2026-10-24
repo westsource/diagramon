@@ -1067,6 +1067,80 @@ window.DGM = window.DGM || {};
     renderOpts(state.activeDoc());
   });
 
+  /* ------------------------------------------------------------------ C3-2 引擎校验（前端真解析并入问题面板）
+   * 把**随包引擎**的真实语法错误（行列 + 语义）并入问题面板，替代 lint.rs 的手写行扫描对
+   * 精度的短板。只覆盖 Mermaid 与 DOT（C3 范围）。
+   * - Mermaid：`window.mermaid.parse` 拒绝时抛的对象带结构化 `err.hash.loc`（三形态已由
+   *   describeMermaid 解码，见上）——最难的「拿真实行列」这里已通。
+   * - DOT：graphviz-wasm 无 parse-only API，`.layout` 解析错会抛文本
+   *   `syntax error in line N …`，用 describeError 取行号。
+   * 降级/代价护栏（C3-4 精神）：
+   * - 引擎未加载（window.mermaid undefined / DGMGraphviz 缺）→ 返回 []（不假红）。
+   * - 超大文档（≥5000 行，与 guard 对齐）不跑引擎校验——避免对万行 doc 做重 layout
+   *   （那正是 C4-① 不想在主线程干的活），超大 doc 交给 Rust 扫描与 C4-③ 预警。
+   * - 校验失败一律吞掉，不影响问题面板既有内容。
+   */
+  const ENGINE_LINT_MAX_LINES = 5000;
+
+  async function mermaidLintIssues(body) {
+    if (typeof window.mermaid === "undefined") return [];
+    try {
+      // 不在这里 initialize：初始化带主题/外观/布局，属于渲染路径（renderMermaid）的职责；
+      // 校验只做 parse，复用当前配置，避免并发渲染时把全局配置改掉。
+      await window.mermaid.parse(body);
+      return [];
+    } catch (err) {
+      const d = DGM.preview.describeMermaid(err);
+      if (!d || !d.line) return []; // 拿不到定位就不报（不假红）
+      return [{
+        severity: "error",
+        line: d.line,
+        column: d.col > 0 ? d.col : null,
+        message: d.text,
+        hint: t("lint.engineHint"),
+      }];
+    }
+  }
+
+  async function dotLintIssues(body, layout) {
+    if (!window.DGMGraphviz) {
+      if (!window.DGMGraphvizReady) return [];
+      try { await window.DGMGraphvizReady; } catch (e) { return []; }
+    }
+    if (!window.DGMGraphviz) return [];
+    try {
+      await window.DGMGraphviz.layout(body, "svg", layout || "dot", {});
+      return [];
+    } catch (err) {
+      const d = describeError(err && err.message ? err.message : err);
+      if (!d || !d.line) return []; // graphviz 的文本若能解析出 `line N` 才报，否则不假红
+      return [{
+        severity: "error",
+        line: d.line,
+        column: null,
+        message: d.text,
+        hint: t("lint.engineHint"),
+      }];
+    }
+  }
+
+  DGM.engineLint = {
+    /** 返回该文档的引擎侧 Issue[]（空 = 无引擎错误或引擎不可用）。大文档返回 []。 */
+    async issues(d) {
+      if (!d) return [];
+      const body = (d.body || "").trim();
+      if (!body) return [];
+      switch (state.docFmt(d).id) {
+        case "mermaid":
+          return body.split("\n").length + 1 > ENGINE_LINT_MAX_LINES ? [] : mermaidLintIssues(body);
+        case "dot":
+          return body.split("\n").length + 1 > ENGINE_LINT_MAX_LINES ? [] : dotLintIssues(body, (d.layout) || "dot");
+        default:
+          return []; // D2/drawio/excalidraw 不属 C3 范围
+      }
+    },
+  };
+
   DGM.preview = {
     render: renderActive,
     schedule,
