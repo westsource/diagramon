@@ -138,6 +138,44 @@ window.DGM = window.DGM || {};
   }
 
   /**
+   * 复制一段文本（报错原文）。
+   *
+   * 为什么不是「让文字能选中就够了」：WebView 里右键菜单不可用、拖选在弹窗里也常被
+   * 误当成点击，用户报的「拷不了」多半就是选中了也按不出 Ctrl+C。所以给一个显式按钮；
+   * 剪贴板 API 失败时退回同步 `execCommand`（与云登录复制注册地址同一套兜底）。
+   */
+  async function copyText(text) {
+    const s = String(text || "");
+    if (!s) return;
+    let ok = false;
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(s);
+        ok = true;
+      }
+    } catch (e) {
+      ok = false;
+    }
+    if (!ok) {
+      try {
+        const ta = document.createElement("textarea");
+        ta.value = s;
+        ta.setAttribute("readonly", "");
+        ta.style.position = "fixed";
+        ta.style.opacity = "0";
+        document.body.appendChild(ta);
+        ta.select();
+        ok = document.execCommand("copy");
+        ta.remove();
+      } catch (e) {
+        ok = false;
+      }
+    }
+    if (ok) DGM.toast({ icon: "copy", title: t("status.copied"), sub: "" });
+    else DGM.toast({ icon: "alert", title: t("ai.copyFail"), sub: "", warn: true });
+  }
+
+  /**
    * 给 Mermaid 源注入 `layout: elk`，让 **drawio 自己的** ELK layered 引擎重排。
    *
    * 为什么是文本注入而不是传配置：`canvas.js` 送进 drawio 的是 descriptor 协议
@@ -413,12 +451,20 @@ window.DGM = window.DGM || {};
       : "";
 
     const previewHtml = plan.error
-      ? `<div class="callout warn">${icon("alert")}<span>${esc(plan.error)}</span></div>`
+      ? `<div class="callout warn">${icon("alert")}<span>${esc(plan.error)}</span>` +
+        `<button class="mini-btn copy-err" data-act="copy-error" title="${esc(t("conv.copyError"))}">${icon("copy", "ico-sm")}${esc(t("common.copy"))}</button></div>`
       : isRust
         ? `<pre class="conv-pre">${esc(plan.text)}</pre>${notesHtml}`
         : `<div class="callout">${icon("info")}<span>${esc(plan.notes[0] || t("dlg.convert.noPreview"))}</span></div>`;
 
     const meta = isRust && plan.text ? t("dlg.convert.previewMeta", { n: plan.text.split("\n").length }) : "";
+    // 「让 AI 试试」：只在**真需要**的时候出现 —— 本地有损/有错、开关开着、配了模型、
+    // 且目标是文本格式（AI 不产几何，画布目标一律不给这个入口）。
+    const enhGate = DGM.enhance ? DGM.enhance.eligible(d, sel.to, plan.notes.length > 0 || !!plan.error) : { ok: false };
+    const enhHtml = enhGate.ok
+      ? `<div class="callout">${icon("sparkles")}<span>${esc(t("enh.entryHint"))}</span></div>
+         <div class="btn-row"><button class="btn ai sm" data-act="enhance">${icon("sparkles")}${esc(t("enh.entry"))}</button></div>`
+      : "";
     const newName = d.name.replace(/\.[^.]+$/, "") + (state.fmtById(sel.to).exts[0] || "." + sel.to);
     const hint = plan.error
       ? plan.error
@@ -446,7 +492,7 @@ window.DGM = window.DGM || {};
           </div>
           <div class="conv-cols">
             <div class="conv-col"><h4>${esc(t("dlg.convert.pickTarget"))}</h4><div class="tgts">${targets}</div></div>
-            <div class="conv-col"><h4>${esc(t("dlg.convert.preview"))} <span class="meta">${esc(meta)}</span></h4>${previewHtml}</div>
+            <div class="conv-col"><h4>${esc(t("dlg.convert.preview"))} <span class="meta">${esc(meta)}</span></h4>${previewHtml}${enhHtml}</div>
           </div>
           ${elkRow}
           <div class="callout warn">${icon("alert")}<span>${t("dlg.convert.oneway", { name: esc(d.name) })}</span></div>
@@ -465,9 +511,19 @@ window.DGM = window.DGM || {};
       });
     }
     wire((act) => {
+      if (act === "copy-error") {
+        // 不关弹窗：用户可能要一边看报错一边改源文件
+        copyText(plan.error);
+        return;
+      }
       if (act.startsWith("sel:")) {
         close();
         convertTo(act.slice(4));
+        return;
+      }
+      if (act === "enhance") {
+        close();
+        if (DGM.enhance) DGM.enhance.run({ srcDoc: d, to: sel.to, notes: plan.notes, lossy: true });
         return;
       }
       if (act === "go") {

@@ -742,6 +742,42 @@ window.DGM = window.DGM || {};
    *  （见 `retryCtx.convDoc`）—— 用户中途切了标签页的话，回复必须落回原来的桶，
    *  否则落盘时（S3：按归属落盘）会写错文档、丢这一轮。
    */
+  /* ------------------------------------------------------------------ 单向取数
+   * 程序化的一次调用：发出去、等它正常收尾、把正文交回来。
+   *
+   * 为什么要它：增强转换的回灌要**按结果决定下一步**（校验/对账 → 再修或收手），
+   * 不能靠"看气泡里有没有代码块"这种界面状态判断。这里只薄薄包一层 `dispatch`，
+   * 消息照旧进当前对话（用户能看见 AI 到底改了几轮、花了多少），只是多了一个 Promise。
+   */
+  const pendingAsks = new Map(); // request_id -> {resolve, reject}
+
+  async function askOnce(opt) {
+    const o = opt || {};
+    const d = state.doc(o.docId) || state.activeDoc();
+    const req = {
+      request_id: newId(),
+      model_id: (o.modelId || (state.currentModel() ? state.currentModel().id : "")) || "",
+      // review 的系统提示词本来就写死了"只做局部修改、保持结构、不要重写整张图"，
+      // 正是"按报错修正"该有的口径，不再另写一套。
+      intent: "review",
+      prompt: String(o.prompt || ""),
+      format: o.format || (d ? d.format : "mermaid"),
+      context: o.context == null ? null : o.context,
+      files: [],
+      image_data_url: null,
+      history: [],
+    };
+    return new Promise((resolve, reject) => {
+      pendingAsks.set(req.request_id, { resolve, reject });
+      dispatch(req, "review", { id: newId(), role: "user", text: o.userText || req.prompt }, o.docId || (d && d.id)).catch(
+        (e) => {
+          pendingAsks.delete(req.request_id);
+          reject(e);
+        },
+      );
+    });
+  }
+
   async function dispatch(req, cur, userMsg, docId) {
     const owner = docId || (state.activeDoc() || {}).id || "";
     // `at` 落在这条消息上：会话持久化要按它排跨页签的展示顺序，
@@ -797,6 +833,13 @@ window.DGM = window.DGM || {};
     }
     state.ui.aiBusy = false;
     state.ui.aiRequestId = null;
+    // 用户点了取消：挂着的程序化调用不能一直等下去（否则增强转换会卡在"正在修正"）
+    if (pendingAsks.size) {
+      for (const [k, p] of pendingAsks) {
+        pendingAsks.delete(k);
+        p.reject(new Error("cancelled"));
+      }
+    }
     render();
   }
 
@@ -867,6 +910,12 @@ window.DGM = window.DGM || {};
 
   function onDone(ev) {
     const m = findMsg(ev && ev.request_id);
+    // 程序化调用（增强转换回灌）先拿到结果：它要按正文决定"再修一轮还是收手"。
+    const ask = pendingAsks.get(ev && ev.request_id);
+    if (ask) {
+      pendingAsks.delete(ev.request_id);
+      ask.resolve(String(ev.text || (m && m.text) || ""));
+    }
     state.ui.aiBusy = false;
     state.ui.aiRequestId = null;
     if (!m) {
@@ -957,6 +1006,11 @@ window.DGM = window.DGM || {};
   }
 
   function onFailed(ev) {
+    const ask = pendingAsks.get(ev && ev.request_id);
+    if (ask) {
+      pendingAsks.delete(ev.request_id);
+      ask.reject(new Error((ev && ev.message) || "ai failed"));
+    }
     const m = findMsg(ev && ev.request_id);
     state.ui.aiBusy = false;
     state.ui.aiRequestId = null;
@@ -1513,6 +1567,8 @@ window.DGM = window.DGM || {};
     clear,
     send: sendNow,
     cancel,
+    /** 程序化的一次调用：`{prompt, format, context, docId}` → Promise<回复正文>。 */
+    askOnce,
     applyLast,
     revertLast,
     popModels,
