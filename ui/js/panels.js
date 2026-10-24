@@ -24,10 +24,14 @@ window.DGM = window.DGM || {};
     { id: "usage", icon: "bolt", label: "panel.usage" },
   ];
 
-  function goto(id, line) {
+  function goto(id, line, column) {
     state.activateDoc(id).then(() => {
       if (DGM.editor && DGM.editor.loadActive) DGM.editor.loadActive();
-      if (DGM.editor && DGM.editor.gotoLine && line) DGM.editor.gotoLine(line);
+      // 有精确列就落到列（引擎校验给的真行列），否则退到只按行跳。
+      if (line) {
+        if (DGM.editor && DGM.editor.jumpTo) DGM.editor.jumpTo(line, column || 1);
+        else if (DGM.editor && DGM.editor.gotoLine) DGM.editor.gotoLine(line);
+      }
       state.refreshDerived(id);
     });
   }
@@ -75,12 +79,16 @@ window.DGM = window.DGM || {};
     for (const { d, i } of rows) {
       const sev = i.severity === "error" ? "err" : "warn";
       const row = h("button", "issue " + sev);
+      // 引擎校验的问题带真实列；没有列的实现（旧行扫描）就只显示行。
+      const where =
+        `${esc(t("common.line"))} ${i.line}` +
+        (i.column ? ` ${esc(t("common.col"))} ${i.column}` : "");
       row.innerHTML =
         `<span class="sev">${icon(sev === "err" ? "err" : "warn", "ico-sm")}</span>` +
         `<span class="txt"><b>${esc(i.message)}</b>` +
-        `<span>${esc(d.name)} · ${esc(t("common.line"))} ${i.line} · ${esc(i.hint)}</span></span>` +
+        `<span>${esc(d.name)} · ${where} · ${esc(i.hint)}</span></span>` +
         `<span class="go">${esc(t("panel.issues.goto"))} ${icon("chevR", "ico-sm")}</span>`;
-      row.addEventListener("click", () => goto(d.id, i.line));
+      row.addEventListener("click", () => goto(d.id, i.line, i.column));
       box.appendChild(row);
     }
     return box;

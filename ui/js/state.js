@@ -1067,15 +1067,17 @@ window.DGM = window.DGM || {};
       state.issuesByDoc[id] = [];
     }
     // C3-2：前端引擎校验（真实行列/语义）并入问题面板。
-    // 只并入引擎回报里 Rust 没在同一行报过的（避免重复）；引擎不可用/超大文档返回 [] 不假红。
+    // 同一行冲突时**引擎优先**：真解析带真实列，比行扫描的粗略判断准；
+    // 其它行保留 Rust 的结论（旧扫描器能报的问题因此不回归）。
+    // 引擎不可用 / 超大文档返回 []，此时面板完全等于原来的 Rust 结果，不假红。
     try {
       const d = state.doc(id);
       if (d && DGM.engineLint) {
         const eng = (await DGM.engineLint.issues(d)) || [];
         if (eng.length) {
-          const rustLines = new Set(state.issuesByDoc[id].map((i) => i.line));
-          for (const e of eng) if (e && !rustLines.has(e.line)) state.issuesByDoc[id].push(e);
-          state.issuesByDoc[id].sort((a, b) => (a.line || 0) - (b.line || 0));
+          const byLine = new Map((state.issuesByDoc[id] || []).map((i) => [i.line, i]));
+          for (const e of eng) if (e && e.line) byLine.set(e.line, e);
+          state.issuesByDoc[id] = [...byLine.values()].sort((a, b) => (a.line || 0) - (b.line || 0));
         }
       }
     } catch (e) {

@@ -2900,12 +2900,16 @@ def main() -> int:
         shot("ui-probe.png")
 
         # ---- C3：引擎校验（真解析 → 真实行列）----
-        # C3-1 语料：mermaid 少一个右括号（错误在第 2 行）、DOT 连续箭头（错误在第 2 行）、
-        # 合法文档必须不报（不假红）。这三条锁住「引擎校验真的接到了问题面板数据链」。
+        # 关键：断言走**合并后的** state.issuesByDoc（问题面板真正读的那份），
+        # 不是直接调 engineLint —— 否则测不出「同线被丢弃/列没生效」这类问题。
+        # ① mermaid 少右括号：Rust 行扫描也会在同一行报「括号没有闭合」，
+        #    合并策略要求**引擎那条覆盖它**，所以最终必须带 line=2 且 column>=1。
+        # ② 合法 mermaid 不能有任何问题（不假红）。
+        # ③ DOT 连续箭头：合并后必须报在第 2 行。
         def c3_issues(expr: str, label: str):
             raw = ev(expr)
             if not raw:
-                fails.append(f"C3 {label}：拿不到结果（engineLint 链路可能没接上）")
+                fails.append(f"C3 {label}：拿不到结果（问题面板数据链可能没接上）")
                 return None
             try:
                 return json.loads(raw)
@@ -2917,22 +2921,24 @@ def main() -> int:
             '(async () => {'
             ' const d = await DGM.state.newDoc("mermaid");'
             ' DGM.state.setBodyNow(d.id, "flowchart TD\\n  A[x --> B[y\\n");'
-            ' return JSON.stringify(await DGM.engineLint.issues(DGM.state.doc(d.id)));'
+            ' await DGM.state.refreshDerived(d.id);'
+            ' return JSON.stringify(DGM.state.issuesByDoc[d.id] || []);'
             '})()',
-            "mermaid 已知错误",
+            "mermaid 已知错误（合并后）",
         )
         if c3_mm is not None:
-            if not (isinstance(c3_mm, list) and c3_mm and c3_mm[0].get("line") == 2
-                    and (c3_mm[0].get("column") or 0) >= 1):
-                fails.append(f"C3 mermaid 已知错误没报出真实行列：{c3_mm!r}")
+            _hit = [i for i in c3_mm if i.get("line") == 2 and (i.get("column") or 0) >= 1]
+            if not _hit:
+                fails.append(f"C3 mermaid 合并后没带真实行列（引擎应覆盖同线的行扫描）：{c3_mm!r}")
 
         c3_ok = c3_issues(
             '(async () => {'
             ' const d = await DGM.state.newDoc("mermaid");'
             ' DGM.state.setBodyNow(d.id, "flowchart TD\\n  A[x] --> B[y]\\n");'
-            ' return JSON.stringify(await DGM.engineLint.issues(DGM.state.doc(d.id)));'
+            ' await DGM.state.refreshDerived(d.id);'
+            ' return JSON.stringify(DGM.state.issuesByDoc[d.id] || []);'
             '})()',
-            "mermaid 合法文档",
+            "mermaid 合法文档（合并后）",
         )
         if c3_ok not in (None, []):
             fails.append(f"C3 mermaid 合法文档不应报问题（假红）：{c3_ok!r}")
@@ -2941,13 +2947,14 @@ def main() -> int:
             '(async () => {'
             ' const d = await DGM.state.newDoc("dot");'
             ' DGM.state.setBodyNow(d.id, "digraph G {\\n  a -> -> b\\n}");'
-            ' return JSON.stringify(await DGM.engineLint.issues(DGM.state.doc(d.id)));'
+            ' await DGM.state.refreshDerived(d.id);'
+            ' return JSON.stringify(DGM.state.issuesByDoc[d.id] || []);'
             '})()',
-            "DOT 已知错误",
+            "DOT 已知错误（合并后）",
         )
         if c3_dot is not None:
-            if not (isinstance(c3_dot, list) and c3_dot and c3_dot[0].get("line") == 2):
-                fails.append(f"C3 DOT 已知错误没报出行号：{c3_dot!r}")
+            if not any(i.get("line") == 2 for i in c3_dot):
+                fails.append(f"C3 DOT 合并后没报出第 2 行：{c3_dot!r}")
 
         # ---- 大纲跳转：点文本大纲的行，光标要落到该元素在源码里的行列 ----
         # 语料：第 2 行 `  A[开始] --> B[结束]`，点「结束」应落在第 2 行该名字的起始列。
