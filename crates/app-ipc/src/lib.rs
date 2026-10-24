@@ -300,6 +300,13 @@ pub struct AiPrefs {
     pub default_model: String,
     pub vision_notice_accepted: bool,
     pub render_retry: bool,
+    /// 「AI 增强转换」总开关。**默认关**：这是显式触发的兜底路径，
+    /// 打开后才在转换预览区出现入口（仍要满足"有损或校验失败"且"已配置模型"）。
+    pub enhance_enabled: bool,
+    /// 增强转换的「外发提示」是否已确认过（只弹一次）。
+    pub enhance_notice_seen: bool,
+    /// 一次增强最多重试几轮（真实调用上限 = 1 + 该值）。**默认 3**，范围 1–3。
+    pub retry_max: u8,
     pub context_from_doc: bool,
     /// 长期记忆总开关。关掉后**请求体与没有记忆时完全一致**（单测钉住这一点）。
     pub memory_enabled: bool,
@@ -322,6 +329,9 @@ impl Default for AiPrefs {
             default_model: String::new(),
             vision_notice_accepted: false,
             render_retry: true,
+            enhance_enabled: false,
+            enhance_notice_seen: false,
+            retry_max: 3,
             context_from_doc: true,
             memory_enabled: true,
             memory_auto: true,

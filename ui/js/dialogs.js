@@ -749,6 +749,7 @@ window.DGM = window.DGM || {};
       <div class="field"><label>${esc(t("set.ai.defaultModel"))}</label><select data-act="noop" id="ai-default">${defaultOpts}</select><span class="hint">${esc(t("set.ai.defaultModelHint"))}</span></div>
       ${switchRow(!!ai.context_from_doc, t("set.ai.contextFromDoc"), null, "ctxdoc")}
       ${switchRow(!!ai.render_retry, t("set.ai.renderRetry"), "set.ai.renderRetryHint", "retry")}
+      ${switchRow(!!ai.enhance_enabled, t("set.ai.enhance"), "set.ai.enhanceHint", "enhance")}
       ${switchRow(!!ai.tools_enabled, t("set.ai.tools"), "set.ai.toolsHint", "tools")}
       ${switchRow(!!ai.vision_notice_accepted, t("set.ai.visionNotice"), null, "vnotice")}
       ${switchRow(!!ai.memory_enabled, t("set.ai.memoryOn"), "set.ai.memoryOnHint", "memory")}
@@ -1074,6 +1075,7 @@ window.DGM = window.DGM || {};
         else if (a === "closetray") state.patchSettings({ close_to_tray: on });
         else if (a === "ctxdoc") state.patchSettings({ ai: { context_from_doc: on } });
         else if (a === "retry") state.patchSettings({ ai: { render_retry: on } });
+        else if (a === "enhance") state.patchSettings({ ai: { enhance_enabled: on } });
         else if (a === "tools") state.patchSettings({ ai: { tools_enabled: on } });
         else if (a === "vnotice") state.patchSettings({ ai: { vision_notice_accepted: on } });
         else if (a === "memory") state.patchSettings({ ai: { memory_enabled: on } });
