@@ -1505,6 +1505,12 @@ table.spec td .kbd { font: var(--fs-xs) var(--font-mono); color: var(--ink-2); b
   border-radius: var(--radius);
   user-select: text;
 }
+/* 对话框里的说明/报错必须能选中复制：body 上是全局 user-select: none，
+   而转换失败的原文只出现在 .callout 与底栏 .note 里 —— 不显式放开，
+   用户连 Ctrl+C 都拿不到那条消息（只能重新读一遍再手打）。 */
+.dialog-body .callout, .dialog-foot .note { user-select: text; }
+/* 报错旁边那个「复制」按钮靠右，不参与文字选中 */
+.callout .copy-err { margin-left: auto; align-self: flex-start; flex: 0 0 auto; }
 
 /* 设置对话框 */
 .dialog-body.has-tabs { display: grid; grid-template-columns: 176px minmax(0, 1fr); gap: 16px; padding: 0; }
