@@ -44,10 +44,34 @@ window.DGM = window.DGM || {};
 
   /* ------------------------------------------------------------------ 打开文档 */
 
-  async function openDocAt(id, line) {
+  /** 在正文第 `line` 行里找 `name` 的起始列（1 基）；找不到退到第 1 列。
+   *
+   *  大纲行的 `name` 是元素标签/首段文本，通常就长在源码这一行里，
+   *  所以用它算列比让 Rust 侧额外带列更省事（也不必改 OutlineRow 契约）。 */
+  function colOf(id, line, name) {
+    try {
+      const d = state.doc(id);
+      const text = ((d && d.body) || "").split("\n")[line - 1] || "";
+      const i = name ? text.indexOf(name) : -1;
+      return i >= 0 ? i + 1 : 1;
+    } catch (e) {
+      return 1;
+    }
+  }
+
+  async function openDocAt(id, line, name) {
     await state.activateDoc(id);
     if (DGM.editor && DGM.editor.loadActive) DGM.editor.loadActive();
-    if (DGM.editor && DGM.editor.gotoLine && line) DGM.editor.gotoLine(line);
+    if (line) {
+      const col = colOf(id, line, name);
+      const go = () => {
+        if (DGM.editor && DGM.editor.jumpTo) DGM.editor.jumpTo(line, col);
+        else if (DGM.editor && DGM.editor.gotoLine) DGM.editor.gotoLine(line);
+      };
+      go();
+      // loadActive 之后编辑器可能还在重建：等一帧再落一次，保证光标真的停在目标元素上。
+      requestAnimationFrame(() => go());
+    }
     if (DGM.preview && DGM.preview.schedule) DGM.preview.schedule();
     state.refreshDerived(id);
   }
@@ -929,7 +953,7 @@ window.DGM = window.DGM || {};
         const ic = KIND_ICON[r.kind] || "layers";
         row.innerHTML = `${icon(ic, "ico-sm")}<span class="nm">${esc(r.name)}</span><span class="kind">L${r.line}</span>`;
         row.title = `${t("side.outline.kind." + r.kind) || r.kind} · L${r.line}`;
-        row.addEventListener("click", () => openDocAt(d.id, r.line));
+        row.addEventListener("click", () => openDocAt(d.id, r.line, r.name));
         list.appendChild(row);
       });
       hd.addEventListener("click", () => {

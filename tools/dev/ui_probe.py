@@ -2949,6 +2949,30 @@ def main() -> int:
             if not (isinstance(c3_dot, list) and c3_dot and c3_dot[0].get("line") == 2):
                 fails.append(f"C3 DOT 已知错误没报出行号：{c3_dot!r}")
 
+        # ---- 大纲跳转：点文本大纲的行，光标要落到该元素在源码里的行列 ----
+        # 语料：第 2 行 `  A[开始] --> B[结束]`，点「结束」应落在第 2 行该名字的起始列。
+        c3_jump = c3_issues(
+            '(async () => {'
+            ' const d = await DGM.state.newDoc("mermaid");'
+            ' const body = "flowchart TD\\n  A[开始] --> B[结束]\\n";'
+            ' DGM.state.setBodyNow(d.id, body);'
+            ' await DGM.state.refreshDerived(d.id);'
+            ' await DGM.sidebar.openDocAt(d.id, 2, "结束");'
+            ' await new Promise(r => setTimeout(r, 150));'
+            ' const cols = (DGM.state.outlineByDoc && DGM.state.outlineByDoc[d.id]) || [];'
+            ' return JSON.stringify({ caret: DGM.editor.caret(), groups: cols.length });'
+            '})()',
+            "大纲跳转",
+        )
+        if c3_jump is not None:
+            _caret = (c3_jump or {}).get("caret") or {}
+            _expect_col = "  A[开始] --> B[结束]".index("结束") + 1
+            if _caret.get("line") != 2 or _caret.get("col") != _expect_col:
+                fails.append(
+                    f"大纲跳转没落到元素位置：期望 2:{_expect_col}，实际 "
+                    f"{_caret.get('line')}:{_caret.get('col')}（{c3_jump!r}）"
+                )
+
         log("")
         if fails:
             for f in fails:
