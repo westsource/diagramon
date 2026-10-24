@@ -1,0 +1,89 @@
+flowchart TD
+    %% ==== 全局样式定义 (Class Definitions) ====
+    classDef raw fill:#f1f5f9,stroke:#94a3b8,stroke-width:1px,color:#334155,rx:4,ry:4
+    classDef resource fill:#e0f2fe,stroke:#38bdf8,stroke-width:2px,color:#0369a1,rx:6,ry:6
+    classDef asset fill:#dcfce7,stroke:#34d399,stroke-width:2px,color:#047857,rx:6,ry:6
+    classDef dataset fill:#fef3c7,stroke:#f59e0b,stroke-width:2px,color:#92400e,rx:6,ry:6
+    classDef product fill:#fef08a,stroke:#facc15,stroke-width:2px,color:#854d0e,rx:8,ry:8
+    
+    classDef catalog fill:#fce7f3,stroke:#f472b6,stroke-width:2px,color:#9d174d,rx:8,ry:8
+    classDef router fill:#ffedd5,stroke:#fb923c,stroke-width:2px,color:#c2410c,rx:8,ry:8
+    classDef terminal fill:#ffffff,stroke:#cbd5e1,stroke-width:1px,color:#475569,rx:15,ry:15
+    classDef infra fill:#f8fafc,stroke:#94a3b8,stroke-width:2px,color:#475569,stroke-dasharray: 5 5,rx:4,ry:4
+
+    %% ==== 1. 管理平面 (Management Plane) ====
+    subgraph L_MGMT ["🔍 管理平面：数据治理与全局资产调度"]
+        DC["数据目录<br/>Data Catalog"]:::catalog
+    end
+
+    %% ==== 2. 业务平面 (Value Plane) ====
+    subgraph L_VALUE ["💎 业务平面：数据价值演进主链条"]
+        direction TB
+        RD["原始数据<br/>Raw Data"]:::raw
+        DR["数据资源<br/>Data Resources"]:::resource
+        
+        subgraph L_Split ["资产化与场景化"]
+            direction LR
+            DA["数据资产<br/>Data Assets"]:::asset
+            DS["数据集<br/>Dataset"]:::dataset
+        end
+        
+        DP["数据产品<br/>Data Products"]:::product
+
+        %% 价值主链（使用加粗箭头 ==> 凸显核心流程）
+        RD == "采集→清洗→注册" ==> DR
+        DR == "确权→计量→入表" ==> DA
+        DR == "按目的裁剪" ==> DS
+        DA == "加工→封装→标准化" ==> DP
+        DS == "算法赋能" ==> DP
+    end
+
+    %% ==== 3. 交付平面 (Delivery Plane) ====
+    subgraph L_DELIVERY ["🚀 交付平面：服务网关与应用路由"]
+        direction TB
+        DDM["数据交付方式<br/>Data Delivery Methods"]:::router
+        
+        subgraph G_Integration ["🔌 集成与传输通道"]
+            direction TB
+            T_API["📡 API/SDK"]:::terminal
+            T_FILE["📁 文件传输"]:::terminal
+            T_CDC["🔄 数据库同步"]:::terminal
+            T_STREAM["📡 数据流"]:::terminal
+            T_PACKAGE["📦 数据包/订阅"]:::terminal
+        end
+        
+        subgraph G_Analytics ["📊 分析与决策支撑"]
+            direction TB
+            T_BI["📊 BI 看板"]:::terminal
+            T_QUERY["🧩 联邦查询"]:::terminal
+        end
+        
+        subgraph G_Advanced ["🛡️ 可信与高阶计算"]
+            direction TB
+            T_PRIVACY["🛡️ 隐私计算"]:::terminal
+            T_SANDBOX["🏖️ 安全沙箱"]:::terminal
+            T_BC["⛓️ 区块链存证"]:::terminal
+            T_MAAS["🤖 模型即服务"]:::terminal
+        end
+    end
+
+    %% ==== 4. 基础设施底座 (Infrastructure Plane) ====
+    subgraph L_STORAGE ["💾 物理底座：统一多模存储引擎"]
+        direction LR
+        STRUCT["🗄️ 结构化存储<br/>(RDBMS / CSV / Parquet)"]:::infra
+        SEMI["📄 半结构化存储<br/>(JSON / MongoDB / ES)"]:::infra
+        UNSTRUCT["📦 非结构化存储<br/>(S3 / FileSystem / VectorDB)"]:::infra
+    end
+
+    %% ==== 跨平面关系映射 (Cross-Plane Relations) ====
+    
+    %% 主干连接：产品到分发
+    DP ===>|"发布至服务网关"| DDM
+    DDM --> G_Integration & G_Analytics & G_Advanced
+
+    %% 虚线连接：管理平面的检索关系 (降低视觉干扰)
+    DC -. "发现 / 寻址" .-> DR 
+    %%& DA & DP & DS
+
+    %% 虚线连接：落盘关系 (统一指向底座，避免交叉)
+    L_VALUE -. "物理落盘映射" .-> L_STORAGE

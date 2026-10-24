@@ -12,9 +12,10 @@
 //! 这是路线图里的 P2 决策。
 //!
 //! 支持的是 Mermaid flowchart 的**常用子集**：节点四类形状、带/不带标签的六种边
-//! （含两端端点标记 `<-->` / `o--o` / `x--x`）、subgraph、classDef/class/style、
-//! direction、`%%` 注释。序列图 / 状态图 / 甘特等不在范围内 ——
-//! 遇到不认识的头部会明确报错，不猜。
+//! （含两端端点标记 `-->` / `<-->` / `o--o` / `x--x`，以及用重复字符拉长的
+//! `--->` / `-..->` / `====>`）、`A & B` 多源/多目标、subgraph（含 `id ["标题"]` 与
+//! 「连到 subgraph」的跨容器边）、classDef/class/style、direction、`%%` 注释。
+//! 序列图 / 状态图 / 甘特等不在范围内 —— 遇到不认识的头部会明确报错，不猜。
 
 use std::collections::HashMap;
 use std::fmt::Write as _;
@@ -137,9 +138,18 @@ impl Shape {
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Stmt {
     Direction(String),
-    SubgraphOpen(String),
+    /// `subgraph id ["标题"]`：`id` 是**引用名**（跨 subgraph 的边用它），`label` 是显示文本。
+    ///
+    /// 两者必须分开：Mermaid 的 `subgraph L_MGMT ["🔍 管理平面…"]` 里
+    /// `L_VALUE -. 说明 .-> L_STORAGE` 这种「容器到容器」的边引用的是 **id**，
+    /// 而画在框上的字是括号里的标题。早先把整行 `L_MGMT ["…"]` 当一个名字，结果
+    /// DOT 的 cluster 标签里出现方括号与引号、D2 的容器名也被污染成带引号的怪串。
+    SubgraphOpen { id: Option<String>, label: String },
     SubgraphClose,
-    /// 一条链：操作数与连接件交替，`operands.len() == links.len() + 1`
+    /// 一条链：操作数与连接件交替（通常 `operands.len() == links.len() + 1`）。
+    ///
+    /// 唯一的例外是「只有端点、没有边」的声明行（`A & B`）：那时 `links` 为空，
+    /// 操作数只用来登记节点 —— 取边的地方必须 `links.get(i - 1)`，不能直接下标。
     Chain { operands: Vec<Operand>, links: Vec<Link> },
     ClassDef { name: String, style: String },
     ClassAssign { name: String, ids: Vec<String> },
@@ -187,9 +197,8 @@ fn parse(src: &str) -> Result<(String, Vec<Stmt>), String> {
 
         // 一条语句可能以 `;` 结尾，甚至一行里放多条
         for piece in split_statements(line) {
-            if let Some(stmt) = parse_stmt(&piece, idx + 1)? {
-                stmts.push(stmt);
-            }
+            // `A & B --> C` 会展开成多条链（笛卡尔积），所以这里收的是**一批**语句。
+            stmts.extend(parse_stmt(&piece, idx + 1)?);
         }
     }
 
@@ -250,42 +259,42 @@ fn map_direction(dir: &str) -> Result<String, String> {
     .to_string())
 }
 
-fn parse_stmt(text: &str, line_no: usize) -> Result<Option<Stmt>, String> {
+/// 解析一条语句。返回**一批**：`A & B --> C & D` 会展开成 4 条链（笛卡尔积）。
+fn parse_stmt(text: &str, line_no: usize) -> Result<Vec<Stmt>, String> {
     let t = text.trim().trim_end_matches(';').trim();
     if t.is_empty() {
-        return Ok(None);
+        return Ok(Vec::new());
     }
 
     if t == "end" {
-        return Ok(Some(Stmt::SubgraphClose));
+        return Ok(vec![Stmt::SubgraphClose]);
     }
     if let Some(rest) = t.strip_prefix("subgraph") {
-        let name = rest.trim().trim_matches('"').trim().to_string();
-        return Ok(Some(Stmt::SubgraphOpen(name)));
+        return Ok(vec![parse_subgraph(rest)]);
     }
     if let Some(rest) = t.strip_prefix("direction ") {
-        return Ok(Some(Stmt::Direction(map_direction(rest.trim())?)));
+        return Ok(vec![Stmt::Direction(map_direction(rest.trim())?)]);
     }
     if let Some(rest) = t.strip_prefix("classDef ") {
         let (name, style) = split_once_ws(rest);
-        return Ok(Some(Stmt::ClassDef { name, style }));
+        return Ok(vec![Stmt::ClassDef { name, style }]);
     }
     if let Some(rest) = t.strip_prefix("class ") {
         let (name, ids) = match rest.rsplit_once(' ') {
             Some((ids, name)) => (name.to_string(), ids.to_string()),
-            None => return Ok(Some(Stmt::Ignored)),
+            None => return Ok(vec![Stmt::Ignored]),
         };
-        return Ok(Some(Stmt::ClassAssign {
+        return Ok(vec![Stmt::ClassAssign {
             name,
             ids: ids.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect(),
-        }));
+        }]);
     }
     if let Some(rest) = t.strip_prefix("style ") {
         // 别把 `style --> B` 当成 style 语句（节点叫 style 也是合法的）
         if !rest.starts_with(['-', '=']) {
             let (id, style) = split_once_ws(rest);
             if !style.is_empty() {
-                return Ok(Some(Stmt::StyleAssign { id, style }));
+                return Ok(vec![Stmt::StyleAssign { id, style }]);
             }
         }
     }
@@ -295,18 +304,13 @@ fn parse_stmt(text: &str, line_no: usize) -> Result<Option<Stmt>, String> {
         || t.starts_with("accTitle")
         || t.starts_with("accDescr")
     {
-        return Ok(Some(Stmt::Ignored));
+        return Ok(vec![Stmt::Ignored]);
     }
 
-    // `A & B --> C` 的多源/多目标：宁可明确报错，也不要静默只取第一个 ——
-    // 那样用户会得到一张少了一半连线的图，还以为转换成功了。
-    if t.contains('&') {
-        return Err(format!(
-            "第 {line_no} 行：`&` 多源/多目标语法尚未支持（请拆成多条边再转）"
-        ));
-    }
-
-    let (operands, links, leftover) = parse_chain(t)
+    // `A & B --> C` 的多源/多目标：按 Mermaid 的语义展开成两两相连的边
+    // （`A & B --> C & D` 是 4 条），而不是像早先那样直接报「尚未支持」——
+    // 真实语料里 `DDM --> A & B & C` 这种写法很常见，报错等于整份文件转不出来。
+    let (groups, links, leftover) = parse_chain(t)
         .ok_or_else(|| format!("第 {line_no} 行：看不懂的语句「{}」", truncate(t, 60)))?;
     if leftover {
         return Err(format!(
@@ -314,7 +318,58 @@ fn parse_stmt(text: &str, line_no: usize) -> Result<Option<Stmt>, String> {
             truncate(t, 60)
         ));
     }
-    Ok(Some(Stmt::Chain { operands, links }))
+    Ok(expand_groups(groups, links))
+}
+
+/// `subgraph` 后面的部分 → 引用名 + 显示标题。
+///
+/// Mermaid 的写法有三种，都要认（真实语料三种都有）：
+/// `subgraph 风控`（只有名字）、`subgraph L_MGMT ["🔍 管理平面"]`（id + 括号标题）、
+/// `subgraph "标题里有空格"`（整段就是标题，没有单独 id）。
+fn parse_subgraph(rest: &str) -> Stmt {
+    let t = rest.trim();
+    // 括号标题：`id [标题]` / `id["标题"]`。取第一个 `[` 之前的是 id。
+    if let Some(open) = t.find('[') {
+        let id = t[..open].trim().trim_matches('"').trim();
+        let inner = t[open + 1..].trim();
+        let inner = inner.strip_suffix(']').unwrap_or(inner);
+        let label = strip_one_quote_pair(inner.trim()).to_string();
+        let id = (!id.is_empty()).then(|| id.to_string());
+        let label = if label.is_empty() { id.clone().unwrap_or_default() } else { label };
+        return Stmt::SubgraphOpen { id, label };
+    }
+    // 没有括号：整段就是名字（可能被引号包住）。这时引用名与标题同一个。
+    let label = strip_one_quote_pair(t).trim().to_string();
+    Stmt::SubgraphOpen {
+        id: Some(label.clone()).filter(|s| !s.is_empty()),
+        label,
+    }
+}
+
+/// 把「操作数分组 + 连接件」展开成两两相连的链（`&` 的笛卡尔积）。
+///
+/// `[A, B] --x--> [C, D]` 展开成 `A->C` / `A->D` / `B->C` / `B->D` —— 与 Mermaid
+/// 把 `&` 当作「多重端点」的语义一致。单组（`A & B` 不带边）保持一条声明链。
+fn expand_groups(groups: Vec<Vec<Operand>>, links: Vec<Link>) -> Vec<Stmt> {
+    debug_assert_eq!(groups.len(), links.len() + 1, "parse_chain 保证分组比连接件多一个");
+    // 每个分组只有一个操作数 ⇒ 本来就是一条普通链，原样交出去（保住链式写法）
+    if links.is_empty() || groups.iter().all(|g| g.len() == 1) {
+        let operands = groups.into_iter().flatten().collect();
+        return vec![Stmt::Chain { operands, links }];
+    }
+    let mut out = Vec::new();
+    for (i, pair) in groups.windows(2).enumerate() {
+        let link = links[i].clone();
+        for a in &pair[0] {
+            for b in &pair[1] {
+                out.push(Stmt::Chain {
+                    operands: vec![a.clone(), b.clone()],
+                    links: vec![link.clone()],
+                });
+            }
+        }
+    }
+    out
 }
 
 fn split_once_ws(s: &str) -> (String, String) {
@@ -333,18 +388,30 @@ fn truncate(s: &str, n: usize) -> String {
     }
 }
 
-/// `A([开始]) --> B{判断} -- 否 --> C` → 操作数与连接件交替。
-fn parse_chain(text: &str) -> Option<(Vec<Operand>, Vec<Link>, bool)> {
+/// `A([开始]) --> B{判断} -- 否 --> C` → 操作数分组与连接件交替。
+///
+/// 分组是 `&` 分隔的多端点（`A & B --> C`），每个分组至少一个操作数。
+fn parse_chain(text: &str) -> Option<(Vec<Vec<Operand>>, Vec<Link>, bool)> {
     let bytes = text.as_bytes();
     let mut i = 0usize;
-    let mut operands = Vec::new();
+    let mut groups: Vec<Vec<Operand>> = Vec::new();
     let mut links = Vec::new();
 
     loop {
         i = skip_ws(bytes, i);
-        let (op, ni) = parse_operand(text, i)?;
-        i = ni;
-        operands.push(op);
+        // 一组：`op` 或 `op & op & …`
+        let mut group = Vec::new();
+        loop {
+            let (op, ni) = parse_operand(text, i)?;
+            group.push(op);
+            i = skip_ws(bytes, ni);
+            if i < bytes.len() && bytes[i] == b'&' {
+                i = skip_ws(bytes, i + 1);
+                continue;
+            }
+            break;
+        }
+        groups.push(group);
 
         let save = i;
         i = skip_ws(bytes, i);
@@ -360,11 +427,11 @@ fn parse_chain(text: &str) -> Option<(Vec<Operand>, Vec<Link>, bool)> {
         }
     }
 
-    if operands.len() != links.len() + 1 {
+    if groups.len() != links.len() + 1 {
         return None;
     }
     // 尾部还有内容 ⇒ 没解析干净，交给调用方报错（别静默丢掉）
-    Some((operands, links, !text[i..].trim().is_empty()))
+    Some((groups, links, !text[i..].trim().is_empty()))
 }
 
 fn skip_ws(bytes: &[u8], mut i: usize) -> usize {
@@ -391,11 +458,8 @@ fn parse_operand(text: &str, start: usize) -> Option<(Operand, usize)> {
         return None;
     }
 
-    // `&` 分隔的多源/多目标：只取第一个，其余交给调用方继续解析（会被忽略并计入 notes）
-    if chars[ci] == '&' {
-        ci += 1;
-    }
-
+    // `&` 分隔的多端点由 `parse_chain` 在分组层处理，这里不再跳过它 ——
+    // 真在操作数位置遇到 `&` 说明语法不对，让它明确失败。
     let id_start = ci;
     loop {
         while ci < chars.len() && is_id_char(chars[ci]) {
@@ -573,8 +637,9 @@ fn char_to_byte(text: &str, ci: usize) -> usize {
     text.char_indices().nth(ci).map(|(b, _)| b).unwrap_or(text.len())
 }
 
-/// 连接件：`-->` / `---` / `-.->` / `-.-` / `==>` / `===`，以及带内联标签的
-/// `-- 是 -->` / `-. 是 .->` / `== 是 ==>`，还有 `-->|是|`。
+/// 连接件：`-->` / `---` / `-.->` / `-.-` / `==>` / `===`（每种都允许把字符重复拉长，
+/// 如 `--->` / `-..->` / `====>`），以及带内联标签的
+/// `-- 是 -->` / `-. 是 .->` / `== 是 ==>`，还有 `-->|是|` / `-->|"带 空格"|`。
 ///
 /// 两端端点标记（Mermaid 的 `[xo<]` / `[-xo>]`）在这里一并吃掉：
 /// `<-->`（双向箭头）、`o--o` / `x--x`、单端点的 `--o` / `--x`、以及 `<-- 文本 -->`。
@@ -592,60 +657,54 @@ fn parse_link(text: &str, start: usize) -> Option<(Link, usize)> {
         _ => (None, start),
     };
     let rest = &text[body_start..];
-    if !rest.starts_with('-') && !rest.starts_with('=') {
-        return None;
-    }
 
-    // 1) 先试无标签的整token（长的优先，否则 `-->` 会被 `--` 抢走）
-    for (tok, family) in [
-        ("-.->", Family::Dotted),
-        ("-.-", Family::Dotted),
-        ("-->", Family::Solid),
-        ("---", Family::Solid),
-        ("--o", Family::Solid),
-        ("--x", Family::Solid),
-        ("==>", Family::Thick),
-        ("===", Family::Thick),
-        ("==o", Family::Thick),
-        ("==x", Family::Thick),
-    ] {
-        if let Some(after) = rest.strip_prefix(tok) {
-            // 后面可能跟 `|标签|`
-            let (label, used) = parse_pipe_label(after);
-            let (source, target) = link_ends(marked, end_marker(tok));
-            return Some((
-                Link { family, source, target, label },
-                body_start + tok.len() + used,
-            ));
-        }
+    // 1) 先试「纯连接件」（不带内联标签）。Mermaid 允许把连接件加长
+    //    （`--->` / `====>` / `-..->` 与更长的重复），所以这里按**游程**扫描，
+    //    而不是枚举几个固定 token —— 枚举法下 `DP ===>|"标签"| DDM` 会把 `===>`
+    //    切成 `===` + 残留 `>`，整条边报「看不懂的语句」。
+    if let Some((tok_len, family, target)) = scan_link_token(rest) {
+        let (label, used) = parse_pipe_label(&rest[tok_len..]);
+        let (source, target) = link_ends(marked, target);
+        return Some((
+            Link { family, source, target, label },
+            body_start + tok_len + used,
+        ));
     }
 
     // 2) 带内联标签：`-- text -->` / `-. text .->` / `== text ==>`（也允许无箭头的收尾）
-    let (lead, family, closers): (&str, Family, &[&str]) = if rest.starts_with("-.") {
-        ("-.", Family::Dotted, &[".->", ".-"])
+    let (lead, family): (&str, Family) = if rest.starts_with("-.") {
+        ("-.", Family::Dotted)
     } else if rest.starts_with("==") {
-        ("==", Family::Thick, &["==>", "==o", "==x", "=="])
+        ("==", Family::Thick)
     } else if rest.starts_with("--") {
-        ("--", Family::Solid, &["-->", "--o", "--x", "--"])
+        ("--", Family::Solid)
     } else {
         return None;
     };
 
     let body = &rest[lead.len()..];
-    // 取最早出现的收尾符（有端点的那个优先，避免 `-->` 里的 `--` 抢先）
-    let mut best: Option<(usize, &str)> = None;
-    for c in closers {
-        if let Some(at) = body.find(c) {
-            match best {
-                Some((b, _)) if b <= at => {}
-                _ => best = Some((at, c)),
+    // 虚线的收尾是首部的镜像（`.->` / `.-`），不以 `-` 开头，单独找
+    let (at, closer_len, target) = if family == Family::Dotted {
+        let arrow = body.find(".->").map(|a| (a, 3, End::Point));
+        let plain = body.find(".-").map(|a| (a, 2, End::None));
+        match (arrow, plain) {
+            (Some(a), Some(p)) => {
+                if p.0 < a.0 {
+                    p
+                } else {
+                    a
+                }
             }
+            (Some(a), None) => a,
+            (None, Some(p)) => p,
+            (None, None) => return None,
         }
-    }
-    let (at, closer) = best?;
+    } else {
+        find_family_token(body, family)?
+    };
     let label = body[..at].trim().trim_matches('"').trim_matches('\'').trim();
-    let used = lead.len() + at + closer.len();
-    let (source, target) = link_ends(marked, end_marker(closer));
+    let used = lead.len() + at + closer_len;
+    let (source, target) = link_ends(marked, target);
     Some((
         Link {
             family,
@@ -657,13 +716,87 @@ fn parse_link(text: &str, start: usize) -> Option<(Link, usize)> {
     ))
 }
 
-/// 连接件 token 的末位字符 → 目标端的端点标记。
-fn end_marker(tok: &str) -> End {
-    match tok.as_bytes().last() {
-        Some(b'>') => End::Point,
-        Some(b'o') => End::Circle,
-        Some(b'x') => End::Cross,
-        _ => End::None,
+/// 扫描一个连接件游程：返回 (字节长度, 线型, 目标端标记)。
+///
+/// 规则与 Mermaid 一致：
+/// * 实线是 `-` 的游程，粗线是 `=` 的游程，虚线是 `-.` 后跟 `.` / `-` 的游程；
+/// * 游程后面紧跟 `>` / `o` / `x` ⇒ 那是目标端标记；
+/// * 没有端点标记时，**至少三个字符**才算一条线（`---` / `===` / `-.-`），
+///   两个字符的 `--` / `==` 只是「带内联标签的连接件首部」，留给调用方接着找收尾。
+fn scan_link_token(rest: &str) -> Option<(usize, Family, End)> {
+    let b = rest.as_bytes();
+
+    // 虚线要先判：它也以 `-` 开头
+    if rest.starts_with("-.") {
+        let mut i = 2;
+        while i < b.len() && (b[i] == b'.' || b[i] == b'-') {
+            i += 1;
+        }
+        if let Some(end) = end_marker_at(b.get(i).copied()) {
+            return Some((i + 1, Family::Dotted, end));
+        }
+        if i >= 3 && b[i - 1] == b'.' {
+            return Some((i, Family::Dotted, End::None));
+        }
+        return None;
+    }
+
+    // 粗线
+    if b.first() == Some(&b'=') {
+        let run = b.iter().take_while(|c| **c == b'=').count();
+        if run >= 2 {
+            if let Some(end) = end_marker_at(b.get(run).copied()) {
+                return Some((run + 1, Family::Thick, end));
+            }
+            if run >= 3 {
+                return Some((run, Family::Thick, End::None));
+            }
+        }
+        return None;
+    }
+
+    // 实线
+    if b.first() == Some(&b'-') {
+        let run = b.iter().take_while(|c| **c == b'-').count();
+        if run >= 2 {
+            if let Some(end) = end_marker_at(b.get(run).copied()) {
+                return Some((run + 1, Family::Solid, end));
+            }
+            if run >= 3 {
+                return Some((run, Family::Solid, End::None));
+            }
+        }
+    }
+    None
+}
+
+/// 指定的线型在正文里最早出现的收尾 token（内联标签用）。
+fn find_family_token(body: &str, family: Family) -> Option<(usize, usize, End)> {
+    let b = body.as_bytes();
+    for i in 0..b.len() {
+        if !body.is_char_boundary(i) {
+            continue;
+        }
+        // 只在连接件可能的起始字符上试，避免对每个字符做一次游程扫描
+        if b[i] != b'-' && b[i] != b'=' {
+            continue;
+        }
+        if let Some((len, fam, end)) = scan_link_token(&body[i..]) {
+            if fam == family {
+                return Some((i, len, end));
+            }
+        }
+    }
+    None
+}
+
+/// 端点标记字符 → `End`。
+fn end_marker_at(c: Option<u8>) -> Option<End> {
+    match c {
+        Some(b'>') => Some(End::Point),
+        Some(b'o') => Some(End::Circle),
+        Some(b'x') => Some(End::Cross),
+        _ => None,
     }
 }
 
@@ -690,7 +823,8 @@ fn parse_pipe_label(s: &str) -> (Option<String>, usize) {
     }
     match t[1..].find('|') {
         Some(at) => {
-            let label = t[1..1 + at].trim().to_string();
+            // Mermaid 允许 `-->|"带 空格 的标签"|`：成对引号只是定界，不该画进标签
+            let label = strip_one_quote_pair(t[1..1 + at].trim()).trim().to_string();
             (Some(label), skipped + 1 + at + 1)
         }
         None => (None, 0),
@@ -820,6 +954,20 @@ pub fn mermaid_to_dot(src: &str) -> Result<Conversion, String> {
     let mut nested_direction = false;
     let mut ignored_directive = false;
 
+    // subgraph 的引用名 → 簇下标。边可以先于 subgraph 定义出现，所以先扫一遍收集。
+    let mut subgraph_idx: HashMap<String, usize> = HashMap::new();
+    {
+        let mut n = 0usize;
+        for st in &stmts {
+            if let Stmt::SubgraphOpen { id, .. } = st {
+                if let Some(id) = id {
+                    subgraph_idx.entry(id.clone()).or_insert(n);
+                }
+                n += 1;
+            }
+        }
+    }
+
     for st in &stmts {
         match st {
             Stmt::ClassDef { name, style } => {
@@ -841,10 +989,11 @@ pub fn mermaid_to_dot(src: &str) -> Result<Conversion, String> {
                     let _ = d;
                 }
             }
-            Stmt::SubgraphOpen(name) => {
+            Stmt::SubgraphOpen { id, label } => {
                 let idx = clusters.len();
                 clusters.push(Cluster {
-                    name: if name.is_empty() { format!("cluster_{idx}") } else { name.clone() },
+                    name: label.clone(),
+                    id: id.clone(),
                     parent: stack.last().copied(),
                     children: Vec::new(),
                 });
@@ -869,6 +1018,16 @@ pub fn mermaid_to_dot(src: &str) -> Result<Conversion, String> {
             }
             Stmt::Chain { operands, links } => {
                 for (i, op) in operands.iter().enumerate() {
+                    // subgraph 也能当边的端点（`subgraph A -.-> subgraph B`）：它不是一个节点，
+                    // 别在 order / label_of 里造出一个同名占位节点（那会在图上多出一对空框）。
+                    if subgraph_idx.contains_key(&op.id) {
+                        if i > 0 {
+                            if let Some(link) = links.get(i - 1) {
+                                attach_edge(&mut edges, &mut used_ends, &operands[i - 1].id, &op.id, link);
+                            }
+                        }
+                        continue;
+                    }
                     if !label_of.contains_key(&op.id) {
                         order.push(op.id.clone());
                         cluster_of.insert(op.id.clone(), stack.last().copied());
@@ -896,14 +1055,9 @@ pub fn mermaid_to_dot(src: &str) -> Result<Conversion, String> {
                         used_shapes.push(op.shape);
                     }
                     if i > 0 {
-                        let prev = &operands[i - 1].id;
-                        let link = &links[i - 1];
-                        for e in [link.source, link.target] {
-                            if matches!(e, End::Circle | End::Cross) && !used_ends.contains(&e) {
-                                used_ends.push(e);
-                            }
+                        if let Some(link) = links.get(i - 1) {
+                            attach_edge(&mut edges, &mut used_ends, &operands[i - 1].id, &op.id, link);
                         }
-                        edges.push((prev.clone(), op.id.clone(), link.clone()));
                     }
                 }
             }
@@ -931,6 +1085,13 @@ pub fn mermaid_to_dot(src: &str) -> Result<Conversion, String> {
     let _ = writeln!(out, "    rankdir={direction};");
     let _ = writeln!(out, "    node [shape=box, style=\"rounded\", fontname=\"Helvetica\"];");
     let _ = writeln!(out, "    edge [fontname=\"Helvetica\"];");
+    // cluster 之间的边要靠 compound + ltail/lhead 才能落在簇的边界上
+    let has_cluster_edge = edges
+        .iter()
+        .any(|(f, t, _)| subgraph_idx.contains_key(f) || subgraph_idx.contains_key(t));
+    if has_cluster_edge {
+        let _ = writeln!(out, "    compound=true;");
+    }
 
     for id in &order {
         if cluster_of.get(id).copied().flatten().is_none() {
@@ -945,7 +1106,17 @@ pub fn mermaid_to_dot(src: &str) -> Result<Conversion, String> {
     }
 
     for (from, to, link) in &edges {
-        emit_edge(&mut out, from, to, link, 1);
+        emit_edge(
+            &mut out,
+            from,
+            to,
+            link,
+            1,
+            &subgraph_idx,
+            &order,
+            &cluster_of,
+            &clusters,
+        );
     }
     let _ = writeln!(out, "}}");
 
@@ -998,9 +1169,18 @@ pub fn mermaid_to_dot(src: &str) -> Result<Conversion, String> {
 
 /// 一个 subgraph 在 DOT 里的落点。
 struct Cluster {
+    /// 显示标题（`subgraph id ["标题"]` 里括号中的那一段）
     name: String,
+    /// Mermaid 里用来引用的名字（跨 subgraph 的边用它）。没有单独 id 时是 `None`。
+    id: Option<String>,
     parent: Option<usize>,
     children: Vec<usize>,
+}
+
+/// 容器在目标格式里的引用名：有专门 id 就用 id，否则用标题
+/// （`subgraph 风控` 这种没有单独 id 的写法，名字本身就是引用名）。
+fn cluster_ref(c: &Cluster) -> &str {
+    c.id.as_deref().filter(|s| !s.is_empty()).unwrap_or(&c.name)
 }
 
 fn emit_node(
@@ -1052,7 +1232,18 @@ fn emit_cluster(
     let _ = writeln!(out, "{pad}}}");
 }
 
-fn emit_edge(out: &mut String, from: &str, to: &str, link: &Link, indent: usize) {
+#[allow(clippy::too_many_arguments)]
+fn emit_edge(
+    out: &mut String,
+    from: &str,
+    to: &str,
+    link: &Link,
+    indent: usize,
+    subgraph_idx: &HashMap<String, usize>,
+    order: &[String],
+    cluster_of: &HashMap<String, Option<usize>>,
+    clusters: &[Cluster],
+) {
     let pad = "    ".repeat(indent);
     let mut attrs: Vec<String> = Vec::new();
     if let Some(label) = &link.label {
@@ -1070,12 +1261,73 @@ fn emit_edge(out: &mut String, from: &str, to: &str, link: &Link, indent: usize)
         // 无端点，以及圆圈 / 叉（DOT 没有这两种端点形状）—— 都退化成不带端点
         _ => attrs.push("dir=none".into()),
     }
+
+    // 端点可能是 subgraph：DOT 不能直接连 cluster，只能连到簇里的某个节点，
+    // 再用 ltail / lhead 把这条边裁到簇的边界上（graph 里已写了 `compound=true`）。
+    let (tail_id, tail_cluster) = anchor_end(from, subgraph_idx, clusters, order, cluster_of);
+    let (head_id, head_cluster) = anchor_end(to, subgraph_idx, clusters, order, cluster_of);
+    if let Some(i) = tail_cluster {
+        attrs.push(format!("ltail=cluster_{i}"));
+    }
+    if let Some(i) = head_cluster {
+        attrs.push(format!("lhead=cluster_{i}"));
+    }
+
     let suffix = if attrs.is_empty() {
         String::new()
     } else {
         format!(" [{}]", attrs.join(", "))
     };
-    let _ = writeln!(out, "{pad}{} -> {}{suffix};", dot_id(from), dot_id(to));
+    let _ = writeln!(out, "{pad}{} -> {}{suffix};", dot_id(&tail_id), dot_id(&head_id));
+}
+
+/// 边的一端落在哪个节点上；那一端若是 subgraph，额外返回簇下标（要写 ltail/lhead）。
+fn anchor_end(
+    id: &str,
+    subgraph_idx: &HashMap<String, usize>,
+    clusters: &[Cluster],
+    order: &[String],
+    cluster_of: &HashMap<String, Option<usize>>,
+) -> (String, Option<usize>) {
+    let Some(&idx) = subgraph_idx.get(id) else {
+        return (id.to_string(), None);
+    };
+    // 簇里的第一个节点当代表；节点可以属于子簇（祖先簇的 lhead/ltail 同样有效）
+    let anchor = order
+        .iter()
+        .find(|nid| {
+            let mut cur = cluster_of.get(*nid).copied().flatten();
+            while let Some(c) = cur {
+                if c == idx {
+                    return true;
+                }
+                cur = clusters[c].parent;
+            }
+            false
+        })
+        .cloned();
+    match anchor {
+        Some(a) => (a, Some(idx)),
+        // 空簇（只有 subgraph 没有节点）：没有可连的节点，退回同名占位节点，
+        // 至少不会把这条关系整条丢掉。
+        None => (id.to_string(), None),
+    }
+}
+
+/// 记一条边，并登记它用到的圆圈 / 叉端点（DOT 没有这两种形状，要进 notes）。
+fn attach_edge(
+    edges: &mut Vec<(String, String, Link)>,
+    used_ends: &mut Vec<End>,
+    from: &str,
+    to: &str,
+    link: &Link,
+) {
+    for e in [link.source, link.target] {
+        if matches!(e, End::Circle | End::Cross) && !used_ends.contains(&e) {
+            used_ends.push(e);
+        }
+    }
+    edges.push((from.to_string(), to.to_string(), link.clone()));
 }
 
 /* ------------------------------------------------------------------ Mermaid → D2 */
@@ -1187,6 +1439,20 @@ pub fn mermaid_to_d2(src: &str) -> Result<Conversion, String> {
     }
 
     /* ---------- 第二遍：结构 ---------- */
+    // subgraph 的引用名 → 容器下标（与 DOT 侧同一套语义：跨 subgraph 的边引用 id）
+    let mut subgraph_idx: HashMap<String, usize> = HashMap::new();
+    {
+        let mut n = 0usize;
+        for st in &stmts {
+            if let Stmt::SubgraphOpen { id, .. } = st {
+                if let Some(id) = id {
+                    subgraph_idx.entry(id.clone()).or_insert(n);
+                }
+                n += 1;
+            }
+        }
+    }
+
     let mut order: Vec<String> = Vec::new();
     let mut label_of: HashMap<String, (Option<String>, Shape)> = HashMap::new();
     let mut container_of: HashMap<String, Option<usize>> = HashMap::new();
@@ -1212,10 +1478,11 @@ pub fn mermaid_to_d2(src: &str) -> Result<Conversion, String> {
                     container_direction.insert(top, d2_direction(d).to_string());
                 }
             }
-            Stmt::SubgraphOpen(name) => {
+            Stmt::SubgraphOpen { id, label } => {
                 let idx = containers.len();
                 containers.push(Cluster {
-                    name: if name.is_empty() { format!("组{}", idx + 1) } else { name.clone() },
+                    name: if label.is_empty() { format!("组{}", idx + 1) } else { label.clone() },
+                    id: id.clone(),
                     parent: stack.last().copied(),
                     children: Vec::new(),
                 });
@@ -1240,6 +1507,15 @@ pub fn mermaid_to_d2(src: &str) -> Result<Conversion, String> {
             }
             Stmt::Chain { operands, links } => {
                 for (i, op) in operands.iter().enumerate() {
+                    // subgraph 当端点：D2 里容器本身就能连边，别再声明同名节点
+                    if subgraph_idx.contains_key(&op.id) {
+                        if i > 0 {
+                            if let Some(link) = links.get(i - 1) {
+                                attach_d2_edge(&mut edges, &mut used_families, &mut used_ends, &operands[i - 1].id, &op.id, link);
+                            }
+                        }
+                        continue;
+                    }
                     if !label_of.contains_key(&op.id) {
                         order.push(op.id.clone());
                         container_of.insert(op.id.clone(), stack.last().copied());
@@ -1266,16 +1542,9 @@ pub fn mermaid_to_d2(src: &str) -> Result<Conversion, String> {
                         used_shapes.push(op.shape);
                     }
                     if i > 0 {
-                        let link = &links[i - 1];
-                        if link.family != Family::Solid && !used_families.contains(&link.family) {
-                            used_families.push(link.family);
+                        if let Some(link) = links.get(i - 1) {
+                            attach_d2_edge(&mut edges, &mut used_families, &mut used_ends, &operands[i - 1].id, &op.id, link);
                         }
-                        for e in [link.source, link.target] {
-                            if matches!(e, End::Circle | End::Cross) && !used_ends.contains(&e) {
-                                used_ends.push(e);
-                            }
-                        }
-                        edges.push((operands[i - 1].id.clone(), op.id.clone(), link.clone()));
                     }
                 }
             }
@@ -1415,6 +1684,26 @@ fn d2_style_inline(kv: &[(String, String)]) -> String {
         .join("; ")
 }
 
+/// 记一条 D2 边，并登记它用到的线型 / 端点（notes 要用）。
+fn attach_d2_edge(
+    edges: &mut Vec<(String, String, Link)>,
+    used_families: &mut Vec<Family>,
+    used_ends: &mut Vec<End>,
+    from: &str,
+    to: &str,
+    link: &Link,
+) {
+    if link.family != Family::Solid && !used_families.contains(&link.family) {
+        used_families.push(link.family);
+    }
+    for e in [link.source, link.target] {
+        if matches!(e, End::Circle | End::Cross) && !used_ends.contains(&e) {
+            used_ends.push(e);
+        }
+    }
+    edges.push((from.to_string(), to.to_string(), link.clone()));
+}
+
 fn emit_d2_edge(out: &mut String, from: &str, to: &str, link: &Link, indent: usize) {
     let pad = "    ".repeat(indent);
     let arrow = match (link.source, link.target) {
@@ -1460,6 +1749,11 @@ impl D2Emit {
     /// 节点在全文里的引用名：容器里的节点要写点号路径（`集成层.网关`），
     /// 否则顶层那行边会造出一个新的同名节点。
     fn path_of(&self, id: &str) -> String {
+        // subgraph 本身也能当边的端点（`L_VALUE -.-> L_STORAGE`）：走容器的完整路径，
+        // 嵌套容器也一样（否则 D2 会在顶层造一个同名空容器）。
+        if let Some(idx) = self.containers.iter().position(|c| cluster_ref(c) == id) {
+            return self.container_path(idx);
+        }
         match self.container_of.get(id).copied().flatten() {
             Some(idx) => format!("{}.{}", self.container_path(idx), d2_id(id)),
             None => d2_id(id),
@@ -1467,10 +1761,10 @@ impl D2Emit {
     }
 
     fn container_path(&self, idx: usize) -> String {
-        let mut segs: Vec<String> = vec![d2_id(&self.containers[idx].name)];
+        let mut segs: Vec<String> = vec![d2_id(cluster_ref(&self.containers[idx]))];
         let mut cur = self.containers[idx].parent;
         while let Some(p) = cur {
-            segs.push(d2_id(&self.containers[p].name));
+            segs.push(d2_id(cluster_ref(&self.containers[p])));
             cur = self.containers[p].parent;
         }
         segs.reverse();
@@ -1509,7 +1803,13 @@ impl D2Emit {
     fn emit_container(&self, out: &mut String, idx: usize, order: &[String], indent: usize) {
         let pad = "    ".repeat(indent);
         let c = &self.containers[idx];
-        let _ = writeln!(out, "{pad}{}: {{", d2_id(&c.name));
+        let r = cluster_ref(c);
+        if c.name == r {
+            let _ = writeln!(out, "{pad}{}: {{", d2_id(r));
+        } else {
+            // 引用名与显示标题不同：`id: "标题" {`（Mermaid 的 `subgraph id ["标题"]`）
+            let _ = writeln!(out, "{pad}{}: {} {{", d2_id(r), d2_str(&c.name));
+        }
         if let Some(dir) = self.container_direction.get(&idx) {
             let _ = writeln!(out, "{pad}    direction: {dir}");
         }
@@ -1857,6 +2157,71 @@ mod tests {
         // `<--` 的 `<` 在 Mermaid 里不产生端点，但两个字符的 `--` 我们的词法不认 ⇒ 明确报错
         let e = mermaid_to_dot("flowchart LR\n    A <-- B\n").unwrap_err();
         assert!(e.contains("第 2 行"), "{e}");
+    }
+
+    /// 加长连接件：`--->` / `====>` / `-..->`（Mermaid 允许重复连接件字符把线拉长）。
+    ///
+    /// 修前词法是**枚举固定 token**：`===>` 只吃到 `===`、剩下的 `>` 被当成节点名的开头，
+    /// 于是真实语料里 `DP ===>|"发布至服务网关"| DDM` 整行报「看不懂的语句」。
+    #[test]
+    fn longer_links_are_recognised_not_split() {
+        let c = mermaid_to_dot(
+            "flowchart LR\n    A ---> B\n    B ===>|发布| C\n    C -..-> D\n    D --> E\n",
+        )
+        .unwrap();
+        assert!(c.body.contains("A -> B;"), "{}", c.body);
+        assert!(c.body.contains("B -> C [label=\"发布\", penwidth=2];"), "{}", c.body);
+        assert!(c.body.contains("C -> D [style=\"dotted\"];"), "{}", c.body);
+        assert!(c.body.contains("D -> E;"), "{}", c.body);
+    }
+
+    /// 管道标签允许成对引号（`-->|"带 空格 的标签"|`）：引号是定界，不该画进标签。
+    #[test]
+    fn quoted_pipe_label_drops_the_quotes() {
+        let c = mermaid_to_dot("flowchart LR\n    A -->|\"发布至服务网关\"| B\n").unwrap();
+        assert!(c.body.contains("A -> B [label=\"发布至服务网关\"];"), "{}", c.body);
+    }
+
+    /// `&` 多源 / 多目标：`A --> B & C` 是两条边，`A & B --> C` 也是两条。
+    ///
+    /// 修前这一行直接报「`&` 多源/多目标语法尚未支持」，整份文件转不出来。
+    #[test]
+    fn ampersand_expands_to_one_edge_per_pair() {
+        let c = mermaid_to_dot("flowchart TB\n    A --> B & C\n    C & B --> D\n").unwrap();
+        for e in ["A -> B", "A -> C", "B -> D", "C -> D"] {
+            assert!(c.body.contains(&format!("{e};")) || c.body.contains(&format!("{e} ")), "缺 {e}：{}", c.body);
+        }
+        // 每个端点只声明一次
+        assert_eq!(c.body.matches("B [shape=").count(), 1, "{}", c.body);
+        assert_eq!(c.body.matches("C [shape=").count(), 1, "{}", c.body);
+    }
+
+    /// 只有端点、没有边的 `A & B`：能当两条声明，且**不能 panic**
+    /// （之前边与操作数同下标取用，这种行会越界）。
+    #[test]
+    fn bare_multi_node_line_declares_both_without_panicking() {
+        let c = mermaid_to_dot("flowchart LR\n    A & B\n").unwrap();
+        assert!(c.body.contains("A [") && c.body.contains("B ["), "{}", c.body);
+        let d = mermaid_to_d2("flowchart LR\n    A & B\n").unwrap();
+        assert!(d.body.contains('A') && d.body.contains('B'), "{}", d.body);
+    }
+
+    /// `subgraph id ["标题"]`：id 是引用名、标题是画在框上的字，两者不能混成一个。
+    /// 容器到容器的边只能靠 `compound` + `ltail`/`lhead` 落到簇边界上，
+    /// 而且**不能**因此多出两个同名占位节点。
+    #[test]
+    fn subgraph_id_and_label_are_separate_and_cluster_edges_use_compound() {
+        let src = "flowchart TB\n    subgraph L_ONE [\"组 一\"]\n        A\n    end\n    subgraph L_TWO\n        B\n    end\n    L_ONE -.-> L_TWO\n";
+        let c = mermaid_to_dot(src).unwrap();
+        assert!(c.body.contains("label=\"组 一\";"), "标题没落到 cluster label：{}", c.body);
+        assert!(c.body.contains("compound=true;"), "{}", c.body);
+        assert!(c.body.contains("ltail=cluster_") && c.body.contains("lhead=cluster_"), "{}", c.body);
+        assert!(!c.body.contains("L_ONE ["), "subgraph id 被当成节点又声明了一次：{}", c.body);
+
+        let d = mermaid_to_d2(src).unwrap();
+        assert!(d.body.contains("L_ONE: \"组 一\" {"), "{}", d.body);
+        // `-.->` 是带目标的虚线：D2 里箭头仍是 `->`，虚线靠 style.stroke-dash
+        assert!(d.body.contains("L_ONE -> L_TWO { style.stroke-dash: 3 }"), "{}", d.body);
     }
 
     #[test]

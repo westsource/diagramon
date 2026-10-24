@@ -91,3 +91,39 @@ fn c1_apostrophe_labels_are_not_taken_as_delimiters() {
     assert!(c.body.contains("A -> B"), "{}", c.body);
     assert!(c.body.contains("B -> C"), "{}", c.body);
 }
+
+/// ⑦ 真实语料（`service/docs/数据概念详解-概念间逻辑关系3.mmd`）：一份文件里同时用了
+/// 加长箭头 `===>`、`A --> B & C` 多目标、`subgraph id ["标题"]`、容器到容器的虚线边。
+///
+/// 修前在第 81 行 `DP ===>|"发布至服务网关"| DDM` 就整份失败（`===>` 被切成 `===` + `>`），
+/// 跳过它之后下一行又撞上「`&` 多源/多目标语法尚未支持」。四个断言各钉一个转出物：
+/// ① 标题只出现在 cluster / 容器名里，不是 `L_MGMT ["…"]` 那种混串；
+/// ② 多目标真的变成三条边；③ 加长粗边保留线宽；④ 容器到容器的边没有退化出占位节点。
+#[test]
+fn c1_concepts_cross_plane_fixture() {
+    let src = fixture!("c1-concepts.mmd");
+    let c = mermaid_to_dot(src).unwrap_or_else(|e| panic!("这份真实语料必须能转成 DOT：{e}"));
+    assert!(
+        c.body.contains("label=\"🔍 管理平面：数据治理与全局资产调度\";"),
+        "subgraph 标题没落到 cluster label：{}",
+        c.body
+    );
+    assert!(!c.body.contains("L_MGMT ["), "subgraph 的 id 与标题被混成了一串：{}", c.body);
+    assert!(c.body.contains("DP -> DDM [label=\"发布至服务网关\", penwidth=2];"), "{}", c.body);
+    for to in ["T_API", "T_BI", "T_PRIVACY"] {
+        assert!(c.body.contains(&format!("DDM -> {to} [lhead=")), "多目标少了 {to}：{}", c.body);
+    }
+    assert!(c.body.contains("ltail=cluster_") && c.body.contains("lhead=cluster_"), "{}", c.body);
+    assert!(!c.body.contains("L_STORAGE ["), "跨平面边退化成了占位节点：{}", c.body);
+
+    let d = mermaid_to_d2(src).unwrap_or_else(|e| panic!("这份真实语料必须能转成 D2：{e}"));
+    assert!(d.body.contains("L_MGMT: \"🔍 管理平面：数据治理与全局资产调度\" {"), "{}", d.body);
+    assert!(d.body.contains("L_VALUE -> L_STORAGE: \"物理落盘映射\""), "{}", d.body);
+    for to in ["G_Integration", "G_Analytics", "G_Advanced"] {
+        assert!(
+            d.body.contains(&format!("L_DELIVERY.DDM -> L_DELIVERY.{to}")),
+            "多目标少了 {to}：{}",
+            d.body
+        );
+    }
+}
