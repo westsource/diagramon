@@ -794,7 +794,7 @@ window.DGM = window.DGM || {};
       ${switchRow(!!e.lint, t("set.editor.lint"), "set.editor.lintHint", "lint")}
       ${switchRow(!!e.per_doc_view, t("set.editor.perDocView"), null, "perdoc")}
       <div class="field-row">
-        ${switchRow(e.autosave !== false, t("set.autosave"), null, "autosave")}
+        ${switchRow(!!e.autosave, t("set.autosave"), null, "autosave")}
         <div class="field narrow"><label>${esc(t("set.autosave.interval"))}</label><input type="number" min="500" max="60000" step="500" value="${e.autosave_ms || 5000}" id="e-autosave"></div>
       </div>
       <div class="callout">${icon("save")}<span>${t("set.autosave.desc")}</span></div>

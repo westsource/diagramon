@@ -211,7 +211,9 @@ pub struct EditorPrefs {
     pub lint: bool,
     pub per_doc_view: bool,
     pub default_view: ViewMode,
-    /// autosave：由 **Rust 侧**计时落盘（改正文后经过 `autosave_ms` 就写）
+    /// autosave：由 **Rust 侧**计时落盘（改正文后经过 `autosave_ms` 就写）。
+    /// **默认关闭**：写盘是不可逆的副作用（AI 应用、重命名、批量替换都会改正文），
+    /// 默认静默落盘等于替用户按下 Ctrl+S。想要"随手改随手存"的，在设置里显式打开。
     pub autosave: bool,
     pub autosave_ms: u32,
     /// 打开工作区后，是否把文件读写限制在工作区内。
@@ -227,7 +229,7 @@ impl Default for EditorPrefs {
             lint: true,
             per_doc_view: true,
             default_view: ViewMode::Split,
-            autosave: true,
+            autosave: false,
             autosave_ms: 5000,
             restrict_to_workspace: false,
         }
@@ -1122,4 +1124,17 @@ pub mod commands {
     pub const AI_MEMORY_DELETE: &str = "ai_memory_delete";
     pub const AI_MEMORY_CLEAR: &str = "ai_memory_clear";
     pub const AI_MEMORY_EXTRACT: &str = "ai_memory_extract";
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 自动保存**默认关闭**：写盘是不可逆副作用，不能替用户按 Ctrl+S。
+    /// 想改回默认开的人请先想清楚"AI 应用/批量替换后静默改写磁盘"这个后果。
+    #[test]
+    fn autosave_is_off_by_default() {
+        assert!(!EditorPrefs::default().autosave);
+        assert!(!Settings::default().editor.autosave);
+    }
 }

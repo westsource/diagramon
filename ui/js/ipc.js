@@ -538,7 +538,7 @@ digraph Pipeline {
         accent: "pine",
         locale: "zh-CN",
         panels: { activitybar: true, sidebar: false, sidebar_view: "explorer", ai: true, bottom: true, bottom_tab: "problems", sidebar_w: 236, ai_w: 344, panel_h: 168, split_src: 33 },
-        editor: { font_size: 13, debounce_ms: 350, lint: true, per_doc_view: true, default_view: "split", autosave: true, autosave_ms: 5000, restrict_to_workspace: false },
+        editor: { font_size: 13, debounce_ms: 350, lint: true, per_doc_view: true, default_view: "split", autosave: false, autosave_ms: 5000, restrict_to_workspace: false },
         ai: {
           providers: [
             { id: "p-byok-1", name: "OpenAI", provider: "openai", base_url: "https://api.openai.com/v1", max_tokens: 8192, temperature: 0.7, has_key: false, key_hint: "" },
