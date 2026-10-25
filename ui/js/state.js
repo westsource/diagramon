@@ -239,6 +239,11 @@ window.DGM = window.DGM || {};
       state.settings.panels.split_src = 33;
       ipc.invoke("settings_patch", { patch: { panels: { split_src: 33 } } }).catch(() => {});
     }
+    // 搜索与转换中心已分别并入资源管理器和帮助菜单；旧持久化视图归一，避免侧栏空白。
+    if (state.settings && state.settings.panels && ["search", "convert"].includes(state.settings.panels.sidebar_view)) {
+      state.settings.panels.sidebar_view = "explorer";
+      ipc.invoke("settings_patch", { patch: { panels: { sidebar_view: "explorer" } } }).catch(() => {});
+    }
     const session = await ipc.invoke("session_get");
     state.docs = (session && session.docs) || [];
     state.active = session ? session.active : null;

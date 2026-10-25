@@ -431,13 +431,13 @@ window.DGM = window.DGM || {};
       openDialog(
         head(t("dlg.convert.title"), "swap") +
           `<div class="dialog-body"><div class="callout warn">${icon("alert")}<span><b>${esc(t("dlg.convert.noSource", { name: state.docFmt(d).name }))}</b><br>${esc(t("dlg.convert.noSourceDesc", { name: state.docFmt(d).name }))}</span></div>
-          <div class="btn-row mt"><button class="btn ai" data-act="ai">${icon("sparkles")}${esc(t("dlg.convert.letAI"))}</button><button class="btn ghost" data-act="center">${icon("swap")}${esc(t("dlg.convert.center"))}</button></div></div>` +
+          <div class="btn-row mt"><button class="btn ai" data-act="ai">${icon("sparkles")}${esc(t("dlg.convert.letAI"))}</button><button class="btn ghost" data-act="ref">${icon("swap")}${esc(t("mi.convertRef"))}</button></div></div>` +
           foot("", `<button class="btn ghost" data-close>${esc(t("common.close"))}</button>`),
       );
       wire((a) => {
         close();
         if (a === "ai") DGM.ai.focus("chat");
-        else DGM.shell.setSidebarView("convert");
+        else DGM.dialogs.convertReference();
       });
       return;
     }
@@ -744,7 +744,6 @@ window.DGM = window.DGM || {};
     { id: "appearance", label: "set.tab.appearance", icon: "palette" },
     { id: "editor", label: "set.tab.editor", icon: "code" },
     { id: "ai", label: "set.tab.ai", icon: "sparkles" },
-    { id: "convert", label: "set.tab.convert", icon: "swap" },
     { id: "cloud", label: "set.tab.cloud", icon: "cloud" },
   ];
 
@@ -1153,21 +1152,46 @@ window.DGM = window.DGM || {};
     renderSettings("ai");
   }
 
-  function pConvert() {
-    const rows = state.formatList
-      .map(
-        (f) => `<tr><td><span class="chip ${f.id}">${esc(f.name)}</span></td><td>${esc((f.exts || []).join(" "))}</td><td>${esc(f.surface)}</td><td>${f.split_view ? "✓" : "—"}</td><td>${f.ai ? "✓" : "—"}</td><td>${esc((f.convert_to || []).map((x) => state.fmtById(x).short || x).join(" ") || "—")}</td><td>${esc((f.layouts || []).join(" ") || "—")}</td></tr>`,
-      )
-      .join("");
+  /** 转换能力矩阵（只读；从侧栏中心和设置页合并过来）。 */
+  function convMatrixHTML(dirs) {
+    const list = state.formatList;
+    const find = (from, to) => dirs.find((c) => c.from === from && c.to === to);
+    const cols = `grid-template-columns:44px repeat(${Math.max(1, list.length)},1fr)`;
+    const head = `<div class="mx-row mx-head" style="${cols}"><span class="mx-src" title="${esc(t("side.convert.matrixHead"))}"></span>` +
+      list.map((d) => `<span title="${esc(d.name)}">${esc(d.short || d.name)}</span>`).join("") + `</div>`;
+    const rows = list.map((src) => {
+      const cells = list.map((dst) => {
+        if (src.id === dst.id) return `<span class="mx-c self" title="${esc(t("side.convert.self"))}">—</span>`;
+        const c = find(src.id, dst.id);
+        if (!c) return `<span class="mx-c no" title="${esc(t("side.convert.unplanned"))}">·</span>`;
+        return `<span class="mx-c ${c.ok ? "yes" : "plan"}" title="${esc(src.name)} → ${esc(dst.name)}：${esc(c.how)}">${c.ok ? "✓" : "…"}</span>`;
+      }).join("");
+      return `<div class="mx-row" style="${cols}"><span class="mx-src" title="${esc(src.name)}">${esc(src.short || src.name)}</span>${cells}</div>`;
+    }).join("");
+    return `<div class="conv-matrix">${head}${rows}</div>`;
+  }
+
+  /** Help → 转换能力一览：只读说明，不提供第二个操作入口。 */
+  function convertReference() {
+    const d = state.activeDoc();
+    const fmt = d ? state.docFmt(d) : null;
     const dirs = DGM.directions();
-    const mx = dirs
-      .map((c) => `<div class="mx-line"><span class="chip ${c.from}">${esc(state.fmtById(c.from).short || c.from)}</span>${icon("chevR", "ico-sm")}<span class="chip ${c.to}">${esc(state.fmtById(c.to).short || c.to)}</span><span class="mx-tag ${c.ok ? "ok" : "off"}">${esc(c.tag)}</span><span class="mx-how">${esc(c.how)}</span></div>`)
-      .join("");
-    return `
+    const rows = state.formatList.map(
+      (f) => `<tr><td><span class="chip ${f.id}">${esc(f.name)}</span></td><td>${esc((f.exts || []).join(" "))}</td><td>${esc(f.surface)}</td><td>${f.split_view ? "✓" : "—"}</td><td>${f.ai ? "✓" : "—"}</td><td>${esc((f.convert_to || []).map((x) => state.fmtById(x).short || x).join(" ") || "—")}</td><td>${esc((f.layouts || []).join(" ") || "—")}</td></tr>`,
+    ).join("");
+    const mx = dirs.map((c) => `<div class="mx-line"><span class="chip ${c.from}">${esc(state.fmtById(c.from).short || c.from)}</span>${icon("chevR", "ico-sm")}<span class="chip ${c.to}">${esc(state.fmtById(c.to).short || c.to)}</span><span class="mx-tag ${c.ok ? "ok" : "off"}">${esc(c.tag)}</span><span class="mx-how">${esc(c.how)}</span></div>`).join("");
+    const body = `
+      <div class="callout">${icon("info")}<span>${t("help.convRef.intro")}</span></div>
+      ${fmt ? `<div class="conv-head"><span>${esc(t("side.convert.from"))}</span><span class="chip ${fmt.id}">${esc(fmt.name)}</span></div>` : ""}
+      <div class="field"><label>${esc(t("side.convert.all"))}</label>${convMatrixHTML(dirs)}</div>
+      <div class="callout">${icon("info")}<span>${t("side.convert.note")}</span></div>
+      <div class="field"><label>${esc(t("conv.title"))}</label><div class="mx-list">${mx}</div>
+        <div class="callout warn">${icon("info")}<span>${t("set.convert.reverseWarn")}</span></div></div>
       <div class="field"><label>${esc(t("set.convert.registry"))}</label>
         <div class="reg-wrap"><table class="reg-table"><thead><tr><th>Name</th><th>ext</th><th>surface</th><th>split</th><th>ai</th><th>→</th><th>layouts</th></tr></thead><tbody>${rows}</tbody></table></div></div>
-      <div class="field"><label>${esc(t("conv.title"))}</label><div class="mx-list">${mx}</div>
-        <div class="callout warn">${icon("info")}<span>${t("set.convert.reverseWarn")}</span></div></div>`;
+      <div class="callout">${icon("swap")}<span>${t("help.convRef.entry")}</span></div>`;
+    openDialog(head(t("help.convRef.title"), "swap", t("help.convRef.sub")) + `<div class="dialog-body">${body}</div>` + foot("", `<button class="btn ghost" data-close>${esc(t("common.close"))}</button>`), true);
+    wire(() => {});
   }
 
   function pCloud() {
@@ -1183,7 +1207,7 @@ window.DGM = window.DGM || {};
       <div class="callout">${icon("info")}<span>${t("set.cloud.offlineGuard")}<br>${esc(t("set.cloud.offlineGuardHint"))}</span></div>`;
   }
 
-  const PANES = { appearance: pAppearance, editor: pEditor, ai: pAI, convert: pConvert, cloud: pCloud };
+  const PANES = { appearance: pAppearance, editor: pEditor, ai: pAI, cloud: pCloud };
 
   function settings(tab) {
     const cur = tab || "appearance";
@@ -2387,6 +2411,7 @@ window.DGM = window.DGM || {};
   DGM.dialogs = {
     newDoc,
     convertTo,
+    convertReference,
     runConvert,
     vision,
     settings,

@@ -101,7 +101,10 @@ window.DGM = window.DGM || {};
     if (q.get("density")) patch.density = q.get("density");
     if (q.get("accent")) patch.accent = q.get("accent");
     const panels = {};
-    if (q.get("sidebar")) panels.sidebar_view = q.get("sidebar");
+    if (q.get("sidebar")) {
+      const v = q.get("sidebar");
+      panels.sidebar_view = v === "search" || v === "convert" ? "explorer" : v;
+    }
     if (q.get("nopanel")) panels.bottom = false;
     if (q.get("noai")) panels.ai = false;
     if (Object.keys(panels).length) patch.panels = panels;

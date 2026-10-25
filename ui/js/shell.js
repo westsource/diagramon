@@ -115,9 +115,9 @@ window.DGM = window.DGM || {};
       "view.activitybar": "mi.activitybar", "view.fullscreen": "mi.fullscreen",
       "view.theme": "mi.toggleTheme", "view.zoom.fit": "mi.fit", "view.zoom.in": "mi.zoomIn", "view.zoom.out": "mi.zoomOut",
       "view.settings": "mi.appearance", "view.settings.ai": "mi.aiSettings", "view.settings.cloud": "mi.billing",
-      "conv.center": "mi.convertCenter", "fmt.format": "mi.format", "fmt.layout": "set.convert.layouts",
+      "fmt.format": "mi.format", "fmt.layout": "set.convert.layouts",
       "exp.png": "exp.png", "exp.svg": "exp.svg", "exp.copy": "exp.copy",
-      "help.keys": "mi.shortcuts", "help.guide": "mi.guide", "help.about": "mi.about", "help.update": "mi.checkUpdate",
+      "help.keys": "mi.shortcuts", "help.guide": "mi.guide", "help.convertRef": "mi.convertRef", "help.about": "mi.about", "help.update": "mi.checkUpdate",
       "palette": "mi.palette",
     };
     const c = cmds.find((x) => x.id === id);
@@ -377,7 +377,7 @@ window.DGM = window.DGM || {};
           { label: t("mi.open"), kbd: "Ctrl+O", icon: "folderOpen", act: "cmd:file.open" },
           { label: t("mi.openFolder"), icon: "folderOpen", act: "cmd:file.openFolder" },
           { label: t("mi.closeWorkspace"), icon: "close", act: "cmd:file.closeFolder", disabled: !state.workspace.root },
-          { label: t("mi.searchWorkspace"), kbd: "Ctrl+Shift+H", icon: "search", act: "cmd:file.searchWorkspace", disabled: !state.workspace.root },
+          { label: t("mi.searchWorkspace"), kbd: "Ctrl+Shift+H", icon: "search", act: "cmd:file.searchWorkspace" },
           { label: t("mi.newFileHere"), icon: "plus", act: "cmd:file.newFileHere", disabled: !state.workspace.root },
           { label: t("mi.openRecent"), icon: "clock", kbd: "Ctrl+R", children: recentItems },
           { sep: true },
@@ -386,13 +386,6 @@ window.DGM = window.DGM || {};
           { sep: true },
           { label: t("mi.save"), kbd: "Ctrl+S", icon: "save", act: "cmd:file.save" },
           { label: t("mi.saveAs"), kbd: "Ctrl+Shift+S", icon: "save", act: "cmd:file.saveAs" },
-          { sep: true },
-          {
-            label: t("mi.convertTo"), icon: "swap",
-            children: (state.docFmt(state.activeDoc()).convert_to || []).map((to) => ({
-              label: state.fmtById(to).name, icon: "swap", act: "conv:" + to, kbd: t("conv.tag.done"),
-            })).concat([{ sep: true }, { label: t("mi.convertCenter"), icon: "swap", act: "cmd:conv.center" }]),
-          },
           { sep: true },
           { label: t("mi.closeTab"), kbd: "Ctrl+W", icon: "close", act: "doc:close", disabled: !activeId },
           { label: t("mi.quit"), kbd: "Ctrl+Q", icon: "close", act: "app:quit" },
@@ -466,6 +459,7 @@ window.DGM = window.DGM || {};
         items: [
           { label: t("mi.shortcuts"), kbd: "Ctrl+K Ctrl+S", icon: "keyboard", act: "cmd:help.keys" },
           { label: t("mi.guide"), icon: "info", act: "cmd:help.guide" },
+          { label: t("mi.convertRef"), icon: "swap", act: "cmd:help.convertRef" },
           { sep: true },
           // 官方文档：点一下用系统浏览器打开（地址写死在 DOC_LINKS，不硬编码在菜单里）
           ...DOC_LINKS.map((d) => ({ label: t(d.label), icon: "globe", act: "link:" + d.url })),
@@ -663,7 +657,9 @@ window.DGM = window.DGM || {};
   }
 
   function setSidebarView(view) {
-    state.patchSettings({ panels: { sidebar_view: view, sidebar: true } });
+    // search / convert 已并入 explorer；旧设置或旧深链不能把侧栏留成空白。
+    const next = view === "search" || view === "convert" ? "explorer" : view;
+    state.patchSettings({ panels: { sidebar_view: next, sidebar: true } });
   }
 
   function zenMode() {
@@ -719,8 +715,6 @@ window.DGM = window.DGM || {};
 
   const ACTS = [
     { id: "explorer", icon: "explorer", label: "act.explorer", kbd: "Alt+1" },
-    { id: "search", icon: "search", label: "act.search", kbd: "Alt+2" },
-    { id: "convert", icon: "swap", label: "act.convert", kbd: "Alt+3" },
     { id: "cloud", icon: "cloud", label: "act.cloud", kbd: "Alt+4" },
     { id: "outline", icon: "outline", label: "act.outline", kbd: "Alt+5" },
   ];
@@ -852,8 +846,8 @@ window.DGM = window.DGM || {};
     }
     parts.push(`<span class="st ro">${esc(t("status.encoding"))}</span>`);
     if (d && state.isTextDoc(d)) parts.push(`<span class="st ro">${esc(t("status.eol"))}</span>`);
-    // 当前格式 = 「转换为」的近入口之一（另一处在标签条）：点它弹转换菜单。
-    parts.push(`<button class="st accent" data-a="convert" title="${esc(t("status.formatConvertTip"))}">${esc(d ? state.docFmt(d).name : t("status.noDoc"))}</button>`);
+    // 当前格式只作指示；转换的唯一可见入口是标签条右侧的「转换」按钮。
+    parts.push(`<span class="st accent" title="${esc(t("status.formatTip"))}">${esc(d ? state.docFmt(d).name : t("status.noDoc"))}</span>`);
 
     bar.innerHTML = parts.join("");
     bar.onclick = (e) => {
@@ -871,7 +865,6 @@ window.DGM = window.DGM || {};
       // 弹菜单的两个分支必须 stopPropagation：状态栏本身不用停（别的按钮还要让
       // 文档级监听关掉别处的弹出物），只停"弹菜单"这一次点击（showPop 的约定）。
       else if (a === "layout") { e.stopPropagation(); popLayouts(b); }
-      else if (a === "convert") { e.stopPropagation(); popConvertMenu(b); }
     };
   }
 
@@ -911,16 +904,16 @@ window.DGM = window.DGM || {};
     if (!d) return;
     const fmt = state.docFmt(d);
     const items = (fmt.convert_to || [])
-      .map((to) => ({ label: t("palette.convert", { from: fmt.name, to: state.fmtById(to).name }), icon: "swap", act: "conv:" + to }))
-      .concat([{ sep: true }, { label: t("mi.convertCenter"), icon: "swap", act: "center" }]);
+      .map((to) => ({ label: t("palette.convert", { from: fmt.name, to: state.fmtById(to).name }), icon: "swap", act: "conv:" + to }));
+    // 没有可用目标时直接进转换对话框，让对话框说明原因（不再挂一个空菜单）。
+    if (!items.length) return DGM.dialogs.convertTo();
     const r = anchor.getBoundingClientRect();
     showPop(
       items,
       { x: r.left, y: r.bottom + 4 },
       (it) => {
         hidePop();
-        if (it.act === "center") setSidebarView("convert");
-        else DGM.dialogs.convertTo(it.act.slice(5));
+        DGM.dialogs.convertTo(it.act.slice(5));
       },
       "menu",
     );
@@ -1344,12 +1337,14 @@ window.DGM = window.DGM || {};
     // AI 的会话历史在 AI 面板的「历史会话」按钮与 AI 菜单里，不占这个键。
     if (mod && k === "r" && !e.shiftKey) { e.preventDefault(); return DGM.dialogs.fileHistory(); }
     if (mod && e.shiftKey && k === "c") { e.preventDefault(); return DGM.preview.copyImage(); }
-    // Alt+Shift+C：转换为（弹目标选择对话框；鼠标近入口在标签条与状态栏格式项）
+    // Alt+Shift+C：转换为（弹目标选择对话框；唯一可见入口在标签条右侧）
     if (e.altKey && e.shiftKey && k === "c") { e.preventDefault(); return DGM.dialogs.convertTo(); }
 
-    if (e.altKey && ["1", "2", "3", "4", "5"].includes(k)) {
+    if (e.altKey && ["1", "2", "4", "5"].includes(k)) {
       e.preventDefault();
-      const a = ACTS[+k - 1];
+      if (k === "1") return setSidebarView("explorer");
+      if (k === "2") return DGM.sidebar && DGM.sidebar.focusSearch ? DGM.sidebar.focusSearch() : setSidebarView("explorer");
+      const a = ACTS.find((x) => x.kbd === "Alt+" + k);
       if (a) setSidebarView(a.id);
       return;
     }
@@ -1473,11 +1468,7 @@ window.DGM = window.DGM || {};
     });
     cmd({
       id: "file.searchWorkspace", group: "file", icon: "search", kbd: "Ctrl+Shift+H",
-      run: () => {
-        setSidebarView("search");
-        if (DGM.sidebar && DGM.sidebar.focusSearch) DGM.sidebar.focusSearch();
-      },
-      avail: () => (state.workspace.root ? true : { why: t("side.search.needWorkspace") }),
+      run: () => DGM.sidebar && DGM.sidebar.focusSearch ? DGM.sidebar.focusSearch() : setSidebarView("explorer"),
     });
     cmd({
       id: "file.newFileHere", group: "file", icon: "plus",
@@ -1517,7 +1508,6 @@ window.DGM = window.DGM || {};
         avail: () => (convTargets().includes(to) ? true : { why: t("dlg.convert.unsupportedDesc", { list: convTargets().map((x) => state.fmtById(x).name).join(" / ") || t("common.none") }) }),
       });
     });
-    cmd({ id: "conv.center", group: "convert", icon: "swap", run: () => setSidebarView("convert") });
     cmd({ id: "fmt.format", group: "format", icon: "wand", kbd: "Shift+Alt+F", run: () => formatSource() });
     // 布局菜单按**注册表**开放（DOT 六种、D2 三种），不在前端写第二份格式清单
     cmd({ id: "fmt.layout", group: "format", icon: "diagram", run: (a) => DGM.dialogs.layout(), avail: () => (state.activeDoc() && (state.docFmt(state.activeDoc()).layouts || []).length ? true : { why: t("status.formatTip") }) });
@@ -1527,6 +1517,7 @@ window.DGM = window.DGM || {};
 
     cmd({ id: "help.keys", group: "help", icon: "keyboard", kbd: "Ctrl+K Ctrl+S", run: () => DGM.dialogs.keys() });
     cmd({ id: "help.guide", group: "help", icon: "info", run: () => DGM.dialogs.guide() });
+    cmd({ id: "help.convertRef", group: "help", icon: "swap", run: () => DGM.dialogs.convertReference() });
     cmd({ id: "help.about", group: "help", icon: "info", run: () => DGM.dialogs.about() });
     cmd({ id: "help.update", group: "help", icon: "refresh", run: () => checkUpdate() });
   }
@@ -1893,7 +1884,7 @@ window.DGM = window.DGM || {};
     toggleTheme,
     setSidebarView,
     togglePanel,
-    /** 「转换为」下拉（标签条 #tab-convert 也用它）。锚点调用方自己 stopPropagation。 */
+    /** 「转换为」下拉（标签条 #tab-convert 唯一入口）。锚点调用方自己 stopPropagation。 */
     popConvertMenu,
     zenMode,
     saveActive,

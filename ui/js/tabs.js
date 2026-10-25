@@ -143,8 +143,6 @@ window.DGM = window.DGM || {};
       { sep: true },
       { label: t("tab.copyPath"), icon: "copy", act: "path", disabled: !d.path },
       { label: t("tab.reveal"), icon: "folderOpen", act: "reveal", disabled: !d.path },
-      { sep: true },
-      { label: t("tab.convert"), icon: "swap", act: "convert" },
     ];
     if (!isActive) {
       state.activateDoc(d.id).then(() => {
@@ -159,7 +157,6 @@ window.DGM = window.DGM || {};
       else if (it.act === "all") closeMany(state.docs.map((x2) => x2.id));
       else if (it.act === "path") copyPath(d.path);
       else if (it.act === "reveal") DGM.toast({ icon: "folderOpen", title: t("tab.reveal"), sub: t("common.notWired") });
-      else if (it.act === "convert") DGM.shell.setSidebarView("convert");
     });
   }
 

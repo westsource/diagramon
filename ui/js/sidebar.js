@@ -316,6 +316,14 @@ window.DGM = window.DGM || {};
     const activeId = state.active;
 
     box.appendChild(wsHeader());
+    // 搜索并入资源管理器：输入为空看文件树，输入非空直接看结果。
+    box.appendChild(explorerSearch());
+    if (state.search.query.trim()) {
+      const results = h("div", "search-results");
+      renderSearchResults(results);
+      box.appendChild(results);
+      return box;
+    }
 
     if (!state.workspace.root) {
       box.appendChild(tip(esc(t("side.ws.none"))));
@@ -442,8 +450,9 @@ window.DGM = window.DGM || {};
 
   let searchTimer = 0;
 
-  function viewSearch() {
-    const box = h("div");
+  /** Explorer 顶部的搜索条。结果由 viewExplorer 在当前查询非空时接在下面。 */
+  function explorerSearch() {
+    const box = h("div", "explorer-search");
     const ws = state.workspace.root;
     const scope = h("div", "search-scope");
     scope.innerHTML = ws
@@ -453,15 +462,22 @@ window.DGM = window.DGM || {};
 
     const field = h("div", "field");
     field.innerHTML =
+      `<div class="search-line">` +
       `<input id="side-search-input" type="text" placeholder="${esc(t("side.search.placeholder"))}" spellcheck="false">` +
+      `<button type="button" class="icon-btn search-clear" title="${esc(t("side.search.clear"))}" hidden>${icon("close", "ico-sm")}</button>` +
+      `</div>` +
+      `<div class="search-opts">` +
       `<label class="search-regex"><input type="checkbox" id="side-search-regex"${state.search.regex ? " checked" : ""}>.*</label>` +
-      `<label class="search-regex" title="Aa"><input type="checkbox" id="side-search-case"${state.search.caseSensitive ? " checked" : ""}>Aa</label>`;
+      `<label class="search-regex" title="Aa"><input type="checkbox" id="side-search-case"${state.search.caseSensitive ? " checked" : ""}>Aa</label>` +
+      `</div>`;
     const input = $("input", field);
+    const clear = $(".search-clear", field);
     input.value = searchQuery || state.search.query || "";
-    const results = h("div", "search-results");
+    const syncClear = () => { if (clear) clear.hidden = !input.value; };
 
     input.addEventListener("input", () => {
       searchQuery = input.value;
+      syncClear();
       clearTimeout(searchTimer);
       // 去抖：全库搜索有真实 IO，别每敲一个字就扫一遍
       searchTimer = setTimeout(() => state.runSearch(searchQuery), 220);
@@ -472,101 +488,38 @@ window.DGM = window.DGM || {};
     $("#side-search-case", field).addEventListener("change", (e) => {
       state.runSearch(searchQuery, { caseSensitive: e.target.checked });
     });
+    if (clear) {
+      clear.addEventListener("click", () => {
+        searchQuery = "";
+        input.value = "";
+        syncClear();
+        state.runSearch("");
+        setTimeout(() => {
+          const next = $("#side-search-input");
+          if (next) next.focus();
+        }, 0);
+      });
+    }
+    field.addEventListener("keydown", (e) => {
+      if (e.key === "Escape" && input.value) {
+        e.preventDefault();
+        e.stopPropagation();
+        searchQuery = "";
+        input.value = "";
+        syncClear();
+        state.runSearch("");
+      }
+    });
+    syncClear();
 
+    box.appendChild(field);
     if (!ws) box.appendChild(tip(esc(t("side.search.needWorkspace"))));
 
     const stop = h("div", "side-acts");
     stop.hidden = !state.search.running;
     stop.innerHTML = `<button class="btn sm ghost" data-a="stop">${icon("close")}${esc(t("side.search.stop"))}</button>`;
     stop.addEventListener("click", () => state.cancelSearch());
-
-    box.append(field, stop, results);
-    renderSearchResults(results);
-    return box;
-  }
-
-  /* ------------------------------------------------------------------ 转换中心 */
-
-  function convCard(dir, muted) {
-    const src = state.fmtById(dir.from);
-    const dst = state.fmtById(dir.to);
-    const b = h("button", "conv-card" + (muted ? " is-other" : ""));
-    if (!dir.ok) b.disabled = true;
-    b.innerHTML =
-      `<span class="conv-flow">` +
-      `<span class="chip ${src.id}">${esc(src.name)}</span>` +
-      `<span class="arrow">${icon("chevR", "ico-sm")}</span>` +
-      `<span class="chip ${dst.id}">${esc(dst.name)}</span>` +
-      `<span class="conv-tag ${dir.ok ? "ok" : "off"}">${esc(dir.tag)}</span>` +
-      `</span>` +
-      `<span class="conv-note">${esc(dir.how)}</span>`;
-    b.addEventListener("click", () => DGM.dialogs.convertTo(dir.to));
-    return b;
-  }
-
-  function convMatrix(dirs) {
-    const list = state.formatList;
-    const find = (from, to) => dirs.find((c) => c.from === from && c.to === to);
-    const grid = h("div", "conv-matrix");
-    const head = h("div", "mx-row mx-head");
-    head.innerHTML =
-      `<span class="mx-src" title="${esc(t("side.convert.matrixHead"))}"></span>` +
-      list.map((d) => `<span title="${esc(d.name)}">${esc(d.short || d.name)}</span>`).join("");
-    grid.appendChild(head);
-    for (const src of list) {
-      const row = h("div", "mx-row");
-      const cells = list
-        .map((dst) => {
-          if (src.id === dst.id) return `<span class="mx-c self" title="${esc(t("side.convert.self"))}">—</span>`;
-          const c = find(src.id, dst.id);
-          if (!c) return `<span class="mx-c no" title="${esc(t("side.convert.unplanned"))}">·</span>`;
-          return `<span class="mx-c ${c.ok ? "yes" : "plan"}" title="${esc(src.name)} → ${esc(dst.name)}：${esc(c.how)}">${c.ok ? "✓" : "…"}</span>`;
-        })
-        .join("");
-      row.innerHTML = `<span class="mx-src" title="${esc(src.name)}">${esc(src.short || src.name)}</span>${cells}`;
-      grid.appendChild(row);
-    }
-    return grid;
-  }
-
-  function viewConvert() {
-    const box = h("div");
-    const d = state.activeDoc();
-    const dirs = DGM.directions();
-
-    if (!d) {
-      box.appendChild(tip(esc(t("status.noDoc"))));
-      return box;
-    }
-    const fmt = state.docFmt(d);
-    const head = h("div", "conv-head");
-    head.innerHTML = `<span>${esc(t("side.convert.from"))}</span><span class="chip ${fmt.id}">${esc(fmt.name)}</span>`;
-    box.appendChild(head);
-
-    const fromHere = dirs.filter((c) => c.from === fmt.id);
-    if (fromHere.length) {
-      fromHere.forEach((c) => box.appendChild(convCard(c, false)));
-    } else {
-      box.appendChild(tip(t("side.convert.targetOnly", { name: esc(fmt.name) })));
-    }
-
-    const all = h("div", "side-section" + (collapsed.has("conv-all") ? " collapsed" : ""));
-    const hd = h("h4", "", `${icon("chevD", "ico-sm chev")}${esc(t("side.convert.all"))}`);
-    const list = h("div", "side-list");
-    list.appendChild(convMatrix(dirs));
-    dirs.forEach((c) => {
-      if (c.from === fmt.id) return;
-      list.appendChild(convCard(c, true));
-    });
-    hd.addEventListener("click", () => {
-      all.classList.toggle("collapsed");
-      if (collapsed.has("conv-all")) collapsed.delete("conv-all");
-      else collapsed.add("conv-all");
-    });
-    all.append(hd, list);
-    box.appendChild(all);
-
-    box.appendChild(tip(t("side.convert.note")));
+    box.appendChild(stop);
     return box;
   }
 
@@ -971,15 +924,15 @@ window.DGM = window.DGM || {};
 
   const VIEWS = {
     explorer: viewExplorer,
-    search: viewSearch,
-    convert: viewConvert,
     cloud: viewCloudDocs,
     account: viewAccount,
     outline: viewOutline,
   };
 
   function render() {
-    const view = state.panels().sidebar_view || "explorer";
+    const rawView = state.panels().sidebar_view || "explorer";
+    // 旧版本持久化过 search / convert 视图；它们已经并入 explorer，不能留成空白侧栏。
+    const view = rawView === "search" || rawView === "convert" ? "explorer" : rawView;
     if (el.sideTitle) el.sideTitle.textContent = t("side." + view) || t("act." + view) || view;
     const host = el.sideView;
     if (!host) return;
@@ -1010,7 +963,7 @@ window.DGM = window.DGM || {};
   }
 
   function focusSearch() {
-    state.patchSettings({ panels: { sidebar_view: "search", sidebar: true } });
+    state.patchSettings({ panels: { sidebar_view: "explorer", sidebar: true } });
     setTimeout(() => {
       const input = $("#side-search-input");
       if (input) input.focus();
@@ -1026,13 +979,13 @@ window.DGM = window.DGM || {};
   DGM.bus.on("issues:changed", () => {
     /* 问题不直接进侧栏，但打开列表的脏标会随会话刷新，这里不重复渲染 */
   });
-  // 工作区与搜索（第 4 步）：只在对应的视图里重渲染，免得在转换中心时白刷一遍
+  // 工作区与搜索：搜索已并入 Explorer，所以两者都只为 Explorer 重渲染。
   DGM.bus.on("workspace:changed", () => {
     const v = state.panels().sidebar_view || "explorer";
-    if (v === "explorer" || v === "search") render();
+    if (v === "explorer") render();
   });
   DGM.bus.on("search:changed", () => {
-    if ((state.panels().sidebar_view || "explorer") === "search") render();
+    if ((state.panels().sidebar_view || "explorer") === "explorer") render();
   });
   DGM.bus.on("fs:changed", () => {
     const v = state.panels().sidebar_view || "explorer";

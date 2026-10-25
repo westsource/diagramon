@@ -479,11 +479,12 @@ def main() -> int:
             "    await new Promise(r2 => setTimeout(r2, 0));"
             "  };"
             "  await probe('tab-convert', '#tab-convert');"
-            "  await probe('status-convert', '#statusbar [data-a=\"convert\"]');"
             "  await probe('side-more', '#side-more');"
             "  await probe('tab-more', '#tab-more');"
             "  await probe('btn-layout', '#btn-layout');"
             "  await probe('status-layout', '#statusbar [data-a=\"layout\"]');"
+            "  const f = document.querySelector('#statusbar .st.accent');"
+            "  out.statusFormat = f ? (f.tagName + (f.dataset.a ? ':entry' : ':readonly')) : 'missing';"
             "  return JSON.stringify(out);"
             "})()"
         )
@@ -492,9 +493,11 @@ def main() -> int:
             av = json.loads(anchors or "{}")
         except Exception:
             av = {}
-        for name in ("tab-convert", "status-convert", "side-more", "tab-more", "btn-layout", "status-layout"):
+        for name in ("tab-convert", "side-more", "tab-more", "btn-layout", "status-layout"):
             if av.get(name) != "alive":
                 fails.append(f"弹出锚点 {name} 点击后菜单没存活（点了没反应复现）")
+        if av.get("statusFormat") != "SPAN:readonly":
+            fails.append(f"状态栏格式项应只读（唯一转换入口是标签条），实际 {av.get('statusFormat')}")
 
         # ---- 断言 5c：转换对话框切换目标格式不能整屏闪（overlay 不得被隐藏）----
         # 旧实现：点目标 -> close() -> convertTo() 重开，遮罩 hidden 翻两次，用户看到闪屏。
@@ -839,9 +842,11 @@ def main() -> int:
             "  document.querySelector('.act.is-ai').click();"
             "  await wait(350);"
             "  const on = document.querySelector('#ai-tabs .ai-tab.on');"
+            "  const tabs = document.querySelector('#ai-tabs');"
             "  return JSON.stringify({"
             "    hasDoc: !!DGM.state.activeDoc(),"
             "    tab: on ? on.dataset.ai : '',"
+            "    divider: tabs ? getComputedStyle(tabs).borderBottomWidth : '',"
             "    visible: !document.body.classList.contains('no-ai')"
             "  });"
             "})()"
@@ -855,9 +860,66 @@ def main() -> int:
                 fails.append("活动栏 AI 按钮没有重新打开面板")
             if at.get("tab") != "review":
                 fails.append(f"有图时打开 AI 面板没有自动切到改图：{at.get('tab')}")
+            if at.get("divider") != "1px":
+                fails.append(f"AI 标签区下方应有 1px 分割线：{at.get('divider')}")
         except Exception as e:
             log(f"（断言 12.1 解析失败：{e}）")
             fails.append("断言 12.1 拿不到结果（AI 页签切换可能没接上）")
+
+        # ---- 断言 12.2：搜索并入 Explorer，活动栏不再有搜索/转换中心图标 ----
+        search_merge = ev(
+            "(async () => {"
+            "  const wait = (ms) => new Promise(r => setTimeout(r, ms));"
+            "  const titles = [...document.querySelectorAll('#activitybar .act')].map(b => b.title || '');"
+            "  DGM.shell.setSidebarView('explorer'); await wait(250);"
+            "  const input = document.querySelector('#side-search-input');"
+            "  const hasInput = !!input;"
+            "  if (input) {"
+            "    input.value = 'graph';"
+            "    input.dispatchEvent(new Event('input', { bubbles: true }));"
+            "    await wait(700);"
+            "  }"
+            "  const typed = !!(DGM.state.search.query || '').trim();"
+            "  const results = !!document.querySelector('#side-view .search-results');"
+            "  const clear = document.querySelector('.explorer-search .search-clear');"
+            "  const clearVisible = !!(clear && !clear.hidden);"
+            "  if (clear) clear.click();"
+            "  await wait(300);"
+            "  const restored = !document.querySelector('#side-view .search-results');"
+            "  document.dispatchEvent(new KeyboardEvent('keydown', { key: '2', altKey: true, bubbles: true }));"
+            "  await wait(300);"
+            "  const altFocused = document.activeElement && document.activeElement.id === 'side-search-input';"
+            "  DGM.shell.setSidebarView('search'); await wait(250);"
+            "  const legacyView = DGM.state.settings.panels.sidebar_view;"
+            "  return JSON.stringify({"
+            "    hasSearchIcon: titles.some(x => x.includes('搜索')),"
+            "    hasConvertIcon: titles.some(x => x.includes('转换中心')),"
+            "    hasInput, typed, results, clearVisible, restored, altFocused, legacyView"
+            "  });"
+            "})()"
+        )
+        log(f"Explorer 内联搜索: {search_merge}")
+        try:
+            sm = json.loads(search_merge or "{}")
+            if sm.get("hasSearchIcon"):
+                fails.append("活动栏仍然有搜索图标（应已并入资源管理器）")
+            if sm.get("hasConvertIcon"):
+                fails.append("活动栏仍然有转换中心图标（应已移除）")
+            if not sm.get("hasInput"):
+                fails.append("资源管理器顶部没有搜索框")
+            if not sm.get("typed") or not sm.get("results"):
+                fails.append(f"在 Explorer 输入查询后没有进入结果态: {search_merge}")
+            if not sm.get("clearVisible"):
+                fails.append("搜索框有查询时没有清空按钮")
+            if not sm.get("restored"):
+                fails.append("清空搜索后没有恢复文件树")
+            if not sm.get("altFocused"):
+                fails.append("Alt+2 没有聚焦 Explorer 搜索框")
+            if sm.get("legacyView") != "explorer":
+                fails.append(f"旧 sidebar_view=search 没有归一成 explorer：{sm.get('legacyView')}")
+        except Exception as e:
+            log(f"（断言 12.2 解析失败：{e}）")
+            fails.append("断言 12.2 拿不到结果（Explorer 搜索合并可能没接上）")
 
         # ---- 断言 13：设置窗口左右布局（页签列在左、内容在右）----
         cdp.call("Input.dispatchKeyEvent", {"type": "keyDown", "key": "Escape", "code": "Escape", "windowsVirtualKeyCode": 27}, timeout=15)
@@ -889,11 +951,15 @@ def main() -> int:
         except Exception as e:
             log(f"（断言 13 解析失败：{e}）")
 
-        # ---- 断言 13b：设置 →「格式与转换」的注册表表格不用横向滚动就能看全 ----
-        # 用户反馈：那一列是 7 列 nowrap 的表格，.wide（720）只给得到 500px，必然出横向滚动条。
+        # ---- 断言 13b：帮助 →「转换能力一览」的注册表表格不用横向滚动就能看全 ----
+        # 该页从设置「格式与转换」与侧栏转换中心合并而来；设置里不应再有这个只读页。
         settings_width = ev(
             "(async () => {"
-            "  DGM.dialogs.settings('convert');"
+            "  DGM.dialogs.settings('appearance');"
+            "  await new Promise(r => setTimeout(r, 120));"
+            "  const tabLabels = [...document.querySelectorAll('.dlg-tabs .dlg-tab')].map(b => b.textContent.trim());"
+            "  DGM.dialogs.close();"
+            "  DGM.dialogs.convertReference();"
             "  await new Promise(r => setTimeout(r, 300));"
             "  const dlg = document.querySelector('#dialog');"
             "  const wrap = document.querySelector('.reg-wrap');"
@@ -903,21 +969,27 @@ def main() -> int:
             "    dialogW: Math.round(dlg.getBoundingClientRect().width),"
             "    wrapW: wrap.clientWidth, tableW: Math.round(tbl.getBoundingClientRect().width),"
             "    overflowX: wrap.scrollWidth > wrap.clientWidth + 1,"
+            "    hasSettingsConvertTab: tabLabels.some(x => x.includes('格式与转换')),"
+            "    hasAction: !!dlg.querySelector('[data-act^=conv]') || !!dlg.querySelector('.conv-card button')"
             "  };"
             "  DGM.dialogs.close();"
             "  return JSON.stringify(out);"
             "})()"
         )
-        log(f"设置窗口宽度（格式与转换）: {settings_width}")
+        log(f"帮助 → 转换能力一览: {settings_width}")
         try:
             sw = json.loads(settings_width)
             if sw == "missing":
-                fails.append("设置窗口的「格式与转换」页没渲染出注册表表格")
+                fails.append("帮助 →「转换能力一览」没渲染出注册表表格")
             elif sw.get("overflowX"):
                 fails.append(
-                    f"格式与转换的表格仍要横向滚动（表 {sw.get('tableW')}px / 容器 {sw.get('wrapW')}px，"
+                    f"转换能力一览的表格仍要横向滚动（表 {sw.get('tableW')}px / 容器 {sw.get('wrapW')}px，"
                     f"窗口 {sw.get('dialogW')}px）"
                 )
+            if sw.get("hasSettingsConvertTab"):
+                fails.append("设置窗口里仍然有「格式与转换」页")
+            if sw.get("hasAction"):
+                fails.append("转换能力一览里出现了操作按钮（应只读）")
         except Exception as e:
             log(f"（断言 13b 解析失败：{e}）")
 
@@ -958,7 +1030,7 @@ def main() -> int:
             "  const rows = [...document.querySelectorAll('#pop .pop-row .lbl')].map(e => e.textContent.trim());"
             "  bar.click();"
             "  const has = (s) => rows.some(x => x.includes(s));"
-            "  return JSON.stringify({rows, mermaid: has('Mermaid'), dot: has('DOT'), d2: has('D2')});"
+            "  return JSON.stringify({rows, mermaid: has('Mermaid'), dot: has('DOT'), d2: has('D2'), ref: has('转换能力一览')});"
             "})()"
         )
         log(f"帮助菜单文档入口: {doc_menu}")
@@ -970,6 +1042,8 @@ def main() -> int:
                 for key, name in (("mermaid", "Mermaid 文档"), ("dot", "Graphviz DOT 规范"), ("d2", "D2 参考")):
                     if not dm.get(key):
                         fails.append(f"帮助菜单缺「{name}」入口（现有：{dm.get('rows')}）")
+                if not dm.get("ref"):
+                    fails.append(f"帮助菜单缺「转换能力一览」入口（现有：{dm.get('rows')}）")
         except Exception as e:
             fails.append(f"帮助菜单文档入口断言解析失败：{e} / {doc_menu}")
 

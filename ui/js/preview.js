@@ -1026,7 +1026,7 @@ window.DGM = window.DGM || {};
     if (zf) zf.addEventListener("click", fit);
     const bs = $("#btn-show-source");
     if (bs) bs.addEventListener("click", () => DGM.shell.setMode("source"));
-    // 「转换」入口已收编到标签条（#tab-convert）与状态栏格式项，顶栏不再放
+    // 「转换」唯一可见入口是标签条（#tab-convert），顶栏与状态栏不再放重复入口。
     const cp = $("#btn-copy-img");
     if (cp) cp.addEventListener("click", copyImage);
     const ex = $("#btn-export");

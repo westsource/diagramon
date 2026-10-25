@@ -698,7 +698,7 @@ body.no-ai #ai-gutter { display: none; }
 .ai-model:hover { border-color: var(--ai-line); color: var(--ai); }
 .ai-model .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--ok); }
 
-.ai-tabs { display: flex; gap: 2px; padding: 6px 10px 0; }
+.ai-tabs { display: flex; gap: 2px; padding: 6px 10px 0; border-bottom: 1px solid var(--border); }
 .ai-tab {
   padding: 4px 11px;
   font-size: var(--fs-sm);
@@ -1953,6 +1953,14 @@ body.no-mock .mock-badge { display: none; }
 /* 搜索框：输入框 + 正则开关并排 */
 .sidebar .field { margin-bottom: 10px; }
 .sidebar .field input[type="text"] { width: 100%; }
+.explorer-search { margin: 2px 4px 8px; }
+.explorer-search .search-scope { margin: 4px 0 6px; }
+.explorer-search .field { margin-bottom: 6px; }
+.explorer-search .search-line { position: relative; display: flex; }
+.explorer-search .search-line input[type="text"] { flex: 1; min-width: 0; padding-right: 30px; }
+.explorer-search .search-clear { position: absolute; right: 3px; top: 50%; transform: translateY(-50%); width: 22px; height: 22px; }
+.explorer-search .search-clear[hidden] { display: none; }
+.explorer-search .search-opts { display: flex; gap: 10px; margin-top: 2px; }
 .search-regex {
   display: inline-flex; align-items: center; gap: 4px;
   font-size: var(--fs-xs); color: var(--muted); font-weight: 500;
