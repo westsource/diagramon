@@ -319,10 +319,13 @@ async function main() {
     } else {
       // 同样不要 shell: true —— 见 findPython 的注释：node 在 shell 模式下不给参数加引号，
       // DGM_PYTHON 指到带空格的路径（C:\Program Files\...）时会被切词切坏。
+      // 超时给 300s：探针本身现在按条件等（boot 最多 30s、画布每步最多 3s），
+      // 但整套断言 + 4 张截图在慢机器上实测要 3 分钟上下；原来的 180s 会把
+      // **跑得完的**探针掐死，然后被下面归成"起不来"跳过 —— 等于白跑。
       const r = spawnSync(py[0], [...py.slice(1), "tools/dev/ui_probe.py"], {
         cwd: ROOT,
         stdio: "inherit",
-        timeout: 180_000,
+        timeout: 300_000,
       });
       if (r.status === 1) {
         // 断言失败：UI 真的死了，拦下整场验收

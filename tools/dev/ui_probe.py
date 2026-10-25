@@ -225,7 +225,6 @@ def main() -> int:
                 cdp.pump(timeout=min(0.5, max(0.05, end - time.time())))
 
         cdp.send("Page.navigate", {"url": f"http://127.0.0.1:{ui_port}/index.html"})
-        drain(4.0)  # 等启动跑完（mock 后端零延迟，4s 足够）
 
         def ev(expr: str):
             r = cdp.call(
@@ -238,6 +237,35 @@ def main() -> int:
                 errors.append("eval-error: " + str(res.get("description"))[:400])
                 return None
             return res.get("value")
+
+        def wait_boot(timeout: float = 30.0) -> bool:
+            """等到页面真的 boot 完（`DGM` 就绪 + 菜单栏已渲染）再开始断言。
+
+            这里原来是固定 `drain(4.0)`，注释还写着"mock 后端零延迟，4s 足够" ——
+            但 4 秒里还要下载并解析 5.5MB 的 `vendor/mermaid.min.js`（它是个
+            **阻塞式** `<script>`）：本机冷启动实测 >4s，4 秒时页面还停在
+            `readyState=loading`、`document.scripts.length=1`、`DGM` 是
+            `undefined`。之后每条断言都拿到 `None`，探针最后崩在
+            `json.loads(None)` 上 —— 报出来却像"UI 死了"，把产品代码当凶手。
+            改成按条件等：条件满足就立刻往下走（快机器不会被白等 4 秒）。
+            """
+            deadline = time.time() + timeout
+            while time.time() < deadline:
+                drain(0.25)
+                try:
+                    ok = ev(
+                        "typeof window.DGM === 'object'"
+                        " && !!document.querySelector('#menubar > *')"
+                    )
+                except Exception:
+                    ok = False
+                if ok:
+                    return True
+            return False
+
+        if not wait_boot():
+            log("✗ 页面 30s 内没有 boot 完（DGM 未就绪 / 菜单栏为空）")
+            return 2
 
         # ---- 诊断：页面到底加载成什么样 ----
         info = ev("JSON.stringify({href: location.href, dgm: typeof window.DGM, "
@@ -465,6 +493,9 @@ def main() -> int:
         # side-more / tab-more / btn-layout / 状态栏 layout 曾全部死于这个坑
         # （2026-10-13 探针实测：handler 触发、菜单填充、随即被关）。
         # 这里一并守住：修复过的四个锚点 + 新加的两个「转换为」近入口，弹出后必须活着。
+        # 顺带钉住「转换为」下拉的**次序**：必须与 `DGM.directions()`（「转换能力一览」
+        # 里那张方向清单的同源数据）逐条一致 —— 曾经下拉按 `convert_to` 的声明顺序、
+        # 说明页按格式注册表顺序，同一个源看到两套次序。
         anchors = ev(
             "(async () => {"
             "  const out = {};"
@@ -485,6 +516,26 @@ def main() -> int:
             "  await probe('status-layout', '#statusbar [data-a=\"layout\"]');"
             "  const f = document.querySelector('#statusbar .st.accent');"
             "  out.statusFormat = f ? (f.tagName + (f.dataset.a ? ':entry' : ':readonly')) : 'missing';"
+            # 下拉次序：逐行比对「转换为 X」与 directions() 的顺序。
+            # 这里**固定用 Mermaid 文档**：断言 5b 跑到这时活动文档可能是上一条
+            # 断言留下的 DOT（它只有实验方向、没有可用目标），拿它比等于比空集。
+            "  const made = await DGM.state.newDoc('mermaid');"
+            "  const d = made;"
+            "  {"
+            "    const fmt = DGM.state.docFmt(d);"
+            "    const expect = DGM.directions().filter(c => c.from === fmt.id && c.ok)"
+            "      .map(c => DGM.i18n.t('palette.convert', { from: fmt.name, to: DGM.state.fmtById(c.to).name }));"
+            "    const b = document.querySelector('#tab-convert');"
+            "    if (b && expect.length) {"
+            "      b.click();"
+            "      await new Promise(r2 => setTimeout(r2, 0));"
+            "      out.convOrder = [...document.querySelectorAll('#pop .pop-row .lbl')].map(e => e.textContent.trim());"
+            "      out.convOrderExpect = expect;"
+            "      document.body.click();"
+            "      await new Promise(r2 => setTimeout(r2, 0));"
+            "    }"
+            "  }"
+            "  await DGM.state.closeDoc(made.id);"
             "  return JSON.stringify(out);"
             "})()"
         )
@@ -498,6 +549,14 @@ def main() -> int:
                 fails.append(f"弹出锚点 {name} 点击后菜单没存活（点了没反应复现）")
         if av.get("statusFormat") != "SPAN:readonly":
             fails.append(f"状态栏格式项应只读（唯一转换入口是标签条），实际 {av.get('statusFormat')}")
+        if not av.get("convOrderExpect"):
+            fails.append("「转换为」下拉没有可验证的目标次序（按钮缺失或当前源没有可用目标）")
+        else:
+            if av.get("convOrder") != av.get("convOrderExpect"):
+                fails.append(
+                    "「转换为」下拉的次序与「转换能力一览」不一致："
+                    f"{av.get('convOrder')} ≠ {av.get('convOrderExpect')}"
+                )
 
         # ---- 断言 5c：转换对话框切换目标格式不能整屏闪（overlay 不得被隐藏）----
         # 旧实现：点目标 -> close() -> convertTo() 重开，遮罩 hidden 翻两次，用户看到闪屏。
@@ -803,7 +862,8 @@ def main() -> int:
         # ---- 断言 12：重启还原 —— 重载页面（mock 经 sessionStorage 存活），
         # 关闭过的侧栏必须保持关闭；再打开也要保持打开。----
         cdp.call("Page.reload", {}, timeout=20)
-        drain(4.0)
+        if not wait_boot():
+            fails.append("重载后 30s 内没有 boot 完（DGM 未就绪）")
         restored = ev(
             "JSON.stringify({"
             "  noSidebar: document.body.classList.contains('no-sidebar'),"
@@ -1030,7 +1090,8 @@ def main() -> int:
             "  const rows = [...document.querySelectorAll('#pop .pop-row .lbl')].map(e => e.textContent.trim());"
             "  bar.click();"
             "  const has = (s) => rows.some(x => x.includes(s));"
-            "  return JSON.stringify({rows, mermaid: has('Mermaid'), dot: has('DOT'), d2: has('D2'), ref: has('转换能力一览')});"
+            "  return JSON.stringify({rows, mermaid: has('Mermaid'), dot: has('DOT'), d2: has('D2'), ref: has('转换能力一览'),"
+            "    refRow: rows.find(x => x.includes('转换能力一览')) || '', ro: has('只读')});"
             "})()"
         )
         log(f"帮助菜单文档入口: {doc_menu}")
@@ -1044,6 +1105,8 @@ def main() -> int:
                         fails.append(f"帮助菜单缺「{name}」入口（现有：{dm.get('rows')}）")
                 if not dm.get("ref"):
                     fails.append(f"帮助菜单缺「转换能力一览」入口（现有：{dm.get('rows')}）")
+                if dm.get("ro"):
+                    fails.append(f"帮助菜单「转换能力一览」仍带「只读」字样：{dm.get('refRow')!r}")
         except Exception as e:
             fails.append(f"帮助菜单文档入口断言解析失败：{e} / {doc_menu}")
 
@@ -1474,15 +1537,27 @@ def main() -> int:
         canvas_lc = ev(
             "(async () => {"
             "  const wait = (ms) => new Promise(r => setTimeout(r, ms));"
+            # 条件等待：固定 `wait(150)` 在本机 headless 下不够 —— canvas 的宿主队列靠
+            # `setInterval(120ms)` 轮询分发，而 headless 的计时器会被节流到 ~1s/次；
+            # 桩的 `ready` 又是 iframe 解析后 20ms 才发。于是"show 之后 150ms 看
+            # `__lastLoad`"会稳定地看到空串，把"还没轮到"误判成"载荷丢了"。
+            # 改成等到条件成立（或超时）再看：快机器立刻通过，慢机器不会被冤。
+            "  const until = async (fn, ms = 3000) => {"
+            "    const t0 = performance.now();"
+            "    while (!fn()) { if (performance.now() - t0 > ms) break; await wait(50); }"
+            "    return fn();"
+            "  };"
             "  const out = {};"
             "  const cv = DGM.canvas;"
             "  const stubOf = (fmt) => {"
             "    const e = document.querySelector('#canvas-host iframe.canvas-' + fmt);"
             "    return e ? e.contentWindow : null;"
             "  };"
+            "  const loadOf = (fmt) => (stubOf(fmt) ? (stubOf(fmt).__lastLoad || '') : '');"
             # 先清掉可能残留的画布实例，从干净状态开始
             "  for (const f of ['drawio','excalidraw']) { if (cv.supports(f)) cv.teardown(f); }"
-            "  await wait(100);"
+            "  await until(() => !document.querySelector('#canvas-host iframe.canvas-drawio') &&"
+            "                      !document.querySelector('#canvas-host iframe.canvas-excalidraw'));"
             "  cv.init({ container: document.getElementById('canvas-host') });"
             #
             "  const dA = await DGM.state.newDoc('drawio');"
@@ -1493,30 +1568,29 @@ def main() -> int:
             "  DGM.state.setBody(dX.id, '{}');"
             #
             # ---- C-L1 连续转换两次（次次都是新的一版，旧的不得残留）----
-            "  cv.show(dA); await wait(150);"
-            "  out.lc1_first = stubOf('drawio') && (stubOf('drawio').__lastLoad || '');"
-            "  cv.show(dB); await wait(150);"
-            "  out.lc1_second = stubOf('drawio') && (stubOf('drawio').__lastLoad || '');"
+            "  cv.show(dA); await until(() => loadOf('drawio').includes('A_MARKER_PROBE'));"
+            "  out.lc1_first = loadOf('drawio');"
+            "  cv.show(dB); await until(() => loadOf('drawio').includes('B_MARKER_PROBE'));"
+            "  out.lc1_second = loadOf('drawio');"
             #
             # ---- C-L2 两个画布标签来回切（格式甲/格式乙，各认各的）----
-            "  const dw = stubOf('drawio');"
-            "  const beforeSwitchDrawio = dw ? dw.__lastLoad : '';"
-            "  cv.show(dX); await wait(150);"                                   # 切到 excalidraw
-            "  const ex = stubOf('excalidraw');"
-            "  out.lc2_ex = ex ? ex.__lastLoad : '';"
-            "  out.lc2_drawioUnchanged = (stubOf('drawio') ? stubOf('drawio').__lastLoad : '') === beforeSwitchDrawio;"
-            "  cv.show(dA); await wait(150);"                                  # 切回 drawio
-            "  out.lc2_drawioBack = stubOf('drawio') ? stubOf('drawio').__lastLoad : '';"
+            "  const beforeSwitchDrawio = loadOf('drawio');"
+            "  cv.show(dX); await until(() => loadOf('excalidraw'));"              # 切到 excalidraw
+            "  out.lc2_ex = loadOf('excalidraw');"
+            "  out.lc2_drawioUnchanged = loadOf('drawio') === beforeSwitchDrawio;"
+            "  cv.show(dA); await until(() => loadOf('drawio').includes('A_MARKER_PROBE'));"  # 切回 drawio
+            "  out.lc2_drawioBack = loadOf('drawio');"
             #
             # ---- C-L3 关闭标签后残留载荷（teardown 清理 + 重开不继承旧 payload）----
-            "  cv.teardown('drawio'); await wait(100);"
+            "  cv.teardown('drawio');"
+            "  await until(() => !document.querySelector('#canvas-host iframe.canvas-drawio'));"
             "  out.lc3_gone = !!document.querySelector('#canvas-host iframe.canvas-drawio');"
             "  out.lc3_loaded = cv.loadedDoc('drawio');"
             "  out.lc3_ready = cv.isReady('drawio');"
             "  const dC = await DGM.state.newDoc('drawio');"
             "  DGM.state.setBody(dC.id, 'C_MARKER_PROBE');"
-            "  cv.show(dC); await wait(150);"
-            "  out.lc3_reopen = stubOf('drawio') ? stubOf('drawio').__lastLoad : '';"
+            "  cv.show(dC); await until(() => loadOf('drawio').includes('C_MARKER_PROBE'));"
+            "  out.lc3_reopen = loadOf('drawio');"
             # 诊断：为什么桩没收到载荷（iframe 在不在 / __apply 有没有 / 动作序列空了没）
             "  const dbgF = document.querySelector('#canvas-host iframe.canvas-drawio');"
             "  out.lc_dbg = {"

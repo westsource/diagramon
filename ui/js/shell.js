@@ -898,13 +898,16 @@ window.DGM = window.DGM || {};
   /** 「转换为」下拉（标签条按钮与状态栏格式指示器共用）。
    *  转换是"针对当前文档的动作"，入口就该贴着工作区；侧栏的转换中心保留，
    *  职责降为全览矩阵（六方向表格 + 不可用理由）——菜单末尾留它的入口。
-   *  锚点必须 stopPropagation（showPop 的约定），调用方负责。 */
+   *  **次序与「转换能力一览」里的方向清单同源**：都走 `directions()`（格式注册表
+   *  的遍历顺序），否则下拉按 `convert_to` 的声明顺序排、说明页按注册表顺序排，
+   *  同一个 Mermaid 源看到的就是两套次序。锚点必须 stopPropagation，调用方负责。 */
   function popConvertMenu(anchor) {
     const d = state.activeDoc();
     if (!d) return;
     const fmt = state.docFmt(d);
-    const items = (fmt.convert_to || [])
-      .map((to) => ({ label: t("palette.convert", { from: fmt.name, to: state.fmtById(to).name }), icon: "swap", act: "conv:" + to }));
+    const items = directions()
+      .filter((c) => c.from === fmt.id && c.ok)
+      .map((c) => ({ label: t("palette.convert", { from: fmt.name, to: state.fmtById(c.to).name }), icon: "swap", act: "conv:" + c.to }));
     // 没有可用目标时直接进转换对话框，让对话框说明原因（不再挂一个空菜单）。
     if (!items.length) return DGM.dialogs.convertTo();
     const r = anchor.getBoundingClientRect();
