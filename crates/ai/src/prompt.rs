@@ -187,7 +187,15 @@ fn build_messages_with_images(
     }
     if let Some(ctx) = context {
         if !ctx.trim().is_empty() {
-            user_text.push_str("当前图表源码（作为上下文，不要整段重写）：\n```\n");
+            // 这句措辞必须跟着 intent 走：改图是"整段替换"进编辑器的（ai.js::applyBlock），
+            // 旧写法「作为上下文，不要整段重写」会把模型推向"只给片段"，落盘就是半张图。
+            let head = if intent == AiIntent::Review {
+                "当前图表源码（要修改的就是它；**输出必须是修改后的完整源码**，未改动的部分原样保留）：\n"
+            } else {
+                "当前图表源码（作为上下文，不要整段重写）：\n"
+            };
+            user_text.push_str(head);
+            user_text.push_str("```\n");
             user_text.push_str(ctx.trim_end());
             user_text.push_str("\n```\n\n");
         }
@@ -615,12 +623,19 @@ mod tests {
     }
 
     #[test]
-    fn context_is_wrapped_in_a_fence_so_the_model_does_not_echo_it() {
+    fn context_fence_wording_follows_intent() {
         let m = build_messages(FormatId::Mermaid, AiIntent::Review, "加一条失败分支", Some("flowchart TD\n A-->B\n"), None, &[]);
         let text = m[1]["content"].as_str().unwrap();
-        assert!(text.contains("作为上下文，不要整段重写"));
+        // 改图：客户端整段替换，所以这里必须要求"输出完整源码"，不能再写"不要整段重写"。
+        assert!(text.contains("输出必须是修改后的完整源码"), "{text}");
+        assert!(!text.contains("不要整段重写"), "{text}");
         assert!(text.contains("flowchart TD"));
         assert!(text.ends_with("加一条失败分支"));
+
+        // 生成/对话：正文只是参考上下文，保持原口径。
+        let g = build_messages(FormatId::Mermaid, AiIntent::Generate, "画一张登录图", Some("flowchart TD\n A-->B\n"), None, &[]);
+        let gt = g[1]["content"].as_str().unwrap();
+        assert!(gt.contains("作为上下文，不要整段重写"), "{gt}");
     }
 
     #[test]

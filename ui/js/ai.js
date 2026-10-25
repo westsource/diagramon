@@ -828,18 +828,26 @@ window.DGM = window.DGM || {};
       if (old && old.m === cur && old.doc === (d && d.id)) removeTurn(old);
     }
 
-    // 上下文：改图用整篇正文；选择区优先；对话按设置决定
+    // 上下文：改图**永远发全文**；选择区只作为"这次只改这一段"的说明（见下）。
+    // 旧写法把 context 换成选区，而「应用到编辑器」是整段替换 —— 模型返回改过的
+    // 那段，落盘后文档就只剩这一段（比"只回 diff"更狠）。
     const ai = state.ai();
     let context = null;
-    if (selectionCtx) context = selectionCtx;
-    else if (cur === "review") context = d ? d.body : null;
+    if (cur === "review") context = d ? d.body : selectionCtx;
+    else if (selectionCtx) context = selectionCtx;
     else if (cur === "chat" && ai.context_from_doc && d && state.isTextDoc(d)) context = d.body;
+
+    // 选区说明放进 user 文本，全文仍在 context 里。
+    const reqPrompt =
+      selectionCtx && cur === "review"
+        ? `${t("ai.selOnly")}\n\`\`\`\n${selectionCtx.trim()}\n\`\`\`\n\n${text}`
+        : text;
 
     const req = {
       request_id: newId(),
       model_id: state.currentModel() ? state.currentModel().id : "",
       intent: cur === "vision" ? "vision" : cur === "review" ? "review" : "generate",
-      prompt: text,
+      prompt: reqPrompt,
       format: fmtId,
       context: context || null,
       // 附加的外部文件（参考资料）：与 context（当前图表源码）分开两个字段，
