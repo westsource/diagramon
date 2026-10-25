@@ -1302,10 +1302,28 @@ window.DGM = window.DGM || {};
 
   /* ------------------------------------------------------------------ 全局快捷键 */
 
+  /** Ctrl+K 组合键的起始时刻（0 = 没有等待中的组合键）。 */
+  let chordAt = 0;
+
   function onKey(e) {
     const k = e.key.toLowerCase();
     const mod = e.ctrlKey || e.metaKey;
     const typing = /^(INPUT|TEXTAREA)$/.test(e.target.tagName) || e.target.isContentEditable;
+
+    // Ctrl+K 组合键（VS Code 式两段键）：Ctrl+K 之后 1.5s 内再按第二个键。
+    // 菜单与「快捷键总表」一直印着 `Ctrl+K Ctrl+T` / `Ctrl+K Ctrl+S`，但此前
+    // **没有任何实现** —— 按下去没反应，属于文档在说谎。
+    if (mod && k === "k" && !e.shiftKey && !e.altKey) {
+      e.preventDefault();
+      chordAt = performance.now();
+      return;
+    }
+    if (chordAt && performance.now() - chordAt < 1500) {
+      chordAt = 0;
+      if (k === "t") { e.preventDefault(); return toggleTheme(); }
+      if (k === "s") { e.preventDefault(); return DGM.dialogs.keys(); }
+    }
+    chordAt = 0;
 
     // 面板 / 布局（Ctrl 组合始终生效）
     if (mod && e.shiftKey && k === "p") { e.preventDefault(); return DGM.palette.open(); }
@@ -1314,6 +1332,8 @@ window.DGM = window.DGM || {};
     if (mod && k === "b") { e.preventDefault(); return togglePanel("sidebar"); }
     if (mod && k === "j") { e.preventDefault(); return togglePanel("bottom"); }
     if (mod && e.shiftKey && k === "f") { e.preventDefault(); return zenMode(); }
+    // Shift+Alt+F：格式化源码（菜单/总表都印着，同样此前没接线）
+    if (e.altKey && e.shiftKey && k === "f" && !mod) { e.preventDefault(); return formatSource(); }
     // 标签循环切换（编辑器里聚焦时也要能切 —— 放在 typing 拦截之前）
     if (mod && k === "tab") { e.preventDefault(); return DGM.tabs.cycle(e.shiftKey ? -1 : 1); }
     if (mod && (k === "pageup" || k === "pagedown")) {

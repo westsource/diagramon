@@ -839,6 +839,73 @@ def main() -> int:
         if act_after != expect_next:
             fails.append("Ctrl+Tab 未按标签顺序循环切换")
 
+        # ---- 断言 10b：Ctrl+K 组合键真的接了线 + 「快捷键总表」内容与实现一致 ----
+        # 菜单/总表一直印着 `Ctrl+K Ctrl+T`、`Ctrl+K Ctrl+S`，但 2026-10-25 之前
+        # **没有任何实现**（按下去没反应）。这里用真实 CDP 输入钉住两段键，
+        # 再把总表的键位格子抓出来，挡住"文档写了、代码没做"的回潮。
+        def chord(second: str, code: str, vk: int) -> None:
+            for t in ("keyDown", "keyUp"):
+                cdp.call("Input.dispatchKeyEvent", {"type": t, "modifiers": 2, "key": "k", "code": "KeyK", "windowsVirtualKeyCode": 75}, timeout=15)
+            for t in ("keyDown", "keyUp"):
+                cdp.call("Input.dispatchKeyEvent", {"type": t, "modifiers": 2, "key": second, "code": code, "windowsVirtualKeyCode": vk}, timeout=15)
+            drain(0.4)
+
+        theme0 = ev("document.documentElement.dataset.theme")
+        chord("t", "KeyT", 84)
+        theme1 = ev("document.documentElement.dataset.theme")
+        log(f"Ctrl+K Ctrl+T: {theme0} → {theme1}（期望切换）")
+        if not theme1 or theme1 == theme0:
+            fails.append(f"Ctrl+K Ctrl+T 没有切换主题：{theme0} → {theme1}")
+        chord("t", "KeyT", 84)  # 切回去，别把主题状态留给后面的截图
+
+        chord("s", "KeyS", 83)
+        keys_dlg = ev(
+            "JSON.stringify({"
+            "  open: !document.querySelector('#overlay-dialog').hidden,"
+            "  title: (document.querySelector('#dialog .dialog-head h2') || {}).textContent || '',"
+            "  rows: [...document.querySelectorAll('.keys-row .kbd-inline')].map(e => e.textContent.trim())"
+            "})"
+        )
+        log(f"Ctrl+K Ctrl+S: {str(keys_dlg)[:400]}")
+        try:
+            kd = json.loads(keys_dlg or "{}")
+            if not kd.get("open"):
+                fails.append("Ctrl+K Ctrl+S 没有打开快捷键窗口")
+            if kd.get("title") != "快捷键总表":
+                fails.append(f"快捷键窗口标题应为「快捷键总表」，实际 {kd.get('title')!r}")
+            rows = kd.get("rows") or []
+            for want in ("Ctrl+R", "Ctrl+Tab / Ctrl+Shift+Tab", "Ctrl+Q", "Alt+2", "Ctrl+K Ctrl+T"):
+                if want not in rows:
+                    fails.append(f"快捷键总表缺少「{want}」（现有：{rows}）")
+            if "Alt+1…Alt+5" in rows:
+                fails.append("快捷键总表仍在写「Alt+1…Alt+5」——实际只绑了 Alt+1/2/4/5")
+            ev("DGM.dialogs.close()")
+        except Exception as e:
+            fails.append(f"快捷键总表断言解析失败：{e} / {keys_dlg}")
+
+        # Shift+Alt+F：格式化源码（同样属于"菜单印了但没接线"的一类）
+        fmt_probe = ev(
+            "(async () => {"
+            "  const d = await DGM.state.newDoc('mermaid');"
+            "  await DGM.state.setBodyNow(d.id, 'flowchart TD   \\n    A --> B\\t\\n');"
+            "  DGM.editor.loadActive();"
+            "  return JSON.stringify({id: d.id, before: DGM.state.doc(d.id).body});"
+            "})()"
+        )
+        for t in ("keyDown", "keyUp"):
+            cdp.call("Input.dispatchKeyEvent", {"type": t, "modifiers": 9, "key": "f", "code": "KeyF", "windowsVirtualKeyCode": 70}, timeout=15)
+        drain(0.6)
+        try:
+            fp = json.loads(fmt_probe or "{}")
+            after = ev("DGM.state.doc(" + json.dumps(fp.get("id")) + ").body")
+            log(f"Shift+Alt+F 格式化: {fp.get('before')!r} → {after!r}")
+            if after == fp.get("before"):
+                fails.append("Shift+Alt+F 没有格式化源码（行尾空白还在）")
+            ev("DGM.state.closeDoc(" + json.dumps(fp.get("id")) + ")")
+        except Exception as e:
+            fails.append(f"格式化快捷键断言解析失败：{e} / {fmt_probe}")
+
+
         # ---- 断言 11：侧栏 / AI 面板关闭按钮（togglePanel → body 类）----
         r1 = ev(
             "(async () => {"
