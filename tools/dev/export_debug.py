@@ -110,7 +110,7 @@ def main():
                               "scripts: document.scripts.length, dgm: typeof DGM, "
                               "bodyLen: document.body ? document.body.innerHTML.length : -1})"))
         print("== newDoc mermaid ==", ev(
-            "(async () => { const d = await DGM.state.newDoc(['mermaid']); "
+            "(async () => { const d = await DGM.state.newDoc('mermaid'); "
             "DGM.tabs ? DGM.tabs.activate(d.id) : DGM.state.activateDoc(d.id); "
             "await new Promise(r=>setTimeout(r,2500)); "
             "const s = document.querySelector('#canvas-stage svg'); "
@@ -145,7 +145,7 @@ def main():
 
         # ③ 换 DOT 文档再来一遍
         print("== newDoc dot ==", ev(
-            "(async () => { const d = await DGM.state.newDoc(['dot']); "
+            "(async () => { const d = await DGM.state.newDoc('dot'); "
             "DGM.tabs ? DGM.tabs.activate(d.id) : DGM.state.activateDoc(d.id); "
             "await new Promise(r=>setTimeout(r,3000)); "
             "const s = document.querySelector('#canvas-stage svg'); "

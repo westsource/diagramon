@@ -468,7 +468,7 @@ window.DGM = window.DGM || {};
       }
       ok(
         "注册表五种格式",
-        info && info.formats && info.formats.length === 5 && info.formats.map((f) => f.id).join(",") === "mermaid,dot,d2,drawio,excalidraw",
+        info && info.formats && info.formats.length === 5 && info.formats.map((f) => f.id).join(",") === "drawio,mermaid,excalidraw,dot,d2",
         info && info.formats && info.formats.map((f) => f.id).join(","),
       );
       ok(

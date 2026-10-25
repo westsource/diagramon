@@ -30,9 +30,27 @@ const DRAWIO_BODY: &str = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<mxfile h
 
 const EXCALIDRAW_BODY: &str = "{\n  \"type\": \"excalidraw\",\n  \"version\": 2,\n  \"source\": \"https://diagramon.app\",\n  \"elements\": [],\n  \"appState\": { \"viewBackgroundColor\": \"#ffffff\" }\n}\n";
 
-/// 五种格式的能力位。顺序即 UI 里新建对话框的顺序（文本型在前）。
+/// 五种格式的能力位。顺序即 UI 显示顺序：drawio、Mermaid、Excalidraw、DOT、D2 ——
+/// 「新建」对话框、标签条「转换」下拉、「转换能力一览」（方向清单与矩阵）、命令面板
+/// 都直接吃这一份顺序，**别在前端再排第二次**。
 pub fn registry() -> Vec<FormatInfo> {
     vec![
+        FormatInfo {
+            id: FormatId::Drawio,
+            name: "drawio".into(),
+            short: "Drw".into(),
+            exts: vec![".drawio".into()],
+            surface: Surface::Canvas,
+            split_view: false,
+            ai: false,
+            // D2 / Excalidraw 都不作为转换源：D2 的出口是 drawio（见 D2 那条），
+            // 画布型则要先把内容导回文本或 Mermaid
+            convert_to: vec![],
+            layouts: vec![],
+            looks: vec![],
+            note: "画布即编辑器；文件仍是可 diff 的 mxfile XML".into(),
+            default_body: DRAWIO_BODY.into(),
+        },
         FormatInfo {
             id: FormatId::Mermaid,
             name: "Mermaid".into(),
@@ -53,6 +71,20 @@ pub fn registry() -> Vec<FormatInfo> {
             looks: MERMAID_LOOKS.iter().map(|s| (*s).to_string()).collect(),
             note: "文本图表，支持源码 / 分屏 / 预览三态".into(),
             default_body: MERMAID_BODY.into(),
+        },
+        FormatInfo {
+            id: FormatId::Excalidraw,
+            name: "Excalidraw".into(),
+            short: "Exc".into(),
+            exts: vec![".excalidraw".into()],
+            surface: Surface::Canvas,
+            split_view: false,
+            ai: false,
+            convert_to: vec![],
+            layouts: vec![],
+            looks: vec![],
+            note: "手绘风画布；文件是场景 JSON".into(),
+            default_body: EXCALIDRAW_BODY.into(),
         },
         FormatInfo {
             id: FormatId::Dot,
@@ -84,36 +116,6 @@ pub fn registry() -> Vec<FormatInfo> {
             looks: vec![],
             note: "文本图表，支持源码 / 分屏 / 预览三态；三种布局引擎（tala 较慢）".into(),
             default_body: D2_BODY.into(),
-        },
-        FormatInfo {
-            id: FormatId::Drawio,
-            name: "drawio".into(),
-            short: "Drw".into(),
-            exts: vec![".drawio".into()],
-            surface: Surface::Canvas,
-            split_view: false,
-            ai: false,
-            // D2 / Excalidraw 都不作为转换源：D2 的出口是 drawio（见上面 D2 那条），
-            // 画布型则要先把内容导回文本或 Mermaid
-            convert_to: vec![],
-            layouts: vec![],
-            looks: vec![],
-            note: "画布即编辑器；文件仍是可 diff 的 mxfile XML".into(),
-            default_body: DRAWIO_BODY.into(),
-        },
-        FormatInfo {
-            id: FormatId::Excalidraw,
-            name: "Excalidraw".into(),
-            short: "Exc".into(),
-            exts: vec![".excalidraw".into()],
-            surface: Surface::Canvas,
-            split_view: false,
-            ai: false,
-            convert_to: vec![],
-            layouts: vec![],
-            looks: vec![],
-            note: "手绘风画布；文件是场景 JSON".into(),
-            default_body: EXCALIDRAW_BODY.into(),
         },
     ]
 }
@@ -156,6 +158,18 @@ mod tests {
         for id in [FormatId::Mermaid, FormatId::Dot, FormatId::D2, FormatId::Drawio, FormatId::Excalidraw] {
             assert_eq!(r.iter().filter(|f| f.id == id).count(), 1, "{id:?} 出现次数不为 1");
         }
+    }
+
+    /// 显示顺序是产品决定的：drawio、Mermaid、Excalidraw、DOT、D2。
+    /// 「新建」对话框、「转换」下拉、「转换能力一览」的方向清单与矩阵都吃这个顺序 ——
+    /// 前端不再排第二次，所以这里一旦被改动，四处会一起变（这是有意的）。
+    #[test]
+    fn registry_order_is_the_ui_order() {
+        let order: Vec<FormatId> = registry().iter().map(|f| f.id).collect();
+        assert_eq!(
+            order,
+            vec![FormatId::Drawio, FormatId::Mermaid, FormatId::Excalidraw, FormatId::Dot, FormatId::D2]
+        );
     }
 
     #[test]

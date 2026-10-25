@@ -769,7 +769,11 @@ def main() -> int:
             hx, hy = json.loads(hover)
             cdp.call("Input.dispatchMouseEvent", {"type": "mouseMoved", "x": hx, "y": hy}, timeout=15)
             drain(0.25)
-            first_sub = ev("(() => { const b = document.querySelector('#pop-sub .pop-row');"
+            # 子菜单的行序 = 注册表顺序（drawio 在最前），而后面几条断言
+            # （视口适应 / PNG 导出）验的是**文本文档**；这里按名字挑 Mermaid，
+            # 不再"点第一行"——否则注册表一换序，探针就悄悄改成测画布了。
+            first_sub = ev("(() => { const rows = [...document.querySelectorAll('#pop-sub .pop-row')];"
+                           "const b = rows.find(r => r.textContent.includes('Mermaid')) || rows[0];"
                            "if (!b) return null; const r = b.getBoundingClientRect();"
                            "return JSON.stringify([r.left + r.width / 2, r.top + r.height / 2, b.textContent.trim()]); })()")
             if first_sub:
@@ -1090,7 +1094,8 @@ def main() -> int:
             "  const rows = [...document.querySelectorAll('#pop .pop-row .lbl')].map(e => e.textContent.trim());"
             "  bar.click();"
             "  const has = (s) => rows.some(x => x.includes(s));"
-            "  return JSON.stringify({rows, mermaid: has('Mermaid'), dot: has('DOT'), d2: has('D2'), ref: has('转换能力一览'),"
+            "  return JSON.stringify({rows, mermaid: rows.includes('Mermaid 文档'), dot: rows.includes('Graphviz DOT 文档'),"
+            "    d2: rows.includes('D2 文档'), ref: has('转换能力一览'),"
             "    refRow: rows.find(x => x.includes('转换能力一览')) || '', ro: has('只读')});"
             "})()"
         )
@@ -1100,7 +1105,7 @@ def main() -> int:
             if dm.get("err"):
                 fails.append(f"找不到帮助菜单：{dm.get('err')}")
             else:
-                for key, name in (("mermaid", "Mermaid 文档"), ("dot", "Graphviz DOT 规范"), ("d2", "D2 参考")):
+                for key, name in (("mermaid", "Mermaid 文档"), ("dot", "Graphviz DOT 文档"), ("d2", "D2 文档")):
                     if not dm.get(key):
                         fails.append(f"帮助菜单缺「{name}」入口（现有：{dm.get('rows')}）")
                 if not dm.get("ref"):
@@ -2009,7 +2014,7 @@ def main() -> int:
             # 换文档 = 一次新的「初始化」：新文档仍要按画布适应
             fresh = ev(
                 "(async () => {"
-                "  await DGM.state.newDoc(['mermaid']);"
+                "  await DGM.state.newDoc('mermaid');"
                 "  DGM.editor.loadActive();"
                 "  DGM.preview.schedule();"
                 "  await new Promise(r => setTimeout(r, 900));"
@@ -2428,7 +2433,7 @@ def main() -> int:
             "  await DGM.ai.ensureConversation(d.id, true);"
             "  await new Promise(r => setTimeout(r, 400));"
             "  const after = DGM.ai.turnCount();"
-            "  const fresh = await DGM.state.newDoc(['mermaid']);"
+            "  const fresh = await DGM.state.newDoc('mermaid');"
             "  await new Promise(r => setTimeout(r, 400));"
             "  const other = DGM.ai.turnCount();"
             "  return JSON.stringify({"
@@ -2977,7 +2982,7 @@ def main() -> int:
             "  out.aiTitle = DGM.i18n.t('dlg.history.title');"
             "  DGM.dialogs.close();"
             "  await DGM.state.patchSettings({ recent: before });"
-            "  await DGM.state.newDoc(['mermaid']);"  # 收尾留一份文档（后面的截图不该拍到欢迎页）
+            "  await DGM.state.newDoc('mermaid');"  # 收尾留一份文档（后面的截图不该拍到欢迎页）
             "  return JSON.stringify(out);"
             "})()"
         )

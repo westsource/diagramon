@@ -141,7 +141,10 @@ window.DGM = window.DGM || {};
       return state.doc(state.active);
     },
     docFmt(doc) {
-      return state.fmtById(doc ? doc.format : (state.formatList[0] && state.formatList[0].id));
+      // 没有文档时**固定按 Mermaid**（文本型）算：注册表的顺序是 UI 显示顺序
+      // （drawio 在前），拿 `formatList[0]` 当兜底会让"无文档"这种状态被当成
+      // 画布型 —— 视图菜单/另存默认后缀都会跟着走偏。
+      return state.fmtById(doc ? doc.format : "mermaid");
     },
     isTextDoc(doc) {
       return state.docFmt(doc).surface === "text";

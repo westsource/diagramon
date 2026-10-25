@@ -368,13 +368,29 @@ digraph Pipeline {
     excalidraw: '{\n  "type": "excalidraw",\n  "version": 2,\n  "source": "https://diagramon.app",\n  "elements": [],\n  "appState": { "viewBackgroundColor": "#ffffff" }\n}\n',
   };
 
+  // 顺序必须与 crates/app-core/src/format.rs 的 registry() 一致（drawio、Mermaid、
+  // Excalidraw、DOT、D2）：「新建」对话框、「转换为」下拉、能力一览都直接吃这个顺序。
   const FORMATS = [
+    {
+      id: "drawio", name: "drawio", short: "drawio", exts: [".drawio"],
+      surface: "canvas", split_view: false, ai: false,
+      convert_to: [], layouts: [],
+      note: "画布即编辑器；文件仍是可 diff 的 mxfile XML",
+      default_body: NEW_BODIES.drawio,
+    },
     {
       id: "mermaid", name: "Mermaid", short: "Mermaid", exts: [".mmd", ".mermaid"],
       surface: "text", split_view: true, ai: true,
       convert_to: ["drawio", "excalidraw", "dot", "d2"], layouts: [],
       note: "文本图表，支持源码 / 分屏 / 预览三态",
       default_body: NEW_BODIES.mermaid,
+    },
+    {
+      id: "excalidraw", name: "Excalidraw", short: "Excalidraw", exts: [".excalidraw"],
+      surface: "canvas", split_view: false, ai: false,
+      convert_to: [], layouts: [],
+      note: "手绘风画布；文件是场景 JSON",
+      default_body: NEW_BODIES.excalidraw,
     },
     {
       id: "dot", name: "Graphviz DOT", short: "DOT", exts: [".dot", ".gv"],
@@ -389,20 +405,6 @@ digraph Pipeline {
       convert_to: ["drawio"], layouts: ["dagre", "elk", "tala"],
       note: "文本图表，支持源码 / 分屏 / 预览三态；三种布局引擎（tala 较慢）",
       default_body: NEW_BODIES.d2,
-    },
-    {
-      id: "drawio", name: "drawio", short: "drawio", exts: [".drawio"],
-      surface: "canvas", split_view: false, ai: false,
-      convert_to: [], layouts: [],
-      note: "画布即编辑器；文件仍是可 diff 的 mxfile XML",
-      default_body: NEW_BODIES.drawio,
-    },
-    {
-      id: "excalidraw", name: "Excalidraw", short: "Excalidraw", exts: [".excalidraw"],
-      surface: "canvas", split_view: false, ai: false,
-      convert_to: [], layouts: [],
-      note: "手绘风画布；文件是场景 JSON",
-      default_body: NEW_BODIES.excalidraw,
     },
   ];
 
@@ -677,7 +679,13 @@ digraph Pipeline {
       return { docs: this._clone(this.docs), active: this.active };
     },
     _fmt(id) {
-      return FORMATS.find((f) => f.id === id) || FORMATS[0];
+      // 找不到就**报错**，别回退 FORMATS[0]：`doc_new` 的 `format` 是单个 FormatId，
+      // 传数组（历史上探针写成 `newDoc(['mermaid'])`）原本会被静默当成 FORMATS[0]，
+      // 于是"想建 Mermaid 却建了 drawio"，断言跟着测错东西。回退只在"没有文档"的
+      // 语义里出现（state.docFmt 固定 mermaid），不在这里。
+      const f = FORMATS.find((x) => x.id === id);
+      if (!f) throw new Error(`unknown format: ${JSON.stringify(id)}`);
+      return f;
     },
     _newId(prefix) {
       return prefix + nowSeq().toString(36) + Date.now().toString(36).slice(-3);
