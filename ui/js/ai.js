@@ -127,6 +127,20 @@ window.DGM = window.DGM || {};
     return { text: out.trim(), blocks };
   }
 
+  /**
+   * 该应用哪一块：**最后一个非空围栏**。
+   *
+   * 与 Rust 侧 `extract_code` 同一口径（那里注释写得很清楚：模型常先给一版再给修正版）。
+   * 客户端此前两处都取 `blocks[0]` —— 模型若先贴 diff/半张图、再贴完整版，
+   * 落进编辑器的就是第一块（半截），Mermaid 解析自然失败。
+   */
+  function lastBlock(blocks) {
+    for (let i = blocks.length - 1; i >= 0; i -= 1) {
+      if (String(blocks[i].code || "").trim()) return blocks[i];
+    }
+    return null;
+  }
+
   function langToFormat(lang) {
     if (lang === "dot" || lang === "graphviz") return "dot";
     if (lang === "d2") return "d2";
@@ -1121,7 +1135,8 @@ window.DGM = window.DGM || {};
     // 用户中途切了页签就会把别处的回复落进来。
     if (retryCtx && retryCtx.reqId && ev.request_id === retryCtx.reqId) {
       const { blocks } = splitFences(m.text || "");
-      if (blocks.length) applyBlock(blocks[0], m);
+      const blk = lastBlock(blocks);
+      if (blk) applyBlock(blk, m);
     }
     if (state.ui.aiSendThenApply) {
       state.ui.aiSendThenApply = false;
@@ -1303,7 +1318,8 @@ window.DGM = window.DGM || {};
       const m = list[i];
       if (m.role !== "assistant") continue;
       const { blocks } = splitFences(m.text || "");
-      if (blocks.length) return applyBlock(blocks[0], m);
+      const blk = lastBlock(blocks);
+      if (blk) return applyBlock(blk, m);
     }
     DGM.toast({ icon: "info", title: t("ai.apply"), sub: t("exp.noContent") });
   }

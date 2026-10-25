@@ -71,20 +71,33 @@ pub fn system_prompt(format: FormatId, intent: AiIntent) -> String {
             format_name(format)
         ),
         AiIntent::Review => format!(
-            "你是 Diagramon 的图表助手。用户会给你一份 {} 源码，请**只做局部修改**，不要重写整张图；\
-             保留原有的节点 id 与结构，除非用户明确要求改。",
+            // 这里曾经是「不要重写整张图…不要重复贴出用户已经给你的源码」，而客户端
+            // 「应用到编辑器」是把返回的那段代码**当作全文**替换的 —— 模型照着
+            // "别重复源码" 只回一个 diff/片段，落到编辑器里就是半张图，解析必挂。
+            // 语义改成：改动范围可以小，但**输出必须是完整源码**。
+            "你是 Diagramon 的图表助手。用户会给你一份 {} 源码，请**只改用户要求的部分**，\
+             不要顺手重写整张图；保留原有的节点 id 与结构，除非用户明确要求改。\
+             **输出时仍要给出完整源码**（未改动的部分原样保留）。",
             format_name(format)
         ),
         // 上面已提前返回；这里保持 match 穷尽，避免新增意图时静默落错分支。
         AiIntent::Explain => unreachable!("Explain 已在函数开头单独处理"),
     };
-    format!(
-        "{head}\n\n{rules}\n\n输出要求：\n\
+    // 改图的输出要求与生成不同：客户端把这一块**整体替换**进编辑器，
+    // 所以"只给改动部分"在这里等于把文档改坏。生成/识图没有这个约束（没有原文可保留）。
+    let tail = if intent == AiIntent::Review {
+        "输出要求：\n\
+         1. 输出**完整**的图表源码：未改动的部分原样保留，**不要只给 diff、片段或省略号**；\n\
+         2. 代码用 ``` 围栏包起来；\n\
+         3. 围栏外面最多一句话说明你改了什么，不要写教程；\n\
+         4. 不要解释语法。"
+    } else {
+        "输出要求：\n\
          1. 只输出一段可直接粘贴的代码，用 ``` 围栏包起来；\n\
          2. 围栏外面最多一句话说明你改了什么，不要写教程；\n\
-         3. 不要解释语法，不要重复贴出用户已经给你的源码。",
-        rules = format_rules(format)
-    )
+         3. 不要解释语法，不要重复贴出用户已经给你的源码。"
+    };
+    format!("{head}\n\n{rules}\n\n{tail}", rules = format_rules(format))
 }
 
 /// 附加文件的字符预算（**所有文件合计**）。
@@ -546,7 +559,23 @@ mod tests {
     #[test]
     fn review_prompt_forbids_full_rewrite() {
         let p = system_prompt(FormatId::Mermaid, AiIntent::Review);
-        assert!(p.contains("只做局部修改"), "改图必须明确不重写整张图：{p}");
+        assert!(p.contains("只改用户要求的部分"), "改图必须限定改动范围：{p}");
+        assert!(p.contains("不要顺手重写整张图"), "{p}");
+    }
+
+    /// 客户端「应用到编辑器」是把返回的代码**整体替换**进正文的（见 ai.js::applyBlock），
+    /// 所以改图的提示词必须要求**完整源码**：只要它允许"只给 diff/片段"，应用后就是半张图、
+    /// Mermaid 解析必失败。这条断言钉住的是这个跨层契约。
+    #[test]
+    fn review_prompt_demands_complete_source_because_apply_replaces_whole_body() {
+        let p = system_prompt(FormatId::Mermaid, AiIntent::Review);
+        assert!(p.contains("完整源码"), "改图必须要求完整源码：{p}");
+        assert!(p.contains("不要只给 diff、片段或省略号"), "{p}");
+        assert!(!p.contains("不要重复贴出用户已经给你的源码"), "改图不能再说别重复源码：{p}");
+        // 生成/识图没有"原文要保留"的问题，保持原口径。
+        let g = system_prompt(FormatId::Mermaid, AiIntent::Generate);
+        assert!(g.contains("只输出一段可直接粘贴的代码"), "{g}");
+        assert!(!g.contains("未改动的部分原样保留"), "{g}");
     }
 
     #[test]
