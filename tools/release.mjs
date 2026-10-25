@@ -314,19 +314,26 @@ function writeCnManifest() {
   log(`  ✓ 生成 ${basename(cnManifestFile())}（url → Gitee）`);
   return manifest;
 }
-/** 只保留最近 N 个带安装包的 Gitee Release；更老的删掉安装包与 latest-cn.json。 */
+/** 只保留最近 N 个带安装包的 Gitee Release；更老的删掉安装包与 latest-cn.json。
+ *
+ * 判据**必须读每个 release 的 attach_files**，不能看列表接口的 `assets`：
+ * 2026-10-25 实测列表接口里旧 release 的 `assets` 为空（或没有 name），于是
+ * `withSetup` 只算出最近几条、slice 之后一条都不删 —— 配额一路堆到 969 MB，
+ * 下一次上传直接 400「文件大小已超出仓库附件配额：1 GB」，而日志还写着"已清理"。 */
 function pruneGiteeInstallers() {
   if (opts.dryRun) { log(`  （--dry-run：Gitee 附件保留最近 ${GITEE_KEEP_INSTALLERS} 个）`); return; }
   const releases = curlJson({
-    url: giteeUrl(`releases?per_page=50&access_token=${giteeToken()}`),
+    url: giteeUrl(`releases?per_page=100&access_token=${giteeToken()}`),
     proxy: null,
   }).json || [];
-  const withSetup = releases
-    .filter((r) => !r.prerelease && !r.draft && (r.assets || []).some((a) => a.name.endsWith("-setup.exe")))
-    .sort((a, b) => Date.parse(b.created_at || 0) - Date.parse(a.created_at || 0));
-  for (const rel of withSetup.slice(GITEE_KEEP_INSTALLERS)) {
+  const withSetup = [];
+  for (const rel of releases) {
     let atts = [];
     try { atts = giteeAttachments(rel.id); } catch (e) { warn(`读 Gitee 附件失败（${rel.tag_name}）：${e.message}`); continue; }
+    if (atts.some((a) => a.name.endsWith("-setup.exe"))) withSetup.push({ rel, atts });
+  }
+  withSetup.sort((a, b) => Date.parse(b.rel.created_at || 0) - Date.parse(a.rel.created_at || 0));
+  for (const { rel, atts } of withSetup.slice(GITEE_KEEP_INSTALLERS)) {
     for (const a of atts) {
       if (a.name.endsWith("-setup.exe") || a.name === "latest-cn.json") {
         try { deleteGiteeAttachment(rel.id, a); } catch (e) { warn(`删 Gitee 附件失败（${a.name}）：${e.message}`); }
