@@ -8,8 +8,9 @@
  * - 画布型（drawio / Excalidraw）：交给 `DGM.canvas`（同源 iframe 承载面），
  *   本模块只切可见面并把工具条/缩放接到承载页的钩子上。
  * - 手势：滚轮平移 / Shift 横向 / Ctrl 以光标为中心缩放 / 拖拽 / 双击适应视图。
- * - 视口：只有**文档第一次挂上（初始化）**和用户显式「适应视图」才按画布大小适应；
- *   此后重渲染（敲字 / 换主题 / 切视图模式）与占位态都不再动用户的缩放与位置。
+ * - 视口：自动适应发生在三处 —— **文档第一次挂上（初始化）**、用户显式「适应视图」、
+ *   以及设置项 `editor.fit_on_resize`（默认开）打开时的**渲染区域尺寸变化**（拖分隔条 /
+ *   开合面板 / 切视图模式 / 缩放窗口）。其余重渲染（敲字 / 换主题）不动用户的缩放与位置。
  * - 动态尺寸只经 CSS 自定义属性（--pan-x/--pan-y/--zoom）。
  */
 window.DGM = window.DGM || {};
@@ -41,8 +42,9 @@ window.DGM = window.DGM || {};
    * - targetDoc：上一次渲染的目标文档 —— 换了目标才算一次新的「初始化」；
    * - fittedFor：这一次目标里已经按画布适应过的文档 id（失败不记账，下次重试）；
    * - mountedDoc：舞台里当前挂着哪份文档的 SVG（占位内容会把它清成 null）。
-   * 自动适应只发生在「初始化」（目标文档第一次真正挂上图）—— 之后的重渲染
-   * （敲字 / 换主题 / 切视图模式）一律保留用户自己调过的缩放与位置。 */
+   * 自动适应只发生在「初始化」（目标文档第一次真正挂上图）、显式「适应视图」与
+   * （设置开着时的）渲染区域尺寸变化 —— 之后的重渲染（敲字 / 换主题 / 切视图模式）
+   * 一律保留用户自己调过的缩放与位置。 */
   let targetDoc = null;
   let fittedFor = null;
   let mountedDoc = null;
@@ -148,6 +150,60 @@ window.DGM = window.DGM || {};
   function markFitted() {
     const d = state.activeDoc();
     if (d) fittedFor = d.id;
+  }
+
+  /* ------------------------------------------------- 渲染区域尺寸变化 → 自动适应 */
+
+  /**
+   * 设置项 `editor.fit_on_resize`（默认开）：渲染区域尺寸一变（拖分隔条、开合侧栏 /
+   * AI 面板 / 底部面板、切视图模式、缩放窗口），就等同用户点了一次「适应视图」。
+   * 关掉时视口仍只在「初始化」与显式适应时变（见文件头的视口约定）。
+   */
+  function autoFitOnResize() {
+    const s = state.settings;
+    return !!(s && s.editor && s.editor.fit_on_resize !== false);
+  }
+
+  /** 拖拽时尺寸每帧变一次；适配合并成每帧最多一次，别把 fit 排成一队。 */
+  let autoFitRaf = 0;
+
+  function scheduleAutoFit() {
+    if (autoFitRaf) return;
+    autoFitRaf = requestAnimationFrame(() => {
+      autoFitRaf = 0;
+      if (!autoFitOnResize()) return;
+      // 占位态（加载中 / 空文档 / 报错 / 大文档护栏）没有可适配的图：
+      // 报错文字、提示框都不是"内容"，别把它们当图去适配。
+      if (!DGM.preview.hasContent()) return;
+      fit();
+    });
+  }
+
+  /**
+   * 盯住渲染区域的尺寸。首帧回调只是基线（`observe()` 会立刻回一次当前尺寸），
+   * 那一次不能被当成"用户改了大小"，否则设置一开就可能多一次无谓的适应。
+   *
+   * 画布型（drawio / Excalidraw）的适配由承载页的 `__hostFit` 落地 —— `fit()` 里
+   * 已经分流，这里不用另开一条路。
+   */
+  function watchViewportResize() {
+    const { viewport } = nodes();
+    if (!viewport || typeof ResizeObserver === "undefined") return;
+    let base = null;
+    const ro = new ResizeObserver((entries) => {
+      const box = entries[entries.length - 1];
+      if (!box) return;
+      const w = box.contentRect.width;
+      const h = box.contentRect.height;
+      if (!base) {
+        base = { w, h };
+        return;
+      }
+      if (base.w === w && base.h === h) return;
+      base = { w, h };
+      scheduleAutoFit();
+    });
+    ro.observe(viewport);
   }
 
   function zoomBy(factor, origin) {
@@ -1026,6 +1082,9 @@ window.DGM = window.DGM || {};
     if (zf) zf.addEventListener("click", fit);
     const bs = $("#btn-show-source");
     if (bs) bs.addEventListener("click", () => DGM.shell.setMode("source"));
+    // 「解图」：预览顶栏的直接入口（菜单 / Ctrl+Shift+E / 命令面板 / 标签右键是另外几条）
+    const bx = $("#btn-explain");
+    if (bx) bx.addEventListener("click", () => DGM.ai.explain());
     // 「转换」唯一可见入口是标签条（#tab-convert），顶栏与状态栏不再放重复入口。
     const cp = $("#btn-copy-img");
     if (cp) cp.addEventListener("click", copyImage);
@@ -1054,6 +1113,7 @@ window.DGM = window.DGM || {};
       });
     }
     setupGestures();
+    watchViewportResize();
   }
 
   /* ------------------------------------------------------------------ 对外 */

@@ -438,6 +438,7 @@ window.DGM = window.DGM || {};
           { label: t("mi.aiGenerate"), kbd: "Ctrl+I", icon: "sparkles", act: "cmd:ai.generate" },
           { label: t("mi.aiVision"), kbd: "Ctrl+Shift+I", icon: "scan", act: "cmd:ai.vision" },
           { label: t("mi.aiReview"), icon: "wand", act: "cmd:ai.review" },
+          { label: t("mi.aiExplain"), icon: "diagram", kbd: "Ctrl+Shift+E", act: "cmd:ai.explain" },
           { label: t("mi.aiApply"), icon: "check", act: "cmd:ai.apply" },
           { sep: true },
           {
@@ -650,7 +651,7 @@ window.DGM = window.DGM || {};
   async function togglePanel(key, extra) {
     const p = state.panels();
     const opening = !p[key];
-    // 打开 AI 面板时按当前文档重新推导页签：有图落「改图」，无图落「对话生成」。
+    // 打开 AI 面板时按当前文档重新推导页签：有图落「改图」，无图落「生图」。
     if (key === "ai" && opening && DGM.ai && DGM.ai.onPanelOpen) DGM.ai.onPanelOpen();
     const patch = { panels: Object.assign({}, { [key]: !p[key] }, extra || {}) };
     await state.patchSettings(patch);
@@ -1344,6 +1345,9 @@ window.DGM = window.DGM || {};
     if (mod && e.shiftKey && k === "h") { e.preventDefault(); return runCommand("file.searchWorkspace"); }
     if (mod && k === "i" && !e.shiftKey) { e.preventDefault(); return DGM.ai.focus("chat"); }
     if (mod && e.shiftKey && k === "i") { e.preventDefault(); return DGM.dialogs.vision(); }
+    // Ctrl+Shift+E：解图（只读解读当前图）。快捷键只在父文档上生效 ——
+    // 焦点在 drawio / Excalidraw 的 iframe 里时按键不冒泡到这里，和其它快捷键一样。
+    if (mod && e.shiftKey && k === "e") { e.preventDefault(); return DGM.ai.explain(); }
     if (mod && k === "s" && !e.shiftKey) { e.preventDefault(); return saveActive(false); }
     if (mod && e.shiftKey && k === "s") { e.preventDefault(); return saveActive(true); }
     if (mod && k === "n") { e.preventDefault(); return DGM.dialogs.newDoc(); }
@@ -1466,6 +1470,9 @@ window.DGM = window.DGM || {};
     cmd({ id: "ai.generate", group: "ai", icon: "sparkles", kbd: "Ctrl+I", run: () => DGM.ai.focus("chat") });
     cmd({ id: "ai.vision", group: "ai", icon: "scan", kbd: "Ctrl+Shift+I", run: () => DGM.dialogs.vision() });
     cmd({ id: "ai.review", group: "ai", icon: "wand", run: () => DGM.ai.focus("review") });
+    // 「解图」= 只读解读当前图（独立 intent，不产代码卡、不动文档）。四个入口共用它：
+    // AI 菜单 / 命令面板 / 预览顶栏按钮 / 文档标签右键。
+    cmd({ id: "ai.explain", group: "ai", icon: "diagram", kbd: "Ctrl+Shift+E", run: () => DGM.ai.explain(), avail: () => (state.activeDoc() ? true : { why: t("status.noDoc") }) });
     cmd({ id: "ai.model", group: "ai", icon: "robot", kbd: "", run: (a) => DGM.ai.popModels(a || $("#ai-model")) });
     cmd({ id: "ai.apply", group: "ai", icon: "check", run: () => DGM.ai.applyLast() });
     cmd({ id: "ai.history", group: "ai", icon: "history", run: () => DGM.dialogs.history() });

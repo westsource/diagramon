@@ -137,6 +137,8 @@ window.DGM = window.DGM || {};
   function openTabMenu(x, y, d) {
     const isActive = d.id === state.active;
     const items = [
+      { label: t("tab.explain"), icon: "diagram", act: "explain" },
+      { sep: true },
       { label: t("tab.close"), icon: "close", act: "close" },
       { label: t("tab.closeOthers"), icon: "close", act: "others" },
       { label: t("tab.closeAll"), icon: "trash", act: "all" },
@@ -144,8 +146,9 @@ window.DGM = window.DGM || {};
       { label: t("tab.copyPath"), icon: "copy", act: "path", disabled: !d.path },
       { label: t("tab.reveal"), icon: "folderOpen", act: "reveal", disabled: !d.path },
     ];
+    let activated = null;
     if (!isActive) {
-      state.activateDoc(d.id).then(() => {
+      activated = Promise.resolve(state.activateDoc(d.id)).then(() => {
         if (DGM.editor && DGM.editor.loadActive) DGM.editor.loadActive();
         if (DGM.preview && DGM.preview.schedule) DGM.preview.schedule();
       });
@@ -156,7 +159,10 @@ window.DGM = window.DGM || {};
       else if (it.act === "others") closeMany(state.docs.filter((x2) => x2.id !== d.id).map((x2) => x2.id));
       else if (it.act === "all") closeMany(state.docs.map((x2) => x2.id));
       else if (it.act === "path") copyPath(d.path);
-      else if (it.act === "reveal") DGM.toast({ icon: "folderOpen", title: t("tab.reveal"), sub: t("common.notWired") });
+      else if (it.act === "explain") {
+        // 对**右键的那份**文档解读（不是右键时碰巧活动的另一份）：等激活落地再发
+        Promise.resolve(activated || true).then(() => DGM.ai.explain());
+      } else if (it.act === "reveal") DGM.toast({ icon: "folderOpen", title: t("tab.reveal"), sub: t("common.notWired") });
     });
   }
 

@@ -1,4 +1,4 @@
-/* AI 右栏：对话生成 / 识图 / 改图 三 tab。
+/* AI 右栏：生图 / 识图 / 改图 三 tab。
  *
  * - 请求走 ai_chat，接受结果走事件 ai://delta / ai://done / ai://failed；
  *   mock 后端在同一条事件通道上假流式，界面无需区分。
@@ -53,11 +53,19 @@ window.DGM = window.DGM || {};
     return docId || "__none__";
   }
 
+  /** 面板的四个页签 = 四份对话桶。**只在这里枚举一次**：加页签时漏改任何一处
+   *  （渲染 / 落盘 / 还原 / 清空）都会得到"消息 push 到 undefined"或"某页签永远空"。 */
+  const TABS_ALL = ["chat", "vision", "review", "explain"];
+
+  function emptyBucket() {
+    return { chat: [], vision: [], review: [], explain: [] };
+  }
+
   function bucket(docId) {
     const key = bucketKey(docId);
     let b = msgsByDoc.get(key);
     if (!b) {
-      b = { chat: [], vision: [], review: [] };
+      b = emptyBucket();
       msgsByDoc.set(key, b);
     }
     return b;
@@ -82,7 +90,7 @@ window.DGM = window.DGM || {};
   }
 
   /** 面板从收起变为打开时调用：丢掉上一次的显式页签，让 `tab()` 重新按当前文档推导。
-   *  已经打开图还停在上次选的「对话生成」上，是用户明确反馈过的错位。 */
+   *  已经打开图还停在上次选的「生图」上，是用户明确反馈过的错位。 */
   function onPanelOpen() {
     state.ui.aiTab = null;
   }
@@ -381,7 +389,7 @@ window.DGM = window.DGM || {};
     const req = m.reqBody || {
       request_id: newId(),
       model_id: m.modelId || (state.currentModel() ? state.currentModel().id : ""),
-      intent: m.intent || (m.m === "vision" ? "vision" : m.m === "review" ? "review" : "generate"),
+      intent: m.intent || (m.m === "vision" ? "vision" : m.m === "review" ? "review" : m.m === "explain" ? "explain" : "generate"),
       prompt: m.prompt || (user && user.text) || "",
       format: (doc && doc.format) || "mermaid",
       context: (doc && doc.body) || null,
@@ -419,6 +427,7 @@ window.DGM = window.DGM || {};
   }
 
   function emptyNode() {
+    if (tab() === "explain") return explainEmptyNode();
     const box = h("div", "ai-empty");
     box.innerHTML =
       `<div><div class="hero">${icon("sparkles", "ico-lg")}</div>` +
@@ -435,6 +444,40 @@ window.DGM = window.DGM || {};
       if (b.dataset.a === "vision") DGM.ai.focus("vision");
       else if (b.dataset.a === "ctx") DGM.ai.explain();
       else input().focus();
+    });
+    return box;
+  }
+
+  /** 「解图」页签的空态：一个主按钮 + 三个角度词。
+   *
+   *  角度词**直接发**（走 `sendNow`，页签本身已经把 intent 定成 `explain`），不是像
+   *  「生图」的建议词那样只把文字填进输入框 —— 后者在生图页签里会被当"画图"发出去，
+   *  同一句话两个契约正是这个功能以前的毛病。
+   */
+  function explainEmptyNode() {
+    const box = h("div", "ai-empty");
+    box.innerHTML =
+      `<div><div class="hero">${icon("diagram", "ico-lg")}</div>` +
+      `<h3>${esc(t("ai.empty.explain.title"))}</h3>` +
+      `<p>${esc(t("ai.empty.explain.desc"))}</p>` +
+      `<div class="acts">` +
+      `<button class="btn ai block" data-a="ctx">${icon("diagram")}${esc(t("ai.empty.ctx"))}</button>` +
+      ["what", "path", "risk"]
+        .map((k) => `<button class="btn ghost block" data-a="ask:${k}">${esc(t("ai.explain.chip." + k))}</button>`)
+        .join("") +
+      `</div></div>`;
+    box.addEventListener("click", (e) => {
+      const b = e.target.closest("button");
+      if (!b) return;
+      if (b.dataset.a === "ctx") {
+        DGM.ai.explain();
+        return;
+      }
+      const k = (b.dataset.a || "").split(":")[1];
+      if (!k) return;
+      const ta = input();
+      if (ta) ta.value = t("ai.explain.chip." + k);
+      sendNow();
     });
     return box;
   }
@@ -495,7 +538,9 @@ window.DGM = window.DGM || {};
           ? t("ai.hint.vision")
           : cur === "review"
             ? t("ai.hint.review", { name: d ? d.name : t("status.noDoc") })
-            : t("ai.hint.chat", { name: d ? state.docFmt(d).name : t("status.noDoc") });
+            : cur === "explain"
+              ? t("ai.hint.explain", { name: d ? d.name : t("status.noDoc") })
+              : t("ai.hint.chat", { name: d ? state.docFmt(d).name : t("status.noDoc") });
     }
 
     // 建议词只在对话 tab
@@ -507,6 +552,13 @@ window.DGM = window.DGM || {};
         ["ai.suggest.1", "ai.suggest.2", "ai.suggest.3", "ai.suggest.4", "ai.suggest.5"].forEach((k) => {
           const b = h("button", "sug", esc(t(k)));
           b.addEventListener("click", () => {
+            // #4 是「解释这张图在讲什么」：直接落到「解图」页签去发。
+            // 以前它只是把文字填进输入框，而这个页签的 intent 是 generate（画图）——
+            // 同一句话两个契约，用户永远猜不到它到底会画还是会讲。
+            if (k === "ai.suggest.4") {
+              DGM.ai.explain();
+              return;
+            }
             if (ta) {
               ta.value = t(k);
               ta.focus();
@@ -815,6 +867,11 @@ window.DGM = window.DGM || {};
       DGM.toast({ icon: "image", title: t("ai.vision.pick"), sub: "", warn: true });
       return;
     }
+    // 「解图」是只读页签：没有活动文档就没有可解读的东西（不拿"无上下文"去问模型）
+    if (cur === "explain" && !d) {
+      DGM.toast({ icon: "info", title: t("ai.empty.ctx"), sub: t("status.noDoc") });
+      return;
+    }
     const text = prompt || (cur === "vision" ? t("ai.tab.vision") : "");
     if (!text) {
       ta && ta.focus();
@@ -834,6 +891,7 @@ window.DGM = window.DGM || {};
     const ai = state.ai();
     let context = null;
     if (cur === "review") context = d ? d.body : selectionCtx;
+    else if (cur === "explain") context = d ? d.body : null; // 解读的永远是全文，不吃选区
     else if (selectionCtx) context = selectionCtx;
     else if (cur === "chat" && ai.context_from_doc && d && state.isTextDoc(d)) context = d.body;
 
@@ -846,7 +904,7 @@ window.DGM = window.DGM || {};
     const req = {
       request_id: newId(),
       model_id: state.currentModel() ? state.currentModel().id : "",
-      intent: cur === "vision" ? "vision" : cur === "review" ? "review" : "generate",
+      intent: cur === "vision" ? "vision" : cur === "review" ? "review" : cur === "explain" ? "explain" : "generate",
       prompt: reqPrompt,
       format: fmtId,
       context: context || null,
@@ -872,7 +930,15 @@ window.DGM = window.DGM || {};
     });
   }
 
-  /** 只读解释当前图表：独立 intent，不产出代码卡，也不走 apply。 */
+  /** 只读解释当前图表：独立 intent，不产出代码卡，也不走 apply。
+   *
+   *  落点是**自己的「解图」页签**（2026-10-26 拍板）：解释是这个面板里唯一的只读任务，
+   *  混进「改图」的会话桶会让那条桶既像改图又像读图。入口有四个，全走这里：
+   *  菜单 / 命令面板 / 预览顶栏 / 文档标签右键（+ 面板里的空态按钮与角度词）。
+   *
+   *  **必须自己把面板打开**：这条以前只从面板内部的空态按钮进，所以没做这件事；
+   *  现在菜单和快捷键在面板收起时也能按，不打开就等于按了没反应。
+   */
   async function explain() {
     const d = state.activeDoc();
     if (!d) {
@@ -884,7 +950,11 @@ window.DGM = window.DGM || {};
       DGM.dialogs.settings("ai");
       return;
     }
-    state.ui.aiTab = "review";
+    if (!state.panels().ai) state.patchSettings({ panels: { ai: true } });
+    state.ui.aiTab = "explain";
+    unreadCount = 0;
+    render();
+    if (DGM.shell && DGM.shell.renderActivity) DGM.shell.renderActivity();
     const req = {
       request_id: newId(),
       model_id: state.currentModel() ? state.currentModel().id : "",
@@ -894,10 +964,10 @@ window.DGM = window.DGM || {};
       context: d.body,
       files: [],
       image_data_url: null,
-      history: [],
+      history: historyFor("explain", d.id),
       scene: "explain",
     };
-    await dispatch(req, "review", { id: newId(), role: "user", text: t("ai.empty.ctx") }, d.id);
+    await dispatch(req, "explain", { id: newId(), role: "user", text: t("ai.empty.ctx") }, d.id);
   }
 
   /** 把一个请求挂进某个 tab 并发出去：用户消息 + 占位气泡 + busy 标记 + 调 `ai_chat`。
@@ -1466,15 +1536,20 @@ window.DGM = window.DGM || {};
     }
     const turns = (conv && conv.turns) || [];
     if (!turns.length && !force) return;
-    const b = force ? { chat: [], vision: [], review: [] } : bucket(docId);
+    const b = force ? emptyBucket() : bucket(docId);
     if (force) msgsByDoc.set(docId, b);
     for (const tn of turns) {
-      const which = tn.tab === "vision" || tn.tab === "review" ? tn.tab : "chat";
+      // 旧会话文件没有 `explain` 这一页（2026-10-26 才加），认不出来的一律归「生图」——
+      // 宁可放错页签，也不能把整份会话丢掉。
+      const which = TABS_ALL.includes(tn.tab) ? tn.tab : "chat";
       const assistant = tn.role === "assistant";
       b[which].push({
         id: newId(),
         role: assistant ? "assistant" : "user",
         text: tn.text || "",
+        // 还原这一轮**属于哪个页签**：重试要用它推 intent（以前还原出来的消息没有 `m`，
+        // 「改图」里重试会被当成"从头生成"，解图里重试会去画图）。
+        m: which,
         // 思考原文一起还原（3.5.3 起思考块可折叠，但推理以前只在内存里 —— 重启后
         // 那一轮连块都没有，"随时点开重读"就成了空话）。收不到就是空串（旧文件）。
         thinking: tn.thinking || "",
@@ -1524,7 +1599,7 @@ window.DGM = window.DGM || {};
     if (!d) return;
     const b = bucket(d.id);
     const turns = [];
-    for (const which of ["chat", "vision", "review"]) {
+    for (const which of TABS_ALL) {
       for (const m of b[which]) {
         if (!turnKeep(m)) continue;
         turns.push({
@@ -1565,8 +1640,8 @@ window.DGM = window.DGM || {};
     if (fromKey === toKey) return;
     const src = msgsByDoc.get(fromKey);
     if (!src) return;
-    if (!src.chat.length && !src.vision.length && !src.review.length) return;
-    const copy = { chat: [], vision: [], review: [] };
+    if (!TABS_ALL.some((k) => src[k] && src[k].length)) return;
+    const copy = emptyBucket();
     // 归属一起改：过继后的消息属于新文档，后续「重新生成 / 编辑重发 / 落盘」都按 `m.doc`
     // 找桶 —— 留在旧归属上，这些操作会写回旧文档（没有文档时更是写进无主桶）。
     for (const k of Object.keys(copy)) copy[k] = src[k].map((x) => ({ ...x, doc: toId }));
@@ -1583,7 +1658,7 @@ window.DGM = window.DGM || {};
   async function clear() {
     const d = state.activeDoc();
     if (!d) return;
-    msgsByDoc.set(d.id, { chat: [], vision: [], review: [] });
+    msgsByDoc.set(d.id, emptyBucket());
     render();
     DGM.toast({ icon: "trash", title: t("ai.clearToast"), sub: "" });
     try {
@@ -1603,7 +1678,7 @@ window.DGM = window.DGM || {};
     if (!d) return [];
     const b = bucket(d.id);
     const out = [];
-    for (const which of ["chat", "vision", "review"]) {
+    for (const which of TABS_ALL) {
       for (const m of b[which]) {
         if (!turnKeep(m)) continue;
         out.push({

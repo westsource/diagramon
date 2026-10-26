@@ -151,7 +151,7 @@ PROBE_JS = r"""
 
   // 6) AI 面板有明确入口（未配置模型时要给引导，而不是死路）
   ok("AI 面板存在", sel(".ai-pane"));
-  ok("AI 三页签存在", document.querySelectorAll("#ai-tabs .ai-tab").length === 3);
+  ok("AI 四页签存在", document.querySelectorAll("#ai-tabs .ai-tab").length === 4);
 
   return JSON.stringify(out);
 })()

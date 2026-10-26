@@ -69,6 +69,10 @@ Version **3.8.7** · Official website <https://www.diagramon.com>
   clamped to the same 0.2×–30× range as the other surfaces
 - **Status-bar zoom readout** — shows the zoom of the *active* view only (each canvas's own readout is
   hidden so two numbers can never disagree on screen)
+- **Refits when the render area resizes** (on by default; turn it off in Settings → Editor) — dragging the
+  splitter, toggling the sidebar / AI panel / bottom panel, switching view modes or resizing the window
+  re-fits and re-centres the diagram exactly as pressing "Fit view" would; with it off, the viewport only
+  changes on open/switch and on an explicit fit
 - **Layout engine picker** — DOT offers `dot` / `neato` / `fdp` / `sfdp` / `twopi` / `circo`, switched
   incrementally without reloading the WASM engine; D2 offers `dagre` / `elk` / `tala`, recompiled for the
   new layout while the engine instance is reused (`tala` is slow — pick it deliberately); Mermaid offers
@@ -147,8 +151,9 @@ Version **3.8.7** · Official website <https://www.diagramon.com>
   authorization), and can be tightened with "only read and write inside the workspace"
 
 ### AI assistant
-- **Three tabs** — generate (natural language → diagram code for the current format), vision
-  (image → code) and review (ask for changes to the current document)
+- **Four tabs** — generate (natural language → diagram code for the current format), vision
+  (image → code), review (ask for changes to the current document) and explain (a read-only reading of
+  the current diagram: what it says, the main path, module boundaries, risks — no code, no edits)
 - **Two kinds of credentials, kept visually separate** — the cloud gateway (membership; the credential is
   the current login token, so you fill in nothing) and local BYOK (OpenAI-compatible / Ollama / custom,
   where you supply the key) are shown as groups, never mixed
@@ -382,7 +387,7 @@ tools/               asset fetching (drawio / excalidraw / graphviz / mermaid / 
 | `Ctrl+F` | Find and replace |
 | `Ctrl+Shift+H` | Search the whole workspace |
 | `Ctrl+Shift+P` / `F1` | Command palette |
-| `Ctrl+I` / `Ctrl+Shift+I` | AI chat / AI image recognition |
+| `Ctrl+I` / `Ctrl+Shift+I` / `Ctrl+Shift+E` | AI generate / AI vision / AI explain |
 | `Ctrl+Shift+C` | Copy the active view as an image |
 | `Ctrl+B` / `Ctrl+J` / `Ctrl+Shift+A` | Sidebar / bottom panel / AI panel |
 | `Ctrl+Shift+F` | Zen mode (full-screen editing) |

@@ -216,6 +216,11 @@ pub struct EditorPrefs {
     /// 默认静默落盘等于替用户按下 Ctrl+S。想要"随手改随手存"的，在设置里显式打开。
     pub autosave: bool,
     pub autosave_ms: u32,
+    /// 渲染区域尺寸变化时自动适应视图（等同用户点了一次「适应视图」）。
+    /// **默认开**：拖分隔条、开合侧栏 / AI 面板 / 底部面板、切视图模式、缩放窗口之后，
+    /// 图不该只露一角或缩成一小团。不想要这个联动就在设置里关掉 ——
+    /// 关掉后视口只在「打开/切换文档」与显式「适应视图」时变。
+    pub fit_on_resize: bool,
     /// 打开工作区后，是否把文件读写限制在工作区内。
     /// 默认关：自由「另存为」到别处是常见需求，开成默认会莫名挡住用户。
     pub restrict_to_workspace: bool,
@@ -231,6 +236,7 @@ impl Default for EditorPrefs {
             default_view: ViewMode::Split,
             autosave: false,
             autosave_ms: 5000,
+            fit_on_resize: true,
             restrict_to_workspace: false,
         }
     }

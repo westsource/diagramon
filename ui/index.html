@@ -100,6 +100,7 @@
             <span class="sp"></span>
             <!-- 渲染选项控件（Mermaid：外观+布局 / DOT·D2：布局）；由 preview.js 按格式显隐 -->
             <span id="pv-opts" style="display:contents"></span>
+            <button class="mini-btn" id="btn-explain" data-i18n-title="ui.explain" title="解图  Ctrl+Shift+E"><svg class="ico ico-sm"><use href="#i-diagram"></use></svg></button>
             <button class="mini-btn" id="btn-show-source" data-i18n-title="ui.showSource" title="显示源码窗口  Ctrl+1"><svg class="ico ico-sm"><use href="#i-code"></use></svg></button>
             <button class="mini-btn" id="btn-copy-img" data-i18n-title="preview.copyTip" title="复制图片"><svg class="ico ico-sm"><use href="#i-copy"></use></svg></button>
             <button class="mini-btn" id="btn-export" data-i18n-title="preview.exportTip" title="导出图片"><svg class="ico ico-sm"><use href="#i-download"></use></svg></button>
@@ -152,9 +153,10 @@
       </div>
 
       <div class="ai-tabs" id="ai-tabs">
-        <button class="ai-tab on" data-ai="chat" data-i18n="ai.tab.chat">对话生成</button>
+        <button class="ai-tab on" data-ai="chat" data-i18n="ai.tab.chat">生图</button>
         <button class="ai-tab" data-ai="vision" data-i18n="ai.tab.vision">识图</button>
         <button class="ai-tab" data-ai="review" data-i18n="ai.tab.review">改图</button>
+        <button class="ai-tab" data-ai="explain" data-i18n="ai.tab.explain">解图</button>
       </div>
 
       <div class="ai-memory-bar" id="ai-memory-bar" hidden><!-- JS 渲染：待确认的记忆候选 --></div>

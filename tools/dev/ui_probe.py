@@ -2092,6 +2092,73 @@ def main() -> int:
             if not fresh or fresh == hundred:
                 fails.append(f"新文档没有重新适应视口：{hundred} → {fresh}")
 
+        # ---- 断言 23b：渲染区域尺寸变化 → 自动适应（设置默认开） ----
+        # 用户要求（2026-10-26）：设置里新增「渲染区域大小变化时自动适应视图」，默认开；
+        # 开着时尺寸一变就等同点一次「适应视图」。钉三件事：默认开、改尺寸后真的按新视口
+        # 重新适应并居中、关掉后改尺寸一动不动。尺寸改完立刻还原，别影响后面的断言。
+        fit_ready = ev(
+            "(async () => {"
+            "  const d = DGM.state.docs.find(x => x.format === 'mermaid');"
+            "  if (!d) return 'no-doc';"
+            "  await DGM.state.activateDoc(d.id);"
+            "  await DGM.state.setViewMode(d.id, 'split');"
+            "  DGM.shell.render();"
+            "  await new Promise(r => setTimeout(r, 900));"
+            "  window.__fitSnap = () => {"
+            "    const st = document.querySelector('#canvas-stage');"
+            "    const svg = st && st.querySelector('svg');"
+            "    const vp = document.querySelector('#canvas-viewport').getBoundingClientRect();"
+            "    const z = parseFloat(st.style.getPropertyValue('--zoom'));"
+            "    const out = { z, vw: vp.width, vh: vp.height, w: 0, want: 0, dx: 0, dy: 0 };"
+            "    if (!svg) return JSON.stringify(out);"
+            "    const w = svg.width.baseVal.value, h = svg.height.baseVal.value;"
+            "    out.w = w;"
+            "    out.want = Math.min(Math.max(Math.min((vp.width - 36) / w, (vp.height - 36) / h), 0.2), 30);"
+            "    out.dx = parseFloat(st.style.getPropertyValue('--pan-x')) - (vp.width - w * z) / 2;"
+            "    out.dy = parseFloat(st.style.getPropertyValue('--pan-y')) - (vp.height - h * z) / 2;"
+            "    return JSON.stringify(out);"
+            "  };"
+            "  return JSON.stringify({ def: DGM.state.settings.editor.fit_on_resize !== false,"
+            "    snap: JSON.parse(window.__fitSnap()) });"
+            "})()"
+        )
+        log(f"尺寸适应（默认值 + 初始）: {fit_ready}")
+        if fit_ready in (None, "", "no-doc"):
+            fails.append("尺寸自适应断言起不来（没有 mermaid 文档？）")
+        else:
+            fr = json.loads(fit_ready)
+            if not fr.get("def"):
+                fails.append("editor.fit_on_resize 默认应为开（旧设置文件缺这个字段时也必须开）")
+            # 放大、再改尺寸：必须按新视口重新适应（缩放 = 期望值，且居中）
+            cdp.send("Emulation.setDeviceMetricsOverride",
+                     {"width": 1120, "height": 820, "deviceScaleFactor": 1, "mobile": False})
+            drain(0.6)
+            after = json.loads(ev("window.__fitSnap()") or "{}")
+            log(f"尺寸适应（改小窗口）: {fr.get('snap')} → {after}")
+            if not after.get("w"):
+                fails.append("改尺寸后舞台上没有图（断言无效）")
+            elif abs(after.get("z", 0) - after.get("want", -1)) > 1e-2:
+                fails.append(f"改尺寸后没有按新视口适应：z={after.get('z')} want={after.get('want')}")
+            elif abs(after.get("dx", 99)) > 1.5 or abs(after.get("dy", 99)) > 1.5:
+                fails.append(f"改尺寸后没有居中：dx={after.get('dx')} dy={after.get('dy')}")
+            elif abs(after.get("z", 0) - fr["snap"].get("z", 0)) < 1e-6:
+                fails.append(f"改尺寸后缩放没变（自动适应没接上）：{fr['snap']} → {after}")
+            # 关掉设置 → 改尺寸不再动视口
+            ev("DGM.state.patchSettings({ editor: { fit_on_resize: false } })")
+            drain(0.4)
+            cdp.send("Emulation.setDeviceMetricsOverride",
+                     {"width": 1280, "height": 900, "deviceScaleFactor": 1, "mobile": False})
+            drain(0.6)
+            off = json.loads(ev("window.__fitSnap()") or "{}")
+            log(f"尺寸适应（设置关掉）: {after} → {off}")
+            if abs(off.get("z", 0) - after.get("z", 0)) > 1e-6:
+                fails.append(f"设置关掉后仍在改缩放：{after.get('z')} → {off.get('z')}")
+            # 还原：尺寸回到探针基准、设置回到默认开
+            cdp.send("Emulation.setDeviceMetricsOverride",
+                     {"width": 1440, "height": 900, "deviceScaleFactor": 1, "mobile": False})
+            ev("DGM.state.patchSettings({ editor: { fit_on_resize: true } })")
+            drain(0.6)
+
         # ---- 断言 24：AI「有 token、没有正文」不再是空气泡 ----
         # 2026-10-14 用户报的 bug：用思考型模型改图，token 记了 2000+，对话里一个字都没有。
         # 根因：客户端只认 `delta.content`，把整条流的 `reasoning_content` 全丢了（真机抓包
@@ -2382,30 +2449,42 @@ def main() -> int:
             log(f"（断言 26.5 解析失败：{e}）")
             fails.append("断言 26.5 拿不到结果（外部文件上下文链路可能整个没接上）")
 
-        # ---- 断言 26.6：Explain 只读意图 + 单条消息操作 ----
-        # Explain 不能再出代码卡/应用按钮；消息操作栏要能删除整轮（user+assistant）。
+        # ---- 断言 26.6：「解图」只读页签（独立桶）+ 单条消息操作 ----
+        # 2026-10-26 拍板：解释图从「改图」里独立出来，成为第 4 个页签「解图」。
+        # 这里钉住：四个页签都在、解图的空态有主按钮 + 3 个角度词、角度词直接发 explain
+        # （不是填输入框走 generate）、回复落在 explain 桶里且没有代码卡、删除整轮成对。
         explain_probe = ev(
             "(async () => {"
             "  const wait = (ms) => new Promise(r => setTimeout(r, ms));"
             "  const d = await DGM.state.newDoc('mermaid');"
             "  await DGM.state.setBodyNow(d.id, 'flowchart TD\\n  A[a] --> B[b]\\n');"
-            "  DGM.ai.focus('review'); await wait(200);"
-            "  DGM.ai.clear(); await wait(150);"
-            "  await DGM.ai.explain();"
+            "  DGM.ai.focus('explain'); await wait(250);"
+            "  DGM.ai.clear(); await wait(200);"
+            "  const tabs = [...document.querySelectorAll('#ai-tabs .ai-tab')].map((b) => b.dataset.ai + ':' + b.textContent.trim());"
+            "  const emptyBtns = [...document.querySelectorAll('#ai-stream .ai-empty button')].map((b) => b.dataset.a || '');"
+            "  const chip = document.querySelector('#ai-stream .ai-empty button[data-a=\"ask:risk\"]');"
+            "  if (chip) chip.click();"
             "  for (let i = 0; i < 50 && DGM.state.ui.aiBusy; i++) await wait(100);"
-            "  await wait(200);"
+            "  await wait(250);"
             "  const msgs = [...document.querySelectorAll('#ai-stream .msg')];"
             "  const bot = [...msgs].reverse().find((m) => m.classList.contains('bot'));"
             "  const cards = bot ? bot.querySelectorAll('.code-card').length : -1;"
+            "  const applyBtn = bot ? bot.querySelectorAll('.code-card .apply, [data-a=apply]').length : -1;"
             "  const acts = bot ? bot.querySelectorAll('.msg-acts .msg-act').length : -1;"
+            "  const turns = DGM.ai.turnsFor();"
+            "  const lastTab = turns.length ? turns[turns.length - 1].tab : '';"
+            "  const cmd = DGM.commands.list().some((c) => c.id === 'ai.explain');"
+            "  const headBtn = !!document.querySelector('#pane-preview #btn-explain');"
             "  const beforeDel = msgs.length;"
             "  const del = bot && bot.querySelector('.msg-acts .msg-act:last-child');"
             "  if (del) del.click();"
-            "  await wait(250);"
+            "  await wait(300);"
             "  const afterDel = document.querySelectorAll('#ai-stream .msg').length;"
             "  DGM.dialogs.close();"
             "  await DGM.state.closeDoc(d.id);"
-            "  return JSON.stringify({ hasFn: typeof DGM.ai.explain === 'function', cards, acts, deleted: beforeDel - afterDel });"
+            "  return JSON.stringify({ hasFn: typeof DGM.ai.explain === 'function', tabs, emptyBtns,"
+            "    tab: DGM.state.ui.aiTab, intentTab: lastTab, cards, applyBtn, acts,"
+            "    deleted: beforeDel - afterDel, cmd, headBtn });"
             "})()"
         )
         log(f"Explain / 消息操作: {explain_probe}")
@@ -2413,12 +2492,27 @@ def main() -> int:
             ep = json.loads(explain_probe or "{}")
             if not ep.get("hasFn"):
                 fails.append("DGM.ai.explain 不存在")
+            if ep.get("tabs") != ["chat:生图", "vision:识图", "review:改图", "explain:解图"]:
+                fails.append(f"AI 页签不是 生图/识图/改图/解图 四个：{ep.get('tabs')}")
+            btns = ep.get("emptyBtns") or []
+            if btns[:1] != ["ctx"] or len(btns) != 4:
+                fails.append(f"解图空态应有 1 个主按钮 + 3 个角度词，实际 {btns}")
+            if ep.get("tab") != "explain":
+                fails.append(f"解释没有落在「解图」页签：{ep.get('tab')}")
+            if ep.get("intentTab") != "explain":
+                fails.append(f"这一轮没有记进 explain 桶：{ep.get('intentTab')}")
             if ep.get("cards") != 0:
                 fails.append(f"Explain 回复仍渲染了代码卡：{ep.get('cards')}")
+            if ep.get("applyBtn") != 0:
+                fails.append(f"Explain 回复出现了应用按钮：{ep.get('applyBtn')}")
             if (ep.get("acts") or 0) < 2:
                 fails.append(f"消息操作栏没有重试/删除按钮：{ep.get('acts')}")
             if ep.get("deleted") != 2:
                 fails.append(f"删除整轮没有同时移除 user+assistant：{ep.get('deleted')}")
+            if not ep.get("cmd"):
+                fails.append("命令面板里没有 ai.explain（菜单/快捷键/命令面板三条入口靠它）")
+            if not ep.get("headBtn"):
+                fails.append("预览顶栏没有「解图」按钮（#btn-explain）")
         except Exception as e:
             log(f"（断言 26.6 解析失败：{e}）")
             fails.append("断言 26.6 拿不到结果（Explain 或消息操作链路可能没接上）")
