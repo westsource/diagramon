@@ -645,6 +645,11 @@ window.DGM = window.DGM || {};
       startOnLoad: false,
       securityLevel: "strict",
       theme: dark ? "dark" : "default",
+      // Mermaid 12.2.0 的 line-hops（交叉处跳线）后处理会把经过交叉点的边重写成
+      // `stroke-dasharray: 0 0 <len> <marker>`，**连 linkStyle 里的 stroke-dasharray
+      // 一起覆盖** —— 用户 2026-10-27 报的就是这个：`-.->` 的边被画成实线。
+      // 交叉跳线只是装饰，虚线的语义不能丢；上游修好之前先关掉它。
+      elk: { lineHops: false },
       ...(look ? { look } : {}),
       ...(layout ? { layout } : {}),
     });

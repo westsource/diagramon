@@ -2604,6 +2604,59 @@ def main() -> int:
             log(f"（断言 26.7 解析失败：{e}）")
             fails.append("断言 26.7 拿不到结果（识图粘贴链路可能没接上）")
 
+        # ---- 断言 26.8：line-hops 不得把 linkStyle 的虚线改成实线 ----
+        # 2026-10-27 用户报：diagramon 里两条 `-.->` 是实线，mermaid.ai/live 正确。
+        # 根因是 mermaid 12.2.0 的 line-hops 后处理把经过交叉点的边重写成
+        # `stroke-dasharray: 0 0 <len> <marker>`，连 linkStyle 的 dasharray 一起覆盖。
+        # 这里用同形态的小图钉住修复（renderMermaid 里关掉 lineHops）。
+        dash_probe = ev(
+            "(async () => {"
+            "  const wait = (ms) => new Promise(r => setTimeout(r, ms));"
+            "  const oldLook = DGM.state.settings.mermaid && DGM.state.settings.mermaid.look;"
+            "  await DGM.state.patchSettings({ mermaid: { look: 'neo' } });"
+            "  const d = await DGM.state.newDoc('mermaid');"
+            "  await DGM.state.setBodyNow(d.id, 'flowchart TB\\n"
+            "    subgraph HUB[\"HUB\"]\\n"
+            "        direction TB\\n"
+            "        DataPlatform[\"Data\"]\\n"
+            "        VideoSvc[\"Video\"]\\n"
+            "        FileSvc[\"File\"]\\n"
+            "        IotHub[\"Iot\"]\\n"
+            "        AiPlatform[\"AI\"]\\n"
+            "    end\\n"
+            "    BizApps[\"Biz\"]\\n"
+            "    DataPlatform --> BizApps\\n"
+            "    VideoSvc --> BizApps\\n"
+            "    FileSvc --> BizApps\\n"
+            "    DataPlatform -.-> AiPlatform\\n"
+            "    VideoSvc -.-> AiPlatform\\n"
+            "    FileSvc -.-> AiPlatform\\n"
+            "    IotHub -.-> AiPlatform\\n"
+            "    linkStyle 3,4,5,6 stroke:#7b2fa8,stroke-width:2px,stroke-dasharray: 6 4');"
+            "  await DGM.state.activateDoc(d.id);"
+            "  await DGM.state.setViewMode(d.id, 'split');"
+            "  DGM.editor.loadActive(); DGM.preview.schedule();"
+            "  await wait(1400);"
+            "  const paths = [...document.querySelectorAll('#canvas-stage svg path[data-edge]')];"
+            "  const ai = paths.filter((p) => /AiPlatform/.test(p.getAttribute('data-id') || ''));"
+            "  const dashes = ai.map((p) => ({ id: p.getAttribute('data-id'), dash: getComputedStyle(p).strokeDasharray }));"
+            "  const allDashed = ai.length === 4 && dashes.every((x) => /^6px/.test(x.dash));"
+            "  await DGM.state.closeDoc(d.id);"
+            "  await DGM.state.patchSettings({ mermaid: { look: oldLook || 'auto' } });"
+            "  return JSON.stringify({ n: ai.length, dashes, allDashed });"
+            "})()"
+        )
+        log(f"虚线保持（line-hops）: {dash_probe}")
+        try:
+            dp = json.loads(dash_probe or "{}")
+            if dp.get("n") != 4:
+                fails.append(f"虚线回归夹具没找到 4 条 AI 连线：{dp.get('dashes')}")
+            elif not dp.get("allDashed"):
+                fails.append(f"linkStyle 的虚线被 line-hops 改成了实线：{dp.get('dashes')}")
+        except Exception as e:
+            log(f"（断言 26.8 解析失败：{e}）")
+            fails.append("断言 26.8 拿不到结果（预览渲染或虚线样式链路可能没接上）")
+
         # ---- 断言 27：会话按文档持久化（写盘 → 读回 → 按文档分开） ----
         # 阶段三之前：`conversations_dir()` 全仓零读写（只建了个空目录），而对话框的说明
         # 却写着"按文档稳定身份持久化（真实实现里路径 SHA256）"。这条断言钉住四件事：
