@@ -2466,6 +2466,13 @@ def main() -> int:
             "  if (chip) chip.click();"
             "  for (let i = 0; i < 50 && DGM.state.ui.aiBusy; i++) await wait(100);"
             "  await wait(250);"
+            "  /* 再发一轮：用户消息的删除要成对移除，同时保留一轮给 assistant 的删除断言用。 */"
+            "  const taMore = document.querySelector('#ai-input');"
+            "  taMore.value = '再补一条';"
+            "  taMore.dispatchEvent(new Event('input', { bubbles: true }));"
+            "  document.querySelector('#ai-send').click();"
+            "  for (let i = 0; i < 50 && DGM.state.ui.aiBusy; i++) await wait(100);"
+            "  await wait(250);"
             "  const msgs = [...document.querySelectorAll('#ai-stream .msg')];"
             "  const bot = [...msgs].reverse().find((m) => m.classList.contains('bot'));"
             "  const md0 = bot && bot.querySelector('.md-view');"
@@ -2517,8 +2524,26 @@ def main() -> int:
             "  await wait(80);"
             "  DGM.clip.write = oldWrite;"
             "  const userCopyOk = copied.length === 1 && copied[0].indexOf('设计风险') >= 0;"
-            "  const beforeDel = msgs.length;"
-            "  const del = bot && bot.querySelector('.msg-acts .msg-act:last-child');"
+            "  /* 用户消息上的「编辑并重发」「删除」必须真的动到那一轮（用户 2026-10-27 报："
+            "     拷贝好使、旁边两个按钮点了没反应 —— 根因是 userMsg 没带 m，turnRange 找不到）。 */"
+            "  const userBubble = userMsg && userMsg.querySelector('.bubble');"
+            "  const userText = userBubble ? userBubble.textContent.trim() : '';"
+            "  if (userEdit) userEdit.click();"
+            "  await wait(250);"
+            "  const userEditPre = document.querySelector('#ai-input').value;"
+            "  const userEditTab = DGM.state.ui.aiTab;"
+            "  const taEdit = document.querySelector('#ai-input');"
+            "  if (taEdit) { taEdit.value = ''; taEdit.dispatchEvent(new Event('input', { bubbles: true })); }"
+            "  const beforeUserDel = document.querySelectorAll('#ai-stream .msg').length;"
+            "  const userNow = document.querySelector('#ai-stream .msg.user');"
+            "  const userDelBtn = userNow && userNow.querySelector('.msg-acts .msg-act:last-child');"
+            "  if (userDelBtn) userDelBtn.click();"
+            "  await wait(300);"
+            "  const userDel = beforeUserDel - document.querySelectorAll('#ai-stream .msg').length;"
+            "  const botNow = [...document.querySelectorAll('#ai-stream .msg')]"
+            "    .reverse().find((m) => m.classList.contains('bot'));"
+            "  const beforeDel = document.querySelectorAll('#ai-stream .msg').length;"
+            "  const del = botNow && botNow.querySelector('.msg-acts .msg-act:last-child');"
             "  if (del) del.click();"
             "  await wait(300);"
             "  const afterDel = document.querySelectorAll('#ai-stream .msg').length;"
@@ -2526,7 +2551,8 @@ def main() -> int:
             "  await DGM.state.closeDoc(d.id);"
             "  return JSON.stringify({ hasFn: typeof DGM.ai.explain === 'function', tabs, emptyBtns,"
             "    tab: DGM.state.ui.aiTab, intentTab: lastTab, cards, applyBtn, acts,"
-            "    deleted: beforeDel - afterDel, cmd, headBtn, mdDefault, mdHeading, mdStrong,"
+            "    deleted: beforeDel - afterDel, userDel, userEditPre, userText, userEditTab,"
+            "    cmd, headBtn, mdDefault, mdHeading, mdStrong,"
             "    mdTable, mdSourceOn, mdBack, mdPartial, mdSafe, botCopyIcon, userCopyIcon, userCopyOk,"
             "    copyInActs, copySameCls, copySameGroup, copySamePad });"
             "})()"
@@ -2582,6 +2608,12 @@ def main() -> int:
                 fails.append("拷贝按钮没和「编辑并重发」等操作放在同一个 .msg-acts 组里（样式会再次跑偏）")
             if not ep.get("copySameCls") or not ep.get("copySamePad"):
                 fails.append("拷贝按钮与相邻操作按钮的类名/padding 不一致")
+            if not ep.get("userEditPre") or ep.get("userEditPre") != ep.get("userText"):
+                fails.append(f"用户消息的「编辑并重发」没把原文填回输入框：{ep.get('userEditPre')!r} vs {ep.get('userText')!r}")
+            if ep.get("userEditTab") != "explain":
+                fails.append(f"「编辑并重发」没有留在原页签：{ep.get('userEditTab')}")
+            if ep.get("userDel") != 2:
+                fails.append(f"用户消息的「删除这一轮」没有成对移除：{ep.get('userDel')}")
         except Exception as e:
             log(f"（断言 26.6 解析失败：{e}）")
             fails.append("断言 26.6 拿不到结果（Explain 或消息操作链路可能没接上）")

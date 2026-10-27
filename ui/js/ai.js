@@ -1121,6 +1121,10 @@ window.DGM = window.DGM || {};
     if (userMsg) {
       userMsg.at = Date.now();
       userMsg.doc = owner;
+      // `m` = 这条消息属于哪个页签。**用户消息也必须带**：消息头的「编辑并重发」「删除」
+      // 都靠 `bucket(m.doc)[m.m]` 找回自己那一轮（turnRange 用对象身份 indexOf）。
+      // 以前只有 assistant 设了 `m`，于是用户消息上的按钮点了没有任何反应（2026-10-27 用户报）。
+      userMsg.m = cur;
       bucket(owner)[cur].push(userMsg);
     }
     const bot = {
