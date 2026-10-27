@@ -339,36 +339,35 @@ window.DGM = window.DGM || {};
       `<div class="msg-head"><span class="who">${esc(t(mine ? "ai.you" : "ai.assistant"))}</span>` +
       (!mine && m.used ? `<span class="badge-used">${esc(m.used.model)} · ${esc(m.used.tokens)} tok</span>` : "") +
       `</div>`;
-    // 整条消息的「一键拷贝」：AI 回复拷全部产出的源码（无代码块则拷正文），
-    // 用户消息拷自己发出的内容。按钮只给图标（文案进 title/aria-label），
-    // 两侧用同一个 copy 图标，位置都在消息头。
+    // 消息头右侧的一组操作按钮（拷贝 / 编辑并重发・重新生成 / 删除）：
+    // 全部用同一个 `mini-btn msg-act` 规格、同一个 `.msg-acts` 容器，悬停整组淡入。
+    //   拷贝：AI 回复拷全部产出的源码（无代码块则拷正文），用户消息拷自己发出的内容；
+    //         只给图标，文案进 title/aria-label。
+    // 2026-10-27 用户报：拷贝原本单独挂在 `.msg-head` 下、带自己的 padding 与常亮，
+    // 和旁边的「编辑并重发」明显不是一套样式 —— 现在收进同一组，别再加 `.msg-copy` 专属样式。
     const copyValue = mine ? m.text || "" : replySource(m);
+    const acts = h("span", "msg-acts");
+    const addAct = (cls, label, iconName, fn) => {
+      const b = h("button", "mini-btn msg-act" + cls);
+      b.title = label;
+      b.setAttribute("aria-label", label);
+      b.innerHTML = icon(iconName, "ico-sm");
+      b.addEventListener("click", (e) => {
+        e.stopPropagation();
+        fn();
+      });
+      acts.appendChild(b);
+    };
     if (copyValue) {
-      const copyLabel = t(mine ? "ai.op.copyInput" : "ai.op.copy");
-      const copyBtn = h("button", "mini-btn msg-copy");
-      copyBtn.title = copyLabel;
-      copyBtn.setAttribute("aria-label", copyLabel);
-      copyBtn.innerHTML = icon("copy", "ico-sm");
-      copyBtn.addEventListener("click", () => copyText(copyValue, mine ? "status.copied" : "ai.copied"));
-      $(".msg-head", body).appendChild(copyBtn);
+      addAct(" msg-copy", t(mine ? "ai.op.copyInput" : "ai.op.copy"), "copy",
+        () => copyText(copyValue, mine ? "status.copied" : "ai.copied"));
     }
     if (!m.streaming && !m.err) {
-      const acts = h("span", "msg-acts");
-      const addAct = (key, iconName, fn) => {
-        const b = h("button", "mini-btn msg-act");
-        b.title = t(key);
-        b.innerHTML = icon(iconName, "ico-sm");
-        b.addEventListener("click", (e) => {
-          e.stopPropagation();
-          fn();
-        });
-        acts.appendChild(b);
-      };
-      if (mine) addAct("ai.op.edit", "code", () => editTurn(m));
-      else addAct("ai.op.retry", "refresh", () => retryTurn(m));
-      addAct("ai.op.delete", "trash", () => deleteTurn(m));
-      $(".msg-head", body).appendChild(acts);
+      if (mine) addAct("", t("ai.op.edit"), "code", () => editTurn(m));
+      else addAct("", t("ai.op.retry"), "refresh", () => retryTurn(m));
+      addAct("", t("ai.op.delete"), "trash", () => deleteTurn(m));
     }
+    if (acts.children.length) $(".msg-head", body).appendChild(acts);
     n.append(ava, body);
     const imgs = m.images && m.images.length ? m.images : m.image ? [m.image] : [];
     for (const img of imgs) {

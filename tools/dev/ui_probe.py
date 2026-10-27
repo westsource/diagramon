@@ -2502,6 +2502,14 @@ def main() -> int:
             "  const userMsg = msgs.find((m) => m.classList.contains('user'));"
             "  const userCopy = userMsg && userMsg.querySelector('.msg-head .msg-copy');"
             "  const userCopyIcon = iconOnly(userCopy);"
+            "  const userEdit = userMsg && userMsg.querySelector('.msg-act:not(.msg-copy)');"
+            "  const copyInActs = !!userCopy && !!userCopy.closest('.msg-acts');"
+            "  const copySameCls = !!userCopy && !!userEdit"
+            "    && userCopy.classList.contains('msg-act') && userEdit.classList.contains('msg-act');"
+            "  const copySameGroup = !!userCopy && !!userEdit"
+            "    && userCopy.closest('.msg-acts') === userEdit.closest('.msg-acts');"
+            "  const copySamePad = !!userCopy && !!userEdit"
+            "    && getComputedStyle(userCopy).padding === getComputedStyle(userEdit).padding;"
             "  const oldWrite = DGM.clip.write;"
             "  const copied = [];"
             "  DGM.clip.write = async (txt) => { copied.push(String(txt)); return true; };"
@@ -2519,7 +2527,8 @@ def main() -> int:
             "  return JSON.stringify({ hasFn: typeof DGM.ai.explain === 'function', tabs, emptyBtns,"
             "    tab: DGM.state.ui.aiTab, intentTab: lastTab, cards, applyBtn, acts,"
             "    deleted: beforeDel - afterDel, cmd, headBtn, mdDefault, mdHeading, mdStrong,"
-            "    mdTable, mdSourceOn, mdBack, mdPartial, mdSafe, botCopyIcon, userCopyIcon, userCopyOk });"
+            "    mdTable, mdSourceOn, mdBack, mdPartial, mdSafe, botCopyIcon, userCopyIcon, userCopyOk,"
+            "    copyInActs, copySameCls, copySameGroup, copySamePad });"
             "})()"
         )
         log(f"Explain / 消息操作: {explain_probe}")
@@ -2569,6 +2578,10 @@ def main() -> int:
                 fails.append("用户消息缺少纯图标的拷贝按钮")
             if not ep.get("userCopyOk"):
                 fails.append("用户消息的拷贝按钮没有把输入内容写进剪贴板")
+            if not ep.get("copyInActs") or not ep.get("copySameGroup"):
+                fails.append("拷贝按钮没和「编辑并重发」等操作放在同一个 .msg-acts 组里（样式会再次跑偏）")
+            if not ep.get("copySameCls") or not ep.get("copySamePad"):
+                fails.append("拷贝按钮与相邻操作按钮的类名/padding 不一致")
         except Exception as e:
             log(f"（断言 26.6 解析失败：{e}）")
             fails.append("断言 26.6 拿不到结果（Explain 或消息操作链路可能没接上）")

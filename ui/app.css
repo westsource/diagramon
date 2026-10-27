@@ -738,8 +738,8 @@ body.no-ai #ai-gutter { display: none; }
 .msg-head { display: flex; align-items: center; gap: 6px; font-size: var(--fs-xs); color: var(--muted); }
 .msg-head .who { font-weight: 600; color: var(--ink-2); }
 .msg-head .badge-used { font-size: 10px; color: var(--ai); background: var(--ai-soft); padding: 0 5px; border-radius: 999px; border: 1px solid var(--ai-line); }
-/* 消息头的「拷贝」：图标按钮（两侧同规格），不跟 used 徽标挤在左边 */
-.msg-head .msg-copy { margin-left: 6px; padding: 1px 4px; }
+/* 消息头的操作按钮组（拷贝 / 编辑并重发・重新生成 / 删除）：同一规格，悬停整组淡入。
+   拷贝按钮不再有专属样式（它也是 `.msg-act`），`msg-copy` 只作选择器标记。 */
 .msg-head .msg-acts { margin-left: auto; display: inline-flex; align-items: center; gap: 2px; opacity: .25; transition: opacity .12s; }
 .msg:hover .msg-head .msg-acts, .msg:focus-within .msg-head .msg-acts { opacity: 1; }
 .msg-head .msg-act { padding: 0 2px; color: var(--muted); }
