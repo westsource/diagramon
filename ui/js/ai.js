@@ -157,6 +157,93 @@ window.DGM = window.DGM || {};
     return "mermaid";
   }
 
+  /* ------------------------------------------------- 「解图」的 Markdown 预览 / 源码 */
+
+  /** 「解图」的回复本来就是 Markdown（Rust 侧 explain 提示词明确要求 3–6 个
+   *  Markdown 小节/项目符号）。以前一律按纯文本 + `<br>` 显示，标题、粗体、列表全是
+   *  裸标记。现在给两个视图：**默认预览**（渲染后的 Markdown），切「源码」看原文 ——
+   *  源码视图不是给普通读者看的，是给"想拷走/核对模型到底写了什么"的人。
+   *
+   *  视图状态挂在消息对象上（`m.mdView`）：流式增量、整栏重排、切页签回来都不会丢。
+   */
+  function mdMode(m) {
+    return m.mdView === "source" ? "source" : "preview";
+  }
+
+  function mdHtml(text) {
+    try {
+      return DGM.markdown.render(text || "");
+    } catch (e) {
+      // 渲染器坏掉也绝不能把回复变成空白：退回纯文本（带换行）
+      return esc(text || "").replace(/\n/g, "<br>");
+    }
+  }
+
+  function mdContentNode(m) {
+    const text = m.text || "";
+    if (mdMode(m) === "source") {
+      const box = h("div", "bubble md-source");
+      const pre = h("pre", "md-src");
+      pre.textContent = text;
+      box.appendChild(pre);
+      return box;
+    }
+    const box = h("div", "bubble md-preview" + (m.streaming ? " streaming" : ""));
+    box.innerHTML = mdHtml(text);
+    return box;
+  }
+
+  function mdBodyNode(m) {
+    const body = h("div", "md-body");
+    body.dataset.req = m.req || "";
+    body.appendChild(mdContentNode(m));
+    return body;
+  }
+
+  /** 切换条 + 内容。切换时**只重画这一条**（`replaceWith`）：整栏重排会把长对话
+   *  滚到底，用户刚切到的位置就跑掉了。 */
+  function mdViewNode(m) {
+    const wrap = h("div", "md-view");
+    const bar = h("div", "md-bar");
+    const seg = h("div", "md-seg");
+    seg.setAttribute("role", "group");
+    seg.setAttribute("aria-label", t("ai.md.mode"));
+    for (const mode of ["preview", "source"]) {
+      const on = mdMode(m) === mode;
+      const b = h("button", "md-seg-btn" + (on ? " on" : ""));
+      b.type = "button";
+      b.dataset.md = mode;
+      b.textContent = mode === "preview" ? t("ai.md.preview") : t("ai.md.source");
+      b.setAttribute("aria-pressed", on ? "true" : "false");
+      b.addEventListener("click", () => {
+        if (mdMode(m) === mode) return;
+        m.mdView = mode;
+        wrap.replaceWith(mdViewNode(m));
+      });
+      seg.appendChild(b);
+    }
+    bar.append(h("span", "md-label", "Markdown"), seg);
+
+    const body = mdBodyNode(m);
+    // 外链走系统浏览器（与帮助菜单同一条通道）；渲染器只放行 http(s)/mailto。
+    body.addEventListener("click", (e) => {
+      const a = e.target.closest("a[data-ext]");
+      if (!a) return;
+      e.preventDefault();
+      const url = a.getAttribute("href") || "";
+      if (url && DGM.cloud && DGM.cloud.openExternal) DGM.cloud.openExternal(url);
+    });
+    wrap.append(bar, body);
+    return wrap;
+  }
+
+  /** 这条消息是不是「解图」的回复。用 `m`（页签）而不是 `intent`：
+   *  从磁盘还原的旧轮次没有 `intent`（见 `ensureConversation`），只认 intent 会让
+   *  重启后的解图回复退回纯文本。 */
+  function isExplainOut(m) {
+    return m.role === "assistant" && m.m === "explain" && !m.err;
+  }
+
   /* ------------------------------------------------------------------ 思考块（可折叠） */
 
   /** 思考原文的展示片段。
@@ -303,9 +390,12 @@ window.DGM = window.DGM || {};
       body.appendChild(line);
     }
 
-    const explain = m.intent === "explain";
-    const parsed = explain ? { text: m.text || "", blocks: [] } : splitFences(m.text || "");
-    if (parsed.text) {
+    const explainOut = isExplainOut(m);
+    const parsed = explainOut ? { text: m.text || "", blocks: [] } : splitFences(m.text || "");
+    if (explainOut) {
+      // 没有正文的收尾（思考型模型把预算花在推理上）不画空气泡，下面有 notice 说明。
+      if ((m.text || "").trim() || m.streaming) body.appendChild(mdViewNode(m));
+    } else if (parsed.text) {
       const b = h("div", "bubble" + (m.streaming ? " streaming" : ""), esc(parsed.text).replace(/\n/g, "<br>"));
       b.dataset.req = m.req || "";
       body.appendChild(b);
@@ -1106,6 +1196,23 @@ window.DGM = window.DGM || {};
     const m = findMsg(ev && ev.request_id);
     if (!m) return;
     m.text = (m.text || "") + (ev.delta || "");
+    // 「解图」的正文是 Markdown：按当前视图（预览/源码）重画这一条的内容区。
+    // 仍只动这块，不整栏重排。
+    const md = $(`#ai-stream .md-body[data-req="${ev.request_id}"]`);
+    if (md) {
+      const pre = $(".md-src", md);
+      if (pre) {
+        pre.textContent = m.text || "";
+      } else {
+        const box = $(".bubble", md);
+        if (box && box.classList.contains("md-preview")) box.innerHTML = mdHtml(m.text || "");
+        else {
+          md.textContent = "";
+          md.appendChild(mdContentNode(m));
+        }
+      }
+      return;
+    }
     // 只更新那块流式气泡，避免整栏重排
     const node = $(`#ai-stream .bubble[data-req="${ev.request_id}"]`);
     if (node) {

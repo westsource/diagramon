@@ -800,6 +800,65 @@ body.no-ai #ai-gutter { display: none; }
 }
 .code-card-actions { display: flex; gap: 6px; padding: 7px 8px; border-top: 1px solid var(--border); background: var(--surface-inset); }
 
+/* ---- 「解图」的 Markdown 预览 / 源码（2026-10-27） --------------------
+ * 回复默认渲染成预览，切「源码」看原文；两个视图与切换条同属一条消息。
+ * 切换只重画这一条（见 ai.js::mdViewNode），不整栏重排。
+ */
+.md-view { display: flex; flex-direction: column; gap: 4px; align-items: stretch; align-self: stretch; min-width: 0; max-width: 100%; }
+.md-bar { display: flex; align-items: center; gap: 6px; padding: 0 2px; font-size: var(--fs-xs); color: var(--muted); }
+.md-seg { display: inline-flex; overflow: hidden; background: var(--surface); border: 1px solid var(--border); border-radius: 6px; }
+.md-seg-btn { padding: 1px 9px; font-size: var(--fs-xs); color: var(--muted); background: transparent; border: 0; cursor: pointer; }
+.md-seg-btn + .md-seg-btn { border-left: 1px solid var(--border); }
+.md-seg-btn:hover { color: var(--fg); background: var(--surface-3); }
+.md-seg-btn.on { color: var(--accent); background: var(--accent-soft); font-weight: 500; }
+.md-body { min-width: 0; max-width: 100%; }
+.md-body .bubble { width: 100%; }
+.md-preview { line-height: 1.65; }
+.md-preview > :first-child { margin-top: 0; }
+.md-preview > :last-child { margin-bottom: 0; }
+.md-preview p { margin: 0 0 6px; }
+.md-preview h1, .md-preview h2, .md-preview h3,
+.md-preview h4, .md-preview h5, .md-preview h6 {
+  margin: 10px 0 5px; font-weight: 600; line-height: 1.35; color: var(--ink);
+}
+.md-preview h1 { font-size: 1.35em; }
+.md-preview h2 { font-size: 1.2em; }
+.md-preview h3 { font-size: 1.08em; }
+.md-preview h4, .md-preview h5, .md-preview h6 { font-size: 1em; }
+.md-preview ul, .md-preview ol { margin: 0 0 6px; padding-left: 20px; }
+.md-preview ul { list-style: disc outside; }
+.md-preview ul ul { list-style: circle outside; }
+.md-preview ul ul ul { list-style: square outside; }
+.md-preview ol { list-style: decimal outside; }
+.md-preview ol ol { list-style: lower-alpha outside; }
+.md-preview li { margin: 1px 0; }
+.md-preview li > ul, .md-preview li > ol { margin: 2px 0; }
+.md-preview code {
+  padding: 0 3px; font-family: var(--font-mono); font-size: .94em;
+  background: var(--surface-2); border: 1px solid var(--border); border-radius: 4px;
+}
+.md-preview pre.md-code {
+  margin: 0 0 6px; padding: 7px 9px; overflow-x: auto;
+  background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius-sm);
+}
+.md-preview pre.md-code code { padding: 0; font-size: var(--fs-xs); background: none; border: 0; }
+.md-preview blockquote {
+  margin: 0 0 6px; padding: 1px 0 1px 9px;
+  color: var(--muted); border-left: 3px solid var(--accent-line);
+}
+.md-preview .md-table { margin: 0 0 8px; overflow-x: auto; }
+.md-preview table { border-collapse: collapse; font-size: var(--fs-xs); }
+.md-preview th, .md-preview td { padding: 3px 8px; text-align: left; vertical-align: top; border: 1px solid var(--border); }
+.md-preview th { font-weight: 600; background: var(--surface-2); }
+.md-preview hr { margin: 9px 0; border: 0; border-top: 1px solid var(--border); }
+.md-preview a { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; }
+.md-source { padding: 0; }
+.md-src {
+  margin: 0; padding: 8px 11px; max-height: 460px; overflow: auto;
+  font: var(--fs-xs)/1.6 var(--font-mono);
+  white-space: pre-wrap; word-break: break-word; user-select: text;
+}
+
 .thumb {
   display: flex; gap: 9px; align-items: center;
   padding: 8px;

@@ -2468,6 +2468,28 @@ def main() -> int:
             "  await wait(250);"
             "  const msgs = [...document.querySelectorAll('#ai-stream .msg')];"
             "  const bot = [...msgs].reverse().find((m) => m.classList.contains('bot'));"
+            "  const md0 = bot && bot.querySelector('.md-view');"
+            "  const mdDefault = !!(md0 && md0.querySelector('.md-preview') && !md0.querySelector('.md-source'));"
+            "  const mdHeading = !!(md0 && md0.querySelector('.md-preview h2'));"
+            "  const mdStrong = !!(md0 && md0.querySelector('.md-preview strong'));"
+            "  const mdTable = !!(md0 && md0.querySelector('.md-preview table'));"
+            "  const srcBtn = md0 && md0.querySelector('.md-seg-btn[data-md=\"source\"]');"
+            "  if (srcBtn) srcBtn.click();"
+            "  await wait(120);"
+            "  const bot2 = [...document.querySelectorAll('#ai-stream .msg')].reverse().find((m) => m.classList.contains('bot'));"
+            "  const md1 = bot2 && bot2.querySelector('.md-view');"
+            "  const mdSrc = md1 && md1.querySelector('.md-src');"
+            "  const mdSourceOn = !!(md1 && mdSrc && mdSrc.textContent.indexOf('## ') === 0 && !md1.querySelector('.md-preview'));"
+            "  const prevBtn = md1 && md1.querySelector('.md-seg-btn[data-md=\"preview\"]');"
+            "  if (prevBtn) prevBtn.click();"
+            "  await wait(120);"
+            "  const bot3 = [...document.querySelectorAll('#ai-stream .msg')].reverse().find((m) => m.classList.contains('bot'));"
+            "  const mdBack = !!(bot3 && bot3.querySelector('.md-view .md-preview'));"
+            "  const partial = DGM.markdown.render('## ');"
+            "  const mdPartial = typeof partial === 'string' && partial.indexOf('##') >= 0;"
+            "  const unsafe = DGM.markdown.render('<img src=x onerror=alert(1)> [x](javascript:alert(1))');"
+            "  const mdSafe = unsafe.indexOf('<img') === -1 && unsafe.indexOf('<a ') === -1"
+            "    && unsafe.indexOf('javascript:alert(1)') >= 0;"
             "  const cards = bot ? bot.querySelectorAll('.code-card').length : -1;"
             "  const applyBtn = bot ? bot.querySelectorAll('.code-card .apply, [data-a=apply]').length : -1;"
             "  const acts = bot ? bot.querySelectorAll('.msg-acts .msg-act').length : -1;"
@@ -2484,7 +2506,8 @@ def main() -> int:
             "  await DGM.state.closeDoc(d.id);"
             "  return JSON.stringify({ hasFn: typeof DGM.ai.explain === 'function', tabs, emptyBtns,"
             "    tab: DGM.state.ui.aiTab, intentTab: lastTab, cards, applyBtn, acts,"
-            "    deleted: beforeDel - afterDel, cmd, headBtn });"
+            "    deleted: beforeDel - afterDel, cmd, headBtn, mdDefault, mdHeading, mdStrong,"
+            "    mdTable, mdSourceOn, mdBack, mdPartial, mdSafe });"
             "})()"
         )
         log(f"Explain / 消息操作: {explain_probe}")
@@ -2513,6 +2536,21 @@ def main() -> int:
                 fails.append("命令面板里没有 ai.explain（菜单/快捷键/命令面板三条入口靠它）")
             if not ep.get("headBtn"):
                 fails.append("预览顶栏没有「解图」按钮（#btn-explain）")
+            if not ep.get("mdDefault"):
+                fails.append("解图回复默认不是 Markdown 预览")
+            if not (ep.get("mdHeading") and ep.get("mdStrong") and ep.get("mdTable")):
+                fails.append(
+                    f"Markdown 预览没有渲染标题/加粗/表格：h2={ep.get('mdHeading')} "
+                    f"strong={ep.get('mdStrong')} table={ep.get('mdTable')}"
+                )
+            if not ep.get("mdSourceOn"):
+                fails.append("切到「源码」后没有显示 Markdown 原文")
+            if not ep.get("mdBack"):
+                fails.append("从「源码」切回「预览」失败")
+            if not ep.get("mdPartial"):
+                fails.append("Markdown 渲染器在半截标题（流式常见前缀）上会卡住或丢字")
+            if not ep.get("mdSafe"):
+                fails.append("Markdown 预览把模型输出的 HTML 或 javascript: 链接当成了可执行内容")
         except Exception as e:
             log(f"（断言 26.6 解析失败：{e}）")
             fails.append("断言 26.6 拿不到结果（Explain 或消息操作链路可能没接上）")
