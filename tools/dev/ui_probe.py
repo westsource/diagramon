@@ -2497,6 +2497,18 @@ def main() -> int:
             "  const lastTab = turns.length ? turns[turns.length - 1].tab : '';"
             "  const cmd = DGM.commands.list().some((c) => c.id === 'ai.explain');"
             "  const headBtn = !!document.querySelector('#pane-preview #btn-explain');"
+            "  const iconOnly = (b) => !!b && !(b.textContent || '').trim() && !!b.querySelector('svg');"
+            "  const botCopyIcon = iconOnly(bot && bot.querySelector('.msg-head .msg-copy'));"
+            "  const userMsg = msgs.find((m) => m.classList.contains('user'));"
+            "  const userCopy = userMsg && userMsg.querySelector('.msg-head .msg-copy');"
+            "  const userCopyIcon = iconOnly(userCopy);"
+            "  const oldWrite = DGM.clip.write;"
+            "  const copied = [];"
+            "  DGM.clip.write = async (txt) => { copied.push(String(txt)); return true; };"
+            "  if (userCopy) userCopy.click();"
+            "  await wait(80);"
+            "  DGM.clip.write = oldWrite;"
+            "  const userCopyOk = copied.length === 1 && copied[0].indexOf('设计风险') >= 0;"
             "  const beforeDel = msgs.length;"
             "  const del = bot && bot.querySelector('.msg-acts .msg-act:last-child');"
             "  if (del) del.click();"
@@ -2507,7 +2519,7 @@ def main() -> int:
             "  return JSON.stringify({ hasFn: typeof DGM.ai.explain === 'function', tabs, emptyBtns,"
             "    tab: DGM.state.ui.aiTab, intentTab: lastTab, cards, applyBtn, acts,"
             "    deleted: beforeDel - afterDel, cmd, headBtn, mdDefault, mdHeading, mdStrong,"
-            "    mdTable, mdSourceOn, mdBack, mdPartial, mdSafe });"
+            "    mdTable, mdSourceOn, mdBack, mdPartial, mdSafe, botCopyIcon, userCopyIcon, userCopyOk });"
             "})()"
         )
         log(f"Explain / 消息操作: {explain_probe}")
@@ -2551,6 +2563,12 @@ def main() -> int:
                 fails.append("Markdown 渲染器在半截标题（流式常见前缀）上会卡住或丢字")
             if not ep.get("mdSafe"):
                 fails.append("Markdown 预览把模型输出的 HTML 或 javascript: 链接当成了可执行内容")
+            if not ep.get("botCopyIcon"):
+                fails.append("AI 回复的「拷贝源码」不是纯图标按钮")
+            if not ep.get("userCopyIcon"):
+                fails.append("用户消息缺少纯图标的拷贝按钮")
+            if not ep.get("userCopyOk"):
+                fails.append("用户消息的拷贝按钮没有把输入内容写进剪贴板")
         except Exception as e:
             log(f"（断言 26.6 解析失败：{e}）")
             fails.append("断言 26.6 拿不到结果（Explain 或消息操作链路可能没接上）")

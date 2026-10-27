@@ -339,12 +339,18 @@ window.DGM = window.DGM || {};
       `<div class="msg-head"><span class="who">${esc(t(mine ? "ai.you" : "ai.assistant"))}</span>` +
       (!mine && m.used ? `<span class="badge-used">${esc(m.used.model)} · ${esc(m.used.tokens)} tok</span>` : "") +
       `</div>`;
-    // 「拷贝源码」：这条回复**全部**产出的源码一次拷走（多个代码块拼起来，无代码块则拷正文）。
-    // 代码卡上的「复制」只给单块；这里给的是整条回复，位置固定，不用先找卡片。
-    if (!mine && replySource(m)) {
-      const copyBtn = h("button", "mini-btn msg-copy", `${icon("copy", "ico-sm")}${esc(t("ai.op.copy"))}`);
+    // 整条消息的「一键拷贝」：AI 回复拷全部产出的源码（无代码块则拷正文），
+    // 用户消息拷自己发出的内容。按钮只给图标（文案进 title/aria-label），
+    // 两侧用同一个 copy 图标，位置都在消息头。
+    const copyValue = mine ? m.text || "" : replySource(m);
+    if (copyValue) {
+      const copyLabel = t(mine ? "ai.op.copyInput" : "ai.op.copy");
+      const copyBtn = h("button", "mini-btn msg-copy");
+      copyBtn.title = copyLabel;
+      copyBtn.setAttribute("aria-label", copyLabel);
+      copyBtn.innerHTML = icon("copy", "ico-sm");
+      copyBtn.addEventListener("click", () => copyText(copyValue, mine ? "status.copied" : "ai.copied"));
       $(".msg-head", body).appendChild(copyBtn);
-      copyBtn.addEventListener("click", () => copyText(replySource(m)));
     }
     if (!m.streaming && !m.err) {
       const acts = h("span", "msg-acts");
@@ -1524,9 +1530,9 @@ window.DGM = window.DGM || {};
   }
 
   /** 拷贝一段文本，并把**真实结果**告诉用户（写不进剪贴板时不再假装成功）。 */
-  async function copyText(text) {
+  async function copyText(text, okKey) {
     const ok = await (DGM.clip ? DGM.clip.write(text) : Promise.resolve(false));
-    if (ok) DGM.toast({ icon: "copy", title: t("ai.copied"), sub: "" });
+    if (ok) DGM.toast({ icon: "copy", title: t(okKey || "ai.copied"), sub: "" });
     else DGM.toast({ icon: "alert", title: t("ai.copyFail"), sub: "", warn: true });
   }
 
