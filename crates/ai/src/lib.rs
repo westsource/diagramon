@@ -4,6 +4,7 @@
 //! 命令层与前端不必改。
 
 pub mod agent;
+pub mod decision;
 pub mod prompt;
 pub mod provider;
 

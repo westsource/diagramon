@@ -236,6 +236,7 @@ pub fn run() {
             commands::ai_provider_key_delete,
             commands::ai_chat,
             commands::ai_agent_run,
+            commands::ai_resolve_intent,
             commands::ai_cancel,
             commands::conversation_list,
             commands::conversation_open,

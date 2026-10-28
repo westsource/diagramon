@@ -698,18 +698,6 @@ body.no-ai #ai-gutter { display: none; }
 .ai-model:hover { border-color: var(--ai-line); color: var(--ai); }
 .ai-model .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--ok); }
 
-.ai-tabs { display: flex; gap: 2px; padding: 6px 10px 0; border-bottom: 1px solid var(--border); }
-.ai-tab {
-  padding: 4px 11px;
-  font-size: var(--fs-sm);
-  color: var(--muted);
-  border: 1px solid transparent;
-  border-bottom: 0;
-  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
-}
-.ai-tab:hover { color: var(--ink); background: var(--surface-3); }
-.ai-tab.on { color: var(--ai); background: var(--surface); border-color: var(--border); font-weight: 500; }
-
 .ai-stream { flex: 1; min-height: 0; overflow: auto; padding: 12px; display: flex; flex-direction: column; gap: 14px; }
 
 /* ---- 微信式对话（2026-10-15）-----------------------------------------
@@ -923,6 +911,48 @@ body.no-ai #ai-gutter { display: none; }
 .ai-box-row { display: flex; align-items: center; gap: 5px; padding-top: 5px; border-top: 1px dashed var(--border); }
 .ai-box-row .sp { flex: 1; }
 .ai-hint { font-size: 10px; color: var(--faint); }
+
+/* 本条意图滑块 + 输出格式：四档等宽，拇指用 --intent-index 平移（JS 只改这个变量） */
+.ai-box-row.ai-intent-row { flex-wrap: wrap; row-gap: 4px; border-top: 0; }
+.intent-wrap { display: inline-flex; align-items: center; gap: 5px; min-width: 0; flex: 0 0 auto; }
+.intent-slider {
+  position: relative; display: inline-flex; align-items: center; flex: 0 0 auto;
+  height: 22px; padding: 2px; border-radius: 999px;
+  background: var(--surface-3); border: 1px solid var(--border);
+}
+.intent-slider .thumb {
+  position: absolute; top: 2px; left: 2px; width: 28px; height: 16px;
+  border-radius: 999px; background: var(--ai-soft); border: 1px dashed var(--ai-line);
+  transform: translateX(calc(var(--intent-index, 2) * 28px));
+  transition: transform .16s ease, background .12s, border-color .12s;
+}
+.intent-slider.manual .thumb { background: var(--accent-soft); border: 1px solid var(--accent-line); }
+.intent-slider button[data-intent] {
+  position: relative; z-index: 1; width: 28px; height: 16px;
+  font-size: 9.5px; color: var(--muted); border-radius: 999px;
+}
+.intent-slider button[data-intent]:hover { color: var(--ink); }
+.intent-slider button[data-intent].on { color: var(--ai); font-weight: 600; }
+.intent-slider.manual button[data-intent].on { color: var(--accent); }
+.intent-auto {
+  display: inline-flex; align-items: center; gap: 3px; height: 20px; padding: 0 3px;
+  font-size: 9.5px; color: var(--muted); white-space: nowrap; border-radius: 999px;
+  flex: 0 0 auto;
+}
+.intent-auto:hover { color: var(--ink); background: var(--surface-3); }
+.intent-auto .dot { width: 4px; height: 4px; border-radius: 50%; background: var(--faint); }
+.intent-auto.on { color: var(--ai); }
+.intent-auto.on .dot { background: var(--ai); }
+.intent-auto.warn { color: var(--warn); }
+.intent-auto.warn .dot { background: var(--warn); }
+.intent-auto .pct { font-family: var(--font-mono); font-size: 9px; color: var(--muted); }
+.intent-auto.on .pct { color: var(--ai); }
+.out-format {
+  height: 20px; max-width: 106px; padding: 0 4px;
+  font-size: 9.5px; color: var(--ink-2); background: var(--surface);
+  border: 1px solid var(--border); border-radius: 999px;
+}
+.out-format:focus { outline: 0; border-color: var(--ai); box-shadow: 0 0 0 2px var(--ai-soft); }
 
 .send-btn {
   width: 26px; height: 26px;

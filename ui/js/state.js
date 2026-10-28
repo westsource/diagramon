@@ -110,7 +110,13 @@ window.DGM = window.DGM || {};
       zoom: 1,
       // 未显式选页签时按当前文档推导：有图 = 改图，无图 = 生图。
       // 不要在这里写死 "chat" —— 那会让“已经打开图后打开 AI”永远落在对话页。
-      aiTab: null,
+      aiSending: false,
+      aiIntentOverride: null,
+      aiIntentResolved: "review",
+      aiIntentConfidence: 0,
+      aiIntentFallback: true,
+      aiIntentReason: "",
+      aiOutputFormat: "follow",
       // 识图对比最多 2 张；数组顺序就是上行顺序。
       aiAttachments: [],
       // 附加的外部文件（AI 上下文）：拖进来 / 手填路径 / 选择文件都进这里。

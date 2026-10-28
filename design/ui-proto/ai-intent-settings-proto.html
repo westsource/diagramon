@@ -1,0 +1,418 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>原型 · 设置窗口 · AI / 意图判定</title>
+<link rel="stylesheet" href="proto.css">
+<style>
+  body {
+    margin: 0; min-height: 100vh; padding: 26px 32px 60px;
+    background: var(--bg); color: var(--ink); font: var(--fs-md) var(--font-ui);
+  }
+  .page-head { display: flex; align-items: flex-start; gap: 18px; margin-bottom: 18px; }
+  .page-head h1 { font-size: 18px; margin: 0 0 6px; }
+  .page-head .lede { margin: 0; max-width: 1080px; line-height: 1.65; color: var(--ink-2); }
+  .page-head .lede b { color: var(--ai); }
+  .page-head .lede code { font: var(--fs-xs) var(--font-mono); background: var(--surface-3); border-radius: 3px; padding: 1px 5px; }
+  .page-head .sp { flex: 1; }
+
+  .demo-wrap {
+    display: flex; justify-content: center; align-items: flex-start;
+    padding: 22px 0 10px; border: 1px dashed var(--border-strong); border-radius: var(--radius);
+    background:
+      radial-gradient(circle at 20% 10%, var(--surface-3) 0 1px, transparent 1px) 0 0/18px 18px,
+      var(--surface-2);
+  }
+
+  .dialog.settings-wide { width: min(900px, 96vw); height: 84vh; max-height: 84vh; display: flex; flex-direction: column; }
+  .dialog.settings-wide .dialog-body.has-tabs { grid-template-columns: 184px minmax(0, 1fr); flex: 1; min-height: 0; overflow: hidden; }
+  .dialog.settings-wide .dlg-pane { padding: 14px 18px 18px 0; height: 100%; max-height: 100%; min-height: 0; overflow: auto; }
+
+  .set-sec { margin-top: 15px; padding-top: 13px; border-top: 1px solid var(--border); }
+  .set-sec:first-child { margin-top: 0; padding-top: 0; border-top: 0; }
+  .set-sec-h { display: flex; align-items: center; gap: 7px; margin-bottom: 4px; }
+  .set-sec-h b { font-size: var(--fs-md); font-weight: 600; }
+  .set-sec-h .sp { flex: 1; }
+  .set-desc { margin: 0 0 10px; font-size: var(--fs-xs); line-height: 1.6; color: var(--muted); }
+  .set-desc b { color: var(--ink-2); font-weight: 500; }
+
+  .chip-opt { font-size: 9px; padding: 1px 5px; border-radius: 999px; color: var(--faint); border: 1px solid var(--border); background: var(--surface-inset); }
+  .status {
+    display: inline-flex; align-items: center; gap: 5px; height: 20px; padding: 0 7px;
+    font-size: 10px; border-radius: 999px; border: 1px solid var(--border); color: var(--muted); background: var(--surface);
+  }
+  .status::before { content: ""; width: 5px; height: 5px; border-radius: 50%; background: var(--faint); }
+  .status.ok { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 36%, transparent); background: color-mix(in srgb, var(--ok) 9%, transparent); }
+  .status.ok::before { background: var(--ok); }
+  .status.warn { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 40%, transparent); background: var(--warn-soft); }
+  .status.warn::before { background: var(--warn); }
+
+  .sub-card {
+    padding: 10px 11px; margin: 9px 0 0;
+    background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+  }
+  .sub-card .field:last-child { margin-bottom: 0; }
+  .sub-card.disabled { opacity: .55; pointer-events: none; }
+
+  .key-row { display: flex; gap: 6px; }
+  .key-row input { flex: 1; min-width: 0; }
+  .key-row .icon-btn { flex: 0 0 auto; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); }
+
+  .test-row { display: flex; align-items: center; gap: 8px; margin-top: 2px; }
+  .test-row .hint { flex: 1; }
+  .test-result {
+    margin-top: 7px; padding: 9px 10px;
+    border: 1px solid var(--border); border-radius: var(--radius-sm);
+    background: var(--surface-inset); font-size: var(--fs-xs); color: var(--ink-2);
+    line-height: 1.55;
+  }
+  .test-result[hidden] { display: none; }
+  .test-result .res-head { display: flex; align-items: center; gap: 6px; margin-bottom: 5px; }
+  .test-result .res-head b { color: var(--ai); font-weight: 600; }
+  .test-result .res-head .sp { flex: 1; }
+  .res-bars { display: flex; flex-direction: column; gap: 3px; }
+  .res-bar { display: grid; grid-template-columns: 50px minmax(0, 1fr) 38px; gap: 7px; align-items: center; font-size: 10px; }
+  .res-bar .k { color: var(--muted); }
+  .res-bar .bar { height: 4px; border-radius: 999px; background: var(--surface-3); overflow: hidden; }
+  .res-bar .bar i { display: block; height: 100%; background: var(--ai); border-radius: inherit; }
+  .res-bar .n { text-align: right; color: var(--ink-2); font-family: var(--font-mono); font-size: 9.5px; }
+
+  .inline-note {
+    display: flex; gap: 7px; align-items: flex-start;
+    padding: 8px 10px; margin: 10px 0 0;
+    font-size: 10.5px; line-height: 1.6; color: var(--muted);
+    background: var(--surface-inset); border: 1px solid var(--border); border-radius: var(--radius-sm);
+  }
+  .inline-note .ico { flex: 0 0 auto; margin-top: 1px; color: var(--ai); }
+  .inline-note b { color: var(--ink-2); font-weight: 500; }
+
+  .setting-subhead { margin: 13px 0 2px; font-size: 10px; font-weight: 600; letter-spacing: .35px; text-transform: uppercase; color: var(--faint); }
+
+  .toasts { position: fixed; right: 22px; bottom: 22px; display: flex; flex-direction: column; gap: 7px; z-index: 50; }
+  .toast {
+    display: flex; align-items: center; gap: 7px; padding: 8px 12px;
+    background: var(--surface); border: 1px solid var(--border-strong); border-radius: var(--radius-sm);
+    box-shadow: 0 8px 24px rgba(0,0,0,.18); font-size: var(--fs-xs); color: var(--ink);
+    animation: toast-in .16s ease-out;
+  }
+  @keyframes toast-in { from { transform: translateY(6px); opacity: 0 } }
+
+  .proto-tag {
+    position: fixed; left: 18px; bottom: 14px; display: flex; align-items: center; gap: 6px;
+    font-size: 10.5px; color: var(--muted);
+  }
+  .proto-tag b { color: var(--ink-2); font-weight: 500; }
+</style>
+</head>
+<body>
+<div class="page-head">
+  <div>
+    <h1>设置窗口 · AI / 意图判定</h1>
+    <p class="lede">
+      真正用户界面里，<b>Jev 的配置只出现在设置窗口的「AI」页</b>，不在主面板常驻。
+      这一页按真实设置窗口的规格做：左侧分类、右侧表单、底部保存；<b>意图判定</b> 是 AI 页里的一个可选小节。
+      未配置时不影响聊天，只是退回本地规则。
+    </p>
+  </div>
+  <span class="sp"></span>
+  <button class="btn sm" id="theme-btn"><svg class="ico ico-sm"><use href="#i-moon"></use></svg><span>暗色</span></button>
+</div>
+
+<div class="demo-wrap">
+  <div class="dialog settings-wide" role="dialog" aria-label="设置">
+    <div class="dialog-head">
+      <svg class="ico"><use href="#i-settings"></use></svg>
+      <h2>设置</h2>
+      <span class="sp"></span>
+      <button class="icon-btn" id="close-btn" title="关闭"><svg class="ico ico-sm"><use href="#i-close"></use></svg></button>
+    </div>
+
+    <div class="dialog-body has-tabs">
+      <div class="dlg-tabs" id="tabs">
+        <button class="dlg-tab" data-tab="appearance"><svg class="ico ico-sm"><use href="#i-palette"></use></svg>外观</button>
+        <button class="dlg-tab" data-tab="editor"><svg class="ico ico-sm"><use href="#i-code"></use></svg>编辑器</button>
+        <button class="dlg-tab on" data-tab="ai"><svg class="ico ico-sm"><use href="#i-sparkles"></use></svg>AI</button>
+        <button class="dlg-tab" data-tab="convert"><svg class="ico ico-sm"><use href="#i-swap"></use></svg>转换</button>
+        <button class="dlg-tab" data-tab="account"><svg class="ico ico-sm"><use href="#i-user"></use></svg>账户</button>
+      </div>
+
+      <div class="dlg-pane" id="panes">
+        <section class="pane" data-pane="appearance" hidden>
+          <div class="field"><label>主题</label>
+            <div class="seg"><button class="on">亮色</button><button>暗色</button><button>跟随系统</button></div>
+            <span class="hint">真实实现里，主题变量还要下发给四个渲染页（mermaid / graphviz / drawio / excalidraw）。</span>
+          </div>
+          <div class="field"><label>界面密度</label><div class="seg"><button>紧凑</button><button class="on">标准</button><button>宽松</button></div></div>
+          <div class="inline-note"><svg class="ico ico-sm"><use href="#i-info"></use></svg><span>这一页只保留最小内容；本原型重点是「AI → 意图判定」。</span></div>
+        </section>
+
+        <section class="pane" data-pane="editor" hidden>
+          <div class="field"><label>默认视图模式</label><div class="seg"><button>仅源码</button><button class="on">分屏</button><button>仅预览</button></div></div>
+          <div class="field-row">
+            <div class="field"><label>源码与预览比例</label><input type="text" value="46 : 54" readonly></div>
+            <div class="field"><label>渲染防抖</label><input type="text" value="350 ms" readonly></div>
+          </div>
+          <div class="inline-note"><svg class="ico ico-sm"><use href="#i-info"></use></svg><span>这一页只保留最小内容；本原型重点是「AI → 意图判定」。</span></div>
+        </section>
+
+        <section class="pane" data-pane="ai">
+          <div class="field"><label>接入方式</label>
+            <div class="seg"><button class="on">Diagramon 云网关（会员）</button><button>BYOK 直连自己的上游</button></div>
+            <span class="hint">云网关：凭据是当前 access token；BYOK：Key 存进系统凭据库。这一项与下面的「意图判定」是两件事。</span>
+          </div>
+
+          <div class="field-row">
+            <div class="field"><label>本周期额度</label><input type="text" value="3.2 / 20 信用点" readonly><span class="hint">周期至 2026/11/1</span></div>
+            <div class="field"><label>默认档位</label><select><option>自动选档</option><option>GLM-5.2</option><option>Qwen3 Max</option><option>gpt-4o</option></select><span class="hint">选「自动选档」时由服务端按请求内容选档</span></div>
+          </div>
+
+          <div class="set-sec">
+            <div class="set-sec-h">
+              <b>意图判定</b>
+              <span class="chip-opt">可选</span>
+              <span class="sp"></span>
+              <span class="status warn" id="jev-status">未配置</span>
+            </div>
+            <p class="set-desc">
+              开启后，在“有文档、无图”时调用一次 Jev，判断本条是 <b>生图 / 改图 / 解图</b>。
+              它只影响意图，不决定能不能发消息；未配置时走本地规则：图片附件→识图、无文档→生图、有文档→默认改图。
+            </p>
+
+            <div class="switch on" data-switch id="jev-enable"><span class="track"></span><span class="txt">启用智能判断<small>关闭后完全走本地硬规则，不发起任何 Jev 请求</small></span></div>
+
+            <div class="sub-card" id="jev-fields">
+              <div class="field"><label>Base URL</label>
+                <input type="text" id="jev-base" value="https://opencode.ai/inference/systemone/v1/systemone" spellcheck="false">
+                <span class="hint">默认 OpenCode Console 的 System One 端点；也可以换成 TypeSafe 官方端点。</span>
+              </div>
+              <div class="field-row">
+                <div class="field"><label>模型</label>
+                  <select id="jev-model">
+                    <option value="jev-1.13">jev-1.13（推荐）</option>
+                    <option value="jev-1.13-free">jev-1.13-free（限时免费）</option>
+                  </select>
+                  <span class="hint">固定版本，不用 jev-latest。</span>
+                </div>
+                <div class="field"><label>超时</label><input type="text" id="jev-timeout" value="700 ms"><span class="hint">超过就回退，不阻塞发送。</span></div>
+              </div>
+              <div class="field"><label>OpenCode Console Key <span style="color:var(--warn)">（不是 Go 套餐 Key）</span></label>
+                <div class="key-row">
+                  <input type="password" id="jev-key" value="" placeholder="未配置">
+                  <button class="icon-btn" id="key-toggle" title="显示/隐藏"><svg class="ico ico-sm"><use href="#i-eye"></use></svg></button>
+                </div>
+                <span class="hint">只写系统凭据库（DPAPI / Keychain），不回显、不进 settings.json。</span>
+              </div>
+              <div class="test-row">
+                <button class="btn sm" id="jev-test"><svg class="ico ico-sm"><use href="#i-bolt"></use></svg>测试</button>
+                <button class="btn sm ghost" id="jev-demo">填入示例</button>
+                <span class="hint" id="test-hint">填 Key 后可发一条固定样例。</span>
+              </div>
+              <div class="field-row">
+                <div class="field"><label>高置信阈值</label><input type="text" id="jev-high" value="0.75"><span class="hint">≥ 此值直接采用。</span></div>
+                <div class="field"><label>低置信阈值</label><input type="text" id="jev-low" value="0.55"><span class="hint">低于此值回退，中间值标“不太确定”。</span></div>
+              </div>
+              <div class="test-result" id="test-result" hidden>
+                <div class="res-head">
+                  <span class="dot" style="width:6px;height:6px;border-radius:50%;background:var(--ok)"></span>
+                  <b>改图</b>
+                  <span class="sp"></span>
+                  <span style="font-family:var(--font-mono);font-size:9.5px;color:var(--muted)">0.86 · jev-1.13 · 412 in / 12 out</span>
+                </div>
+                <div class="res-bars">
+                  <div class="res-bar"><span class="k">生图</span><span class="bar"><i style="width:5%"></i></span><span class="n">0.05</span></div>
+                  <div class="res-bar"><span class="k">改图</span><span class="bar"><i style="width:86%"></i></span><span class="n">0.86</span></div>
+                  <div class="res-bar"><span class="k">解图</span><span class="bar"><i style="width:9%"></i></span><span class="n">0.09</span></div>
+                  <div class="res-bar"><span class="k">识图</span><span class="bar"><i style="width:0%"></i></span><span class="n">0.00</span></div>
+                </div>
+              </div>
+            </div>
+
+            <div class="inline-note">
+              <svg class="ico ico-sm"><use href="#i-info"></use></svg>
+              <span><b>会员 ≠ Jev。</b>会员只决定云端聊天；Jev 是否可用只看“启用 + Key”。没有聊天模型时，先提示开通会员/配置 BYOK；Jev 未配置不会拦住发送。</span>
+            </div>
+            <div class="inline-note">
+              <svg class="ico ico-sm"><use href="#i-warn"></use></svg>
+              <span>开启后，用户输入和<b>文档前 20–40 行</b>会发往 OpenCode → TypeSafe；首次开启弹一次说明。</span>
+            </div>
+          </div>
+
+          <div class="set-sec">
+            <div class="set-sec-h"><b>聊天行为</b></div>
+            <div class="switch on" data-switch><span class="track"></span><span class="txt">把当前图表源码作为上下文<small>AI 面板顶部会显示上下文来自哪个文件</small></span></div>
+            <div class="switch on" data-switch><span class="track"></span><span class="txt">渲染失败时把报错原文发回模型修正一次<small>这是第二次真实调用，会计入用量</small></span></div>
+            <div class="switch on" data-switch><span class="track"></span><span class="txt">识图前显示上传告知<small>首次使用后不再重复弹</small></span></div>
+            <div class="switch" data-switch><span class="track"></span><span class="txt">生成后自动应用到编辑器<small>默认要你点「应用」，避免覆盖未保存的改动</small></span></div>
+          </div>
+
+          <div class="set-sec">
+            <div class="set-sec-h"><b>模型档位与单价</b></div>
+            <table class="kv">
+              <tr><td><span class="chip ai">自动选档</span></td><td>服务端按请求内容选档</td></tr>
+              <tr><td><span class="chip ai">GLM-5.2</span></td><td>主力档 · 中文 / 长上下文</td></tr>
+              <tr><td><span class="chip ai">Qwen3 Max</span></td><td>更强推理 · 更高单价</td></tr>
+              <tr><td><span class="chip ai">gpt-4o</span></td><td>BYOK · 未配置</td></tr>
+            </table>
+          </div>
+
+          <div class="set-sec">
+            <div class="set-sec-h"><b>对话历史</b></div>
+            <div class="field"><div class="field-row"><div class="field"><input type="text" value="%APPDATA%/Diagramon/Conversations" readonly></div><button class="btn sm">浏览…</button><button class="btn sm ghost">打开目录</button></div><span class="hint">按文档稳定身份（路径 SHA256）保存，一条时间线。</span></div>
+          </div>
+        </section>
+
+        <section class="pane" data-pane="convert" hidden>
+          <div class="field"><label>转换结果</label><div class="seg"><button class="on">另开新标签页</button><button>替换当前标签页</button></div></div>
+          <div class="switch on" data-switch><span class="track"></span><span class="txt">转换后自动做一次语法校验<small>有报错会在「问题」面板列出</small></span></div>
+          <div class="inline-note"><svg class="ico ico-sm"><use href="#i-info"></use></svg><span>这一页只保留最小内容；本原型重点是「AI → 意图判定」。</span></div>
+        </section>
+
+        <section class="pane" data-pane="account" hidden>
+          <div class="field"><label>账户</label>
+            <div class="acct"><span class="avatar">道</span><span class="who"><b>道荣</b><small>westsource@126.com</small></span><span class="chip">Pro 会员 · 2026-11-03 到期</span></div>
+          </div>
+          <div class="field"><label>本周期用量</label><div class="meter lg ok mb"><span style="width:16%"></span></div><span class="hint">3.2 / 20 信用点 · 周期至 2026/11/1</span></div>
+          <div class="switch" data-switch><span class="track"></span><span class="txt">把匿名使用统计发给 Diagramon<small>不含图表内容</small></span></div>
+          <div class="inline-note"><svg class="ico ico-sm"><use href="#i-info"></use></svg><span>这一页只保留最小内容；本原型重点是「AI → 意图判定」。</span></div>
+        </section>
+      </div>
+    </div>
+
+    <div class="dialog-foot">
+      <span class="note">设置写入 settings.json；API Key 走系统凭据库（Windows DPAPI），不进 settings.json</span>
+      <span class="sp"></span>
+      <button class="btn ghost" id="cancel-btn">关闭</button>
+      <button class="btn primary" id="save-btn"><svg class="ico ico-sm"><use href="#i-check"></use></svg>保存</button>
+    </div>
+  </div>
+</div>
+
+<div class="toasts" id="toasts"></div>
+<div class="proto-tag"><svg class="ico ico-sm"><use href="#i-info"></use></svg><span>原型 · 设置窗口 / 意图判定 · <b>不发起真实请求</b></span></div>
+
+<script src="./proto-icons.js"></script>
+<script>
+(function () {
+  "use strict";
+  const $ = (s, r) => (r || document).querySelector(s);
+  const $$ = (s, r) => Array.from((r || document).querySelectorAll(s));
+  const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+  const S = {
+    tab: "ai",
+    dark: new URLSearchParams(location.search).get("theme") === "dark",
+    jev: { enabled: true, base: "https://opencode.ai/inference/systemone/v1/systemone", model: "jev-1.13", key: "", timeout: 700, high: 0.75, low: 0.55 },
+    tested: false,
+  };
+
+  function toast(text, warn) {
+    const el = document.createElement("div");
+    el.className = "toast";
+    el.innerHTML = '<svg class="ico ico-sm"><use href="#i-' + (warn ? "warn" : "ok") + '"></use></svg><span>' + esc(text) + "</span>";
+    $("#toasts").appendChild(el);
+    setTimeout(() => el.remove(), 2400);
+  }
+
+  function applyTheme() {
+    document.documentElement.dataset.theme = S.dark ? "dark" : "light";
+    $("#theme-btn").innerHTML = '<svg class="ico ico-sm"><use href="#i-' + (S.dark ? "sun" : "moon") + '"></use></svg><span>' + (S.dark ? "亮色" : "暗色") + "</span>";
+  }
+
+  function showTab(tab) {
+    S.tab = tab;
+    $$("#tabs .dlg-tab").forEach((b) => b.classList.toggle("on", b.dataset.tab === tab));
+    $$("#panes .pane").forEach((p) => { p.hidden = p.dataset.pane !== tab; });
+  }
+
+  function jevConfigured() {
+    return S.jev.enabled && !!(S.jev.base && S.jev.model && S.jev.key);
+  }
+
+  function updateJevState() {
+    const ok = jevConfigured();
+    const st = $("#jev-status");
+    st.className = "status " + (ok ? "ok" : "warn");
+    st.textContent = ok ? "已配置" : "未配置";
+    $("#jev-fields").classList.toggle("disabled", !S.jev.enabled);
+    $("#test-hint").textContent = !S.jev.enabled ? "智能判断已关闭，测试不可用。" : ok ? "用一条固定样例验证 Key、模型与置信度。" : "填 Key 后可发一条固定样例。";
+    $("#jev-test").disabled = !ok;
+    $("#test-result").hidden = !S.tested || !ok;
+  }
+
+  function readForm() {
+    S.jev = {
+      enabled: $("#jev-enable").classList.contains("on"),
+      base: $("#jev-base").value.trim(),
+      model: $("#jev-model").value,
+      key: $("#jev-key").value.trim(),
+      timeout: Number($("#jev-timeout").value.replace(/[^\d]/g, "")) || 700,
+      high: Number($("#jev-high").value) || 0.75,
+      low: Number($("#jev-low").value) || 0.55,
+    };
+    S.tested = false;
+  }
+
+  function bind() {
+    $$("#tabs .dlg-tab").forEach((b) => b.addEventListener("click", () => showTab(b.dataset.tab)));
+    $("#theme-btn").addEventListener("click", () => { S.dark = !S.dark; applyTheme(); });
+
+    $$("[data-switch]").forEach((sw) => sw.addEventListener("click", () => {
+      sw.classList.toggle("on");
+      if (sw.id === "jev-enable") { readForm(); updateJevState(); }
+    }));
+
+    $("#key-toggle").addEventListener("click", () => {
+      const k = $("#jev-key");
+      k.type = k.type === "password" ? "text" : "password";
+    });
+
+    $$("#jev-fields input, #jev-fields select").forEach((el) => el.addEventListener("input", () => {
+      readForm();
+      updateJevState();
+    }));
+    $("#jev-model").addEventListener("change", () => { readForm(); updateJevState(); });
+
+    $("#jev-demo").addEventListener("click", () => {
+      $("#jev-key").value = "demo-key";
+      readForm();
+      updateJevState();
+      toast("已填入示例 Key（只存在当前页面）");
+    });
+
+    $("#jev-test").addEventListener("click", () => {
+      readForm();
+      if (!jevConfigured()) return toast("先填 OpenCode Console Key", true);
+      const btn = $("#jev-test");
+      btn.disabled = true;
+      btn.textContent = "测试中…";
+      setTimeout(() => {
+        btn.disabled = false;
+        btn.innerHTML = '<svg class="ico ico-sm"><use href="#i-bolt"></use></svg>测试';
+        S.tested = true;
+        $("#test-result").hidden = false;
+        updateJevState();
+        toast("测试通过：改图 0.86 · " + S.jev.model);
+      }, 520);
+    });
+
+    $("#save-btn").addEventListener("click", () => {
+      readForm();
+      updateJevState();
+      toast(jevConfigured() ? "设置已保存：意图判定已启用" : "设置已保存：意图判定未配置，将走本地规则");
+    });
+    $("#cancel-btn").addEventListener("click", () => toast("原型：关闭设置窗口"));
+    $("#close-btn").addEventListener("click", () => toast("原型：关闭设置窗口"));
+
+    // 初始状态：Key 为空 → 未配置；点击“填入示例”可直接看已配置态
+    $("#jev-key").value = "";
+    updateJevState();
+    showTab("ai");
+  }
+
+  applyTheme();
+  bind();
+})();
+</script>
+</body>
+</html>

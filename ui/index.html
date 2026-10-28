@@ -152,13 +152,6 @@
         <button class="icon-btn" id="ai-close" data-i18n-title="ui.hideAi" title="隐藏 AI 面板  Ctrl+Shift+A"><svg class="ico ico-sm"><use href="#i-close"></use></svg></button>
       </div>
 
-      <div class="ai-tabs" id="ai-tabs">
-        <button class="ai-tab on" data-ai="chat" data-i18n="ai.tab.chat">生图</button>
-        <button class="ai-tab" data-ai="vision" data-i18n="ai.tab.vision">识图</button>
-        <button class="ai-tab" data-ai="review" data-i18n="ai.tab.review">改图</button>
-        <button class="ai-tab" data-ai="explain" data-i18n="ai.tab.explain">解图</button>
-      </div>
-
       <div class="ai-memory-bar" id="ai-memory-bar" hidden><!-- JS 渲染：待确认的记忆候选 --></div>
 
       <div class="ai-stream" id="ai-stream"><!-- JS 渲染 --></div>
@@ -169,7 +162,7 @@
         <div class="ai-attachments" id="ai-attachments" hidden></div>
         <div class="ai-box">
           <textarea id="ai-input" rows="2" placeholder="描述你想要的图，Enter 发送 / Shift+Enter 换行"></textarea>
-          <div class="ai-box-row">
+          <div class="ai-box-row ai-tools-row">
             <button class="icon-btn" id="ai-attach" data-i18n-title="ui.attachImage" title="添加图片（识图）"><svg class="ico ico-sm"><use href="#i-image"></use></svg></button>
             <button class="icon-btn" id="ai-screenshot" data-i18n-title="ui.capture" title="截取屏幕区域识别"><svg class="ico ico-sm"><use href="#i-scan"></use></svg></button>
             <button class="icon-btn" id="ai-context" data-i18n-title="ui.useDoc" title="把当前图作为上下文"><svg class="ico ico-sm"><use href="#i-diagram"></use></svg></button>
@@ -177,6 +170,27 @@
             <button class="icon-btn" id="ai-file-pick" data-i18n-title="ai.filePick" title="选择文件作为上下文"><svg class="ico ico-sm"><use href="#i-folder"></use></svg></button>
             <span class="sp"></span>
             <span class="ai-hint" id="ai-hint"></span>
+          </div>
+          <div class="ai-box-row ai-intent-row">
+            <div class="intent-wrap">
+              <div class="intent-slider auto" id="ai-intent-slider" role="radiogroup" aria-label="本条意图">
+                <span class="thumb"></span>
+                <button data-intent="generate" role="radio" aria-checked="false" data-i18n-title="ai.intent.generate" title="生图" data-i18n="ai.intent.generate">生图</button>
+                <button data-intent="vision" role="radio" aria-checked="false" data-i18n-title="ai.intent.vision" title="识图" data-i18n="ai.intent.vision">识图</button>
+                <button data-intent="review" role="radio" aria-checked="false" data-i18n-title="ai.intent.review" title="改图" data-i18n="ai.intent.review">改图</button>
+                <button data-intent="explain" role="radio" aria-checked="false" data-i18n-title="ai.intent.explain" title="解图" data-i18n="ai.intent.explain">解图</button>
+              </div>
+              <button class="intent-auto on" id="ai-intent-auto" title="自动判断"><span class="dot"></span><span id="ai-intent-auto-label" data-i18n="ai.intent.auto">自动</span><span class="pct" id="ai-intent-conf"></span></button>
+            </div>
+            <span class="sp"></span>
+            <select class="out-format" id="ai-out-format" title="输出格式；与当前文档不同时，应用会新建对应格式的标签页">
+              <option value="follow" data-i18n="ai.output.follow">跟随当前</option>
+              <option value="mermaid" data-i18n="ai.output.mermaid">Mermaid</option>
+              <option value="dot" data-i18n="ai.output.dot">Graphviz DOT</option>
+              <option value="d2" data-i18n="ai.output.d2">D2</option>
+              <option value="drawio-via" data-i18n="ai.output.drawio">drawio（经转换）</option>
+              <option value="excalidraw-via" data-i18n="ai.output.excalidraw">Excalidraw（经转换）</option>
+            </select>
             <button class="send-btn" id="ai-send" data-i18n-title="ui.send" title="发送  Enter"><svg class="ico ico-sm"><use href="#i-send"></use></svg></button>
           </div>
         </div>

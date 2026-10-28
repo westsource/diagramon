@@ -327,6 +327,33 @@ pub struct AiPrefs {
     /// 而且模型每用一次工具就多一次真实计费。这种"拿流式换能力"的取舍必须由用户来定，
     /// 不能默认替他们改掉已有的打字机体验。
     pub tools_enabled: bool,
+    /// 意图判定（可选）：Jev / System One 兼容端点。
+    pub intent: IntentPrefs,
+}
+
+/// 意图判定（Jev）配置。**默认关**，且它不是会员权益。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct IntentPrefs {
+    pub enabled: bool,
+    pub base_url: String,
+    pub model: String,
+    pub timeout_ms: u32,
+    pub high_confidence: f32,
+    pub min_confidence: f32,
+}
+
+impl Default for IntentPrefs {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            base_url: "https://opencode.ai/inference/systemone/v1/systemone".into(),
+            model: "jev-1.13".into(),
+            timeout_ms: 700,
+            high_confidence: 0.75,
+            min_confidence: 0.55,
+        }
+    }
 }
 
 impl Default for AiPrefs {
@@ -344,6 +371,7 @@ impl Default for AiPrefs {
             memory_enabled: true,
             memory_auto: true,
             tools_enabled: false,
+            intent: IntentPrefs::default(),
         }
     }
 }
@@ -499,8 +527,15 @@ pub struct AiChatRequest {
     pub model_id: String,
     pub intent: AiIntent,
     pub prompt: String,
-    /// 当前格式（决定提示词与代码围栏提取）
+    /// 当前文档格式（上下文；决定提示词之外的回退与文档归属）
     pub format: FormatId,
+    /// 目标生成格式；`None` = 跟随当前文档。
+    ///
+    /// 与 `format` 分开是必须的：在多格式输出里，当前文档可以是 Mermaid，
+    /// 而用户要求生成 DOT/D2 源码 —— 提示词、围栏提取、校验都按这个字段走，
+    /// `format` 仍描述上下文。
+    #[serde(default)]
+    pub output_format: Option<FormatId>,
     /// 当前文档正文（作为上下文；可空）
     pub context: Option<String>,
     /// 附加的外部文件（参考资料；可空）
@@ -525,13 +560,41 @@ pub struct AiChatRequest {
     pub retry_of: Option<String>,
 }
 
+/// 意图判定请求：只传判定所需的最小状态，不传整篇文档。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IntentClassifyRequest {
+    pub prompt: String,
+    pub has_document: bool,
+    pub has_selection: bool,
+    pub has_image: bool,
+    pub current_intent: AiIntent,
+    #[serde(default)]
+    pub document_head: Option<String>,
+    #[serde(default)]
+    pub has_text_files: bool,
+    /// 显式覆盖：前端已点滑块时直接返回它，不请求 Jev。
+    #[serde(default)]
+    pub override_intent: Option<AiIntent>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IntentClassifyResult {
+    pub intent: AiIntent,
+    pub confidence: f32,
+    pub probabilities: std::collections::BTreeMap<String, f32>,
+    pub model: String,
+    pub elapsed_ms: u64,
+    pub fallback: bool,
+    #[serde(default)]
+    pub reason: Option<String>,
+}
+
 /// 事件名：`ai://delta` / `ai://thinking` / `ai://done` / `ai://failed`
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AiDelta {
     pub request_id: String,
     pub delta: String,
 }
-
 /// 模型的**思考**增量（GLM/DeepSeek/Qwen 这一族的 `reasoning_content`）。
 ///
 /// 与正文分开报是刻意的：思考型模型会先连推几十上百帧思考、正文最后才来 —— 界面要能

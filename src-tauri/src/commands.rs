@@ -17,7 +17,8 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
 
 use app_ipc::{
-    events, AiAgentStep, AiChatRequest, AiContextFile, AiDelta, AiDone, AiFailed, AiModel, AiThinking,
+    events, AiAgentStep, AiChatRequest, AiContextFile, AiDelta, AiDone, AiFailed, AiIntent, AiModel,
+    AiThinking, IntentClassifyRequest, IntentClassifyResult,
     AppInfo, ConvMeta, Conversation, ConversationTurn, ConvertOutcome, ConvertRequest, DevFlags, Doc, FormatId,
     Issue, MemoryEntry, MemoryList, MemoryScope, MemoryState, OutlineGroup,
     Session as SessionPayload, Settings, ViewMode,
@@ -700,8 +701,9 @@ pub async fn ai_chat(
     };
     resolved = with_attribution(resolved, &req, gateway);
 
+    let out_format = req.output_format.unwrap_or(req.format);
     let messages = ai::build_messages_with_history_images(
-        req.format,
+        out_format,
         req.intent,
         &req.prompt,
         req.context.as_deref(),
@@ -912,8 +914,9 @@ pub async fn ai_agent_run(
     let doc_id = st.session().payload().active.unwrap_or_default();
     let tools = crate::ai_tools::build(st.clone(), doc_id);
 
+    let out_format = req.output_format.unwrap_or(req.format);
     let messages = ai::build_messages_with_history_images(
-        req.format,
+        out_format,
         req.intent,
         &req.prompt,
         req.context.as_deref(),
@@ -997,6 +1000,105 @@ pub fn ai_cancel(state: State<'_, Arc<AppState>>, id: String) -> R<()> {
             Ok(())
         }
         None => Err("这个请求已经结束了".into()),
+    }
+}
+
+/// 意图判定：硬规则 → Jev（可选）→ 回退。
+///
+/// **永远不会因为 Jev 失败而让发送失败**：上游超时/未配置/低置信都只返回
+/// `fallback=true`，由 UI 保持滑块当前值。真正的发送由 `ai_chat` 负责。
+#[tauri::command]
+pub async fn ai_resolve_intent(
+    state: State<'_, Arc<AppState>>,
+    req: IntentClassifyRequest,
+) -> R<IntentClassifyResult> {
+    let st = state.inner().clone();
+    let started = std::time::Instant::now();
+
+    let done = |intent: AiIntent, confidence: f32, fallback: bool, reason: &str| IntentClassifyResult {
+        intent,
+        confidence,
+        probabilities: std::collections::BTreeMap::new(),
+        model: String::new(),
+        elapsed_ms: ai::decision::elapsed_ms(started),
+        fallback,
+        reason: Some(reason.to_string()),
+    };
+
+    if let Some(it) = req.override_intent {
+        return Ok(done(it, 1.0, false, "override"));
+    }
+    if req.has_image {
+        return Ok(done(AiIntent::Vision, 1.0, true, "hard:image"));
+    }
+    if !req.has_document {
+        return Ok(done(AiIntent::Generate, 1.0, true, "hard:no-document"));
+    }
+
+    let prefs = st.settings().ai.intent.clone();
+    if !prefs.enabled {
+        return Ok(done(req.current_intent, 0.0, true, "disabled"));
+    }
+    let key = match st
+        .creds
+        .get(&crate::state::provider_credential_key("intent-classifier"))
+    {
+        Ok(Some(k)) if !k.trim().is_empty() => k,
+        _ => return Ok(done(req.current_intent, 0.0, true, "not-configured")),
+    };
+
+    let timeout = std::time::Duration::from_millis(prefs.timeout_ms.clamp(300, 2000) as u64);
+    let http = st.http_for_idle(timeout);
+    let input = ai::decision::DecisionInput {
+        prompt: &req.prompt,
+        has_document: req.has_document,
+        has_selection: req.has_selection,
+        has_image: req.has_image,
+        has_text_files: req.has_text_files,
+        current_intent: req.current_intent,
+        document_head: req.document_head.as_deref(),
+    };
+    let client = ai::decision::DecisionClient {
+        client: &http,
+        base_url: prefs.base_url.trim(),
+        api_key: key.trim(),
+        model: prefs.model.trim(),
+        timeout,
+    };
+
+    match client.classify(&input).await {
+        Ok(d) => {
+            // Jev 只允许在三选一里判；识图由图片附件硬规则决定。
+            if d.intent == AiIntent::Vision {
+                return Ok(done(req.current_intent, d.confidence, true, "invalid:vision"));
+            }
+            if d.confidence < prefs.min_confidence {
+                return Ok(done(req.current_intent, d.confidence, true, "low-confidence"));
+            }
+            Ok(IntentClassifyResult {
+                intent: d.intent,
+                confidence: d.confidence,
+                probabilities: d.probabilities,
+                model: if d.model.is_empty() {
+                    prefs.model.clone()
+                } else {
+                    d.model
+                },
+                elapsed_ms: ai::decision::elapsed_ms(started),
+                fallback: false,
+                reason: if d.confidence < prefs.high_confidence {
+                    Some("medium-confidence".to_string())
+                } else {
+                    None
+                },
+            })
+        }
+        Err(e) => Ok(done(
+            req.current_intent,
+            0.0,
+            true,
+            &format!("upstream:{e}"),
+        )),
     }
 }
 

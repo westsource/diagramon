@@ -961,41 +961,58 @@ def main() -> int:
         )
         drain(0.2)
 
-        # ---- 断言 12.1：有图时重新打开 AI 面板，页签必须自动落到「改图」----
-        # 用户报：明明已经打开了图，AI 窗口仍然停在上次选的「对话生成」。
-        # 这里先把页签强行设成 chat，再收起面板，然后点活动栏的 AI 按钮重新打开。
+        # ---- 断言 12.1：有图时重新打开 AI 面板，意图滑块必须自动落到「改图」----
+        # 2026-10-28 起面板不再有四个页签：一条时间线 + 四档意图滑块（自动/手动覆盖）。
+        # 用户报：已经有图时，AI 仍停在上次的「生图」。这里收起再打开，等自动判定落定。
         ai_tab = ev(
             "(async () => {"
             "  const wait = (ms) => new Promise(r => setTimeout(r, ms));"
-            "  DGM.state.ui.aiTab = 'chat';"
+            "  DGM.state.ui.aiIntentOverride = null;"
             "  await DGM.state.patchSettings({ panels: { ai: false } });"
             "  await wait(250);"
             "  document.querySelector('.act.is-ai').click();"
-            "  await wait(350);"
-            "  const on = document.querySelector('#ai-tabs .ai-tab.on');"
-            "  const tabs = document.querySelector('#ai-tabs');"
+            "  await wait(700);"
+            "  const on = document.querySelector('#ai-intent-slider button[data-intent].on');"
+            "  const slider = document.querySelector('#ai-intent-slider');"
+            "  const auto = document.querySelector('#ai-intent-auto');"
+            "  const out = document.querySelector('#ai-out-format');"
+            "  const manualBefore = slider && slider.classList.contains('manual');"
+            "  document.querySelector('#ai-intent-slider button[data-intent=\"generate\"]').click();"
+            "  await wait(120);"
+            "  const manualAfter = slider.classList.contains('manual');"
+            "  const manualIntent = document.querySelector('#ai-intent-slider button[data-intent].on').dataset.intent;"
+            "  if (auto) auto.click();"
+            "  await wait(120);"
             "  return JSON.stringify({"
             "    hasDoc: !!DGM.state.activeDoc(),"
-            "    tab: on ? on.dataset.ai : '',"
-            "    divider: tabs ? getComputedStyle(tabs).borderBottomWidth : '',"
+            "    intent: on ? on.dataset.intent : '',"
+            "    manualBefore, manualAfter, manualIntent,"
+            "    autoAfter: !slider.classList.contains('manual'),"
+            "    hasOut: !!out && out.options.length >= 5,"
             "    visible: !document.body.classList.contains('no-ai')"
             "  });"
             "})()"
         )
-        log(f"有图时打开 AI 页签: {ai_tab}")
+        log(f"有图时打开 AI 意图滑块: {ai_tab}")
         try:
             at = json.loads(ai_tab or "{}")
             if not at.get("hasDoc"):
                 fails.append("断言 12.1 无依据：当前没有活动文档")
             if not at.get("visible"):
                 fails.append("活动栏 AI 按钮没有重新打开面板")
-            if at.get("tab") != "review":
-                fails.append(f"有图时打开 AI 面板没有自动切到改图：{at.get('tab')}")
-            if at.get("divider") != "1px":
-                fails.append(f"AI 标签区下方应有 1px 分割线：{at.get('divider')}")
+            if at.get("intent") != "review":
+                fails.append(f"有图时打开 AI 面板没有自动落到改图：{at.get('intent')}")
+            if at.get("manualBefore"):
+                fails.append("自动模式下滑块不应处于手动覆盖态")
+            if not at.get("manualAfter") or at.get("manualIntent") != "generate":
+                fails.append(f"点「生图」没有形成手动覆盖：{at.get('manualAfter')} / {at.get('manualIntent')}")
+            if not at.get("autoAfter"):
+                fails.append("点「回自动」没有解除手动覆盖")
+            if not at.get("hasOut"):
+                fails.append("输出格式下拉缺失或选项不足")
         except Exception as e:
             log(f"（断言 12.1 解析失败：{e}）")
-            fails.append("断言 12.1 拿不到结果（AI 页签切换可能没接上）")
+            fails.append("断言 12.1 拿不到结果（AI 意图滑块切换可能没接上）")
 
         # ---- 断言 12.2：搜索并入 Explorer，活动栏不再有搜索/转换中心图标 ----
         search_merge = ev(
@@ -2168,7 +2185,7 @@ def main() -> int:
         think = ev(
             "(async () => {"
             "  const before = DGM.state.usage.completion;"
-            "  DGM.ai.focus('chat');"
+            "  DGM.ai.focus('generate');"
             "  await new Promise(r => setTimeout(r, 150));"
             "  const ta = document.querySelector('#ai-input');"
             "  ta.value = '[think] 把配色改成暗色';"
@@ -2221,7 +2238,7 @@ def main() -> int:
                 "  const d = DGM.state.docs.find(x => x.format === 'mermaid');"
                 "  if (!d) return 'no-doc';"
                 "  await DGM.state.activateDoc(d.id);"
-                "  DGM.ai.focus('chat');"
+                "  DGM.ai.focus('generate');"
                 "  await new Promise(r => setTimeout(r, 250));"
                 "  const before = snap();"
                 "  const ta = document.querySelector('#ai-input');"
@@ -2291,7 +2308,7 @@ def main() -> int:
         # 这里模拟"用户手改"：只走编辑器 + setBodyNow（**不**经过 applyBlock，所以不会重新布防）。
         user_edit = ev(
             "(async () => {"
-            "  DGM.ai.focus('chat');"
+            "  DGM.ai.focus('generate');"
             "  await new Promise(r => setTimeout(r, 200));"
             "  const d = DGM.state.docs.find(x => x.format === 'mermaid');"
             "  if (!d) return 'no-doc';"
@@ -2340,7 +2357,7 @@ def main() -> int:
         # mock 夹具 `[hist]` 把"收到几条前序轮次"原样回报（见 ipc.js `_aiText`）。
         hist = ev(
             "(async () => {"
-            "  DGM.ai.focus('chat');"
+            "  DGM.ai.focus('generate');"
             "  await new Promise(r => setTimeout(r, 200));"
             "  DGM.ai.clear();"
             "  await new Promise(r => setTimeout(r, 200));"
@@ -2379,7 +2396,7 @@ def main() -> int:
         # 所以这里断言的是**请求真的带上了文件内容**，不是"界面上多了个 chip"。
         ctxprobe = ev(
             "(async () => {"
-            "  DGM.ai.focus('chat');"
+            "  DGM.ai.focus('generate');"
             "  await new Promise(r => setTimeout(r, 200));"
             "  DGM.ai.clear();"
             "  await new Promise(r => setTimeout(r, 200));"
@@ -2460,10 +2477,11 @@ def main() -> int:
             "  await DGM.state.setBodyNow(d.id, 'flowchart TD\\n  A[a] --> B[b]\\n');"
             "  DGM.ai.focus('explain'); await wait(250);"
             "  DGM.ai.clear(); await wait(200);"
-            "  const tabs = [...document.querySelectorAll('#ai-tabs .ai-tab')].map((b) => b.dataset.ai + ':' + b.textContent.trim());"
+            "  const sliderBtns = [...document.querySelectorAll('#ai-intent-slider button[data-intent]')].map((b) => b.dataset.intent);"
             "  const emptyBtns = [...document.querySelectorAll('#ai-stream .ai-empty button')].map((b) => b.dataset.a || '');"
             "  const chip = document.querySelector('#ai-stream .ai-empty button[data-a=\"ask:risk\"]');"
             "  if (chip) chip.click();"
+            "  await wait(150);"
             "  for (let i = 0; i < 50 && DGM.state.ui.aiBusy; i++) await wait(100);"
             "  await wait(250);"
             "  /* 再发一轮：用户消息的删除要成对移除，同时保留一轮给 assistant 的删除断言用。 */"
@@ -2471,10 +2489,12 @@ def main() -> int:
             "  taMore.value = '再补一条';"
             "  taMore.dispatchEvent(new Event('input', { bubbles: true }));"
             "  document.querySelector('#ai-send').click();"
+            "  await wait(150);"
             "  for (let i = 0; i < 50 && DGM.state.ui.aiBusy; i++) await wait(100);"
             "  await wait(250);"
             "  const msgs = [...document.querySelectorAll('#ai-stream .msg')];"
-            "  const bot = [...msgs].reverse().find((m) => m.classList.contains('bot'));"
+            "  /* 一条时间线后，第二句会被自动判成改图；Markdown 断言必须盯住第一轮 explain 回复。 */"
+            "  const bot = [...msgs].find((m) => m.classList.contains('bot'));"
             "  const md0 = bot && bot.querySelector('.md-view');"
             "  const mdDefault = !!(md0 && md0.querySelector('.md-preview') && !md0.querySelector('.md-source'));"
             "  const mdHeading = !!(md0 && md0.querySelector('.md-preview h2'));"
@@ -2483,14 +2503,14 @@ def main() -> int:
             "  const srcBtn = md0 && md0.querySelector('.md-seg-btn[data-md=\"source\"]');"
             "  if (srcBtn) srcBtn.click();"
             "  await wait(120);"
-            "  const bot2 = [...document.querySelectorAll('#ai-stream .msg')].reverse().find((m) => m.classList.contains('bot'));"
+            "  const bot2 = [...document.querySelectorAll('#ai-stream .msg')].find((m) => m.classList.contains('bot'));"
             "  const md1 = bot2 && bot2.querySelector('.md-view');"
             "  const mdSrc = md1 && md1.querySelector('.md-src');"
             "  const mdSourceOn = !!(md1 && mdSrc && mdSrc.textContent.indexOf('## ') === 0 && !md1.querySelector('.md-preview'));"
             "  const prevBtn = md1 && md1.querySelector('.md-seg-btn[data-md=\"preview\"]');"
             "  if (prevBtn) prevBtn.click();"
             "  await wait(120);"
-            "  const bot3 = [...document.querySelectorAll('#ai-stream .msg')].reverse().find((m) => m.classList.contains('bot'));"
+            "  const bot3 = [...document.querySelectorAll('#ai-stream .msg')].find((m) => m.classList.contains('bot'));"
             "  const mdBack = !!(bot3 && bot3.querySelector('.md-view .md-preview'));"
             "  const partial = DGM.markdown.render('## ');"
             "  const mdPartial = typeof partial === 'string' && partial.indexOf('##') >= 0;"
@@ -2501,7 +2521,7 @@ def main() -> int:
             "  const applyBtn = bot ? bot.querySelectorAll('.code-card .apply, [data-a=apply]').length : -1;"
             "  const acts = bot ? bot.querySelectorAll('.msg-acts .msg-act').length : -1;"
             "  const turns = DGM.ai.turnsFor();"
-            "  const lastTab = turns.length ? turns[turns.length - 1].tab : '';"
+            "  const hasExplain = turns.some((t) => t.tab === 'explain');"
             "  const cmd = DGM.commands.list().some((c) => c.id === 'ai.explain');"
             "  const headBtn = !!document.querySelector('#pane-preview #btn-explain');"
             "  const iconOnly = (b) => !!b && !(b.textContent || '').trim() && !!b.querySelector('svg');"
@@ -2531,7 +2551,7 @@ def main() -> int:
             "  if (userEdit) userEdit.click();"
             "  await wait(250);"
             "  const userEditPre = document.querySelector('#ai-input').value;"
-            "  const userEditTab = DGM.state.ui.aiTab;"
+            "  const userEditIntent = DGM.state.ui.aiIntentOverride;"
             "  const taEdit = document.querySelector('#ai-input');"
             "  if (taEdit) { taEdit.value = ''; taEdit.dispatchEvent(new Event('input', { bubbles: true })); }"
             "  const beforeUserDel = document.querySelectorAll('#ai-stream .msg').length;"
@@ -2550,9 +2570,9 @@ def main() -> int:
             "  DGM.dialogs.close();"
             "  await DGM.state.closeDoc(d.id);"
             "  return JSON.stringify({ hasFn: typeof DGM.ai.explain === 'function', tabs, emptyBtns,"
-            "    tab: DGM.state.ui.aiTab, intentTab: lastTab, cards, applyBtn, acts,"
-            "    deleted: beforeDel - afterDel, userDel, userEditPre, userText, userEditTab,"
-            "    cmd, headBtn, mdDefault, mdHeading, mdStrong,"
+            "    sliderBtns, hasExplain, cards, applyBtn, acts,"
+            "    deleted: beforeDel - afterDel, delFound: !!del, userDel, userEditPre, userText,"
+            "    cmd, headBtn, mdDefault, mdHeading, mdStrong, userEditIntent,"
             "    mdTable, mdSourceOn, mdBack, mdPartial, mdSafe, botCopyIcon, userCopyIcon, userCopyOk,"
             "    copyInActs, copySameCls, copySameGroup, copySamePad });"
             "})()"
@@ -2562,15 +2582,13 @@ def main() -> int:
             ep = json.loads(explain_probe or "{}")
             if not ep.get("hasFn"):
                 fails.append("DGM.ai.explain 不存在")
-            if ep.get("tabs") != ["chat:生图", "vision:识图", "review:改图", "explain:解图"]:
-                fails.append(f"AI 页签不是 生图/识图/改图/解图 四个：{ep.get('tabs')}")
+            if ep.get("sliderBtns") != ["generate", "vision", "review", "explain"]:
+                fails.append(f"AI 意图滑块不是四档：{ep.get('sliderBtns')}")
             btns = ep.get("emptyBtns") or []
             if btns[:1] != ["ctx"] or len(btns) != 4:
                 fails.append(f"解图空态应有 1 个主按钮 + 3 个角度词，实际 {btns}")
-            if ep.get("tab") != "explain":
-                fails.append(f"解释没有落在「解图」页签：{ep.get('tab')}")
-            if ep.get("intentTab") != "explain":
-                fails.append(f"这一轮没有记进 explain 桶：{ep.get('intentTab')}")
+            if not ep.get("hasExplain"):
+                fails.append("解释这一轮的意图没有记成 explain")
             if ep.get("cards") != 0:
                 fails.append(f"Explain 回复仍渲染了代码卡：{ep.get('cards')}")
             if ep.get("applyBtn") != 0:
@@ -2610,8 +2628,8 @@ def main() -> int:
                 fails.append("拷贝按钮与相邻操作按钮的类名/padding 不一致")
             if not ep.get("userEditPre") or ep.get("userEditPre") != ep.get("userText"):
                 fails.append(f"用户消息的「编辑并重发」没把原文填回输入框：{ep.get('userEditPre')!r} vs {ep.get('userText')!r}")
-            if ep.get("userEditTab") != "explain":
-                fails.append(f"「编辑并重发」没有留在原页签：{ep.get('userEditTab')}")
+            if ep.get("userEditIntent") != "explain":
+                fails.append(f"「编辑并重发」没有恢复原意图：{ep.get('userEditIntent')}")
             if ep.get("userDel") != 2:
                 fails.append(f"用户消息的「删除这一轮」没有成对移除：{ep.get('userDel')}")
         except Exception as e:
@@ -2729,7 +2747,7 @@ def main() -> int:
         #   ④ **按文档分开**：新开一份文档，它的会话是空的（不是把上一份带过来）。
         conv = ev(
             "(async () => {"
-            "  DGM.ai.focus('chat');"
+            "  DGM.ai.focus('generate');"
             "  await new Promise(r => setTimeout(r, 150));"
             "  DGM.ai.clear();"
             "  await new Promise(r => setTimeout(r, 250));"
@@ -2798,7 +2816,7 @@ def main() -> int:
             "  const out = {};"
             "  await DGM.state.memoryClear('all');"
             "  await DGM.state.patchSettings({ ai: { memory_enabled: true, memory_auto: true } });"
-            "  DGM.ai.focus('chat');"
+            "  DGM.ai.focus('generate');"
             "  await new Promise(r => setTimeout(r, 250));"
             "  DGM.ai.clear();"
             "  await new Promise(r => setTimeout(r, 300));"
@@ -2884,10 +2902,11 @@ def main() -> int:
             "    ta.value = v;"
             "    ta.dispatchEvent(new Event('input', { bubbles: true }));"
             "    document.querySelector('#ai-send').click();"
+            "    await new Promise(r => setTimeout(r, 150));"
             "    await waitIdle();"
             "    await new Promise(r => setTimeout(r, 300));"
             "  };"
-            "  DGM.ai.focus('chat');"
+            "  DGM.ai.focus('generate');"
             "  await new Promise(r => setTimeout(r, 250));"
             # 记忆提取（memory_auto）会额外发一轮流式调用，混进 delta 计数 —— 这里关掉
             "  await DGM.state.patchSettings({ ai: { memory_auto: false, tools_enabled: false } });"
@@ -3007,7 +3026,7 @@ def main() -> int:
         cut = ev(
             "(async () => {"
             "  const before = DGM.state.usage.completion;"
-            "  DGM.ai.focus('chat');"
+            "  DGM.ai.focus('generate');"
             "  await new Promise(r => setTimeout(r, 150));"
             "  const ta = document.querySelector('#ai-input');"
             "  ta.value = '[cut] 帮我根据业务优化样式、图标';"
@@ -3067,7 +3086,7 @@ def main() -> int:
             "    };"
             "  };"
             "  await DGM.state.patchSettings({ ai: { memory_auto: false, tools_enabled: false } });"
-            "  DGM.ai.focus('chat');"
+            "  DGM.ai.focus('generate');"
             "  await new Promise(r => setTimeout(r, 200));"
             "  DGM.ai.clear();"
             "  await new Promise(r => setTimeout(r, 250));"
@@ -3076,6 +3095,7 @@ def main() -> int:
             "    ta.value = v;"
             "    ta.dispatchEvent(new Event('input', { bubbles: true }));"
             "    document.querySelector('#ai-send').click();"
+            "    await new Promise(r => setTimeout(r, 150));"
             "    await waitIdle();"
             "    await new Promise(r => setTimeout(r, 300));"
             "  };"
@@ -3088,7 +3108,7 @@ def main() -> int:
             "  await new Promise(r => setTimeout(r, 80));"
             "  out.opened = snap();"
             # ③ 整栏重排（focus 会 render）不该改用户的选择
-            "  DGM.ai.focus('chat');"
+            "  DGM.ai.focus('generate');"
             "  await new Promise(r => setTimeout(r, 150));"
             "  out.afterRerender = snap();"
             "  row().dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));"
@@ -3193,7 +3213,7 @@ def main() -> int:
             "    for (let i = 0; i < 40 && DGM.state.ui.aiBusy; i++) await new Promise(r => setTimeout(r, 150));"
             "  };"
             "  await DGM.state.patchSettings({ ai: { memory_auto: false, tools_enabled: false } });"
-            "  DGM.ai.focus('chat');"
+            "  DGM.ai.focus('generate');"
             "  await new Promise(r => setTimeout(r, 200));"
             "  DGM.ai.clear();"
             "  await new Promise(r => setTimeout(r, 250));"
@@ -3204,6 +3224,7 @@ def main() -> int:
             "    ta.value = v;"
             "    ta.dispatchEvent(new Event('input', { bubbles: true }));"
             "    document.querySelector('#ai-send').click();"
+            "    await new Promise(r => setTimeout(r, 150));"
             "    await waitIdle();"
             "    await new Promise(r => setTimeout(r, 300));"
             "  };"
@@ -3458,7 +3479,7 @@ def main() -> int:
         # 这里直接量两个矩形：面板开着时 toast 与 .ai-composer 不得相交；面板收起时 toast 仍贴右缘。
         toast_geo = ev(
             "(async () => {"
-            "  DGM.ai.focus('chat');"
+            "  DGM.ai.focus('generate');"
             "  await new Promise(r => setTimeout(r, 400));"
             "  const mk = () => {"
             "    const n = document.querySelector('.toasts .toast:last-child');"

@@ -444,7 +444,10 @@ window.DGM = window.DGM || {};
         "五块工作区齐备",
         sel(".titlebar") && sel(".activitybar") && sel(".sidebar") && sel(".editor-col") && sel(".ai-pane") && sel(".statusbar")
       );
-      ok("AI 四页签齐备", document.querySelectorAll("#ai-tabs .ai-tab").length === 4);
+      ok(
+        "AI 意图滑块与输出格式齐备",
+        document.querySelectorAll("#ai-intent-slider button[data-intent]").length === 4 && sel("#ai-out-format")
+      );
 
       // ── 契约与命令（纯 IPC） ──
       const info = await invoke("app_info");

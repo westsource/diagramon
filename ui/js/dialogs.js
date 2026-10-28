@@ -396,6 +396,22 @@ window.DGM = window.DGM || {};
     return { doc, notes: made.notes };
   }
 
+  /**
+   * 供 AI 面板直出画布格式：把一份 Mermaid 源码转成 drawio / Excalidraw 并打开新标签页。
+   *
+   * 与「转换中心」共用 `convertViaEngine`（同一个承载页契约、同一套保真度提示），
+   * 但**不弹对话框** —— 用户在 AI 面板已经明确选了输出格式，再让他点一次是多余的。
+   * 返回 `{ doc, notes } | null`；失败时承载页自己会提示，这里不重复报错。
+   */
+  async function convertSourceTo(to, source, fromDoc) {
+    const srcDoc = fromDoc || state.activeDoc();
+    if (!srcDoc || !source) return null;
+    const dir = { from: srcDoc.format || "mermaid", to, how: "" };
+    const r = await convertViaEngine(to, source, srcDoc, dir, null);
+    if (r) finishConvert(r.doc, dir, srcDoc, r.notes);
+    return r;
+  }
+
   /** 转换成功后统一收尾：刷新界面、记转换记录、提示。 */
   function finishConvert(created, dir, srcDoc, notes) {
     DGM.editor.loadActive();
@@ -909,6 +925,19 @@ window.DGM = window.DGM || {};
       ${switchRow(!!ai.vision_notice_accepted, t("set.ai.visionNotice"), null, "vnotice")}
       ${switchRow(!!ai.memory_enabled, t("set.ai.memoryOn"), "set.ai.memoryOnHint", "memory")}
       ${switchRow(!!ai.memory_auto, t("set.ai.memoryAuto"), "set.ai.memoryAutoHint", "memoryauto")}
+      ${switchRow(!!(ai.intent && ai.intent.enabled), t("set.ai.intent"), "set.ai.intentHint", "intentcls")}
+      <details class="ai-prov-adv">
+        <summary>${esc(t("set.ai.advanced"))}</summary>
+        <div class="ai-prov-adv-grid">
+          <label>${esc(t("set.ai.intentUrl"))}<input id="ai-intent-url" value="${esc((ai.intent && ai.intent.base_url) || "")}" spellcheck="false"></label>
+          <label>${esc(t("set.ai.intentModel"))}<input id="ai-intent-model" value="${esc((ai.intent && ai.intent.model) || "")}" spellcheck="false"></label>
+          <label>${esc(t("set.ai.intentTimeout"))}<input id="ai-intent-timeout" type="number" min="300" max="2000" step="50" value="${(ai.intent && ai.intent.timeout_ms) || 700}"></label>
+          <label>${esc(t("set.ai.intentHigh"))}<input id="ai-intent-high" type="number" min="0" max="1" step="0.05" value="${(ai.intent && ai.intent.high_confidence) || 0.75}"></label>
+          <label>${esc(t("set.ai.intentMin"))}<input id="ai-intent-min" type="number" min="0" max="1" step="0.05" value="${(ai.intent && ai.intent.min_confidence) || 0.55}"></label>
+          <label title="${esc(t("set.ai.intentKeyHint"))}">${esc(t("set.ai.intentKey"))}<input type="password" data-key="intent-classifier" placeholder="${esc(t("set.ai.intentKeyHint"))}" spellcheck="false"></label>
+        </div>
+        <span class="hint">${esc(t("set.ai.intentKeyHint"))}</span>
+      </details>
       <div class="field"><label>${esc(t("set.ai.memory"))}</label>
         <div class="btn-row"><button class="btn sm" data-act="memory">${icon("sparkles")}${esc(t("set.ai.memoryManage"))}</button>
         <span class="hint">${esc(t("set.ai.memoryManageHint"))}</span></div></div>`;
@@ -1261,6 +1290,7 @@ window.DGM = window.DGM || {};
         else if (a === "vnotice") state.patchSettings({ ai: { vision_notice_accepted: on } });
         else if (a === "memory") state.patchSettings({ ai: { memory_enabled: on } });
         else if (a === "memoryauto") state.patchSettings({ ai: { memory_auto: on } });
+        else if (a === "intentcls") state.patchSettings({ ai: { intent: { enabled: on } } });
       });
     });
 
@@ -1401,6 +1431,19 @@ window.DGM = window.DGM || {};
         m.temperature = p.temperature;
         m.idle_timeout_s = p.idle_timeout_s;
       }
+      const ip = draftAi.intent || (draftAi.intent = {});
+      const num = (id, lo, hi, dflt) => {
+        const el = $("#" + id);
+        const n = el ? Number(el.value) : NaN;
+        return Number.isFinite(n) ? Math.min(hi, Math.max(lo, n)) : dflt;
+      };
+      const str = (id) => { const el = $("#" + id); return el ? String(el.value || "").trim() : ""; };
+      ip.base_url = str("ai-intent-url") || ip.base_url;
+      ip.model = str("ai-intent-model") || ip.model;
+      ip.timeout_ms = Math.round(num("ai-intent-timeout", 300, 2000, 700));
+      ip.high_confidence = num("ai-intent-high", 0, 1, 0.75);
+      ip.min_confidence = num("ai-intent-min", 0, 1, 0.55);
+      if (ip.min_confidence > ip.high_confidence) ip.min_confidence = ip.high_confidence;
       for (const [id, secret] of Object.entries(draftKeys)) {
         try {
           await DGM.ipc.invoke("ai_provider_key_set", { providerId: id, secret });
@@ -2413,6 +2456,7 @@ window.DGM = window.DGM || {};
   DGM.dialogs = {
     newDoc,
     convertTo,
+    convertSourceTo,
     convertReference,
     runConvert,
     vision,
