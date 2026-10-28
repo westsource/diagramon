@@ -81,6 +81,7 @@ window.DGM = window.DGM || {};
   function section(key, titleHtml, rows, opts) {
     const wrap = h("div", "side-section" + (collapsed.has(key) ? " collapsed" : ""));
     const head = h("h4", "", `${icon("chevD", "ico-sm chev")}${titleHtml}`);
+    if (opts && opts.headAction) head.appendChild(opts.headAction);
     const list = h("div", "side-list");
     rows.forEach((r) => list.appendChild(r));
     head.addEventListener("click", () => {
@@ -107,6 +108,123 @@ window.DGM = window.DGM || {};
   }
 
   /* ------------------------------------------------------------------ 资源管理器 */
+
+  /* ---- 排序 ----
+   * 排序是整棵树共用的视图偏好（settings.explorer），逐层生效。
+   * collator 固定用 zh-Hans-CN：切界面语言不该把文件树重排；中文按拼音，
+   * 数字按数值（「图 2」排在「图 10」前）。排序键用 Unix 毫秒，
+   * 目录的 mtime 由 Rust 侧滚成子树最新值（见 WorkspaceNode）。
+   */
+  const SORT_LABELS = {
+    name_asc: "side.ws.sortNameAsc",
+    name_desc: "side.ws.sortNameDesc",
+    mtime_desc: "side.ws.sortMtimeDesc",
+    mtime_asc: "side.ws.sortMtimeAsc",
+  };
+  const SORT_STATE_LABELS = {
+    name_asc: "side.ws.sortStateNameAsc",
+    name_desc: "side.ws.sortStateNameDesc",
+    mtime_desc: "side.ws.sortStateMtimeDesc",
+    mtime_asc: "side.ws.sortStateMtimeAsc",
+  };
+  const SORT_IDS = Object.keys(SORT_LABELS);
+  const nameCollator = new Intl.Collator("zh-Hans-CN", { numeric: true, sensitivity: "base" });
+
+  function explorerPrefs() {
+    const p = (state.settings && state.settings.explorer) || {};
+    return {
+      sort: SORT_IDS.includes(p.sort) ? p.sort : "name_asc",
+      dirsFirst: p.dirs_first !== false,
+    };
+  }
+
+  function isTimeSort(sort) {
+    return sort === "mtime_desc" || sort === "mtime_asc";
+  }
+
+  /** 统计行/按钮上的一句话状态（短标签，236px 侧栏里放得下）。 */
+  function sortShort(prefs) {
+    return t(SORT_STATE_LABELS[prefs.sort]) + (prefs.dirsFirst ? " · " + t("side.ws.sortDirsFirstShort") : "");
+  }
+
+  /** 排序后的树；节点是浅拷贝，不改 state.workspace.tree（刷新时不会带着旧顺序）。 */
+  function sortTree(nodes) {
+    const prefs = explorerPrefs();
+    const times = new Map();
+    const timeOf = (n) => {
+      const hit = times.get(n);
+      if (hit !== undefined) return hit;
+      let v = null;
+      if (n.dir) {
+        const known = (n.children || []).map(timeOf).filter((t) => t != null);
+        v = known.length ? known.reduce((max, t) => Math.max(max, t), 0) : null;
+      } else if (typeof n.mtime === "number") {
+        v = n.mtime;
+      }
+      times.set(n, v);
+      return v;
+    };
+    const byName = (a, b) => nameCollator.compare(a.name, b.name);
+    const byTime = (a, b, newestFirst) => {
+      const at = timeOf(a);
+      const bt = timeOf(b);
+      // mtime 未知（读取失败）时永远排最后，不拿 0 冒充 1970
+      if (at == null && bt == null) return 0;
+      if (at == null) return 1;
+      if (bt == null) return -1;
+      return newestFirst ? bt - at : at - bt;
+    };
+    const cmp = (a, b) => {
+      let d = 0;
+      if (prefs.sort === "name_desc") d = byName(b, a);
+      else if (prefs.sort === "mtime_desc") d = byTime(a, b, true);
+      else if (prefs.sort === "mtime_asc") d = byTime(a, b, false);
+      else d = byName(a, b);
+      return d || byName(a, b); // 同值按名称兜底，顺序稳定
+    };
+    const walk = (list) => {
+      const arr = list.slice().sort((a, b) => {
+        if (prefs.dirsFirst && a.dir !== b.dir) return a.dir ? -1 : 1;
+        return cmp(a, b);
+      });
+      return arr.map((n) => (n.dir ? Object.assign({}, n, { children: walk(n.children || []) }) : n));
+    };
+    return walk(nodes || []);
+  }
+
+  function patchExplorer(patch) {
+    // settings_patch 成功后 settings:changed 会让整个侧栏重渲染，这里不手动 render
+    state.patchSettings({ explorer: patch }).catch((e) => {
+      DGM.status(t("status.wsFailed") + ": " + String((e && e.message) || e), "err");
+    });
+  }
+
+  function openSortMenu(anchor) {
+    const prefs = explorerPrefs();
+    const items = [{ label2: t("side.ws.sort") }];
+    for (const id of SORT_IDS) {
+      items.push({ label: t(SORT_LABELS[id]), check: true, on: prefs.sort === id, sort: id });
+    }
+    items.push({ sep: true });
+    items.push({ label: t("side.ws.sortDirsFirst"), check: true, on: prefs.dirsFirst, dirs: true });
+    DGM.pop.near(items, anchor, (it) => {
+      if (it.dirs) patchExplorer({ dirs_first: !prefs.dirsFirst });
+      else if (it.sort) patchExplorer({ sort: it.sort });
+    });
+  }
+
+  /** 工作区树标题行右侧的排序入口；非默认状态显示为强调色。 */
+  function sortButton() {
+    const prefs = explorerPrefs();
+    const b = h("button", "icon-btn h-act" + (prefs.sort !== "name_asc" || !prefs.dirsFirst ? " on" : ""));
+    b.title = t("side.ws.sortTip", { s: sortShort(prefs) });
+    b.innerHTML = icon("sort", "ico-sm");
+    b.addEventListener("click", (e) => {
+      e.stopPropagation(); // 别让 h4 的折叠接住这次点击
+      openSortMenu(b);
+    });
+    return b;
+  }
 
   async function openFolderFlow() {
     try {
@@ -180,19 +298,20 @@ window.DGM = window.DGM || {};
     return state.docs.some((d) => d.path && d.path === p);
   }
 
-  function wsNode(node, depth) {
+  function wsNode(node, depth, showTime) {
     const wrap = h("div", "side-node");
     const indent = depth ? " indent-" + Math.min(depth, 2) : "";
+    const when = showTime && node.mtime ? `<span class="meta time">${esc(recentWhen(node.mtime))}</span>` : "";
 
     if (node.dir) {
       const key = "ws:" + node.path;
       const open = !collapsed.has(key);
       const row = h("button", "tree-row ws-dir" + indent);
-      row.innerHTML = `${icon("chevD", "ico-sm chev")}${icon(open ? "folderOpen" : "folder", "ico-sm")}<span class="nm">${esc(node.name)}</span>`;
+      row.innerHTML = `${icon("chevD", "ico-sm chev")}${icon(open ? "folderOpen" : "folder", "ico-sm")}<span class="nm">${esc(node.name)}</span>${when}`;
       if (!open) row.querySelector(".chev").style.transform = "rotate(-90deg)";
       const kids = h("div", "ws-kids");
       kids.hidden = !open;
-      node.children.forEach((c) => kids.appendChild(wsNode(c, depth + 1)));
+      node.children.forEach((c) => kids.appendChild(wsNode(c, depth + 1, showTime)));
       row.addEventListener("click", () => {
         if (collapsed.has(key)) collapsed.delete(key);
         else collapsed.add(key);
@@ -207,6 +326,7 @@ window.DGM = window.DGM || {};
 
     const row = h("button", "tree-row ws-file" + indent + (isOpenPath(node.path) ? " on" : ""));
     row.append(fmtDot(node.format), h("span", "nm", esc(node.name)));
+    if (when) row.insertAdjacentHTML("beforeend", when);
     row.title = node.path;
     const more = h("button", "x-row", icon("more", "ico-sm"));
     more.title = t("side.ws.rowMore");
@@ -308,6 +428,15 @@ window.DGM = window.DGM || {};
       const warn = h("span", "warn", `${icon("warn", "ico-sm")}${esc(t("side.ws.truncated", { n: ws.file_count }))}`);
       box.appendChild(warn);
     }
+    // 当前排序常驻显示（不只是标题行按钮的 tooltip）：否则用户看不出树为什么是这个顺序
+    const prefs = explorerPrefs();
+    const sortBtn = h("button", "sort-state", `${icon("clock", "ico-sm")}${esc(sortShort(prefs))}`);
+    sortBtn.title = t("side.ws.sortTip", { s: sortShort(prefs) });
+    sortBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      openSortMenu(sortBtn);
+    });
+    box.appendChild(sortBtn);
     return box;
   }
 
@@ -332,11 +461,18 @@ window.DGM = window.DGM || {};
       acts.addEventListener("click", () => openFolderFlow());
       box.appendChild(acts);
     } else {
-      const tree = state.workspace.tree || [];
+      const prefs = explorerPrefs();
+      const showTime = isTimeSort(prefs.sort);
+      const tree = sortTree(state.workspace.tree || []);
       if (!tree.length) {
         box.appendChild(tip(esc(t("side.ws.emptyDir"))));
       } else {
-        box.appendChild(section("wsTree", esc(state.workspace.name), tree.map((n) => wsNode(n, 0))));
+        box.appendChild(section(
+          "wsTree",
+          esc(state.workspace.name),
+          tree.map((n) => wsNode(n, 0, showTime)),
+          { headAction: sortButton() },
+        ));
       }
       box.appendChild(statsLine());
     }

@@ -46,7 +46,8 @@ pub fn slash(p: &Path) -> String {
 #[derive(Default)]
 struct Trie {
     dirs: BTreeMap<String, Trie>,
-    files: Vec<(String, FormatId)>,
+    /// (文件名, 格式, mtime)。mtime 取不到就是 `None`。
+    files: Vec<(String, FormatId, Option<u64>)>,
 }
 
 impl Trie {
@@ -54,20 +55,26 @@ impl Trie {
         let mut out = Vec::with_capacity(self.dirs.len() + self.files.len());
         for (name, sub) in self.dirs {
             let path = base.join(&name);
+            let children = sub.into_nodes(&path);
+            // 目录的 mtime = 子树里最新的那个。目录自身的 mtime 只看直接子项增删，
+            // 深层文件改过它不会动 —— 拿它排序会让「刚改过的目录」沉到底下。
+            let mtime = children.iter().filter_map(|c| c.mtime).max();
             out.push(WorkspaceNode {
                 name,
                 path: slash(&path),
                 dir: true,
                 format: None,
-                children: sub.into_nodes(&path),
+                mtime,
+                children,
             });
         }
-        for (name, format) in self.files {
+        for (name, format, mtime) in self.files {
             out.push(WorkspaceNode {
                 name: name.clone(),
                 path: slash(&base.join(&name)),
                 dir: false,
                 format: Some(format),
+                mtime,
                 children: Vec::new(),
             });
         }
@@ -129,6 +136,13 @@ pub fn scan(root: &Path) -> WorkspaceInfo {
         let rel = path.strip_prefix(root).unwrap_or(path);
         let comps: Vec<String> = rel.iter().map(|c| c.to_string_lossy().into_owned()).collect();
         let Some((file_name, dirs)) = comps.split_last() else { continue };
+        // 一次 stat；上限 MAX_FILES（4000），代价可忽略。失败就是 None，界面按未知处理。
+        let mtime = entry
+            .metadata()
+            .ok()
+            .and_then(|m| m.modified().ok())
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_millis() as u64);
         let mut node = &mut trie;
         for d in dirs {
             node = node.dirs.entry(d.clone()).or_default();
@@ -136,6 +150,7 @@ pub fn scan(root: &Path) -> WorkspaceInfo {
         node.files.push((
             file_name.clone(),
             FormatId::from_ext(&ext.to_string_lossy()),
+            mtime,
         ));
         info.file_count += 1;
     }
@@ -403,6 +418,26 @@ mod tests {
             case_sensitive: false,
             max_results: 0,
         }
+    }
+
+    #[test]
+    fn scan_reports_mtime_and_rolls_it_up_to_directories() {
+        use std::time::{Duration, SystemTime};
+        let dir = fixture("mtime");
+        let stamp = |p: &std::path::Path, ms: u64| {
+            let f = fs::OpenOptions::new().write(true).open(p).unwrap();
+            f.set_modified(SystemTime::UNIX_EPOCH + Duration::from_millis(ms)).unwrap();
+        };
+        stamp(&dir.join("flows/login.mmd"), 1_700_000_000_000);
+        stamp(&dir.join("flows/pay.DOT"), 1_600_000_000_000);
+        stamp(&dir.join("arch/deep/topo.drawio"), 1_800_000_000_000);
+
+        let info = scan(&dir);
+        let all = flatten(&info.tree);
+        let mtime_of = |name: &str| all.iter().find(|n| n.name == name).and_then(|n| n.mtime);
+        assert_eq!(mtime_of("login.mmd"), Some(1_700_000_000_000), "文件取自身 mtime");
+        assert_eq!(mtime_of("flows"), Some(1_700_000_000_000), "目录取子树最新，不是目录自身时间");
+        assert_eq!(mtime_of("arch"), Some(1_800_000_000_000), "多层目录要一路滚上来");
     }
 
     #[test]

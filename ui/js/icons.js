@@ -85,6 +85,8 @@ window.DGM = window.DGM || {};
     more: '<circle cx="12" cy="5.5" r="1.4"/><circle cx="12" cy="12" r="1.4"/><circle cx="12" cy="18.5" r="1.4"/>',
     filter: '<path d="M3.5 5.5h17l-6.6 7.6v5.6l-3.8 2v-7.6z"/>',
     refresh: '<path d="M20 11.5A8 8 0 0 0 6.3 6.3L3.5 9"/><path d="M4 12.5a8 8 0 0 0 13.7 5.2l2.8-2.7M3.5 4.5V9H8M20.5 19.5V15H16"/>',
+    // 资源管理器排序：三条渐短的线 + 上箭头（“按某把尺子重排”）
+    sort: '<path d="M4 6h11M4 12h7M4 18h3"/><path d="M18 19V5M14.5 8.5 18 5l3.5 3.5"/>',
     clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5.3l3.3 2"/>',
     branch: '<circle cx="7" cy="5.5" r="2.5"/><circle cx="7" cy="18.5" r="2.5"/><circle cx="17" cy="9" r="2.5"/><path d="M7 8v8M17 11.5a5.5 5.5 0 0 1-5.5 5.5H9.5"/>',
     layers: '<path d="m12 3.5 8.5 4.3L12 12 3.5 7.8z"/><path d="m3.5 12.2 8.5 4.3 8.5-4.3M3.5 16.4l8.5 4.3 8.5-4.3"/>',

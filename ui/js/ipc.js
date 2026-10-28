@@ -560,6 +560,7 @@ digraph Pipeline {
           memory_auto: true,
         },
         cloud: { base_url: "https://www.diagramon.com", device_id: "" },
+        explorer: { sort: "name_asc", dirs_first: true },
         recent: [
           { path: "E:/OpenCode/diagramon/docs/flows/登录流程.mmd", name: "登录流程.mmd", format: "mermaid", opened_at: 0 },
           { path: "E:/OpenCode/diagramon/docs/arch/渲染管线.dot", name: "渲染管线.dot", format: "dot", opened_at: 0 },
@@ -586,21 +587,24 @@ digraph Pipeline {
       const docs = this.docs.filter((d) => d.path && (!base || d.path.startsWith(base)));
       const dirs = new Map();
       const files = [];
-      for (const d of docs) {
+      // mock 也给 mtime：浏览器原型里才能真的验「按修改时间排序」。真机由 Rust 扫盘给出。
+      const baseTime = Date.now() - 60 * 60 * 1000;
+      docs.forEach((d, i) => {
         const p = d.path.replace(/\\/g, "/");
         const rest = base && p.startsWith(base) ? p.slice(base.length).replace(/^\//, "") : p;
         const parts = rest.split("/").filter(Boolean);
+        const mtime = baseTime - i * 7 * 60 * 60 * 1000;
         if (parts.length < 2) {
-          files.push({ name: parts[0] || d.name, path: p, dir: false, format: d.format, children: [] });
-          continue;
+          files.push({ name: parts[0] || d.name, path: p, dir: false, format: d.format, mtime, children: [] });
+          return;
         }
         let cur = dirs;
         for (const seg of parts.slice(0, -1)) {
           if (!cur.has(seg)) cur.set(seg, new Map());
           cur = cur.get(seg);
         }
-        cur.__files = (cur.__files || []).concat([{ name: parts[parts.length - 1], path: p, dir: false, format: d.format, children: [] }]);
-      }
+        cur.__files = (cur.__files || []).concat([{ name: parts[parts.length - 1], path: p, dir: false, format: d.format, mtime, children: [] }]);
+      });
       const build = (map, prefix) => {
         const out = [];
         for (const [seg, sub] of map) {
@@ -612,6 +616,13 @@ digraph Pipeline {
         return out;
       };
       const tree = build(dirs, base);
+      // 与 Rust 侧契约一致：目录 mtime = 子树最新
+      const roll = (nodes) => nodes.forEach((n) => {
+        if (!n.dir) return;
+        roll(n.children);
+        n.mtime = n.children.reduce((m, c) => Math.max(m, c.mtime || 0), 0) || null;
+      });
+      roll(tree);
       const count = (nodes) => nodes.reduce((n, x) => n + (x.dir ? count(x.children) : 1), 0);
       const dirCount = (nodes) => nodes.reduce((n, x) => n + (x.dir ? 1 + dirCount(x.children) : 0), 0);
       return {

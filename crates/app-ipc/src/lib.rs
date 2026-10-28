@@ -397,7 +397,25 @@ pub struct Settings {
     pub cloud: CloudPrefs,
     /// Mermaid 渲染偏好（目前只有默认外观；布局走文档级 d.layout）
     pub mermaid: MermaidPrefs,
+    /// 资源管理器（工作区树）的视图偏好
+    pub explorer: ExplorerPrefs,
     pub recent: Vec<RecentEntry>,
+}
+
+/// 资源管理器的排序偏好。**整棵树共用一份**，不按目录各记一套。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ExplorerPrefs {
+    /// `name_asc` | `name_desc` | `mtime_desc`（新→旧） | `mtime_asc`（旧→新）
+    pub sort: String,
+    /// 目录排在文件前面（关掉后按同一把尺子混排）
+    pub dirs_first: bool,
+}
+
+impl Default for ExplorerPrefs {
+    fn default() -> Self {
+        Self { sort: "name_asc".into(), dirs_first: true }
+    }
 }
 
 /// Mermaid 的全局渲染偏好。文档级选择（`d.look` / `d.layout`）永远优先于这里。
@@ -427,6 +445,7 @@ impl Default for Settings {
             ai: AiPrefs::default(),
             cloud: CloudPrefs::default(),
             mermaid: MermaidPrefs::default(),
+            explorer: ExplorerPrefs::default(),
             recent: Vec::new(),
         }
     }
@@ -654,6 +673,13 @@ pub struct WorkspaceNode {
     pub dir: bool,
     #[serde(default)]
     pub format: Option<FormatId>,
+    /// 最后修改时间（Unix 毫秒）。
+    ///
+    /// 文件取自身 mtime；目录取**子树里最新**的 mtime —— 目录自己的 mtime 只反映
+    /// 直接子项的增删，不代表内容改过。取不到（权限 / 时钟异常）时是 `None`，
+    /// 前端照实按"未知"处理，不拿 0 冒充 1970。
+    #[serde(default)]
+    pub mtime: Option<u64>,
     #[serde(default)]
     pub children: Vec<WorkspaceNode>,
 }

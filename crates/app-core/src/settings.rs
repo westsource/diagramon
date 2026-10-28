@@ -123,6 +123,16 @@ mod tests {
     }
 
     #[test]
+    fn explorer_prefs_default_and_patch_merge() {
+        let mut s = Settings::default();
+        assert_eq!(s.explorer.sort, "name_asc");
+        assert!(s.explorer.dirs_first);
+        apply_patch(&mut s, json!({ "explorer": { "sort": "mtime_desc" } })).unwrap();
+        assert_eq!(s.explorer.sort, "mtime_desc");
+        assert!(s.explorer.dirs_first, "未提及的 dirs_first 不该被重置");
+    }
+
+    #[test]
     fn round_trip_through_disk() {
         let dir = std::env::temp_dir().join("diagramon-settings-test");
         let _ = std::fs::remove_dir_all(&dir);

@@ -2078,6 +2078,17 @@ body.no-mock .mock-badge { display: none; }
 .tree-row.ws-file .x-row { opacity: 0; }
 .tree-row.ws-file:hover .x-row { opacity: 1; }
 
+/* 工作区树标题行右侧的排序入口（点击不能触发 h4 的折叠） */
+.side-section > h4 .h-act { margin-left: auto; width: 22px; height: 22px; }
+.side-section > h4 .h-act.on { color: var(--accent); }
+/* 时间排序时行尾的 mtime：等宽数字，换行时不抖 */
+.tree-row .meta.time { font-variant-numeric: tabular-nums; }
+
+/* 统计行里的当前排序（可点击改） */
+.ws-stats .sort-state { margin-left: auto; cursor: pointer; color: var(--faint); }
+.ws-stats .sort-state:hover { color: var(--accent); }
+.ws-stats .sort-state .ico { color: inherit; }
+
 /* 统计行：文件数 / 截断告警 */
 .ws-stats {
   display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: center;
