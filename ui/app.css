@@ -943,8 +943,7 @@ body.no-ai #ai-gutter { display: none; }
 .intent-auto .dot { width: 4px; height: 4px; border-radius: 50%; background: var(--faint); }
 .intent-auto.on { color: var(--ai); }
 .intent-auto.on .dot { background: var(--ai); }
-.intent-auto.warn { color: var(--warn); }
-.intent-auto.warn .dot { background: var(--warn); }
+.intent-auto[hidden] { display: none; }
 .intent-auto .pct { font-family: var(--font-mono); font-size: 9px; color: var(--muted); }
 .intent-auto.on .pct { color: var(--ai); }
 .out-format {

@@ -977,17 +977,38 @@ def main() -> int:
             "  const auto = document.querySelector('#ai-intent-auto');"
             "  const out = document.querySelector('#ai-out-format');"
             "  const manualBefore = slider && slider.classList.contains('manual');"
+            "  const idleHidden = auto.hidden;"
+            "  const idleText = auto.textContent.trim();"
             "  document.querySelector('#ai-intent-slider button[data-intent=\"generate\"]').click();"
             "  await wait(120);"
             "  const manualAfter = slider.classList.contains('manual');"
             "  const manualIntent = document.querySelector('#ai-intent-slider button[data-intent].on').dataset.intent;"
+            "  const manualHidden = auto.hidden;"
+            "  const manualLabel = document.querySelector('#ai-intent-auto-label').textContent.trim();"
             "  if (auto) auto.click();"
             "  await wait(120);"
+            "  const autoAfterHidden = auto.hidden;"
+            "  /* 判定成功必须显示「自动判定 + 置信度」；失败/未开启必须什么都不显示。 */"
+            "  DGM.state.ui.aiIntentOverride = null;"
+            "  DGM.state.ui.aiIntentResolved = 'review';"
+            "  DGM.state.ui.aiIntentConfidence = 0.86;"
+            "  DGM.state.ui.aiIntentFallback = false;"
+            "  DGM.bus.emit('settings:changed');"
+            "  await wait(50);"
+            "  const judgedHidden = auto.hidden;"
+            "  const judgedLabel = document.querySelector('#ai-intent-auto-label').textContent.trim();"
+            "  const judgedPct = document.querySelector('#ai-intent-conf').textContent.trim();"
+            "  DGM.state.ui.aiIntentConfidence = 0;"
+            "  DGM.state.ui.aiIntentFallback = true;"
+            "  DGM.bus.emit('settings:changed');"
+            "  await wait(50);"
             "  return JSON.stringify({"
             "    hasDoc: !!DGM.state.activeDoc(),"
             "    intent: on ? on.dataset.intent : '',"
             "    manualBefore, manualAfter, manualIntent,"
             "    autoAfter: !slider.classList.contains('manual'),"
+            "    idleHidden, idleText, manualHidden, manualLabel, autoAfterHidden,"
+            "    judgedHidden, judgedLabel, judgedPct,"
             "    hasOut: !!out && out.options.length >= 5,"
             "    visible: !document.body.classList.contains('no-ai')"
             "  });"
@@ -1004,6 +1025,14 @@ def main() -> int:
                 fails.append(f"有图时打开 AI 面板没有自动落到改图：{at.get('intent')}")
             if at.get("manualBefore"):
                 fails.append("自动模式下滑块不应处于手动覆盖态")
+            if not at.get("idleHidden") or at.get("idleText"):
+                fails.append(f"未判定时自动状态必须完全不显示：hidden={at.get('idleHidden')} text={at.get('idleText')!r}")
+            if at.get("manualHidden") or at.get("manualLabel") != "回自动":
+                fails.append(f"手动覆盖后应显示「回自动」：hidden={at.get('manualHidden')} label={at.get('manualLabel')!r}")
+            if not at.get("autoAfterHidden"):
+                fails.append("回到自动且未判定时，自动状态应再次隐藏")
+            if at.get("judgedHidden") or at.get("judgedLabel") != "自动判定" or at.get("judgedPct") != "86%":
+                fails.append(f"判定成功时应显示「自动判定 86%」：hidden={at.get('judgedHidden')} label={at.get('judgedLabel')!r} pct={at.get('judgedPct')!r}")
             if not at.get("manualAfter") or at.get("manualIntent") != "generate":
                 fails.append(f"点「生图」没有形成手动覆盖：{at.get('manualAfter')} / {at.get('manualIntent')}")
             if not at.get("autoAfter"):

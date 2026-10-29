@@ -785,22 +785,23 @@ window.DGM = window.DGM || {};
     });
     const auto = $("#ai-intent-auto");
     if (auto) {
+      // 只有「判定成功」才配得上一个自动状态：失败、超时、低置信、未开启都
+      // 不显示任何自动结论（否则用户会看到一个像错误的「回退」）。手动覆盖仍
+      // 保留「回自动」，否则点错档位就没路回去了。
+      const judged = !state.ui.aiIntentFallback && (state.ui.aiIntentConfidence || 0) > 0;
+      const pct = Math.round((state.ui.aiIntentConfidence || 0) * 100) + "%";
+      auto.hidden = !override && !judged;
       auto.classList.toggle("on", !override);
-      auto.classList.toggle("warn", !override && !!state.ui.aiIntentFallback);
+      auto.classList.remove("warn");
       auto.title = override
-        ? "手动：" + INTENT_LABEL[override] + " · 点击回到自动"
-        : "自动：" + INTENT_LABEL[resolved] +
-          (state.ui.aiIntentConfidence ? " · " + Math.round(state.ui.aiIntentConfidence * 100) + "%" : "");
+        ? t("ai.intent.manualTitle", { name: INTENT_LABEL[override] })
+        : judged
+          ? t("ai.intent.autoTitle", { name: INTENT_LABEL[resolved], pct })
+          : t("ai.intent.idleTitle");
       const label = $("#ai-intent-auto-label");
-      if (label) label.textContent = override ? t("ai.intent.backAuto") : t("ai.intent.auto");
+      if (label) label.textContent = override ? t("ai.intent.backAuto") : judged ? t("ai.intent.autoJudged") : "";
       const conf = $("#ai-intent-conf");
-      if (conf) {
-        conf.textContent = override
-          ? ""
-          : state.ui.aiIntentConfidence
-            ? Math.round(state.ui.aiIntentConfidence * 100) + "%"
-            : state.ui.aiIntentFallback ? t("ai.intent.fallback") : "";
-      }
+      if (conf) conf.textContent = override ? "" : judged ? pct : "";
     }
     const sel = $("#ai-out-format");
     if (sel) sel.value = state.ui.aiOutputFormat || "follow";
