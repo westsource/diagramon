@@ -944,6 +944,8 @@ body.no-ai #ai-gutter { display: none; }
 .intent-auto.on { color: var(--ai); }
 .intent-auto.on .dot { background: var(--ai); }
 .intent-auto[hidden] { display: none; }
+/* 判定成功时它只是状态，不再是按钮；只有手动态的「回自动」可点。 */
+.intent-auto[disabled] { cursor: default; }
 .intent-auto .pct { font-family: var(--font-mono); font-size: 9px; color: var(--muted); }
 .intent-auto.on .pct { color: var(--ai); }
 .out-format {

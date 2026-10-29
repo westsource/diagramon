@@ -91,6 +91,7 @@ window.DGM = window.DGM || {};
     explain: t("ai.intent.explain"),
   };
   const intentCache = new Map();
+  const intentInflight = new Map();
 
   function docHead(d) {
     if (!d) return null;
@@ -136,37 +137,52 @@ window.DGM = window.DGM || {};
       txt: ctxFiles().length > 0,
       fmt: d ? d.format : "mermaid",
     };
-    const key = [prompt.trim(), flags.doc, flags.sel, flags.img, flags.txt, flags.fmt].join("\u0001");
+    // 判定配置也进缓存键：改端点/模型/阈值后，不能拿旧配置的结论继续用 5 分钟。
+    const cfg = [prefs.base_url, prefs.model, prefs.timeout_ms, prefs.high_confidence, prefs.min_confidence].join("\u0002");
+    const key = [prompt.trim(), flags.doc, flags.sel, flags.img, flags.txt, flags.fmt, cfg].join("\u0001");
     const hit = intentCache.get(key);
     if (hit && Date.now() - hit.at < 5 * 60 * 1000) return hit.v;
 
-    let out;
+    // 同一句话在判定还没回来时又被触发（输入事件重入 / 提示按钮连点），复用同一个请求：
+    // 否则每次都会打一次真实上游，而且后回来的结果可能覆盖先回来的。
+    const running = intentInflight.get(key);
+    if (running) return running;
+
+    const task = (async () => {
+      let out;
+      try {
+        out = await ipc.invoke("ai_resolve_intent", {
+          req: {
+            prompt: prompt.trim(),
+            has_document: flags.doc,
+            has_selection: flags.sel,
+            has_image: flags.img,
+            current_intent: state.ui.aiIntentResolved || "review",
+            document_head: docHead(d),
+            has_text_files: flags.txt,
+            override_intent: null,
+          },
+        });
+      } catch (e) {
+        out = { intent: "review", confidence: 0, fallback: true, reason: String(e || "error") };
+      }
+      const v = {
+        intent: INTENT_ORDER.includes(out.intent) ? out.intent : "review",
+        confidence: Number(out.confidence) || 0,
+        fallback: !!out.fallback,
+        reason: out.reason || "",
+        model: out.model || "",
+      };
+      intentCache.set(key, { at: Date.now(), v });
+      if (intentCache.size > 50) intentCache.delete(intentCache.keys().next().value);
+      return v;
+    })();
+    intentInflight.set(key, task);
     try {
-      out = await ipc.invoke("ai_resolve_intent", {
-        req: {
-          prompt: prompt.trim(),
-          has_document: flags.doc,
-          has_selection: flags.sel,
-          has_image: flags.img,
-          current_intent: "review",
-          document_head: docHead(d),
-          has_text_files: flags.txt,
-          override_intent: null,
-        },
-      });
-    } catch (e) {
-      out = { intent: "review", confidence: 0, fallback: true, reason: String(e || "error") };
+      return await task;
+    } finally {
+      intentInflight.delete(key);
     }
-    const v = {
-      intent: INTENT_ORDER.includes(out.intent) ? out.intent : "review",
-      confidence: Number(out.confidence) || 0,
-      fallback: !!out.fallback,
-      reason: out.reason || "",
-      model: out.model || "",
-    };
-    intentCache.set(key, { at: Date.now(), v });
-    if (intentCache.size > 50) intentCache.delete(intentCache.keys().next().value);
-    return v;
   }
 
   /** 把数据库/旧会话里的 tab 名映射成意图（旧文件只有 tab，没有 intent）。 */
@@ -791,6 +807,7 @@ window.DGM = window.DGM || {};
       const judged = !state.ui.aiIntentFallback && (state.ui.aiIntentConfidence || 0) > 0;
       const pct = Math.round((state.ui.aiIntentConfidence || 0) * 100) + "%";
       auto.hidden = !override && !judged;
+      auto.disabled = !override;
       auto.classList.toggle("on", !override);
       auto.classList.remove("warn");
       auto.title = override
@@ -817,6 +834,8 @@ window.DGM = window.DGM || {};
 
   /** 输入停顿 320ms 后预判一次；不阻塞输入，也不重复计费（`resolveIntent` 有缓存）。 */
   function scheduleIntentPreview() {
+    // 面板收起时不判定：既看不见结论，又可能产生一次真实调用。
+    if (!state.panels().ai) return;
     clearTimeout(intentPreviewTimer);
     const seq = ++intentPreviewSeq;
     intentPreviewTimer = setTimeout(async () => {
@@ -2112,6 +2131,18 @@ window.DGM = window.DGM || {};
   }
 
   DGM.bus.on("settings:changed", render);
+  // AI 设置保存后，旧的判定结论（尤其是「未配置 / 已关闭」）不能继续拿缓存顶着：
+  // 用户刚填好端点或密钥，应该立刻看到自动判定，而不是等下一次输入。
+  // 只在 **ai 这一段** 变化时刷新；换主题之类的设置不该触发一次判定调用。
+  let lastAiSettings = null;
+  DGM.bus.on("settings:changed", () => {
+    const sig = JSON.stringify((state.settings && state.settings.ai) || {});
+    if (sig === lastAiSettings) return;
+    lastAiSettings = sig;
+    intentCache.clear();
+    intentInflight.clear();
+    scheduleIntentPreview();
+  });
   DGM.bus.on("session:changed", render);
   // 云状态一变就重渲染：网关模型别名、以及「一个模型都没有」时的引导文案（未登录 →
   // 引导去登录，已登录 → 引导去 AI 设置）都取决于登录与否。少了这条，启动那一帧
