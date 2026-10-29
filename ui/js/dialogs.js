@@ -1651,7 +1651,8 @@ window.DGM = window.DGM || {};
       ? turns
           .map((tn) => {
             const who = tn.role === "assistant" ? t("ai.assistant") : t("ai.you");
-            const tabKey = tn.tab === "vision" ? "ai.tab.vision" : tn.tab === "review" ? "ai.tab.review" : tn.tab === "explain" ? "ai.tab.explain" : "ai.tab.chat";
+            const intent = tn.intent || tn.tab || "generate";
+            const tabKey = intent === "vision" ? "ai.tab.vision" : intent === "review" ? "ai.tab.review" : intent === "explain" ? "ai.tab.explain" : "ai.tab.chat";
             const meta = [t(tabKey), tn.model, tn.at ? new Date(tn.at).toLocaleTimeString() : ""].filter(Boolean).join(" · ");
             const shown = tn.text.length > 160 ? tn.text.slice(0, 160) + "…" : tn.text;
             // 只有思考、没有正文的那一轮（思考型模型把整轮预算花在推理上）：正文格子空着

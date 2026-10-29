@@ -1621,14 +1621,14 @@ window.DGM = window.DGM || {};
       files: ctxFiles().map((f) => ({ path: f.path, name: f.name, text: f.text, truncated: !!f.truncated })),
       image_data_url: null,
       // 自动修正也是这条对话的延续，同样带上前序轮次
-      history: historyFor(ctx.tab, ctx.convDoc),
+      history: historyFor(ctx.intent, ctx.convDoc),
       scene: "convert.retry",
       retry_of: ctx.retryOf || null,
     };
     ctx.reqId = req.request_id;
     // 在这一轮原本所在的 tab 里追加，用户看到的是"同一条对话里它自己修了一次"。
     // 归属也要带回原对话所在文档（S3）：中途切了标签页的话，这轮不能写进别的文档。
-    dispatch(req, ctx.tab, { id: newId(), role: "sys", text: t("ai.retry.sys", { where }) }, ctx.convDoc);
+    dispatch(req, ctx.intent, { id: newId(), role: "sys", text: t("ai.retry.sys", { where }) }, ctx.convDoc);
   }
 
   /* ------------------------------------------------------------------ 应用 */
@@ -1926,7 +1926,7 @@ window.DGM = window.DGM || {};
         at: m.at || 0,
         model: m.role === "assistant" && m.used ? m.used.model || "" : "",
         tokens: m.role === "assistant" && m.used ? m.used.tokens | 0 : 0,
-        tab: m.m || m.intent || "review",
+        intent: m.m || m.intent || "review",
         thinking: m.role === "assistant" ? (m.thinking || "").trim() : "",
       });
     }
@@ -2001,7 +2001,7 @@ window.DGM = window.DGM || {};
         text: (m.text || "").trim(),
         thinking: m.role === "assistant" ? (m.thinking || "").trim() : "",
         at: m.at || 0,
-        tab: m.m || m.intent || "review",
+        intent: m.m || m.intent || "review",
         model: m.used ? m.used.model || "" : "",
       });
     }

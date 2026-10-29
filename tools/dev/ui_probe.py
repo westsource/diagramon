@@ -2550,7 +2550,7 @@ def main() -> int:
             "  const applyBtn = bot ? bot.querySelectorAll('.code-card .apply, [data-a=apply]').length : -1;"
             "  const acts = bot ? bot.querySelectorAll('.msg-acts .msg-act').length : -1;"
             "  const turns = DGM.ai.turnsFor();"
-            "  const hasExplain = turns.some((t) => t.tab === 'explain');"
+            "  const hasExplain = turns.some((t) => t.intent === 'explain');"
             "  const cmd = DGM.commands.list().some((c) => c.id === 'ai.explain');"
             "  const headBtn = !!document.querySelector('#pane-preview #btn-explain');"
             "  const iconOnly = (b) => !!b && !(b.textContent || '').trim() && !!b.querySelector('svg');"

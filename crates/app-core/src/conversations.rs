@@ -366,7 +366,7 @@ mod tests {
             at,
             model: if role == "assistant" { "GLM-5.2".into() } else { String::new() },
             tokens: 0,
-            tab: "chat".into(),
+            intent: "chat".into(),
             thinking: String::new(),
         }
     }
@@ -424,7 +424,7 @@ mod tests {
                     at: 1,
                     model: String::new(),
                     tokens: 0,
-                    tab: "chat".into(),
+                    intent: "chat".into(),
                     thinking: String::new(),
                 },
                 ConversationTurn {
@@ -433,7 +433,7 @@ mod tests {
                     at: 2,
                     model: "GLM-5.2".into(),
                     tokens: 822,
-                    tab: "chat".into(),
+                    intent: "chat".into(),
                     thinking: "先读一遍这张图，把节点与边理清楚……".into(),
                 },
             ],
@@ -473,6 +473,34 @@ mod tests {
         assert_eq!(back.turns.len(), 2);
         assert!(back.turns[1].thinking.is_empty());
         assert_eq!(back.turns[1].text, "答");
+        // 旧文件的 tab 必须落进 intent；否则升级后所有轮次都归到「生图」。
+        assert_eq!(back.turns[0].intent, "chat");
+    }
+
+    /// 新文件只写 `intent`，不写 `tab`；旧文件靠 serde alias 读进来。
+    /// 这是“不再考虑回滚 3.10.7”后的单向迁移：读旧、写新。
+    #[test]
+    fn writes_intent_only_and_migrates_legacy_tab() {
+        let dir = temp_dir("intent-only");
+        std::fs::create_dir_all(&dir).unwrap();
+        let key = doc_key("E:/x/intent.mmd");
+        std::fs::write(
+            file_for(&dir, &key),
+            format!(
+                r#"{{"doc_key":"{key}","path":"E:/x/intent.mmd","updated_at":2,"turns":[
+                    {{"role":"user","text":"问","at":1,"tab":"review"}}]}}"#
+            ),
+        )
+        .unwrap();
+
+        let mut back = load(&dir, &key);
+        assert_eq!(back.turns[0].intent, "review");
+        save(&dir, &back).unwrap();
+        let raw = std::fs::read_to_string(file_for(&dir, &key)).unwrap();
+        assert!(raw.contains(r#""intent": "review""#));
+        assert!(!raw.contains(r#""tab""#), "新文件不应再写 tab：{raw}");
+        back = load(&dir, &key);
+        assert_eq!(back.turns[0].intent, "review");
     }
 
     /// 目录还不存在时 `save` 要自己建（首次运行不该要求目录先被建好）。

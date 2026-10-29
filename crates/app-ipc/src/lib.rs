@@ -1011,9 +1011,12 @@ pub struct ConversationTurn {
     /// prompt + completion（供应商没回报就是 0，**不是"零消耗"**）
     #[serde(default)]
     pub tokens: u32,
-    /// 来自哪个页签：`chat` | `vision` | `review`
-    #[serde(default)]
-    pub tab: String,
+    /// 这一轮的意图：`generate` | `vision` | `review` | `explain`。
+    ///
+    /// 早期把意图存在 `tab` 里（当时确实是页签）；现在只写 `intent`。
+    /// `alias = "tab"` 让旧会话文件原样读得进来，下一次保存就迁移成新字段。
+    #[serde(default, alias = "tab")]
+    pub intent: String,
     /// 这一轮的**思考原文**（思考型模型的 `reasoning_content`；没有就是空串）。
     ///
     /// 落盘的理由：3.5.3 起思考块可折叠（`ai.think.*`），但推理只活在内存里 ——
