@@ -560,6 +560,7 @@ digraph Pipeline {
           memory_auto: true,
           intent: {
             enabled: false,
+            mode: "auto",
             base_url: "https://opencode.ai/inference/systemone/v1/systemone",
             model: "jev-1.13",
             timeout_ms: 700,
@@ -1103,6 +1104,22 @@ digraph Pipeline {
         case "ai_provider_key_delete":
           delete this._cred["ai-provider:" + args.providerId];
           return null;
+
+        case "ai_resolve_intent": {
+          // 浏览器原型的判定夹具：空输入/关闭 → 回退；否则按关键词给一个稳定结果。
+          // 真机走 Rust 的官方/自定义分支，不经过这里。
+          const r = args.req || args || {};
+          const q = String(r.prompt || "").trim();
+          const mode = (this.settings.ai.intent && this.settings.ai.intent.mode) || "auto";
+          if (!q || mode === "off") {
+            return { intent: r.current_intent || "review", confidence: 0, fallback: true, reason: mode === "off" ? "disabled" : "mock-empty" };
+          }
+          const intent = /解释|讲什么|风险|分析/.test(q) ? "explain" : /画|新建|生成/.test(q) ? "generate" : "review";
+          const confidence = intent === "explain" ? 0.88 : intent === "generate" ? 0.82 : 0.8;
+          const probs = { generate: 0.1, vision: 0, review: 0.1, explain: 0.1 };
+          probs[intent] = confidence;
+          return { intent, confidence, probabilities: probs, model: "jev-1.13-mock", elapsed_ms: 120, fallback: false, reason: null };
+        }
 
         case "ai_chat":
           return this._aiChat(args.req || args);

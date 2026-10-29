@@ -127,7 +127,8 @@ window.DGM = window.DGM || {};
     if (hard) return { intent: hard, confidence: 1, fallback: true, reason: "hard" };
 
     const prefs = state.ai().intent || {};
-    if (!prefs.enabled) {
+    const mode = prefs.mode || (prefs.enabled ? "custom" : "auto");
+    if (mode === "off") {
       return { intent: "review", confidence: 0, fallback: true, reason: "disabled" };
     }
     const flags = {
@@ -138,7 +139,7 @@ window.DGM = window.DGM || {};
       fmt: d ? d.format : "mermaid",
     };
     // 判定配置也进缓存键：改端点/模型/阈值后，不能拿旧配置的结论继续用 5 分钟。
-    const cfg = [prefs.base_url, prefs.model, prefs.timeout_ms, prefs.high_confidence, prefs.min_confidence].join("\u0002");
+    const cfg = [mode, prefs.base_url, prefs.model, prefs.timeout_ms, prefs.high_confidence, prefs.min_confidence].join("\u0002");
     const key = [prompt.trim(), flags.doc, flags.sel, flags.img, flags.txt, flags.fmt, cfg].join("\u0001");
     const hit = intentCache.get(key);
     if (hit && Date.now() - hit.at < 5 * 60 * 1000) return hit.v;
@@ -151,7 +152,7 @@ window.DGM = window.DGM || {};
     const task = (async () => {
       let out;
       try {
-        out = await ipc.invoke("ai_resolve_intent", {
+        out = (await ipc.invoke("ai_resolve_intent", {
           req: {
             prompt: prompt.trim(),
             has_document: flags.doc,
@@ -162,7 +163,7 @@ window.DGM = window.DGM || {};
             has_text_files: flags.txt,
             override_intent: null,
           },
-        });
+        })) || {};
       } catch (e) {
         out = { intent: "review", confidence: 0, fallback: true, reason: String(e || "error") };
       }

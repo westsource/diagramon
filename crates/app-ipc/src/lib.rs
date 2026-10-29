@@ -331,11 +331,16 @@ pub struct AiPrefs {
     pub intent: IntentPrefs,
 }
 
-/// 意图判定（Jev）配置。**默认关**，且它不是会员权益。
+/// 意图判定配置。
+///
+/// `mode` 是唯一权威：`auto`（默认，会员登录后用官方） / `official` /
+/// `custom`（自己的 SystemOne 端点 + 本机密钥） / `off`。
+/// `enabled` 是旧版本字段，只在 `mode` 为空时用于迁移（true → custom）。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct IntentPrefs {
     pub enabled: bool,
+    pub mode: String,
     pub base_url: String,
     pub model: String,
     pub timeout_ms: u32,
@@ -347,6 +352,7 @@ impl Default for IntentPrefs {
     fn default() -> Self {
         Self {
             enabled: false,
+            mode: String::new(),
             base_url: "https://opencode.ai/inference/systemone/v1/systemone".into(),
             model: "jev-1.13".into(),
             timeout_ms: 700,

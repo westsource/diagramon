@@ -1003,9 +1003,85 @@ pub fn ai_cancel(state: State<'_, Arc<AppState>>, id: String) -> R<()> {
     }
 }
 
-/// 意图判定：硬规则 → Jev（可选）→ 回退。
+/// 官方 SystemOne：服务端代理，客户端不持有 Console Key。
 ///
-/// **永远不会因为 Jev 失败而让发送失败**：上游超时/未配置/低置信都只返回
+/// 走云网关的 `authed_send`，401 会自动续期一次；任何失败都只影响意图判定。
+async fn official_intent(
+    st: &AppState,
+    req: &IntentClassifyRequest,
+    prefs: &app_ipc::IntentPrefs,
+) -> Result<IntentClassifyResult, String> {
+    let body = serde_json::json!({
+        "prompt": req.prompt,
+        "has_document": req.has_document,
+        "has_selection": req.has_selection,
+        "has_image": req.has_image,
+        "has_text_files": req.has_text_files,
+        "current_intent": ai::decision::intent_name(req.current_intent),
+        "document_head": req.document_head,
+    });
+    let v = crate::cloud::call_json(
+        st,
+        reqwest::Method::POST,
+        "/ai/systemone",
+        Some(body),
+        true,
+    )
+    .await?;
+    let intent = v
+        .get("intent")
+        .and_then(|x| x.as_str())
+        .and_then(ai::decision::parse_intent)
+        .ok_or_else(|| "official:bad_intent".to_string())?;
+    let confidence = v.get("confidence").and_then(|x| x.as_f64()).unwrap_or(0.0) as f32;
+    let probabilities: std::collections::BTreeMap<String, f32> = v
+        .get("probabilities")
+        .cloned()
+        .and_then(|x| serde_json::from_value(x).ok())
+        .unwrap_or_default();
+    let fallback = v.get("fallback").and_then(|x| x.as_bool()).unwrap_or(false);
+    let mut reason = v
+        .get("reason")
+        .and_then(|x| x.as_str())
+        .map(str::to_string);
+    if !fallback && intent == AiIntent::Vision {
+        // 识图只由图片附件硬规则决定；服务端返回 vision 视为无效。
+        return Ok(IntentClassifyResult {
+            intent: req.current_intent,
+            confidence,
+            probabilities,
+            model: prefs.model.clone(),
+            elapsed_ms: 0,
+            fallback: true,
+            reason: Some("invalid:vision".into()),
+        });
+    }
+    let mut fallback = fallback;
+    if !fallback && confidence < prefs.min_confidence {
+        fallback = true;
+        reason = Some("low-confidence".into());
+    }
+    if !fallback && confidence < prefs.high_confidence {
+        reason = Some("medium-confidence".into());
+    }
+    Ok(IntentClassifyResult {
+        intent: if fallback { req.current_intent } else { intent },
+        confidence,
+        probabilities,
+        model: v
+            .get("model")
+            .and_then(|x| x.as_str())
+            .map(str::to_string)
+            .unwrap_or_else(|| prefs.model.clone()),
+        elapsed_ms: v.get("elapsed_ms").and_then(|x| x.as_u64()).unwrap_or(0),
+        fallback,
+        reason,
+    })
+}
+
+/// 意图判定：硬规则 → 官方/自定义 SystemOne → 回退。
+///
+/// **永远不会因为判定失败而让发送失败**：上游超时/未登录/未配置/低置信都只返回
 /// `fallback=true`，由 UI 保持滑块当前值。真正的发送由 `ai_chat` 负责。
 #[tauri::command]
 pub async fn ai_resolve_intent(
@@ -1036,9 +1112,25 @@ pub async fn ai_resolve_intent(
     }
 
     let prefs = st.settings().ai.intent.clone();
-    if !prefs.enabled {
+    let mode = if prefs.mode.trim().is_empty() {
+        // 旧设置没有 mode：开过旧开关的继续走自定义；没开过的采用新的默认官方。
+        if prefs.enabled { "custom" } else { "auto" }
+    } else {
+        prefs.mode.trim()
+    };
+    if mode == "off" {
         return Ok(done(req.current_intent, 0.0, true, "disabled"));
     }
+    if mode == "official" || mode == "auto" {
+        return match official_intent(&st, &req, &prefs).await {
+            Ok(r) => Ok(r),
+            Err(e) => Ok(done(req.current_intent, 0.0, true, &format!("official:{e}"))),
+        };
+    }
+    if mode != "custom" {
+        return Ok(done(req.current_intent, 0.0, true, "disabled"));
+    }
+
     let key = match st
         .creds
         .get(&crate::state::provider_credential_key("intent-classifier"))
@@ -1068,7 +1160,6 @@ pub async fn ai_resolve_intent(
 
     match client.classify(&input).await {
         Ok(d) => {
-            // Jev 只允许在三选一里判；识图由图片附件硬规则决定。
             if d.intent == AiIntent::Vision {
                 return Ok(done(req.current_intent, d.confidence, true, "invalid:vision"));
             }

@@ -925,7 +925,20 @@ window.DGM = window.DGM || {};
       ${switchRow(!!ai.vision_notice_accepted, t("set.ai.visionNotice"), null, "vnotice")}
       ${switchRow(!!ai.memory_enabled, t("set.ai.memoryOn"), "set.ai.memoryOnHint", "memory")}
       ${switchRow(!!ai.memory_auto, t("set.ai.memoryAuto"), "set.ai.memoryAutoHint", "memoryauto")}
-      ${switchRow(!!(ai.intent && ai.intent.enabled), t("set.ai.intent"), "set.ai.intentHint", "intentcls")}
+      <div class="field narrow">
+        <label for="ai-intent-mode">${esc(t("set.ai.intent"))}</label>
+        <select id="ai-intent-mode">
+          ${[
+            ["auto", "set.ai.intentModeAuto"],
+            ["official", "set.ai.intentModeOfficial"],
+            ["custom", "set.ai.intentModeCustom"],
+            ["off", "set.ai.intentModeOff"],
+          ]
+            .map(([v, k]) => `<option value="${v}"${(ai.intent && (ai.intent.mode || (ai.intent.enabled ? "custom" : "auto"))) === v ? " selected" : ""}>${esc(t(k))}</option>`)
+            .join("")}
+        </select>
+        <span class="hint">${esc(t("set.ai.intentHint"))}</span>
+      </div>
       <details class="ai-prov-adv">
         <summary>${esc(t("set.ai.advanced"))}</summary>
         <div class="ai-prov-adv-grid">
@@ -937,6 +950,7 @@ window.DGM = window.DGM || {};
           <label title="${esc(t("set.ai.intentKeyHint"))}">${esc(t("set.ai.intentKey"))}<input type="password" data-key="intent-classifier" placeholder="${esc(t("set.ai.intentKeyHint"))}" spellcheck="false"></label>
         </div>
         <span class="hint">${esc(t("set.ai.intentKeyHint"))}</span>
+        <span class="hint">${esc(t("set.ai.intentOfficialHint"))}</span>
       </details>
       <div class="field"><label>${esc(t("set.ai.memory"))}</label>
         <div class="btn-row"><button class="btn sm" data-act="memory">${icon("sparkles")}${esc(t("set.ai.memoryManage"))}</button>
@@ -1290,7 +1304,6 @@ window.DGM = window.DGM || {};
         else if (a === "vnotice") state.patchSettings({ ai: { vision_notice_accepted: on } });
         else if (a === "memory") state.patchSettings({ ai: { memory_enabled: on } });
         else if (a === "memoryauto") state.patchSettings({ ai: { memory_auto: on } });
-        else if (a === "intentcls") state.patchSettings({ ai: { intent: { enabled: on } } });
       });
     });
 
@@ -1438,6 +1451,9 @@ window.DGM = window.DGM || {};
         return Number.isFinite(n) ? Math.min(hi, Math.max(lo, n)) : dflt;
       };
       const str = (id) => { const el = $("#" + id); return el ? String(el.value || "").trim() : ""; };
+      const mode = str("ai-intent-mode") || "auto";
+      ip.mode = mode;
+      ip.enabled = mode !== "off"; // 旧版本字段：只用于回滚/旧设置读取
       ip.base_url = str("ai-intent-url") || ip.base_url;
       ip.model = str("ai-intent-model") || ip.model;
       ip.timeout_ms = Math.round(num("ai-intent-timeout", 300, 2000, 700));

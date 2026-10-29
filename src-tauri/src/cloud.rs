@@ -274,7 +274,7 @@ async fn authed_send(
 }
 
 /// 一个 HTTP 调用的统一出口：状态码 / 网络 / 协议错误都变成**能看懂的一句话**。
-async fn call_json(
+pub(crate) async fn call_json(
     state: &AppState,
     method: reqwest::Method,
     path: &str,
