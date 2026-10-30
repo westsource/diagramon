@@ -1012,8 +1012,8 @@ window.DGM = window.DGM || {};
       {
         const pals = (info && info.palettes) || [];
         ok(
-          "app_info 带 8 个色系 × 7 个角色",
-          pals.length === 8 && pals.every((p) => p.roles.length === 7 && p.name_zh && p.name_en),
+          "app_info 带 6 个色系 × 7 个角色",
+          pals.length === 6 && pals.every((p) => p.roles.length === 7 && p.name_zh && p.name_en),
           pals.map((p) => p.id).join(","),
         );
         const body = "flowchart TD\n    A([开始]):::lvl-entry --> C{是否通过?}:::lvl-decide\n    C --> D[(用户库)]:::lvl-data\n";

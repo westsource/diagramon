@@ -58,12 +58,16 @@ struct Seed {
 /// 告警还固定在 [`RISK_HUE`]（暖红）—— 所以梯度会自己挑方向（见 [`ladder`]）。
 /// 加色系时先跑 `every_palette_keeps_its_roles_apart`，别靠肉眼选。
 ///
+/// **为什么是 6 个而不是 8 个**（2026-10-30 实测，CIE76）：
+/// 角色铺满 210° 色相，每个色系自带一条彩虹，于是两个色系挨得近时"换色系等于没换"——
+/// 8 个色系里 青瓷(192°) / 藕紫(258°) 的**同角色**最小 ΔE 只有 2。
+/// 去掉 青瓷(192°) 与 靛青(238°) 之后，同角色跨色系的最差 ΔE 是 17、中位 26。
+/// 想再加色系？先量"同角色跨色系最小 ΔE >= 15"，别只看主色。
+///
 /// `tungsten`（钨灰）是特例：饱和度接近 0，角色靠**明度阶梯**分开（打印/线框风）。
-const SEEDS: [Seed; 8] = [
+const SEEDS: [Seed; 6] = [
     Seed { id: "pine", zh: "松绿", en: "Pine", hue: 168.0, sat: 0.42 },
-    Seed { id: "celadon", zh: "青瓷", en: "Celadon", hue: 192.0, sat: 0.30 },
     Seed { id: "indigo", zh: "黛蓝", en: "Indigo", hue: 210.0, sat: 0.40 },
-    Seed { id: "azure", zh: "靛青", en: "Azure", hue: 238.0, sat: 0.36 },
     Seed { id: "lotus", zh: "藕紫", en: "Lotus", hue: 258.0, sat: 0.34 },
     Seed { id: "olive", zh: "橄榄", en: "Olive", hue: 95.0, sat: 0.40 },
     Seed { id: "ochre", zh: "赭石", en: "Ochre", hue: 42.0, sat: 0.48 },
@@ -209,7 +213,7 @@ const NEUTRAL_SAT: f32 = 0.12;
 
 /// 中性色系里各角色的描边明度（顺序同 [`ROLES`]）。亮色一套、暗色一套：
 /// 灰阶没有色相可用，只能靠明度台阶把七个角色拉开，且步长必须肉眼可分。
-const GRAY_STROKE_LIGHT: [f32; 7] = [0.46, 0.38, 0.30, 0.55, 0.64, 0.50, 0.73];
+const GRAY_STROKE_LIGHT: [f32; 7] = [0.44, 0.32, 0.22, 0.58, 0.70, 0.50, 0.82];
 const GRAY_STROKE_DARK: [f32; 7] = [0.62, 0.54, 0.46, 0.71, 0.80, 0.50, 0.88];
 
 fn role_sat(seed_sat: f32, role: &str) -> f32 {
@@ -244,7 +248,10 @@ fn swatch(seed: &Seed, role: &str, dark: bool) -> (String, String, String) {
     if dark {
         (hsl_hex(h, s * 0.55, 0.22), hsl_hex(h, s, 0.60), hsl_hex(h, s * 0.50, 0.90))
     } else {
-        (hsl_hex(h, s * 0.55, 0.94), hsl_hex(h, s, 0.50), hsl_hex(h, s * 0.95, 0.22))
+        // 亮色填充曾经是 L94 / S×0.55：七个角色两两 ΔE 只有 1.2（人眼 ~2 以下看不出），
+        // 节点身体几乎同色、全靠 1.6px 描边撑着。L88 / S×0.95 之后 ΔE 3.6–5.9，
+        // 文字对比度仍有 7:1（可读性没牺牲）。
+        (hsl_hex(h, s * 0.95, 0.88), hsl_hex(h, s, 0.50), hsl_hex(h, s * 0.95, 0.22))
     }
 }
 
@@ -1298,8 +1305,8 @@ b -> c
     #[test]
     fn d2_apply_is_idempotent() {
         let body = "a -> b\nb: 外部\n";
-        let once = apply(body, FormatId::D2, "celadon", false, PaletteMode::All).unwrap();
-        let twice = apply(&once.body, FormatId::D2, "celadon", false, PaletteMode::All).unwrap();
+        let once = apply(body, FormatId::D2, "pine", false, PaletteMode::All).unwrap();
+        let twice = apply(&once.body, FormatId::D2, "pine", false, PaletteMode::All).unwrap();
         assert_eq!(twice.body, once.body);
         assert!(!twice.changed);
     }

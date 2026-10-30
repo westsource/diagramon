@@ -495,10 +495,10 @@ def main() -> int:
         log(f"自动配色控件: {pal}")
         try:
             r = json.loads(pal or "{}")
-            if r.get("menu", 0) < 10:
+            if r.get("menu", 0) < 8:
                 fails.append(f"配色菜单没出来或项太少：{r}")
-            if r.get("picks", 0) < 8:
-                fails.append(f"配色菜单应有 8 个色系：{r}")
+            if r.get("picks", 0) < 6:
+                fails.append(f"配色菜单应有 6 个色系：{r}")
             if not r.get("after"):
                 fails.append(f"选中色系后文档没有记住（doc.scheme 为空）：{r}")
             if "mock" not in str(r.get("status", "")):

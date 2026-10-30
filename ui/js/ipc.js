@@ -364,9 +364,7 @@ digraph Pipeline {
   // 这里只放 id 与名字：色值由 Rust 算，浏览器原型不重算（那会是第二份实现）。
   const PALETTES = [
     { id: "pine", zh: "松绿", en: "Pine" },
-    { id: "celadon", zh: "青瓷", en: "Celadon" },
     { id: "indigo", zh: "黛蓝", en: "Indigo" },
-    { id: "azure", zh: "靛青", en: "Azure" },
     { id: "lotus", zh: "藕紫", en: "Lotus" },
     { id: "olive", zh: "橄榄", en: "Olive" },
     { id: "ochre", zh: "赭石", en: "Ochre" },
