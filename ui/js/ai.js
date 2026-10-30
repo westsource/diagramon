@@ -1664,28 +1664,6 @@ window.DGM = window.DGM || {};
    */
   let retryCtx = null; // { docId, format, code, tab, tried, reqId }
 
-  /** AI 产出的代码落进编辑器之前，按当前色系把**角色标记**展开成色值。
-   *
-   *  这是"自动配色"真正的落点：模型只写 `:::lvl-*` / `palette_role` / `X.class`，
-   *  色值在这里由 Rust 的确定性展开产生（可复现、暗色阶正确、跨格式一致）。
-   *  失败**不挡应用** —— 配色不该让一次生成白费，但要在状态栏如实说一声。
-   */
-  async function paintForApply(code, d) {
-    if (!d || !state.isTextDoc(d) || !state.schemeOf) return code;
-    const scheme = state.schemeOf(d);
-    if (!scheme) return code;
-    try {
-      // 用「仅未着色」而不是「整篇重排」：提示词已经把模型引到"只写角色"，
-      // 正常情况下它不该带色值；万一漏了一处，代价只是留一个手选色，
-      // 而"整篇重排"会**删掉用户手写的 style** —— 破坏性大得多。
-      const res = await state.paint(code, d.format, scheme, "only_uncolored");
-      return res && res.body ? res.body : code;
-    } catch (e) {
-      DGM.status(t("preview.palette.failed", { msg: (e && e.message) || String(e) }), "warn");
-      return code;
-    }
-  }
-
   async function applyBlock(blk, m) {
     const fmt = langToFormat(blk.lang);
     const fromId = (state.activeDoc() || {}).id || "";
@@ -1720,7 +1698,8 @@ window.DGM = window.DGM || {};
     }
     if (!d) return;
     lastApplied = { id: d.id, body: d.body };
-    await DGM.editor.applyBody(await paintForApply(blk.code, d));
+    // 不再在应用时烘焙配色：颜色是**渲染期**按当前色系展开的（写进来反而会让"无"失效）
+    await DGM.editor.applyBody(blk.code);
     if (m) m.applied = true;
     // 布防：这一版渲染失败就自动修正一次（开关见「AI 设置 → 渲染失败时…」）。
     const selfRetry = !!(m && retryCtx && retryCtx.reqId && m.req === retryCtx.reqId);
@@ -1766,6 +1745,31 @@ window.DGM = window.DGM || {};
       DGM.toast({ icon: "undo", title: t("ai.reverted"), sub: t("ai.revertedSub") });
     }
     lastApplied = null;
+  }
+
+  /** 让模型把正文里的颜色删掉（**只删颜色、不动结构**）；调用方负责校验结构签名。
+   *
+   *  为什么让模型做：`palette_clear` 只删我们自己生成的那一段。用户手写的 `style`、
+   *  模型自己加的 `fillcolor`、从别处粘来的配色它一概不碰 —— 自由格式文本没有统一语法，
+   *  正则清不干净，而"看懂这份图、只删颜色"正是模型擅长的活。
+   */
+  async function stripColors(docId) {
+    const d = state.doc(docId) || state.activeDoc();
+    if (!d) throw new Error("没有打开的文档");
+    const out = await askOnce({
+      prompt:
+        "把下面这份图表源码里**所有颜色**去掉，只做删除、不要改写任何别的东西：\n" +
+        "- 删掉设置颜色的整行/整条：Mermaid 的 `style …` 与 `classDef …`、DOT 的 fillcolor / fontcolor / bgcolor / color、D2 的 style.fill / style.stroke / style.font-color；\n" +
+        "- **保留**全部节点 id、标签文字、连线方向、布局与形状属性（shape / rankdir / direction 等）；\n" +
+        "- 不要新增任何节点、注释或说明文字；\n" +
+        "- 输出完整源码（用围栏包起来）。",
+      format: d.format,
+      context: d.body,
+      docId: d.id,
+    });
+    const blk = lastBlock(splitFences((out && out.text) || "").blocks);
+    if (!blk || !String(blk.code || "").trim()) throw new Error("模型没有返回可用的源码");
+    return blk.code;
   }
 
   /** 拷贝一段文本，并把**真实结果**告诉用户（写不进剪贴板时不再假装成功）。 */
@@ -2216,6 +2220,7 @@ window.DGM = window.DGM || {};
     compressImage,
     // 外部文件作为上下文（拖拽 / 手填路径 / 选择文件）：导出让自检与探针能直接驱动，
     // 不必去模拟操作系统的拖放事件。
+    stripColors,
     addContextFile,
     removeContextFile,
     handleDrop,

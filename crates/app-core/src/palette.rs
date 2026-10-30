@@ -27,7 +27,10 @@
 //!   * Mermaid 只有 flowchart 能这么上色（序列图/状态图/类图没有 classDef）；
 //!   * 色值落进文档后**不跟随主题** —— 换主题要重新点一次配色。
 
-use app_ipc::{FormatId, PaletteApplyRes, PaletteInfo, PaletteMode, PaletteRole, RoleSwatch};
+use app_ipc::{
+    FormatId, PaletteApplyRes, PaletteInfo, PaletteMode, PaletteProbe, PaletteRole, PaletteScan,
+    RoleSwatch,
+};
 use std::collections::BTreeMap;
 
 use crate::convert;
@@ -414,6 +417,209 @@ pub fn clear(body: &str, format: FormatId) -> PaletteApplyRes {
     }
 }
 
+/* ------------------------------------------------------------------ 检测 */
+
+/// 文件里那块色系标记属于哪个色系。
+///
+/// 新块第一行带 `id=<id>`；老块（3.11.3/3.11.4 早期）只有中文名，按名字反向匹配 ——
+/// 兼容它们不是洁癖：用户盘上已经有那种文件了。
+pub fn block_palette(body: &str, format: FormatId) -> Option<String> {
+    let marker = match format {
+        FormatId::Mermaid => "%% dgm-palette:begin",
+        FormatId::Dot => "// dgm-palette:begin",
+        FormatId::D2 => "# dgm-palette:begin",
+        FormatId::Drawio | FormatId::Excalidraw => return None,
+    };
+    let line = body.lines().find(|l| l.trim_start().starts_with(marker))?;
+    if let Some(rest) = line.split("id=").nth(1) {
+        let id: String = rest
+            .chars()
+            .take_while(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
+            .collect();
+        if is_known(&id) {
+            return Some(id);
+        }
+    }
+    // 老块：靠中文名反查
+    SEEDS.iter().find(|s| line.contains(s.zh)).map(|s| s.id.to_string())
+}
+
+/// 探测：已经烘焙过就照它，否则按图的内容挑一个。
+pub fn probe(body: &str, format: FormatId) -> PaletteProbe {
+    if matches!(format, FormatId::Drawio | FormatId::Excalidraw) {
+        return PaletteProbe::default();
+    }
+    if let Some(baked) = block_palette(body, format) {
+        return PaletteProbe { baked: Some(baked), suggested: None, why: None };
+    }
+    let (id, why) = suggest(body, format).unwrap_or(("pine", "default"));
+    PaletteProbe {
+        baked: None,
+        suggested: Some(id.to_string()),
+        why: Some(why.to_string()),
+    }
+}
+
+/// "这份图适合哪个色系"——**本地、确定、可解释**，不发请求。
+///
+/// 依据只有两类信号（都不猜语义，只看图里已经有的东西）：
+///   1. 角色占比：数据/存储多 → 黛蓝；异常多 → 赭石；外部接口多 → 橄榄；
+///   2. 标签词表：界面/页面/交互 → 藕紫；其余落到品牌松绿。
+/// 钨灰不参与自动选择：它是"线框/打印"档，自动挑过去会让人以为图坏了。
+fn suggest(body: &str, format: FormatId) -> Option<(&'static str, &'static str)> {
+    let (role_counts, text) = collect_signals(body, format)?;
+    let total: usize = role_counts.values().sum();
+    if total == 0 {
+        return None;
+    }
+    let share = |r: &str| role_counts.get(r).copied().unwrap_or(0) as f32 / total as f32;
+    if share("data") >= 0.30 {
+        return Some(("indigo", "data"));
+    }
+    if share("risk") >= 0.15 {
+        return Some(("ochre", "risk"));
+    }
+    if share("ext") >= 0.30 {
+        return Some(("olive", "ext"));
+    }
+    let lower = text.to_lowercase();
+    const UI_WORDS: [&str; 6] = ["页面", "界面", "按钮", "交互", "screen", "ui"];
+    if UI_WORDS.iter().any(|w| lower.contains(w)) {
+        return Some(("lotus", "ui"));
+    }
+    Some(("pine", "default"))
+}
+
+/// 取"角色分布 + 全部标签文本"（三种格式各走自己的扫描器；画布型没有信号）。
+fn collect_signals(
+    body: &str,
+    format: FormatId,
+) -> Option<(std::collections::BTreeMap<String, usize>, String)> {
+    use std::collections::BTreeMap;
+    let mut counts: BTreeMap<String, usize> = BTreeMap::new();
+    let mut text = String::new();
+    match format {
+        FormatId::Mermaid => {
+            let facts = convert::flow_facts(body).ok()?;
+            for n in &facts.nodes {
+                let role = n
+                    .classes
+                    .iter()
+                    .find_map(|c| role_of_class(c))
+                    .or_else(|| role_from_shape(&n.shape.key()))
+                    .or_else(|| n.label.as_deref().and_then(role_from_label))
+                    .unwrap_or("main");
+                *counts.entry(role.to_string()).or_default() += 1;
+                if let Some(l) = &n.label {
+                    text.push_str(l);
+                    text.push(' ');
+                }
+            }
+        }
+        FormatId::Dot => {
+            for n in dot_nodes(body) {
+                let role = dot_role(&n).unwrap_or("main");
+                *counts.entry(role.to_string()).or_default() += 1;
+                if let Some(l) = n.attrs.get("label") {
+                    text.push_str(l);
+                    text.push(' ');
+                }
+            }
+        }
+        FormatId::D2 => {
+            for n in d2_nodes(body).nodes {
+                let role = n
+                    .role
+                    .or_else(|| n.shape.as_deref().and_then(role_from_d2_shape))
+                    .unwrap_or("main");
+                *counts.entry(role.to_string()).or_default() += 1;
+                if let Some(l) = &n.label {
+                    text.push_str(l);
+                    text.push(' ');
+                }
+            }
+        }
+        FormatId::Drawio | FormatId::Excalidraw => return None,
+    }
+    Some((counts, text))
+}
+
+/* ------------------------------------------------------------------ 清洗前的体检 */
+
+/// 我们那块**之外**还剩多少处颜色痕迹。
+///
+/// 为什么需要它：`clear()` 只删自己生成的那一段。用户手写的 `style`、模型自己加的
+/// `fillcolor`、从别处粘来的配色，它一概不碰（也就清不掉）。于是"点「无」之后图还是花的"
+/// —— 这个函数回答"还剩几处"，有模型时再交给模型去删。
+pub fn color_traces(body: &str, format: FormatId) -> usize {
+    let (base, _) = match format {
+        FormatId::Mermaid => strip_block(body, "%% dgm-palette:begin", "%% dgm-palette:end"),
+        FormatId::Dot => strip_block(body, "// dgm-palette:begin", "// dgm-palette:end"),
+        FormatId::D2 => strip_block(body, "# dgm-palette:begin", "# dgm-palette:end"),
+        FormatId::Drawio | FormatId::Excalidraw => (body.to_string(), false),
+    };
+    let mut n = 0usize;
+    for line in base.lines() {
+        let t = line.trim();
+        if t.is_empty() || t.starts_with("//") || t.starts_with('#') || t.starts_with("%%") {
+            continue; // 注释不算（我们自己的块已经被剥掉了）
+        }
+        let hit = match format {
+            FormatId::Mermaid => {
+                (t.starts_with("style ") || t.starts_with("classDef ") || t.starts_with("linkStyle"))
+                    && (t.contains("fill:") || t.contains("stroke:") || t.contains("color:"))
+            }
+            FormatId::Dot => {
+                t.contains("fillcolor")
+                    || t.contains("fontcolor")
+                    || t.contains("bgcolor")
+                    || t.contains("color=")
+            }
+            FormatId::D2 => {
+                t.contains("style.fill")
+                    || t.contains("style.stroke")
+                    || t.contains("style.font-color")
+            }
+            FormatId::Drawio | FormatId::Excalidraw => false,
+        };
+        if hit {
+            n += 1;
+        }
+    }
+    n
+}
+
+/// 结构签名：节点 id（排序去重）+ 边数。
+///
+/// 只用来回答一个问题：「模型清洗完，结构还是原来那张图吗？」
+/// 颜色不在里面 —— 这正是我们要允许它变化的部分。
+pub fn structure_sig(body: &str, format: FormatId) -> Option<String> {
+    let (base, _) = match format {
+        FormatId::Mermaid => strip_block(body, "%% dgm-palette:begin", "%% dgm-palette:end"),
+        FormatId::Dot => strip_block(body, "// dgm-palette:begin", "// dgm-palette:end"),
+        FormatId::D2 => strip_block(body, "# dgm-palette:begin", "# dgm-palette:end"),
+        FormatId::Drawio | FormatId::Excalidraw => return None,
+    };
+    let mut ids: Vec<String> = Vec::new();
+    match format {
+        FormatId::Mermaid => {
+            let facts = convert::flow_facts(&base).ok()?;
+            ids = facts.nodes.into_iter().map(|n| n.id).collect();
+        }
+        FormatId::Dot => ids = dot_nodes(&base).into_iter().map(|n| n.id).collect(),
+        FormatId::D2 => ids = d2_nodes(&base).nodes.into_iter().map(|n| n.id).collect(),
+        FormatId::Drawio | FormatId::Excalidraw => return None,
+    }
+    ids.sort();
+    ids.dedup();
+    Some(ids.join(","))
+}
+
+/// 体检：还剩多少处颜色痕迹 + 结构签名。
+pub fn scan(body: &str, format: FormatId) -> PaletteScan {
+    PaletteScan { traces: color_traces(body, format), sig: structure_sig(body, format) }
+}
+
 /// 收集"这批节点各自是什么角色"，并把要不要跳过一起算出来。
 ///
 /// 返回 (角色 → 节点列表, 跳过的个数)。**顺序稳定**（BTreeMap + 文档顺序），
@@ -504,7 +710,9 @@ fn apply_mermaid(
         styles_removed = dropped;
     }
 
-    let mut block = String::from("%% dgm-palette:begin（Diagramon 自动配色 · ");
+    let mut block = String::from("%% dgm-palette:begin id=");
+    block.push_str(seed.id);
+    block.push_str("（Diagramon 自动配色 · ");
     block.push_str(seed.zh);
     block.push_str(if dark { " · 暗色" } else { " · 亮色" });
     block.push_str("）\n");
@@ -908,7 +1116,9 @@ fn apply_dot(
     let mut out = base;
     let styles_removed = 0usize;
 
-    let mut block = String::from("  // dgm-palette:begin（Diagramon 自动配色 · ");
+    let mut block = String::from("  // dgm-palette:begin id=");
+    block.push_str(seed.id);
+    block.push_str("（Diagramon 自动配色 · ");
     block.push_str(seed.zh);
     block.push_str(if dark { " · 暗色" } else { " · 亮色" });
     block.push_str("）\n");
@@ -1106,7 +1316,9 @@ fn apply_d2(
     let (by_role, skipped) = plan(items, mode);
 
     let mut out = base;
-    let mut block = String::from("# dgm-palette:begin（Diagramon 自动配色 · ");
+    let mut block = String::from("# dgm-palette:begin id=");
+    block.push_str(seed.id);
+    block.push_str("（Diagramon 自动配色 · ");
     block.push_str(seed.zh);
     block.push_str(if dark { " · 暗色" } else { " · 亮色" });
     block.push_str("）\n");
@@ -1557,6 +1769,89 @@ b -> c
         let c = clear("{}", FormatId::Drawio);
         assert!(!c.changed);
         assert_eq!(c.body, "{}");
+    }
+
+    #[test]
+    fn probe_reads_back_the_baked_palette() {
+        let painted = paint(&mermaid_flow(), FormatId::Mermaid, "lotus", false, PaletteMode::All).unwrap();
+        let p = probe(&painted.body, FormatId::Mermaid);
+        assert_eq!(p.baked.as_deref(), Some("lotus"), "块头里的 id 要能读回来");
+        assert!(p.suggested.is_none(), "已经烘焙过就别再建议别的");
+    }
+
+    #[test]
+    fn probe_resolves_legacy_blocks_without_id() {
+        // 3.11.3/3.11.4 早期生成的块只有中文名，没有 id=
+        let body = "flowchart TD\n    A --> B\n%% dgm-palette:begin（Diagramon 自动配色 · 藕紫 · 亮色）\n%% dgm-palette:end\n";
+        assert_eq!(probe(body, FormatId::Mermaid).baked.as_deref(), Some("lotus"));
+    }
+
+    #[test]
+    fn probe_suggests_by_what_the_diagram_is_made_of() {
+        // 数据/存储占多数 → 黛蓝
+        let data = "flowchart TD\n    A[(用户库)] --> B[(订单库)]\n    B --> C[(日志库)]\n    C --> D[写库]\n";
+        assert_eq!(probe(data, FormatId::Mermaid).suggested.as_deref(), Some("indigo"));
+        // 异常占 15% 以上 → 赭石
+        let risky = "flowchart TD\n    A[调用] --> B[支付失败]\n    B --> C[超时]\n    C --> D[写入]\n";
+        assert_eq!(probe(risky, FormatId::Mermaid).suggested.as_deref(), Some("ochre"));
+        // 界面词 → 藕紫
+        let ui = "flowchart TD\n    A[登录页面] --> B[按钮点击]\n";
+        assert_eq!(probe(ui, FormatId::Mermaid).suggested.as_deref(), Some("lotus"));
+        // 什么都没看出来 → 品牌松绿
+        let plain = "flowchart TD\n    A --> B\n";
+        assert_eq!(probe(plain, FormatId::Mermaid).suggested.as_deref(), Some("pine"));
+        // 自动挑色永远不挑钨灰（线框档，挑过去会让人以为图坏了）
+        for body in [data, risky, ui, plain, mermaid_flow().as_str()] {
+            assert_ne!(probe(body, FormatId::Mermaid).suggested.as_deref(), Some("tungsten"));
+        }
+    }
+
+    #[test]
+    fn color_traces_counts_what_clear_cannot_remove() {
+        let body = "flowchart TD\n    A[开始] --> B[写库]\n    style A fill:#f00\n    classDef x fill:#0f0\n";
+        assert_eq!(color_traces(body, FormatId::Mermaid), 2);
+        // 我们自己的块不算"痕迹"（它本来就是 clear 负责的部分）
+        let painted = paint(body, FormatId::Mermaid, "pine", false, PaletteMode::OnlyUncolored).unwrap();
+        assert_eq!(color_traces(&painted.body, FormatId::Mermaid), 2);
+        // 清完之后痕迹条数不变（我们的块没了，手写的还在）
+        let cleared = clear(&painted.body, FormatId::Mermaid);
+        assert_eq!(color_traces(&cleared.body, FormatId::Mermaid), 2);
+        // DOT / D2 各自的关键字
+        assert_eq!(color_traces("digraph G {\n A [fillcolor=red];\n}\n", FormatId::Dot), 1);
+        assert_eq!(color_traces("a.style.fill: \"#fff\"\n", FormatId::D2), 1);
+        // 注释里的颜色不算
+        assert_eq!(color_traces("# style.fill: red\n", FormatId::D2), 0);
+    }
+
+    #[test]
+    fn structure_sig_ignores_colors_but_catches_structure_changes() {
+        let a = "flowchart TD\n    A --> B\n    B --> C\n";
+        let colored = paint(a, FormatId::Mermaid, "pine", false, PaletteMode::All).unwrap();
+        assert_eq!(
+            structure_sig(a, FormatId::Mermaid),
+            structure_sig(&colored.body, FormatId::Mermaid),
+            "上色不该改变结构签名"
+        );
+        let restructured = "flowchart TD\n    A --> B\n    B --> D\n";
+        assert_ne!(
+            structure_sig(a, FormatId::Mermaid),
+            structure_sig(restructured, FormatId::Mermaid),
+            "换了节点就必须报出来（AI 清洗时靠它拒绝改坏图）"
+        );
+    }
+
+    #[test]
+    fn scan_reports_traces_and_signature_together() {
+        let body = "flowchart TD\n    A --> B\n    style A fill:#f00\n";
+        let s = scan(body, FormatId::Mermaid);
+        assert_eq!(s.traces, 1);
+        assert_eq!(s.sig.as_deref(), Some("A,B"));
+    }
+
+    #[test]
+    fn probe_is_empty_for_canvas_formats() {
+        let p = probe("<mxfile/>", FormatId::Drawio);
+        assert!(p.baked.is_none() && p.suggested.is_none());
     }
 
     #[test]

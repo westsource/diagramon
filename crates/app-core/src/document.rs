@@ -49,7 +49,9 @@ pub fn untitled(id: String, format: FormatId, seq: u32) -> Doc {
         caret_col: 1,
         layout: default_layout(format),
         look: None,
-        scheme: None,
+        // 新建的文档默认**不上色**：用户要的是"我先画/让 AI 画，颜色我自己定"。
+        // 打开磁盘上的文件走另一条路（`from_path` 保持 `None`，由前端探测后填）。
+        scheme: Some(String::new()),
     }
 }
 
@@ -132,6 +134,14 @@ mod tests {
         assert_eq!(d.format, FormatId::Mermaid);
         assert_eq!(d.layout.as_deref(), Some("elk"), "3.11.3 起 Mermaid 默认 ELK 布局（注册表第一个）");
         assert_eq!(untitled("e3".into(), FormatId::Mermaid, 3).layout.as_deref(), Some("elk"), "新建的也一样");
+    }
+
+    #[test]
+    fn new_documents_start_without_colors() {
+        // 新建 = 无：用户先画/让 AI 画，颜色自己定；打开磁盘文件才探测（`from_path` 保持 None）
+        assert_eq!(untitled("e9".into(), FormatId::Mermaid, 9).scheme.as_deref(), Some(""));
+        let p = temp_file("plain.mmd", "flowchart TD\n A\n");
+        assert_eq!(from_path("d9".into(), &p).unwrap().scheme, None, "打开的文件交给前端探测");
     }
 
     #[test]

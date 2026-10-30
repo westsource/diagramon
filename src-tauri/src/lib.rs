@@ -224,6 +224,8 @@ pub fn run() {
             commands::doc_set_scheme,
             commands::palette_apply,
             commands::palette_clear,
+            commands::palette_probe,
+            commands::palette_scan,
             commands::doc_reload,
             commands::doc_issues,
             commands::file_read_text,

@@ -79,6 +79,12 @@ struct Operand {
     /// 用户拿到的是「第 26 行：语句尾部有没解析完的内容」这种与真实原因无关的报错
     /// （真实语料实测：带 `:::` 的部署图 100% 失败）。
     classes: Vec<String>,
+    /// 这个操作数**显式写了形状**吗（`B[x]` / `B{x}`）？
+    ///
+    /// 必须区分：`A[x] --> B` 里第二次提到的 `A` 是裸 id，不能把先前解析出的形状
+    /// 覆盖成默认的 Box —— 否则同一个节点在"提到两次"之后形状就丢了（判断节点变回方框、
+    /// 圆柱变回方框），自动配色的角色推断也跟着错。
+    shaped: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -486,12 +492,7 @@ fn parse_operand(text: &str, start: usize) -> Option<(Operand, usize)> {
         // 裸 id 也可能带内联类名（`A:::cls`），那它在解析里算"没有形状"的一个操作数
         let (classes, end_ci) = parse_inline_classes(&chars, ci);
         return Some((
-            Operand {
-                id,
-                label: None,
-                shape: Shape::Box,
-                classes,
-            },
+            Operand { id, label: None, shape: Shape::Box, classes, shaped: false },
             char_to_byte(text, end_ci),
         ));
     }
@@ -537,6 +538,7 @@ fn parse_operand(text: &str, start: usize) -> Option<(Operand, usize)> {
             label: if label.is_empty() { None } else { Some(label) },
             shape,
             classes,
+            shaped: true,
         },
         char_to_byte(text, end_ci),
     ))
@@ -1024,7 +1026,10 @@ pub fn flow_facts(src: &str) -> Result<FlowFacts, String> {
                     if op.label.is_some() {
                         slot.0 = op.label.clone();
                     }
-                    slot.1 = FlowShape::from_shape(op.shape);
+                    // 裸 id（边上的重复提及）不带形状，别用它覆盖已经解析出来的形状
+                    if op.shaped {
+                        slot.1 = FlowShape::from_shape(op.shape);
+                    }
                     for c in &op.classes {
                         if !slot.2.contains(c) {
                             slot.2.push(c.clone());

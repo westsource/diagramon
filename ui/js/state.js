@@ -925,7 +925,44 @@ window.DGM = window.DGM || {};
     const res = await ipc.invoke("doc_open_paths", { paths });
     applyResult(res);
     emit("session:changed");
+    // 打开之后探测配色：已经烘焙过就照文件里的，否则按图的内容挑一个（**不写正文**）
+    await detectPalette(res, paths);
     return res;
+  }
+
+  /** 打开文件时的配色探测（Rust 侧的纯函数：不发请求、不写盘）。
+   *
+   *  只在"这份文件没有记过色系"时做；探测结果只落 `doc.scheme`（渲染期生效 + 按文件记住），
+   *  **不碰正文** —— 所以打开文件不会变脏，关掉也不会问你保存。
+   */
+  async function detectPalette(res, paths) {
+    const want = new Set((paths || []).map((p) => String(p).replace(/\\/g, "/").toLowerCase()));
+    const docs = (res && res.docs) || state.docs;
+    for (const d of docs) {
+      if (!d || !d.path || !state.isTextDoc(d)) continue;
+      if (!want.has(String(d.path).replace(/\\/g, "/").toLowerCase())) continue;
+      if (d.scheme !== undefined && d.scheme !== null) continue; // 记过的选择优先
+      let probe = null;
+      try {
+        probe = await ipc.invoke("palette_probe", { req: { body: d.body || "", format: d.format } });
+      } catch (e) {
+        continue; // 探测失败不该挡住打开
+      }
+      const pick = probe && (probe.baked || probe.suggested);
+      if (!pick) continue;
+      try {
+        await setScheme(d.id, pick);
+      } catch (e) {
+        continue;
+      }
+      if (probe.suggested && DGM.status) {
+        const why = probe.why ? DGM.i18n.t("preview.palette.why." + probe.why) : "";
+        const name = (state.palette(pick) || {}).name_zh && DGM.i18n.lang === "en-US"
+          ? state.palette(pick).name_en
+          : (state.palette(pick) || {}).name_zh || pick;
+        DGM.status(DGM.i18n.t("preview.palette.detected", { name, why }), "");
+      }
+    }
   }
 
   async function saveDoc(id, as, path) {
@@ -1138,6 +1175,11 @@ window.DGM = window.DGM || {};
     return res || { body, changed: false, applied: 0, skipped: 0, styles_removed: 0 };
   }
 
+  /** 体检：我们那块之外还剩多少处颜色痕迹 + 结构签名。 */
+  async function scanPalette(body, format) {
+    return ipc.invoke("palette_scan", { req: { body, format } });
+  }
+
   /** 清除配色：只删程序生成的那一段（手写样式不动）。 */
   async function clearPalette(body, format) {
     const res = await ipc.invoke("palette_clear", { req: { body, format } });
@@ -1324,6 +1366,7 @@ window.DGM = window.DGM || {};
     setScheme,
     paint,
     clearPalette,
+    scanPalette,
     refreshDerived,
     refreshIssues,
     refreshOutline,

@@ -21,7 +21,7 @@ use app_ipc::{
     AiThinking, IntentClassifyRequest, IntentClassifyResult,
     AppInfo, ConvMeta, Conversation, ConversationTurn, ConvertOutcome, ConvertRequest, DevFlags, Doc, FormatId,
     Issue, MemoryEntry, MemoryList, MemoryScope, MemoryState, OutlineGroup, PaletteApplyReq,
-    PaletteApplyRes, PaletteClearReq, Session as SessionPayload, Settings, ViewMode,
+    PaletteApplyRes, PaletteClearReq, PaletteScan, Session as SessionPayload, Settings, ViewMode,
 };
 use base64::Engine as _;
 use tauri::{AppHandle, Emitter, State};
@@ -259,6 +259,20 @@ pub fn doc_set_scheme(
 #[tauri::command]
 pub fn palette_apply(req: PaletteApplyReq) -> R<PaletteApplyRes> {
     app_core::palette::apply(&req.body, req.format, &req.palette, req.dark, req.edges, req.mode)
+}
+
+/// 打开文档时的配色探测：已经烘焙过就照它，否则给一个"看起来适合"的色系。
+///
+/// 纯函数、不联网、不写任何东西 —— 所以可以在打开文件时放心调用。
+#[tauri::command]
+pub fn palette_probe(req: PaletteClearReq) -> app_ipc::PaletteProbe {
+    app_core::palette::probe(&req.body, req.format)
+}
+
+/// 体检：我们那块之外还剩多少处颜色痕迹 + 结构签名（给"无"的 AI 清洗用）。
+#[tauri::command]
+pub fn palette_scan(req: PaletteClearReq) -> PaletteScan {
+    app_core::palette::scan(&req.body, req.format)
 }
 
 /// 清除配色：把程序生成的那一段整块删掉（手写样式不动）。

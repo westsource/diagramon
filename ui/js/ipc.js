@@ -901,6 +901,12 @@ digraph Pipeline {
           );
         }
 
+        // 探测 / 体检（颜色痕迹与结构签名）同样只存在于 Rust 侧
+        case "palette_probe":
+        case "palette_scan": {
+          throw new Error(`mock 模式没有 ${cmd}：配色探测/清洗在 Rust 侧，请用 node tools/dev/check.mjs 起真实客户端`);
+        }
+
         // 清除同样只存在于 Rust 侧
         case "palette_clear": {
           const r = args.req || {};

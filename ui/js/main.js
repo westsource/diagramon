@@ -1109,6 +1109,63 @@ window.DGM = window.DGM || {};
           ok("箭头颜色也跟着（不只是线）", toHex(marker) === edgeHex, `${toHex(marker)} 期望 ${edgeHex}`);
         }
 
+        // 新建 = 无；打开 = 按图内容探测；配色是**渲染期**的（不写正文）
+        {
+          const nd = await invoke("doc_new", { format: "mermaid" });
+          ok("新建文档默认不上色", nd && nd.scheme === "", nd ? String(nd.scheme) : "没建出来");
+          await invoke("doc_close", { id: nd.id });
+
+          // 打开一份"数据节点多、还带手写颜色"的文件 → 探测出黛蓝，且正文一个字都不改
+          // 直接写盘（`export_write` 的白名单收 .mmd），别用 doc_set_body —— 那只改内存不落盘。
+          // 路径用**命令返回的**：自己拼的字符串与后端规范化后的可能不等（拖放那条踩过）。
+          const detBody =
+            "flowchart TD\n    A[(用户库)] --> B[(订单库)]\n    B --> C[(日志库)]\n    style C fill:#f00\n";
+          const detPath = await invoke("export_write", {
+            path: wsDir + "/selftest-detect.mmd",
+            base64: encRaw(detBody),
+          });
+          // `wsDir` 可能是混合分隔符（报告路径里带 `\`），两边都得归一后再比
+          const norm = (x) => String(x || "").replace(/\\/g, "/").toLowerCase();
+          const samePath = (x) => norm(x) === norm(detPath);
+          await DGM.state.openPaths([detPath]);
+          // 读**状态里**的文档：`doc_open_paths` 的响应是打开那一刻的快照，探测是在之后做的
+          const dd = DGM.state.docs.find((x) => samePath(x.path)) || {};
+          ok("打开文件按图内容探测配色", dd.scheme === "indigo", String(dd.scheme));
+          ok("探测不写正文（文件不变脏）", String(dd.body).includes("style C fill:#f00") && !String(dd.body).includes("classDef"), "正文被改过");
+          const scan = await invoke("palette_scan", { req: { body: dd.body, format: "mermaid" } });
+          ok("体检数出手写颜色", scan.traces === 1 && scan.sig === "A,B,C", `traces=${scan.traces} sig=${scan.sig}`);
+
+          // 渲染期上色：设了色系 → 预览里有色；正文里没有；置「无」→ 颜色消失
+          // 这份图全是"数据/存储"节点（C 带手写颜色会被跳过），所以要验 **data 角色**的色
+          const fmtPal = (info.palettes.find((p) => p.id === "indigo") || {}).roles.find((r) => r.role === "data");
+          const dark = document.documentElement.dataset.theme === "dark";
+          const want = String(dark ? fmtPal.dark.fill : fmtPal.light.fill).toLowerCase();
+          const stageHas = () => {
+            const svg = document.querySelector("#canvas-stage svg");
+            return !!svg && svg.outerHTML.toLowerCase().includes(want);
+          };
+          let got = false;
+          for (let i = 0; i < 40 && !got; i++) {
+            if (DGM.preview && DGM.preview.schedule) DGM.preview.schedule();
+            await new Promise((r) => setTimeout(r, 100));
+            got = stageHas();
+          }
+          ok("设置色系后预览真的上了色", got, `等 ${want}`);
+          ok("但正文里没有 classDef（渲染期上色）", !String((DGM.state.doc(dd.id) || {}).body).includes("classDef"));
+          await DGM.state.setScheme(dd.id, "");
+          let gone = false;
+          for (let i = 0; i < 40 && !gone; i++) {
+            if (DGM.preview && DGM.preview.schedule) DGM.preview.schedule();
+            await new Promise((r) => setTimeout(r, 100));
+            gone = !stageHas();
+          }
+          ok("选「无」后预览颜色消失（正文本来就干净）", gone);
+          await invoke("doc_close", { id: dd.id });
+          try {
+            await invoke("workspace_delete", { path: detPath });
+          } catch (e) { /* 清理失败不影响断言 */ }
+        }
+
         // 恢复默认配色 + 连线开关（3.11.4）
         {
           const src = "flowchart TD\n    A([开始]) --> B[写库]\n";

@@ -769,6 +769,30 @@ pub struct PaletteApplyReq {
     pub mode: PaletteMode,
 }
 
+/// 打开文档时的配色探测结果。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct PaletteProbe {
+    /// 正文里已经烘焙了哪个色系（我们生成的块带着 id）；没有就是 `None`
+    #[serde(default)]
+    pub baked: Option<String>,
+    /// "看起来适合"哪个色系（只在没烘焙、且用户还没选过时才给）
+    #[serde(default)]
+    pub suggested: Option<String>,
+    /// 建议依据的稳定代号（data / risk / ext / ui / default），前端按它翻译
+    #[serde(default)]
+    pub why: Option<String>,
+}
+
+/// "清不干净"时的扫描结果：还剩多少处颜色痕迹 + 结构签名（校验 AI 只删颜色、没动结构）。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct PaletteScan {
+    /// 我们那块**之外**的颜色痕迹条数（手写 style / 模仿模型自己加的颜色）
+    pub traces: usize,
+    /// 结构签名（节点 id 集合 + 数量）。AI 清洗前后必须一致，否则说明它改了结构。
+    #[serde(default)]
+    pub sig: Option<String>,
+}
+
 /// 清除配色：把程序生成的那一段整块删掉（手写样式不动）。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PaletteClearReq {

@@ -413,18 +413,46 @@ window.DGM = window.DGM || {};
     return (sw && sw.stroke) || "var(--faint)";
   }
 
-  /** 选一个色系：先落选择，再按它重排正文。 */
+  /** 渲染期上色：**只为出图**把正文过一遍色系展开，正文与磁盘都不动。
+   *
+   *  为什么放在渲染期而不是写回正文：打开文件时才有资格"自动检测配色"—— 写回正文意味着
+   *  打开即弄脏、关掉就问你保存；换色系也变成纯视图操作（0 次写盘）。
+   *  需要固化给别的工具看时，菜单里有一条显式的「写入文件」。
+   *
+   *  缓存按 (body 引用, scheme, 主题, 连线开关) 判定：`d.body` 没变就是同一个字符串对象，
+   *  比较是 O(1)；敲一个字就换对象 → 自动失效。
+   */
+  let paintCache = { src: null, scheme: "", dark: false, edges: true, out: "" };
+  async function paletteBody(body, d) {
+    const scheme = state.schemeOf(d);
+    if (!scheme || !state.isTextDoc(d)) return body;
+    const dark = document.documentElement.dataset.theme === "dark";
+    const edges = !(state.settings && state.settings.palette_edges === false);
+    const c = paintCache;
+    if (c.src === body && c.scheme === scheme && c.dark === dark && c.edges === edges) return c.out;
+    try {
+      const res = await state.paint(body, d.format, scheme, "only_uncolored");
+      paintCache = { src: body, scheme, dark, edges, out: res.body };
+      return res.body;
+    } catch (e) {
+      // 上色失败**不能**挡住出图（例如序列图不支持 classDef）：原样渲染，并如实说一次
+      DGM.status(t("preview.palette.failed", { msg: (e && e.message) || String(e) }), "warn");
+      return body;
+    }
+  }
+
+  /** 选一个色系：只落选择，颜色交给渲染期展开（换色系 = 纯视图操作）。 */
   async function applyScheme(d, scheme, mode) {
     await state.setScheme(d.id, scheme);
     // setScheme 内部会 `upsertDoc`：`d` 可能是**旧对象**了，重新取一次再读 scheme，
     // 否则读到的还是改之前的值（真机上表现成"选了色系却提示已关闭"）。
     const live = state.doc(d.id) || d;
     if (!state.schemeOf(live)) {
-      DGM.status(t("preview.palette.offDone"), "");
-      schedule();
+      schedule(); // 置空 = 不上色；渲染期展开自然什么都不加
       return;
     }
-    await paintDoc(live, mode);
+    // 不写正文：预览会按新色系重新展开（「写入文件」才是显式固化动作）
+    schedule();
   }
 
   /** 按"当前生效的色系"重排正文（不动选择）。连线开关变化后也走这条。 */
@@ -483,7 +511,7 @@ window.DGM = window.DGM || {};
       });
       items.push({ sep: true });
     }
-    items.push({ label: t("preview.paletteRecolor"), icon: "palette", act: "all" });
+    items.push({ label: t("preview.paletteWrite"), icon: "save", act: "write" });
     items.push({ label: t("preview.paletteAi"), icon: "sparkles", act: "ai" });
     items.push({ sep: true });
     // 连线开关：全局偏好（设置 → 外观里也有），这里只是就近入口
@@ -502,16 +530,22 @@ window.DGM = window.DGM || {};
       try {
         if (it.v) await applyScheme(d, it.v, "only_uncolored");
         else if (it.act === "follow") await applyScheme(d, null, "only_uncolored");
-        else if (it.act === "all") {
+        else if (it.act === "write") {
+          // 把当前色系**固化进正文**：跨工具/离线分享才需要（平时颜色只是视图）
+          const live = state.doc(d.id) || d;
+          if (!state.schemeOf(live)) {
+            DGM.status(t("preview.palette.clearNothing"), "");
+            return;
+          }
           const ok = await DGM.dialogs.confirm({
-            title: t("preview.palette.recolorTitle"),
+            title: t("preview.palette.writeTitle"),
             icon: "warn",
             danger: true,
-            body: esc(t("preview.palette.recolorBody")),
-            warn: t("preview.palette.recolorWarn"),
-            ok: t("preview.palette.recolorOk"),
+            body: esc(t("preview.palette.writeBody")),
+            warn: t("preview.palette.writeWarn"),
+            ok: t("preview.palette.writeOk"),
           });
-          if (ok) await applyScheme(d, cur, "all");
+          if (ok) await paintDoc(live, "all");
         } else if (it.act === "ai") {
           await pickPaletteWithAi(d);
         } else if (it.act === "clear") {
@@ -540,11 +574,43 @@ window.DGM = window.DGM || {};
       ok: t("preview.palette.clearOk"),
     });
     if (!ok) return;
+    // ① 本地：删掉我们生成的那一段（确定性、零成本）
     const res = await state.clearPalette(live.body, live.format);
     if (res.changed) await DGM.editor.applyBody(res.body);
     await state.setScheme(live.id, "");
-    DGM.status(res.changed ? t("preview.palette.cleared") : t("preview.palette.clearNothing"), res.changed ? "ok" : "");
     schedule();
+
+    // ② 我们那块之外还有手写/外来颜色吗？有就交给模型（正则清不干净自由格式）
+    const now = (state.doc(live.id) || live).body;
+    let scan = null;
+    try {
+      scan = await state.scanPalette(now, live.format);
+    } catch (e) {
+      scan = null;
+    }
+    if (!scan || !scan.traces) {
+      DGM.status(res.changed ? t("preview.palette.cleared") : t("preview.palette.clearNothing"), res.changed ? "ok" : "");
+      return;
+    }
+    if (!state.hasModels || !state.hasModels()) {
+      // 没配模型就如实说"还剩几处"，不要假装清干净了
+      DGM.status(t("preview.palette.clearLeft", { n: scan.traces }), "warn");
+      return;
+    }
+    DGM.status(t("preview.palette.cleaning", { n: scan.traces }), "");
+    try {
+      const code = await DGM.ai.stripColors(live.id);
+      const after = await state.scanPalette(code, live.format);
+      // 结构校验：模型只许删颜色。节点集合变了就拒绝应用 —— 宁可不干净，也不改坏图。
+      if (scan.sig && after && after.sig !== scan.sig) {
+        DGM.status(t("preview.palette.clearRefused"), "err");
+        return;
+      }
+      await DGM.editor.applyBody(code);
+      DGM.status(t("preview.palette.clearAiDone", { n: after ? after.traces : 0 }), "ok");
+    } catch (e) {
+      DGM.status(t("preview.palette.clearAiFailed", { msg: (e && e.message) || String(e) }), "err");
+    }
   }
 
   /** 「连线跟随配色」：全局偏好，改完**立刻重跑**当前文档 —— 否则老图的彩线不会消失。 */
@@ -719,6 +785,9 @@ window.DGM = window.DGM || {};
       return;
     }
 
+    // 配色是渲染期选项：正文本身不动（见 paletteBody）
+    const paintBody = await paletteBody(body, d);
+
     const mine = ++renderToken;
     // 同一份文档的重渲染（敲字、换主题、切视图模式）**不清舞台**：清一次就闪一次
     // 加载占位，等于把用户的缩放与位置抹掉。只有这份文档还没挂上图时才显示占位。
@@ -729,11 +798,11 @@ window.DGM = window.DGM || {};
     try {
       let svgText;
       if (d.format === "mermaid") {
-        svgText = await renderMermaid(body, mine, d);
+        svgText = await renderMermaid(paintBody, mine, d);
       } else if (d.format === "dot") {
-        svgText = await renderDot(body, d.layout || "dot");
+        svgText = await renderDot(paintBody, d.layout || "dot");
       } else if (d.format === "d2") {
-        svgText = await renderD2(body, d.layout || "dagre");
+        svgText = await renderD2(paintBody, d.layout || "dagre");
       } else {
         throw new Error(t("preview.noRender", { msg: d.format }));
       }
