@@ -468,6 +468,45 @@ def main() -> int:
             log(f"（断言 4d 解析失败：{e}）")
             fails.append("断言 4d 拿不到结果")
 
+        # ---- 断言 4e：自动配色的控件与菜单（3.11.4）----
+        # mock 只给色系**名单**（id/名字），没有色值 —— 色值真源在 Rust。所以这里验的是
+        # "控件出现 / 菜单出得来 / 选中后文档记住 / 展开器缺失时如实报错"，不验颜色。
+        pal = ev(
+            "(async () => {"
+            "  const opts = [...document.querySelectorAll('#pv-opts .pv-opt')];"
+            "  const btn = opts.find((b) => /配色|Colors/.test(b.textContent));"
+            "  if (!btn) return JSON.stringify({ opts: opts.length, menu: 0 });"
+            "  btn.click();"
+            "  await new Promise((r) => setTimeout(r, 150));"
+            "  const rows = [...document.querySelectorAll('#pop .pop-row')];"
+            "  const picks = rows.filter((r) => r.querySelector('.pv-dot') && /松绿|Pine|青瓷|黛蓝|靛青|藕紫|橄榄|赭石|钨灰/.test(r.textContent));"
+            "  const target = picks[1] || picks[0];"
+            "  const before = (DGM.state.activeDoc() || {}).scheme;"
+            "  if (target) target.click();"
+            "  await new Promise((r) => setTimeout(r, 500));"
+            "  const doc = DGM.state.activeDoc() || {};"
+            "  return JSON.stringify({"
+            "    opts: opts.length, menu: rows.length, picks: picks.length,"
+            "    before: before === undefined ? null : before, after: doc.scheme,"
+            "    status: (DGM.state.ui.status || {}).text || '',"
+            "  });"
+            "})()"
+        )
+        log(f"自动配色控件: {pal}")
+        try:
+            r = json.loads(pal or "{}")
+            if r.get("menu", 0) < 10:
+                fails.append(f"配色菜单没出来或项太少：{r}")
+            if r.get("picks", 0) < 8:
+                fails.append(f"配色菜单应有 8 个色系：{r}")
+            if not r.get("after"):
+                fails.append(f"选中色系后文档没有记住（doc.scheme 为空）：{r}")
+            if "mock" not in str(r.get("status", "")):
+                fails.append(f"mock 下展开器缺失应如实报错，实际状态栏：{r.get('status')!r}")
+        except Exception as e:
+            log(f"（断言 4e 解析失败：{e}）")
+            fails.append("断言 4e 拿不到结果")
+
         # ---- 断言 5：标签压测 —— 标签过多时 tabbar 必须保持单行 ----
         stress = ev(
             "(async () => {"
@@ -541,6 +580,11 @@ def main() -> int:
             "    document.body.click();"
             "    await new Promise(r2 => setTimeout(r2, 0));"
             "  };"
+            # 先切到 Mermaid：只有**有可用目标**的格式才会挂菜单。DOT 只有实验方向
+            # （ok=false），点它是进转换对话框 —— 这条路径下面单独断言。
+            # 以前这里直接点，等于赌"上一条断言留下的活动文档正好是 Mermaid"。
+            "  await DGM.state.newDoc('mermaid');"
+            "  await new Promise(r2 => setTimeout(r2, 120));"
             "  await probe('tab-convert', '#tab-convert');"
             "  await probe('side-more', '#side-more');"
             "  await probe('tab-more', '#tab-more');"
@@ -548,6 +592,15 @@ def main() -> int:
             "  await probe('status-layout', '#statusbar [data-a=\"layout\"]');"
             "  const f = document.querySelector('#statusbar .st.accent');"
             "  out.statusFormat = f ? (f.tagName + (f.dataset.a ? ':entry' : ':readonly')) : 'missing';"
+            # DOT：没有可用目标 ⇒ 不该挂空菜单，而是直接进转换对话框说明原因
+            "  await DGM.state.newDoc('dot');"
+            "  await new Promise(r2 => setTimeout(r2, 120));"
+            "  document.body.click();"
+            "  const convBtn = document.querySelector('#tab-convert');"
+            "  convBtn.click();"
+            "  await new Promise(r2 => setTimeout(r2, 80));"
+            "  out.dotConvert = !document.querySelector('#overlay-dialog').hidden ? 'dialog' : 'other';"
+            "  try { DGM.dialogs.close(); } catch (e) {}"
             # 下拉次序：逐行比对「转换为 X」与 directions() 的顺序。
             # 这里**固定用 Mermaid 文档**：断言 5b 跑到这时活动文档可能是上一条
             # 断言留下的 DOT（它只有实验方向、没有可用目标），拿它比等于比空集。
@@ -581,6 +634,9 @@ def main() -> int:
                 fails.append(f"弹出锚点 {name} 点击后菜单没存活（点了没反应复现）")
         if av.get("statusFormat") != "SPAN:readonly":
             fails.append(f"状态栏格式项应只读（唯一转换入口是标签条），实际 {av.get('statusFormat')}")
+        # DOT 没有可用转换目标：点「转换为」应直接进转换对话框（不挂空菜单）
+        if av.get("dotConvert") != "dialog":
+            fails.append(f"DOT 的「转换为」应进转换对话框而不是空菜单，实际 {av.get('dotConvert')}")
         if not av.get("convOrderExpect"):
             fails.append("「转换为」下拉没有可验证的目标次序（按钮缺失或当前源没有可用目标）")
         else:

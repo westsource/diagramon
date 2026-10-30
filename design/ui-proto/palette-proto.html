@@ -1,0 +1,369 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>原型 · 自动配色的色系（AI 只写角色，色值本地落地）</title>
+<link rel="stylesheet" href="proto.css">
+<style>
+  /* —— 本页专属样式（其余全部走 proto.css 设计系统） —— */
+  body { margin: 0; padding: 28px 32px 70px; background: var(--bg); color: var(--ink); font: var(--fs-md) var(--font-ui); }
+  h1 { font-size: 18px; margin: 0 0 4px; }
+  h2 { font-size: 15px; margin: 30px 0 8px; }
+  .lede { color: var(--ink-2); margin: 0 0 16px; max-width: 1000px; line-height: 1.6; }
+  .lede b { color: var(--accent); }
+  .lede code, .notes code, td code, .ask code { font: var(--fs-xs) var(--font-mono); background: var(--surface-3); border-radius: 3px; padding: 1px 5px; }
+  .toolbar-line { display: flex; align-items: center; gap: 8px; margin: 0 0 14px; flex-wrap: wrap; }
+
+  .window { max-width: 1040px; border: 1px solid var(--border-strong); border-radius: var(--radius); background: var(--surface); box-shadow: var(--sh-2, 0 2px 8px rgba(0,0,0,.06)); position: relative; }
+  .pane-head { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-bottom: 1px solid var(--border); background: var(--surface-inset); }
+  .pane-head .lbl { font-size: var(--fs-sm); color: var(--muted); }
+  .pane-sub { font-size: var(--fs-xs); color: var(--faint); }
+  .sp { flex: 1; }
+  .canvas-viewport { height: 360px; display: flex; align-items: center; justify-content: center; background: var(--surface-inset); border-radius: 0 0 var(--radius) var(--radius); }
+  .canvas-viewport svg { width: 100%; height: 100%; }
+  .canvas-note { position: absolute; left: 14px; bottom: 10px; font-size: var(--fs-xs); color: var(--faint); }
+
+  .mini-btn { display: inline-flex; align-items: center; gap: 5px; height: 24px; padding: 0 9px; font-size: var(--fs-xs);
+              color: var(--ink-2); border: 1px solid transparent; border-radius: var(--radius-sm); background: none; cursor: pointer; }
+  .mini-btn:hover { background: var(--surface-3); }
+  .mini-btn .val { color: var(--ink); }
+  .pv-dot { width: 10px; height: 10px; border-radius: 50%; flex: 0 0 auto; box-shadow: inset 0 0 0 1px rgba(0,0,0,.12); }
+
+  .pop { position: absolute; z-index: 10; min-width: 288px; padding: 5px; background: var(--surface);
+         border: 1px solid var(--border-strong); border-radius: 8px; box-shadow: var(--sh-3, 0 14px 40px rgba(24,32,31,.16)); }
+  .pop[hidden] { display: none; }
+  .pop-row { display: flex; align-items: center; gap: 8px; padding: 5px 9px; font-size: var(--fs-sm); border-radius: var(--radius-sm); cursor: pointer; }
+  .pop-row:hover { background: var(--accent-soft); color: var(--accent); }
+  .pop-row.on { color: var(--accent); }
+  .pop-row.head { color: var(--faint); font-size: var(--fs-xs); cursor: default; pointer-events: none; letter-spacing: .4px; }
+  .pop-row.head:hover { background: none; }
+  .pop-row .kbd { margin-left: auto; font: var(--fs-xs) var(--font-mono); color: var(--faint); }
+  .pop-row .chk { margin-left: auto; color: var(--accent); }
+  .pop-sep { height: 1px; margin: 4px 2px; background: var(--border); }
+  .pop-row.hint { display: block; color: var(--faint); font-size: var(--fs-xs); line-height: 1.5; cursor: default; pointer-events: none; white-space: normal; }
+  .pop-row.hint:hover { background: none; }
+  .dots { display: inline-flex; gap: 2px; margin-left: auto; }
+
+  .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; max-width: 1040px; }
+  .card { border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); overflow: hidden; }
+  .card .hd { padding: 7px 12px; font-size: var(--fs-xs); color: var(--muted); background: var(--surface-inset); border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 6px; }
+  .card pre { margin: 0; padding: 12px 14px; font: var(--fs-xs)/1.65 var(--font-mono); color: var(--ink); overflow: auto; max-height: 280px; }
+
+  table.matrix { border-collapse: separate; border-spacing: 0; font-size: var(--fs-xs); max-width: 1040px; }
+  table.matrix th, table.matrix td { padding: 6px 7px; border-bottom: 1px solid var(--border); text-align: left; vertical-align: top; }
+  table.matrix th { color: var(--muted); font-weight: 600; }
+  .sw { display: inline-block; width: 40px; height: 20px; border-radius: 4px; font: var(--fs-xs) var(--font-mono);
+        line-height: 20px; text-align: center; border: 1px solid; }
+
+  .notes { max-width: 1040px; color: var(--ink-2); font-size: var(--fs-sm); line-height: 1.7; }
+  .notes h3 { font-size: var(--fs-md); color: var(--ink); margin: 16px 0 4px; }
+  .notes table { border-collapse: collapse; font-size: var(--fs-xs); margin: 6px 0 10px; }
+  .notes th, .notes td { border: 1px solid var(--border); padding: 4px 9px; text-align: left; vertical-align: top; }
+  .notes th { background: var(--surface-inset); color: var(--muted); font-weight: 600; }
+  .ask { max-width: 1040px; padding: 12px 16px; border: 1px solid var(--success, #3d7d72); border-radius: var(--radius); background: var(--accent-soft); color: var(--ink); font-size: var(--fs-sm); line-height: 1.7; }
+  .ask ol { margin: 6px 0 0 18px; padding: 0; }
+  .ask li { margin: 3px 0; }
+  .pending { max-width: 1040px; padding: 12px 16px; border: 1px dashed var(--border-strong); border-radius: var(--radius); color: var(--ink-2); font-size: var(--fs-sm); line-height: 1.7; }
+</style>
+</head>
+<body>
+  <h1>自动配色 · 色系原型（方案 2 + 3）</h1>
+  <p class="lede">
+    约定只有一句：<b>模型只写角色，色值由本地按色系落地</b>。理由是实测出来的 —— 同一个提示词两次生成，
+    模型给的 hex 每次不同；它看不见你的主题，暗色下常写出刺眼的浅底；五种格式的写法还各是一套。
+    所以「色系」是<b>一个种子色相 + 一条明度梯度</b>，七个角色按固定步长展开（撞上告警红就整体镜像）。
+    加一种色系 = 加一行数据，不是手抄 42 个 hex。
+    当前主题：<button class="mini-btn" id="btn-theme" title="切换明暗">🌙 暗色</button>
+  </p>
+
+  <div class="toolbar-line">
+    <span class="pane-sub">点<b>「配色」</b>换色系 —— 图、菜单、下面的代码会一起变（这就是"换色系 = 重跑一次本地展开，0 次模型调用"）。8 种色系里有一种是<b>钨灰</b>：近乎无彩，角色靠明度分，适合打印/线框。</span>
+  </div>
+
+  <div class="window" id="win">
+    <div class="pane-head">
+      <span class="lbl">预览</span>
+      <span class="pane-sub" id="sub">Mermaid · 布局 elk</span>
+      <span class="sp"></span>
+      <button class="mini-btn" title="外观模式"><span class="pv-dot" style="background:var(--accent)"></span>外观 · <span class="val">auto</span></button>
+      <button class="mini-btn" title="布局引擎"><span>布局 · <span class="val">elk</span></span></button>
+      <button class="mini-btn" id="btn-palette" title="配色色系"><span class="pv-dot" id="btn-dot"></span>配色 · <span class="val" id="btn-name">松绿</span></button>
+    </div>
+    <div class="pop" id="pop" hidden></div>
+    <div class="canvas-viewport" id="stage"></div>
+    <div class="canvas-note" id="note"></div>
+  </div>
+
+  <h2>① AI 只写角色 → 本地展开成色值</h2>
+  <div class="cols">
+    <div class="card">
+      <div class="hd">模型输出（七个角色，没有一处色值）</div>
+      <pre id="ai-out"></pre>
+    </div>
+    <div class="card">
+      <div class="hd">本地落地（确定性展开，随色系/主题变）</div>
+      <pre id="local-out"></pre>
+    </div>
+  </div>
+
+  <h2>② 色系 × 角色（当前主题的色阶；色块里是填充，下面一行是描边）</h2>
+  <table class="matrix" id="matrix"></table>
+
+  <div class="notes">
+    <h3>数据模型（已定）</h3>
+    <table>
+      <tr><th>概念</th><th>取值</th><th>存在哪</th><th>为什么</th></tr>
+      <tr><td>色系 <code>palette</code></td><td>pine / celadon / indigo / azure / lotus / olive / ochre / tungsten</td><td><code>app-core::palette</code>（真源）→ <code>app_info.palettes</code></td><td>与格式注册表同一套规矩：前端不抄第二份</td></tr>
+      <tr><td>角色 <code>role</code></td><td>main / entry / decide / <b>data</b> / ext / risk / note</td><td>文档里的类名 <code>lvl-*</code></td><td>短、不会跟用户自己的 class 撞</td></tr>
+      <tr><td>色相</td><td>种子 + 35° 步长；撞告警红（6°）整体镜像；<code>ext</code> 选空槽</td><td>代码里的 <code>ladder()</code></td><td>六个彩色角色必须两两 ≥ 32°，否则"异常"和"主链路"分不出来</td></tr>
+      <tr><td>色阶</td><td>亮：fill 94% / stroke 50% / text 22%；暗：22 / 60 / 90；钨灰改按描边明度分角色</td><td>代码里的常量</td><td>对比度由梯度保证，而不是靠肉眼挑</td></tr>
+      <tr><td>全局默认</td><td><code>settings.diagram_palette</code>（默认 <code>pine</code>，<code>""</code> = 关）</td><td>settings.json</td><td>AI 应用代码时的默认色系</td></tr>
+      <tr><td>文档选择</td><td><code>doc.scheme</code>（<code>null</code> = 跟随默认，<code>""</code> = 这份不上色）</td><td><code>render-opts.json</code>（与 look / layout 同一套）</td><td>按文件记住，重开还原</td></tr>
+    </table>
+
+    <h3>与 AI 的协作（三个触点）</h3>
+    <table>
+      <tr><th>触点</th><th>做什么</th><th>代价</th></tr>
+      <tr><td>提示词</td><td>注入「配色只写角色」+ 每种格式可照抄的例子；当前色系名也告诉它</td><td>每次请求多约 140 字</td></tr>
+      <tr><td>工具 <code>color_scheme</code></td><td>只读：列出可用色系与角色。模型想建议换色系时查它，<b>不给"应用"权限</b></td><td>按需一步</td></tr>
+      <tr><td>菜单「让 AI 挑」</td><td>一次短调用，只回 <code>{palette, why}</code>；用户点应用后本地展开</td><td>一次小请求，失败如实报</td></tr>
+    </table>
+
+    <h3>已知边界（不假装支持）</h3>
+    ① drawio / Excalidraw 没有稳定的节点角色 → 直接拒绝，按钮在这两种格式上整组隐藏；<br>
+    ② Mermaid 只有 flowchart 能这么上色（序列图/状态图没有 classDef）→ 报明确错误，不静默失败；<br>
+    ③ 色值落进文档后<b>不跟随主题</b>（classDef 里放不了 CSS 变量）→ 按"应用时的主题"选色阶，换主题要再点一次；<br>
+    ④ 「整篇重排」会删掉节点上手写的 <code>style</code>（否则它优先级更高、等于没重排）→ 先确认，且默认只做「仅未着色」；<br>
+    ⑤ 色相有硬约束：告警红固定在 6°，其余角色 ≤ 32° 就会分不清 → 梯度自己挑方向/槽位。单测钉着，加色系时先跑它。
+  </div>
+
+  <h2>③ 本轮已定 / 待实现</h2>
+  <div class="ask">
+    <b>已确认：</b>
+    <ol>
+      <li>八种色系：松绿 / 青瓷 / 黛蓝 / 靛青 / 藕紫 / 橄榄 / 赭石 / 钨灰。</li>
+      <li>默认开（松绿），菜单最后一项可关；按文档记住。</li>
+      <li>「整篇重排」要做，但要二次确认；默认只给未着色的节点上色。</li>
+      <li>角色七个：主链路 / 入口 / 判断 / <b>数据</b> / 外部 / 异常 / 说明。</li>
+    </ol>
+  </div>
+  <div class="pending" style="margin-top:10px">
+    <b>已实现（本轮）：</b>Rust 侧色系注册表 / 三格式确定性展开（幂等）/ <code>palette_apply</code> ·
+    <code>doc_set_scheme</code> 命令 / <code>Doc.scheme</code> · <code>DocOpts.scheme</code>（按文件记住）/
+    <code>AppInfo.palettes</code>；前端预览顶栏第三颗按钮 + 菜单（含「整篇重排」二次确认与「让 AI 挑」）、
+    设置里的默认色系、AI 应用时自动展开；提示词注入 + 只读工具 <code>color_scheme</code>。<br>
+    <b>还剩：</b>真机自检复跑、发版。
+  </div>
+
+<script>
+/* 色值表：由 crates/app-core/src/palette.rs 直接导出（`cargo run --example palette_dump`），与实现逐字节一致。 */
+const TABLE = {"pine":{"zh":"松绿","en":"Pine","roles":{"main":{"light":{"fill":"#ecf3f2","stroke":"#4ab5a0","text":"#224e46"},"dark":{"fill":"#2b4540","stroke":"#6ec4b3","text":"#e0ebe9"}},"entry":{"light":{"fill":"#ecf1f3","stroke":"#4a8cb5","text":"#223d4e"},"dark":{"fill":"#2b3b45","stroke":"#6ea3c4","text":"#e0e7eb"}},"decide":{"light":{"fill":"#ececf3","stroke":"#4a4eb5","text":"#22234e"},"dark":{"fill":"#2b2c45","stroke":"#6e71c4","text":"#e0e1eb"}},"data":{"light":{"fill":"#f0ecf3","stroke":"#854ab5","text":"#3a224e"},"dark":{"fill":"#392b45","stroke":"#9d6ec4","text":"#e6e0eb"}},"ext":{"light":{"fill":"#ecf3ed","stroke":"#4ab54f","text":"#224e24"},"dark":{"fill":"#2b452c","stroke":"#6ec472","text":"#e0ebe1"}},"risk":{"light":{"fill":"#f5eceb","stroke":"#c94436","text":"#571f19"},"dark":{"fill":"#4a2a26","stroke":"#d46a5e","text":"#ede0de"}},"note":{"light":{"fill":"#eff0f0","stroke":"#788784","text":"#353b3a"},"dark":{"fill":"#363a39","stroke":"#939f9d","text":"#e5e6e6"}}}},"celadon":{"zh":"青瓷","en":"Celadon","roles":{"main":{"light":{"fill":"#edf1f2","stroke":"#5996a6","text":"#284248"},"dark":{"fill":"#2f3e41","stroke":"#7aabb8","text":"#e2e8e9"}},"entry":{"light":{"fill":"#edeef2","stroke":"#596aa6","text":"#282f48"},"dark":{"fill":"#2f3341","stroke":"#7a88b8","text":"#e2e3e9"}},"decide":{"light":{"fill":"#efedf2","stroke":"#7559a6","text":"#342848"},"dark":{"fill":"#362f41","stroke":"#917ab8","text":"#e4e2e9"}},"data":{"light":{"fill":"#f2edf2","stroke":"#a259a6","text":"#462848"},"dark":{"fill":"#402f41","stroke":"#b57ab8","text":"#e9e2e9"}},"ext":{"light":{"fill":"#edf2ef","stroke":"#59a67c","text":"#284837"},"dark":{"fill":"#2f4137","stroke":"#7ab896","text":"#e2e9e5"}},"risk":{"light":{"fill":"#f5eceb","stroke":"#c94436","text":"#571f19"},"dark":{"fill":"#4a2a26","stroke":"#d46a5e","text":"#ede0de"}},"note":{"light":{"fill":"#eff0f0","stroke":"#788487","text":"#353a3b"},"dark":{"fill":"#36393a","stroke":"#939d9f","text":"#e5e6e6"}}}},"indigo":{"zh":"黛蓝","en":"Indigo","roles":{"main":{"light":{"fill":"#ecf0f3","stroke":"#4d80b3","text":"#23384d"},"dark":{"fill":"#2c3844","stroke":"#7099c2","text":"#e0e6eb"}},"entry":{"light":{"fill":"#edecf3","stroke":"#554db3","text":"#26234d"},"dark":{"fill":"#2e2c44","stroke":"#7770c2","text":"#e1e0eb"}},"decide":{"light":{"fill":"#f1ecf3","stroke":"#914db3","text":"#3f234d"},"dark":{"fill":"#3c2c44","stroke":"#a770c2","text":"#e7e0eb"}},"data":{"light":{"fill":"#f3ecf1","stroke":"#b34d99","text":"#4d2343"},"dark":{"fill":"#442c3e","stroke":"#c270ad","text":"#ebe0e8"}},"ext":{"light":{"fill":"#ecf3f1","stroke":"#4db399","text":"#234d43"},"dark":{"fill":"#2c443e","stroke":"#70c2ad","text":"#e0ebe8"}},"risk":{"light":{"fill":"#f5eceb","stroke":"#c94436","text":"#571f19"},"dark":{"fill":"#4a2a26","stroke":"#d46a5e","text":"#ede0de"}},"note":{"light":{"fill":"#eff0f0","stroke":"#788087","text":"#35383b"},"dark":{"fill":"#36383a","stroke":"#93999f","text":"#e5e6e6"}}}},"azure":{"zh":"靛青","en":"Azure","roles":{"main":{"light":{"fill":"#ededf3","stroke":"#5255ad","text":"#25264b"},"dark":{"fill":"#2d2e43","stroke":"#7477be","text":"#e1e1ea"}},"entry":{"light":{"fill":"#edf0f3","stroke":"#528aad","text":"#253d4b"},"dark":{"fill":"#2d3b43","stroke":"#74a2be","text":"#e1e7ea"}},"decide":{"light":{"fill":"#edf3f2","stroke":"#52ad9b","text":"#254b44"},"dark":{"fill":"#2d433f","stroke":"#74beaf","text":"#e1eae8"}},"data":{"light":{"fill":"#edf3ee","stroke":"#52ad65","text":"#254b2d"},"dark":{"fill":"#2d4332","stroke":"#74be84","text":"#e1eae3"}},"ext":{"light":{"fill":"#f3f2ed","stroke":"#ada352","text":"#4b4725"},"dark":{"fill":"#43412d","stroke":"#beb574","text":"#eae9e1"}},"risk":{"light":{"fill":"#f5eceb","stroke":"#c94436","text":"#571f19"},"dark":{"fill":"#4a2a26","stroke":"#d46a5e","text":"#ede0de"}},"note":{"light":{"fill":"#efeff0","stroke":"#787887","text":"#35353b"},"dark":{"fill":"#36363a","stroke":"#93939f","text":"#e5e5e6"}}}},"lotus":{"zh":"藕紫","en":"Lotus","roles":{"main":{"light":{"fill":"#efedf3","stroke":"#6e54ab","text":"#31264a"},"dark":{"fill":"#342e43","stroke":"#8b76bc","text":"#e4e1ea"}},"entry":{"light":{"fill":"#edeef3","stroke":"#546dab","text":"#26304a"},"dark":{"fill":"#2e3443","stroke":"#768abc","text":"#e1e4ea"}},"decide":{"light":{"fill":"#edf2f3","stroke":"#549fab","text":"#26454a"},"dark":{"fill":"#2e4043","stroke":"#76b2bc","text":"#e1e9ea"}},"data":{"light":{"fill":"#edf3f0","stroke":"#54ab84","text":"#264a3a"},"dark":{"fill":"#2e4339","stroke":"#76bc9c","text":"#e1eae6"}},"ext":{"light":{"fill":"#f3f0ed","stroke":"#ab8b54","text":"#4a3d26"},"dark":{"fill":"#433b2e","stroke":"#bca276","text":"#eae7e1"}},"risk":{"light":{"fill":"#f5eceb","stroke":"#c94436","text":"#571f19"},"dark":{"fill":"#4a2a26","stroke":"#d46a5e","text":"#ede0de"}},"note":{"light":{"fill":"#efeff0","stroke":"#7c7887","text":"#37353b"},"dark":{"fill":"#37363a","stroke":"#97939f","text":"#e5e5e6"}}}},"olive":{"zh":"橄榄","en":"Olive","roles":{"main":{"light":{"fill":"#eff3ec","stroke":"#77b34d","text":"#354d23"},"dark":{"fill":"#36442c","stroke":"#92c270","text":"#e5ebe0"}},"entry":{"light":{"fill":"#ecf3ed","stroke":"#4db35d","text":"#234d2a"},"dark":{"fill":"#2c4430","stroke":"#70c27e","text":"#e0ebe2"}},"decide":{"light":{"fill":"#ecf3f1","stroke":"#4db399","text":"#234d43"},"dark":{"fill":"#2c443e","stroke":"#70c2ad","text":"#e0ebe8"}},"data":{"light":{"fill":"#ecf1f3","stroke":"#4d90b3","text":"#233f4d"},"dark":{"fill":"#2c3c44","stroke":"#70a7c2","text":"#e0e7eb"}},"ext":{"light":{"fill":"#f3f2ec","stroke":"#b3a24d","text":"#4d4623"},"dark":{"fill":"#44402c","stroke":"#c2b470","text":"#ebe9e0"}},"risk":{"light":{"fill":"#f5eceb","stroke":"#c94436","text":"#571f19"},"dark":{"fill":"#4a2a26","stroke":"#d46a5e","text":"#ede0de"}},"note":{"light":{"fill":"#f0f0ef","stroke":"#7e8778","text":"#383b35"},"dark":{"fill":"#383a36","stroke":"#989f93","text":"#e5e6e5"}}}},"ochre":{"zh":"赭石","en":"Ochre","roles":{"main":{"light":{"fill":"#f4f1ec","stroke":"#bd9842","text":"#52421f"},"dark":{"fill":"#473e29","stroke":"#caad68","text":"#ece8df"}},"entry":{"light":{"fill":"#f1f4ec","stroke":"#9abd42","text":"#43521f"},"dark":{"fill":"#3f4729","stroke":"#aeca68","text":"#e8ecdf"}},"decide":{"light":{"fill":"#edf4ec","stroke":"#53bd42","text":"#25521f"},"dark":{"fill":"#2d4729","stroke":"#75ca68","text":"#e1ecdf"}},"data":{"light":{"fill":"#ecf4ef","stroke":"#42bd79","text":"#1f5236"},"dark":{"fill":"#294737","stroke":"#68ca94","text":"#dfece5"}},"ext":{"light":{"fill":"#ecf3f4","stroke":"#42b9bd","text":"#1f5052"},"dark":{"fill":"#294647","stroke":"#68c7ca","text":"#dfebec"}},"risk":{"light":{"fill":"#f5eceb","stroke":"#c94436","text":"#571f19"},"dark":{"fill":"#4a2a26","stroke":"#d46a5e","text":"#ede0de"}},"note":{"light":{"fill":"#f0f0ef","stroke":"#878378","text":"#3b3935"},"dark":{"fill":"#3a3936","stroke":"#9f9b93","text":"#e6e6e5"}}}},"tungsten":{"zh":"钨灰","en":"Tungsten","roles":{"main":{"light":{"fill":"#f2f2f3","stroke":"#6e737c","text":"#323334"},"dark":{"fill":"#36383a","stroke":"#989da4","text":"#e5e5e6"}},"entry":{"light":{"fill":"#f2f2f3","stroke":"#5b5f67","text":"#323334"},"dark":{"fill":"#36383a","stroke":"#838891","text":"#e5e5e6"}},"decide":{"light":{"fill":"#f2f2f3","stroke":"#484b51","text":"#323334"},"dark":{"fill":"#36383a","stroke":"#6e737c","text":"#e5e5e6"}},"data":{"light":{"fill":"#f2f2f3","stroke":"#858a93","text":"#323334"},"dark":{"fill":"#36383a","stroke":"#b1b4b9","text":"#e5e5e6"}},"ext":{"light":{"fill":"#f2f2f3","stroke":"#9ea2a9","text":"#323334"},"dark":{"fill":"#36383a","stroke":"#c9cbcf","text":"#e5e5e6"}},"risk":{"light":{"fill":"#f5eceb","stroke":"#c94436","text":"#571f19"},"dark":{"fill":"#4a2a26","stroke":"#d46a5e","text":"#ede0de"}},"note":{"light":{"fill":"#f2f2f3","stroke":"#b6b9be","text":"#323334"},"dark":{"fill":"#36383a","stroke":"#dfe0e2","text":"#e5e5e6"}}}}};
+
+const ROLES = ["main", "entry", "decide", "data", "ext", "risk", "note"];
+const ROLE_ZH = { main: "主链路", entry: "入口", decide: "判断", data: "数据", ext: "外部", risk: "异常", note: "说明" };
+const ORDER = ["pine", "celadon", "indigo", "azure", "lotus", "olive", "ochre", "tungsten"];
+
+const ui = { palette: "pine", dark: false };
+
+/* 图：七个角色各一个节点（原型不追求自动布局，位置写死） */
+const NODES = [
+  { id: "A", role: "entry",  kind: "stadium",  x: 24,  y: 152, w: 112, h: 46, label: "开始" },
+  { id: "C", role: "decide", kind: "diamond",  x: 176, y: 130, w: 150, h: 86, label: "是否通过?" },
+  { id: "E", role: "ext",    kind: "box",      x: 372, y: 44,  w: 138, h: 46, label: "外部网关" },
+  { id: "F", role: "risk",   kind: "box",      x: 570, y: 44,  w: 150, h: 46, label: "支付失败" },
+  { id: "D", role: "data",   kind: "cylinder", x: 372, y: 246, w: 138, h: 58, label: "用户库" },
+  { id: "H", role: "main",   kind: "box",      x: 570, y: 250, w: 150, h: 46, label: "写日志" },
+  { id: "G", role: "note",   kind: "box",      x: 570, y: 146, w: 150, h: 42, label: "重试 3 次" },
+];
+const EDGES = [
+  { from: "A", to: "C", fs: "right", ts: "left", label: "" },
+  { from: "C", to: "E", fs: "right", ts: "left", label: "否" },
+  { from: "C", to: "D", fs: "bottom", ts: "top", label: "是" },
+  { from: "E", to: "F", fs: "right", ts: "left", label: "超时" },
+  { from: "D", to: "H", fs: "right", ts: "left", label: "" },
+  { from: "F", to: "G", fs: "bottom", ts: "top", label: "" },
+];
+
+const $ = (s, r) => (r || document).querySelector(s);
+const colorsFor = (role) => (ui.palette ? TABLE[ui.palette].roles[role][ui.dark ? "dark" : "light"] : null);
+
+function nodeOf(id) { return NODES.find((n) => n.id === id); }
+
+function anchor(n, side) {
+  if (n.kind === "diamond") {
+    const cx = n.x + n.w / 2, cy = n.y + n.h / 2;
+    return side === "left" ? [cx - n.w / 2, cy]
+      : side === "right" ? [cx + n.w / 2, cy]
+      : [cx, side === "top" ? n.y : n.y + n.h];
+  }
+  return side === "left" ? [n.x, n.y + n.h / 2]
+    : side === "right" ? [n.x + n.w, n.y + n.h / 2]
+    : side === "top" ? [n.x + n.w / 2, n.y]
+    : [n.x + n.w / 2, n.y + n.h];
+}
+
+function shapeOf(n, fill, stroke) {
+  const common = `fill="${fill}" stroke="${stroke}" stroke-width="1.6"`;
+  if (n.kind === "diamond") {
+    return `<polygon points="${n.x + n.w / 2},${n.y} ${n.x + n.w},${n.y + n.h / 2} ${n.x + n.w / 2},${n.y + n.h} ${n.x},${n.y + n.h / 2}" ${common}/>`;
+  }
+  if (n.kind === "cylinder") {
+    const ry = 9, cx = n.x + n.w / 2;
+    return `<path d="M${n.x},${n.y + ry} A ${n.w / 2},${ry} 0 0 1 ${n.x + n.w},${n.y + ry} L ${n.x + n.w},${n.y + n.h - ry} A ${n.w / 2},${ry} 0 0 0 ${n.x},${n.y + n.h - ry} Z" ${common}/>`
+      + `<ellipse cx="${cx}" cy="${n.y + ry}" rx="${n.w / 2}" ry="${ry}" fill="none" stroke="${stroke}" stroke-width="1.4"/>`;
+  }
+  return `<rect x="${n.x}" y="${n.y}" width="${n.w}" height="${n.h}" rx="${n.kind === "stadium" ? n.h / 2 : 8}" ${common}/>`;
+}
+
+function draw() {
+  const muted = ui.dark ? "#6b7574" : "#9aa5ae";
+  const es = EDGES.map((e) => {
+    const a = nodeOf(e.from), b = nodeOf(e.to);
+    const [x1, y1] = anchor(a, e.fs);
+    const [x2, y2] = anchor(b, e.ts);
+    const vertical = e.fs === "bottom" || e.ts === "top";
+    const c1 = vertical ? [x1, (y1 + y2) / 2] : [(x1 + x2) / 2, y1];
+    const c2 = vertical ? [x2, (y1 + y2) / 2] : [(x1 + x2) / 2, y2];
+    const label = e.label
+      ? `<text x="${vertical ? x1 + 8 : (x1 + x2) / 2}" y="${vertical ? (y1 + y2) / 2 : (y1 + y2) / 2 - 5}" font-size="11" fill="${muted}" text-anchor="middle">${e.label}</text>`
+      : "";
+    return `<path d="M${x1},${y1} C${c1[0]},${c1[1]} ${c2[0]},${c2[1]} ${x2},${y2}" fill="none" stroke="${muted}" stroke-width="1.4"/>`
+      + `<path d="M${x2},${y2} l-7,-3.5 l0,7 z" fill="${muted}"/>` + label;
+  }).join("");
+
+  const ns = NODES.map((n) => {
+    const c = colorsFor(n.role);
+    const fill = c ? c.fill : (ui.dark ? "#23282c" : "#eef0f1");
+    const stroke = c ? c.stroke : (ui.dark ? "#5d6766" : "#b6bebd");
+    const text = c ? c.text : (ui.dark ? "#d8dedd" : "#3b4443");
+    return `<g><title>${n.id} · lvl-${n.role}</title>${shapeOf(n, fill, stroke)}`
+      + `<text x="${n.x + n.w / 2}" y="${n.y + n.h / 2 + (n.kind === "cylinder" ? 10 : 4)}" font-size="13" fill="${text}" text-anchor="middle" font-family="system-ui,sans-serif">${n.label}</text></g>`;
+  }).join("");
+
+  $("#stage").innerHTML = `<svg viewBox="0 0 760 340" xmlns="http://www.w3.org/2000/svg">${es}${ns}</svg>`;
+  $("#note").textContent = ui.palette
+    ? `配色 · ${TABLE[ui.palette].zh}（${ui.dark ? "暗色阶" : "亮色阶"}）· 节点上的类名是 lvl-*，色值由应用展开`
+    : "配色 · 关闭：节点不着色，只有形状与文字（= 关掉自动配色的样子）";
+}
+
+function aiSnippet() {
+  return [
+    "flowchart TD",
+    "    A([开始]):::lvl-entry --> C{是否通过?}:::lvl-decide",
+    "    C -- 是 --> D[(用户库)]:::lvl-data",
+    "    C -- 否 --> E[外部网关]:::lvl-ext",
+    "    E --> F[支付失败]:::lvl-risk",
+    "    F --> G[重试 3 次]:::lvl-note",
+    "    D --> H[写日志]",
+  ].join("\n");
+}
+
+function localSnippet() {
+  if (!ui.palette) return "%% 配色关闭：不追加任何 classDef（模型写的 lvl-* 类名保留，但没有人给它上色）";
+  const rows = ROLES.map((r) => {
+    const c = TABLE[ui.palette].roles[r][ui.dark ? "dark" : "light"];
+    return `classDef lvl-${r} fill:${c.fill},stroke:${c.stroke},color:${c.text}`;
+  });
+  const groups = { "lvl-entry": ["A"], "lvl-decide": ["C"], "lvl-data": ["D"], "lvl-ext": ["E"], "lvl-risk": ["F"], "lvl-note": ["G"], "lvl-main": ["H"] };
+  const cls = Object.entries(groups).map(([k, ids]) => `class ${ids.join(",")} ${k}`);
+  return [
+    "%% dgm-palette:begin（Diagramon 自动配色 · " + TABLE[ui.palette].zh + " · " + (ui.dark ? "暗色" : "亮色") + "）",
+    ...rows,
+    ...cls,
+    "%% dgm-palette:end",
+  ].join("\n");
+}
+
+function renderCode() {
+  $("#ai-out").textContent = aiSnippet();
+  $("#local-out").textContent = localSnippet();
+}
+
+function renderBtn() {
+  $("#btn-name").textContent = ui.palette ? TABLE[ui.palette].zh : "关闭";
+  const c = ui.palette ? TABLE[ui.palette].roles.main[ui.dark ? "dark" : "light"] : null;
+  $("#btn-dot").style.background = c ? c.stroke : "var(--faint)";
+}
+
+function renderMatrix() {
+  const key = ui.dark ? "dark" : "light";
+  const head = "<tr><th>色系</th>" + ROLES.map((r) => `<th>${ROLE_ZH[r]}<br><span style="font-family:var(--font-mono)">lvl-${r}</span></th>`).join("") + "</tr>";
+  const rows = ORDER.map((id) => {
+    const p = TABLE[id];
+    const cells = ROLES.map((r) => {
+      const c = p.roles[r][key];
+      return `<td><span class="sw" style="background:${c.fill};border-color:${c.stroke};color:${c.text}">${c.fill.slice(1)}</span>`
+        + `<br><span style="font-family:var(--font-mono);color:var(--faint)">${c.stroke}</span></td>`;
+    }).join("");
+    return `<tr><td><b>${p.zh}</b><br><span style="color:var(--faint)">${p.en}</span></td>${cells}</tr>`;
+  }).join("");
+  $("#matrix").innerHTML = head + rows;
+}
+
+function renderAll() {
+  draw();
+  renderCode();
+  renderBtn();
+  renderMatrix();
+  $("#sub").textContent = "Mermaid · 布局 elk · 配色 " + (ui.palette ? TABLE[ui.palette].zh : "关闭");
+}
+
+function openPop() {
+  const pop = $("#pop");
+  const key = ui.dark ? "dark" : "light";
+  const items = ORDER.map((id) => {
+    const p = TABLE[id];
+    const dots = ROLES.map((r) => `<i class="pv-dot" style="background:${p.roles[r][key].stroke}"></i>`).join("");
+    return `<div class="pop-row ${ui.palette === id ? "on" : ""}" data-p="${id}">
+      <span class="pv-dot" style="background:${p.roles.main[key].stroke}"></span>
+      <span>${p.zh}</span><span style="color:var(--faint);font-size:var(--fs-xs)">${p.en}</span>
+      <span class="dots">${dots}</span>${ui.palette === id ? '<span class="chk">✓</span>' : ""}</div>`;
+  }).join("");
+  pop.innerHTML =
+    `<div class="pop-row head">配色色系（本文档）</div>` + items +
+    `<div class="pop-row ${!ui.palette ? "on" : ""}" data-p=""><span class="pv-dot" style="background:var(--faint)"></span><span>关闭（不上自动色）</span>${!ui.palette ? '<span class="chk">✓</span>' : ""}</div>` +
+    `<div class="pop-sep"></div>` +
+    `<div class="pop-row" data-mode="all"><span>整篇重排（覆盖手选颜色）</span><span class="kbd">会先确认</span></div>` +
+    `<div class="pop-row" data-ai="1"><span>让 AI 挑一个…</span><span class="kbd">1 次请求</span></div>` +
+    `<div class="pop-sep"></div>` +
+    `<div class="pop-row hint">默认只给<b>还没上色</b>的节点上色；「整篇重排」会删掉节点上手写的 style（否则它优先级更高，等于没重排）。画布型格式没有这一组。</div>`;
+  const r = $("#btn-palette").getBoundingClientRect();
+  const wr = $("#win").getBoundingClientRect();
+  pop.style.left = Math.max(8, Math.min(r.left - wr.left, wr.width - 310)) + "px";
+  pop.style.top = r.bottom - wr.top + 4 + "px";
+  pop.hidden = false;
+
+  pop.querySelectorAll("[data-p]").forEach((row) => {
+    row.onclick = () => { ui.palette = row.dataset.p; pop.hidden = true; renderAll(); };
+  });
+  const all = pop.querySelector('[data-mode="all"]');
+  if (all) all.onclick = () => {
+    pop.hidden = true;
+    const ok = window.confirm("整篇重排会覆盖这个文档里手选的节点颜色（并删掉手写的 style 语句）。继续？");
+    if (ok) renderAll();
+  };
+  const ai = pop.querySelector("[data-ai]");
+  if (ai) ai.onclick = () => {
+    pop.hidden = true;
+    ui.palette = ui.palette === "indigo" ? "ochre" : "indigo";
+    renderAll();
+    $("#note").textContent = `AI 挑的是「${TABLE[ui.palette].zh}」：这张图的主链路偏"写入/失败重试"，冷色做主链路、暖色留给异常，读起来更顺。点「配色」可以改回。`;
+  };
+}
+
+$("#btn-palette").onclick = (e) => { e.stopPropagation(); openPop(); };
+document.addEventListener("click", (e) => {
+  if (!e.target.closest("#pop") && !e.target.closest("#btn-palette")) $("#pop").hidden = true;
+});
+$("#btn-theme").onclick = () => {
+  ui.dark = !ui.dark;
+  document.documentElement.dataset.theme = ui.dark ? "dark" : "light";
+  $("#btn-theme").textContent = ui.dark ? "☀️ 亮色" : "🌙 暗色";
+  renderAll();
+};
+
+renderAll();
+</script>
+</body>
+</html>

@@ -1288,6 +1288,8 @@ button.st:hover { background: var(--surface-3); }
 .pop-row .ico { color: var(--muted); }
 .pop-row:hover .ico { color: var(--accent); }
 .pop-row .lbl { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* 色系菜单里的圆点：颜色是**文档内容**（来自色系表），所以走内联 background，不用 CSS 变量 */
+.pv-dot { width: 10px; height: 10px; border-radius: 50%; flex: 0 0 auto; box-shadow: inset 0 0 0 1px rgba(0,0,0,.12); }
 .pop-row .kbd { font: var(--fs-xs) var(--font-mono); color: var(--faint); }
 .pop-row.on .lbl { color: var(--accent); font-weight: 500; }
 .pop-row.check::before { content: ""; width: 12px; height: 12px; flex: 0 0 auto; }

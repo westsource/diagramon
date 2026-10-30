@@ -148,6 +148,7 @@ impl Session {
             caret_col: 1,
             layout: document::default_layout(format),
             look: None,
+            scheme: None,
         };
         let id = doc.id.clone();
         self.entries.push(Entry::born_dirty(doc));
@@ -222,6 +223,27 @@ impl Session {
         }
     }
 
+    /// 自动配色的色系：`None` = 跟随设置里的默认，`Some("")` = 这份文档明确不上自动色。
+    ///
+    /// 画布型（drawio / Excalidraw）**拒绝**：那边没有稳定的节点角色，存了也用不上 ——
+    /// 与 `set_layout` 的"拒绝而不是静默改写"同一套约定。
+    pub fn set_scheme(&mut self, id: &str, scheme: Option<String>) -> bool {
+        match self.entry_mut(id) {
+            Some(e) if format::info(e.doc.format).surface == app_ipc::Surface::Text => match &scheme {
+                None => {
+                    e.doc.scheme = None;
+                    true
+                }
+                Some(v) if v.is_empty() || crate::palette::is_known(v) => {
+                    e.doc.scheme = Some(v.clone());
+                    true
+                }
+                Some(_) => false,
+            },
+            _ => false,
+        }
+    }
+
     /// 把「按文件记着的渲染选项」恢复进这份文档（打开文件时调）。
     ///
     /// 合法性由 `set_layout` / `set_look` 里的注册表校验把关：不认识的值一律不写进文档
@@ -234,13 +256,20 @@ impl Session {
         if let Some(l) = opts.look.clone() {
             applied |= self.set_look(id, l);
         }
+        if let Some(s) = opts.scheme.clone() {
+            applied |= self.set_scheme(id, Some(s));
+        }
         applied
     }
 
     /// 这份文档此刻的渲染选项（要按路径记下来时读它）。
     pub fn render_opts(&self, id: &str) -> Option<crate::render_opts::DocOpts> {
         let d = self.get(id)?;
-        Some(crate::render_opts::DocOpts { look: d.look.clone(), layout: d.layout.clone() })
+        Some(crate::render_opts::DocOpts {
+            look: d.look.clone(),
+            layout: d.layout.clone(),
+            scheme: d.scheme.clone(),
+        })
     }
 
     /// 落盘成功后的收口（路径重定向 + 脏标记清除）。
@@ -444,10 +473,10 @@ mod tests {
         let (opened, _) = s.open_paths(&[p.to_string_lossy().to_string()]);
         let id = opened[0].clone();
         assert_eq!(s.get(&id).unwrap().layout.as_deref(), Some("elk"), "刚打开是注册表默认");
-        assert_eq!(s.render_opts(&id), Some(crate::render_opts::DocOpts { look: None, layout: Some("elk".into()) }));
+        assert_eq!(s.render_opts(&id), Some(crate::render_opts::DocOpts { layout: Some("elk".into()), ..Default::default() }));
 
         let remembered =
-            crate::render_opts::DocOpts { look: Some("handDrawn".into()), layout: Some("dagre".into()) };
+            crate::render_opts::DocOpts { look: Some("handDrawn".into()), layout: Some("dagre".into()), ..Default::default() };
         assert!(s.restore_render_opts(&id, &remembered), "两项都合法，应被接受");
         let d = s.get(&id).unwrap();
         assert_eq!(d.look.as_deref(), Some("handDrawn"));
@@ -455,7 +484,7 @@ mod tests {
         assert_eq!(s.render_opts(&id), Some(remembered.clone()));
 
         // 磁盘上被手改过的值：不进文档（注册表是唯一真源），现值保持不变
-        let bad = crate::render_opts::DocOpts { look: Some("sketch".into()), layout: Some("neato".into()) };
+        let bad = crate::render_opts::DocOpts { look: Some("sketch".into()), layout: Some("neato".into()), ..Default::default() };
         assert!(!s.restore_render_opts(&id, &bad));
         let d = s.get(&id).unwrap();
         assert_eq!(d.look.as_deref(), Some("handDrawn"));

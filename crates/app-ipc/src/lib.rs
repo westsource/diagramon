@@ -122,6 +122,10 @@ pub struct Doc {
     /// 与 `layout` 同样按文件路径记住（`render-opts.json`）。
     #[serde(default)]
     pub look: Option<String>,
+    /// 这份文档的配色色系（`None` = 跟随设置里的默认；`Some("")` = 这份文档不上自动色）。
+    /// 与 `look` / `layout` 同一套：按文件记住，下次打开恢复。
+    #[serde(default)]
+    pub scheme: Option<String>,
 }
 
 /// 会话：打开的文档与当前活动文档。
@@ -431,6 +435,9 @@ pub struct Settings {
     pub cloud: CloudPrefs,
     /// Mermaid 渲染偏好（目前只有默认外观；布局走文档级 d.layout）
     pub mermaid: MermaidPrefs,
+    /// 自动配色的**默认色系**（`""` = 关闭自动上色；文档级选择永远优先）。
+    /// 真源在 `app_core::palette`，这里只存 id。
+    pub diagram_palette: String,
     /// 资源管理器（工作区树）的视图偏好
     pub explorer: ExplorerPrefs,
     pub recent: Vec<RecentEntry>,
@@ -479,6 +486,8 @@ impl Default for Settings {
             ai: AiPrefs::default(),
             cloud: CloudPrefs::default(),
             mermaid: MermaidPrefs::default(),
+            // 默认开：模型只管角色、色值由应用按色系落地 —— 用户随时可在预览顶栏换成别的或关掉
+            diagram_palette: "pine".into(),
             explorer: ExplorerPrefs::default(),
             recent: Vec::new(),
         }
@@ -687,7 +696,7 @@ pub struct Limits {
     pub preview_max_bytes: u32,
 }
 
-/// 启动信息：版本、平台、格式注册表、护栏阈值、开发开关。
+/// 启动信息：版本、平台、格式注册表、护栏阈值、开发开关、可用色系。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppInfo {
     pub version: String,
@@ -695,6 +704,72 @@ pub struct AppInfo {
     pub formats: Vec<FormatInfo>,
     pub limits: Limits,
     pub dev: DevFlags,
+    /// 自动配色的色系清单（真源在 `app_core::palette`，前端不抄第二份）。
+    pub palettes: Vec<PaletteInfo>,
+}
+
+/* ---------------- 自动配色（图表配色，不是 UI 强调色） ---------------- */
+
+/// 某个角色在一种底色主题下的三件颜色。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RoleSwatch {
+    pub fill: String,
+    pub stroke: String,
+    pub text: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PaletteRole {
+    /// main | entry | decide | ext | risk | note
+    pub role: String,
+    /// 亮色阶（浅底 + 深描边/文字）
+    pub light: RoleSwatch,
+    /// 暗色阶（深底 + 亮描边/文字）
+    pub dark: RoleSwatch,
+}
+
+/// 一个色系。名字中英各一份 —— 页面/菜单/提示词都直接用这里的叫法，不再各写一份。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PaletteInfo {
+    pub id: String,
+    pub name_zh: String,
+    pub name_en: String,
+    pub roles: Vec<PaletteRole>,
+}
+
+/// 重着色的范围。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PaletteMode {
+    /// 只给"还没上色"的节点上色（手选过颜色的节点一个都不动）
+    OnlyUncolored,
+    /// 整篇重排：手写的 `style` / 已有填充色会被覆盖（调用方必须先跟用户确认）
+    All,
+}
+
+/// 一次确定性的配色展开：**纯函数入参**，不读也不改会话。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PaletteApplyReq {
+    pub body: String,
+    pub format: FormatId,
+    /// 色系 id（`app_core::palette::find` 校验）
+    pub palette: String,
+    /// 当前是不是暗色主题：色值会**落进文档**，之后切主题不会重算，所以这里选一次色阶
+    pub dark: bool,
+    pub mode: PaletteMode,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PaletteApplyRes {
+    pub body: String,
+    /// 正文是否真的变了（没变时调用方不该写回文档，免得平白弄脏）
+    pub changed: bool,
+    /// 上了色的节点数
+    pub applied: usize,
+    /// 因为已有颜色被跳过的节点数（只有「仅未着色」会跳过）
+    pub skipped: usize,
+    /// 整篇重排时删掉的手写 `style` 语句条数
+    pub styles_removed: usize,
 }
 
 /// 事件名常量（与前端 `ipc.on(...)` 逐字对应）。

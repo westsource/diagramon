@@ -34,7 +34,8 @@ pub fn build(state: Arc<AppState>, doc_id: String) -> Vec<Box<dyn Tool>> {
     vec![
         Box::new(ReadDocument { state: state.clone(), doc_id: doc_id.clone() }),
         Box::new(FormatGrammar { state: state.clone(), doc_id: doc_id.clone() }),
-        Box::new(ValidateBody { state, doc_id }),
+        Box::new(ValidateBody { state: state.clone(), doc_id: doc_id.clone() }),
+        Box::new(ColorScheme { state, doc_id }),
     ]
 }
 
@@ -160,6 +161,54 @@ impl Tool for FormatGrammar {
         let session = self.state.session();
         let doc = session.get(&self.doc_id).ok_or("当前文档不存在")?;
         Ok(ai::prompt::format_hint(doc.format))
+    }
+}
+
+/* ------------------------------------------------------------------ color_scheme */
+
+/// 只读：把可选色系与角色名字告诉模型。
+///
+/// **故意不给"应用"** —— 色系是用户的选择（预览顶栏），模型最多建议。
+/// 让它能改色系就等于把"用户偏好"交给一次生成，还绕过了"整篇重排要确认"。
+struct ColorScheme {
+    state: Arc<AppState>,
+    doc_id: String,
+}
+
+impl Tool for ColorScheme {
+    fn name(&self) -> &str {
+        "color_scheme"
+    }
+
+    fn schema(&self) -> Value {
+        json!({
+            "type": "function",
+            "function": {
+                "name": "color_scheme",
+                "description": "列出可用的配色色系与角色名。用户问'换个配色/这个颜色不好看'时先调它，\
+                                然后把建议说给用户听；**应用由用户在预览顶栏点选，你不要写色值、也不要假装已经改了**。",
+                "parameters": {"type": "object", "properties": {}}
+            }
+        })
+    }
+
+    fn call(&self, _args: &Value) -> Result<String, String> {
+        let current = {
+            let s = self.state.session();
+            s.get(&self.doc_id)
+                .and_then(|d| d.scheme.clone())
+                .unwrap_or_else(|| self.state.settings().diagram_palette.clone())
+        };
+        let mut out = String::from("可用色系（id：中文名 / 英文名）：\n");
+        for id in app_core::palette::ids() {
+            let zh = app_core::palette::name_zh(id).unwrap_or(id);
+            let en = app_core::palette::name_en(id).unwrap_or(id);
+            let mark = if id == current { "  ← 当前" } else { "" };
+            out.push_str(&format!("- {id}：{zh} / {en}{mark}\n"));
+        }
+        out.push_str("\n角色：main 主链路 / entry 入口终止 / decide 判断 / data 数据存储 / ext 外部异步 / risk 异常 / note 说明。\n");
+        out.push_str("色值由应用按色系生成，你只标角色（写法见系统提示里的配色约定）。");
+        Ok(out)
     }
 }
 

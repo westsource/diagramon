@@ -360,6 +360,19 @@ digraph Pipeline {
   "appState": { "viewBackgroundColor": "#ffffff", "gridSize": null }
 }`;
 
+  // 色系**名单**（与 crates/app-core/src/palette.rs 的 SEEDS 对齐）。
+  // 这里只放 id 与名字：色值由 Rust 算，浏览器原型不重算（那会是第二份实现）。
+  const PALETTES = [
+    { id: "pine", zh: "松绿", en: "Pine" },
+    { id: "celadon", zh: "青瓷", en: "Celadon" },
+    { id: "indigo", zh: "黛蓝", en: "Indigo" },
+    { id: "azure", zh: "靛青", en: "Azure" },
+    { id: "lotus", zh: "藕紫", en: "Lotus" },
+    { id: "olive", zh: "橄榄", en: "Olive" },
+    { id: "ochre", zh: "赭石", en: "Ochre" },
+    { id: "tungsten", zh: "钨灰", en: "Tungsten" },
+  ];
+
   const NEW_BODIES = {
     mermaid: "flowchart TD\n    A([开始]) --> B[第一步]\n    B --> C{判断}\n    C -- 是 --> D([结束])\n    C -- 否 --> B\n",
     dot: "digraph G {\n    rankdir=LR;\n    node [shape=box];\n    A -> B -> C;\n}\n",
@@ -723,6 +736,10 @@ digraph Pipeline {
             platform: "mock",
             formats: this._clone(FORMATS),
             limits: { preview_max_lines: 5000, preview_max_bytes: 409600 },
+            // 色系清单：**只给 id 与名字，roles 故意留空** —— 色值真源在
+            // `app-core::palette`，在浏览器里再算一份就是"两处实现、互不同步"。
+            // 前端对空 roles 有兜底（圆点退回 --faint），菜单照样可用可点。
+            palettes: PALETTES.map((p) => ({ id: p.id, name_zh: p.zh, name_en: p.en, roles: [] })),
           };
 
         // mock 下**故意不给转换结果**：转换器只有 Rust 侧一份实现
@@ -863,6 +880,27 @@ digraph Pipeline {
           const d = this._doc(args.id);
           if (d) d.layout = args.layout;
           return d ? this._clone(d) : null;
+        }
+
+        case "doc_set_scheme": {
+          const d = this._doc(args.id);
+          if (!d) throw new Error("文档不存在");
+          const v = args.scheme;
+          if (v === null) d.scheme = null;
+          else if (v === "") d.scheme = "";
+          else if (PALETTES.some((p) => p.id === v)) d.scheme = v;
+          else throw new Error(`没有这个色系：${v}`);
+          return this._clone(d);
+        }
+
+        // 配色展开只存在于 Rust 侧（`app-core::palette`）：浏览器原型里**不假装做过**。
+        // 与 `convert_text` 同一套约定 —— 明确报错，并指出该去哪儿验。
+        case "palette_apply": {
+          const r = args.req || {};
+          throw new Error(
+            `mock 模式没有配色展开器（${r.format} / ${r.palette}）：真实展开在 Rust 侧，` +
+              "请用 node tools/dev/check.mjs 起真实客户端",
+          );
         }
 
         case "doc_set_look": {

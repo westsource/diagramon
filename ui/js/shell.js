@@ -259,6 +259,8 @@ window.DGM = window.DGM || {};
       const b = h("button", "pop-row" + (it.check ? " check" : "") + (it.on ? " on" : ""));
       b.innerHTML =
         (it.check ? "" : it.icon ? icon(it.icon, "ico-sm") : `<span class="ico-slot"></span>`) +
+        // 色系行：圆点放在 label 前面（`check` 行的勾由 CSS ::before 画，不占这一格）
+        (it.dot ? `<i class="pv-dot" style="background:${esc(it.dot)}"></i>` : "") +
         `<span class="lbl">${esc(it.label)}</span>` +
         (it.children ? `<span class="kbd arrow-sub">${icon("chevR", "ico-sm")}</span>` : "") +
         (it.kbd && !it.children ? `<span class="kbd">${esc(it.kbd)}</span>` : "");

@@ -565,9 +565,21 @@ fn parse_inline_classes(chars: &[char], start: usize) -> (Vec<String>, usize) {
         if c.is_whitespace() || c == ';' {
             break;
         }
-        // 箭头 / 连线开头就停（`A["x"]:::c --> B` 里 `:::` 后面不该把 `-->` 吃进类名）
+        // 箭头 / 连线开头就停（`A["x"]:::c --> B` 里 `:::` 后面不该把 `-->` 吃进类名）。
+        // **但不能见 `-` 就停**：类名里带连字符是合法的（`:::lvl-entry`、`:::my-class`），
+        // 早先一刀切在 `-` 上，于是 `A:::lvl-entry --> B` 被读成「语句尾部有没解析完的内容」——
+        // 整份图连解析都过不去。只有真正开始一条连线（`--` / `->` / `==>` / `<--`）才停。
         if c == '-' || c == '=' || c == '<' || c == '&' {
-            break;
+            let next = chars.get(ci + 1).copied().unwrap_or(' ');
+            let starts_link = match c {
+                '-' => next == '-' || next == '>',
+                '=' => next == '=' || next == '>',
+                '<' => next == '-',
+                _ => true,
+            };
+            if starts_link {
+                break;
+            }
         }
         if c == ',' {
             let name = cur.trim();
@@ -907,7 +919,7 @@ fn to_dot_label(s: &str) -> String {
 /// `AI1 -> EDGE` 在 graphviz 里是语法错误，得写 `AI1 -> "EDGE"`。
 const DOT_KEYWORDS: [&str; 6] = ["node", "edge", "graph", "digraph", "subgraph", "strict"];
 
-fn dot_id(id: &str) -> String {
+pub(crate) fn dot_id(id: &str) -> String {
     let lower = id.to_ascii_lowercase();
     let bare = !id.is_empty()
         && id.chars().next().is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
@@ -918,6 +930,140 @@ fn dot_id(id: &str) -> String {
     } else {
         format!("\"{}\"", esc_attr(id))
     }
+}
+
+/* ------------------------------------------------------------------ 只读事实（配色用） */
+
+/// Mermaid 的节点形状，对外用**稳定名字**而不是内部枚举（`Shape` 随转换细节变）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FlowShape {
+    Box,
+    Rounded,
+    Stadium,
+    Subroutine,
+    Cylinder,
+    Hexagon,
+    Circle,
+    Diamond,
+    Asymmetric,
+}
+
+impl FlowShape {
+    fn from_shape(s: Shape) -> Self {
+        match s {
+            Shape::Box => Self::Box,
+            Shape::Rounded => Self::Rounded,
+            Shape::Stadium => Self::Stadium,
+            Shape::Subroutine => Self::Subroutine,
+            Shape::Cylinder => Self::Cylinder,
+            Shape::Hexagon => Self::Hexagon,
+            Shape::Circle => Self::Circle,
+            Shape::Diamond => Self::Diamond,
+            Shape::Asymmetric => Self::Asymmetric,
+        }
+    }
+
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Box => "box",
+            Self::Rounded => "rounded",
+            Self::Stadium => "stadium",
+            Self::Subroutine => "subroutine",
+            Self::Cylinder => "cylinder",
+            Self::Hexagon => "hexagon",
+            Self::Circle => "circle",
+            Self::Diamond => "diamond",
+            Self::Asymmetric => "asymmetric",
+        }
+    }
+}
+
+/// 一个 flowchart 节点（只读视图，给自动配色用）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FlowNode {
+    pub id: String,
+    pub label: Option<String>,
+    pub shape: FlowShape,
+    /// 内联 `:::cls` 与 `class X cls` 合并后的类名（按出现顺序去重）。
+    pub classes: Vec<String>,
+    /// 有 `style <id> …` 语句。这类语句**优先级高于 classDef**，配色要动它得先删。
+    pub styled: bool,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct FlowFacts {
+    pub nodes: Vec<FlowNode>,
+    /// 文档里出现过的 classDef 名字（判断"某个类是我们的角色类还是用户自己的"）。
+    pub class_defs: Vec<String>,
+}
+
+/// Mermaid flowchart 的节点事实：**只读**，不改文档、不生成任何代码。
+///
+/// 自动配色（`palette`）要的就是"这份图里有哪些节点、各自什么形状/标签/类名"。
+/// 这里刻意复用同一个 `parse`：Mermaid 的解析只该有一份，另写一个扫描器迟早漂。
+pub fn flow_facts(src: &str) -> Result<FlowFacts, String> {
+    let (_, stmts) = parse(src)?;
+    let mut order: Vec<String> = Vec::new();
+    let mut info: HashMap<String, (Option<String>, FlowShape, Vec<String>, bool)> = HashMap::new();
+    let mut class_of: HashMap<String, Vec<String>> = HashMap::new();
+    let mut class_defs: Vec<String> = Vec::new();
+    let mut styled: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    let touch = |id: &str, info: &mut HashMap<_, _>, order: &mut Vec<String>| {
+        if !info.contains_key(id) {
+            order.push(id.to_string());
+            info.insert(id.to_string(), (None, FlowShape::Box, Vec::new(), false));
+        }
+    };
+    for stmt in &stmts {
+        match stmt {
+            Stmt::Chain { operands, .. } => {
+                for op in operands {
+                    touch(&op.id, &mut info, &mut order);
+                    let slot = info.get_mut(&op.id).expect("刚 inserted");
+                    if op.label.is_some() {
+                        slot.0 = op.label.clone();
+                    }
+                    slot.1 = FlowShape::from_shape(op.shape);
+                    for c in &op.classes {
+                        if !slot.2.contains(c) {
+                            slot.2.push(c.clone());
+                        }
+                    }
+                }
+            }
+            Stmt::ClassDef { name, .. } => {
+                if !class_defs.contains(name) {
+                    class_defs.push(name.clone());
+                }
+            }
+            Stmt::ClassAssign { name, ids } => {
+                for id in ids {
+                    let list = class_of.entry(id.clone()).or_default();
+                    if !list.contains(name) {
+                        list.push(name.clone());
+                    }
+                }
+            }
+            Stmt::StyleAssign { id, .. } => {
+                styled.insert(id.clone());
+            }
+            _ => {}
+        }
+    }
+    let nodes = order
+        .into_iter()
+        .map(|id| {
+            let (label, shape, mut classes, _) = info.remove(&id).expect("order 与 info 同源");
+            for c in class_of.remove(&id).unwrap_or_default() {
+                if !classes.contains(&c) {
+                    classes.push(c);
+                }
+            }
+            FlowNode { id: id.clone(), label, shape, classes, styled: styled.contains(&id) }
+        })
+        .collect();
+    Ok(FlowFacts { nodes, class_defs })
 }
 
 /* ------------------------------------------------------------------ 生成 */
@@ -2097,6 +2243,22 @@ mod tests {
         // D2 侧：节点挂 `.class`
         assert!(d.body.contains("A.class: user"), "{}", d.body);
         assert!(d.body.contains("B.class: user"), "{}", d.body);
+    }
+
+    /// 类名里带连字符（`:::lvl-entry`）：**不能**被当成边箭头切碎。
+    ///
+    /// 自动配色的角色类名就是 `lvl-*`，这个洞会让「AI 写角色」整条链路在解析层就失败。
+    #[test]
+    fn inline_class_names_may_contain_hyphens() {
+        let src = "flowchart TD\n    A([开始]):::lvl-entry --> C{是否通过?}:::lvl-decide\n    C --> D:::lvl-main\n";
+        let facts = flow_facts(src).expect("带连字符的类名必须能解析");
+        let by_id: std::collections::HashMap<&str, Vec<String>> =
+            facts.nodes.iter().map(|n| (n.id.as_str(), n.classes.clone())).collect();
+        assert_eq!(by_id["A"], vec!["lvl-entry"]);
+        assert_eq!(by_id["C"], vec!["lvl-decide"]);
+        assert_eq!(by_id["D"], vec!["lvl-main"]);
+        // 转换那条路也顺带稳住（它用的是同一个 parse）
+        assert!(mermaid_to_dot(src).is_ok());
     }
 
     /// `:::a,b` 多类名：DOT 全挂上；D2 的 `.class` 是单值，只挂第一个并**如实进 notes**。

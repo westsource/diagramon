@@ -20,8 +20,8 @@ use app_ipc::{
     events, AiAgentStep, AiChatRequest, AiContextFile, AiDelta, AiDone, AiFailed, AiIntent, AiModel,
     AiThinking, IntentClassifyRequest, IntentClassifyResult,
     AppInfo, ConvMeta, Conversation, ConversationTurn, ConvertOutcome, ConvertRequest, DevFlags, Doc, FormatId,
-    Issue, MemoryEntry, MemoryList, MemoryScope, MemoryState, OutlineGroup,
-    Session as SessionPayload, Settings, ViewMode,
+    Issue, MemoryEntry, MemoryList, MemoryScope, MemoryState, OutlineGroup, PaletteApplyReq,
+    PaletteApplyRes, Session as SessionPayload, Settings, ViewMode,
 };
 use base64::Engine as _;
 use tauri::{AppHandle, Emitter, State};
@@ -43,6 +43,7 @@ pub fn app_info(state: State<'_, Arc<AppState>>) -> AppInfo {
         formats: app_core::format::registry(),
         limits: app_core::guard::limits(),
         dev: dev_flags(&state.paths),
+        palettes: app_core::palette::infos(),
     }
 }
 
@@ -215,7 +216,11 @@ fn commit_render_opt(state: &AppState, id: &str) -> R<Doc> {
     };
     // 未落盘文档没有稳定身份（路径），没处可记 —— 保存时 `save_to` 会按新路径记上
     if let Some(path) = doc.path.clone() {
-        let opts = app_core::render_opts::DocOpts { look: doc.look.clone(), layout: doc.layout.clone() };
+        let opts = app_core::render_opts::DocOpts {
+            look: doc.look.clone(),
+            layout: doc.layout.clone(),
+            scheme: doc.scheme.clone(),
+        };
         state.remember_render_opts(None, &path, opts.sanitized(format));
     }
     Ok(doc)
@@ -229,6 +234,31 @@ pub fn doc_set_layout(state: State<'_, Arc<AppState>>, id: String, layout: Strin
         return Err(format!("这个格式没有布局引擎「{layout}」"));
     }
     commit_render_opt(state.inner(), &id)
+}
+
+/// 文档级配色色系。`scheme = null` → 跟随设置里的默认；`""` → 这份文档不上自动色。
+///
+/// 只改文档上的选择（并按路径记住），**不碰正文** —— 上色由前端调 `palette_apply`
+/// 拿到新正文后自己写回，这样"选色系"和"改文档"是两步，能各自单独撤销/确认。
+#[tauri::command]
+pub fn doc_set_scheme(
+    state: State<'_, Arc<AppState>>,
+    id: String,
+    scheme: Option<String>,
+) -> R<Doc> {
+    if !state.session().set_scheme(&id, scheme) {
+        return Err("这个格式不接受配色色系（画布型没有节点角色），或色系不存在".to_string());
+    }
+    commit_render_opt(state.inner(), &id)
+}
+
+/// 按色系把一份正文重排成带色的正文（确定性的纯函数，不读也不改会话）。
+///
+/// 前端在两个地方用它：①「配色」菜单选中某个色系 → 拿到新正文写回文档；
+/// ② AI 把代码应用进编辑器之前 → 把模型写的角色标记展开成色值。
+#[tauri::command]
+pub fn palette_apply(req: PaletteApplyReq) -> R<PaletteApplyRes> {
+    app_core::palette::apply(&req.body, req.format, &req.palette, req.dark, req.mode)
 }
 
 #[tauri::command]
@@ -714,6 +744,11 @@ pub async fn ai_chat(
         Some(block) => ai::inject_memory(messages, &block),
         None => messages,
     };
+    // 配色约定紧挨着用户内容（记忆在前、规范在后）：模型最容易遵守"离得最近"的硬约束。
+    let messages = match palette_block(&st, out_format) {
+        Some(block) => ai::inject_memory(messages, &block),
+        None => messages,
+    };
 
     let request_id = req.request_id.clone();
     let cancel = Arc::new(AtomicBool::new(false));
@@ -923,6 +958,11 @@ pub async fn ai_agent_run(
     );
     // 长期记忆与 `ai_chat` 同一套注入（关掉时逐字节一致）
     let messages = match memory_block(&st, &active_doc_key(&st)) {
+        Some(block) => ai::inject_memory(messages, &block),
+        None => messages,
+    };
+    // 配色约定紧挨着用户内容（记忆在前、规范在后）：模型最容易遵守"离得最近"的硬约束。
+    let messages = match palette_block(&st, out_format) {
         Some(block) => ai::inject_memory(messages, &block),
         None => messages,
     };
@@ -1397,6 +1437,34 @@ fn memory_block(state: &AppState, doc_key: &str) -> Option<String> {
     } else {
         Some(block)
     }
+}
+
+/// 当前活动文档实际生效的色系（文档级 > 设置默认；`""` = 关掉自动配色）。
+fn active_scheme(state: &AppState) -> String {
+    let s = state.session();
+    let payload = s.payload();
+    let doc = payload.active.as_deref().and_then(|id| s.get(id));
+    match doc.and_then(|d| d.scheme.clone()) {
+        Some(v) => v,
+        None => state.settings().diagram_palette.clone(),
+    }
+}
+
+/// 组装配色约定块。**色系为空 ⇒ `None`**：关掉自动配色时一个字节都不注入，
+/// 否则模型会写出"没人兑现的角色标记"，用户看到的是"AI 说要配色、结果没色"。
+///
+/// 与记忆块同一套注入方式（独立 system 消息，追加在 system 之后），
+/// 不改 `system_prompt` 本身 —— 那个函数被 BYOK 与云网关共用。
+fn palette_block(state: &AppState, format: FormatId) -> Option<String> {
+    let rules = app_core::palette::prompt_rules(format)?;
+    let id = active_scheme(state);
+    if id.is_empty() {
+        return None;
+    }
+    let name = app_core::palette::name_zh(&id)?;
+    Some(format!(
+        "自动配色（必须遵守）：当前色系「{name}」。色值由应用按色系落地，你只标角色。\n{rules}"
+    ))
 }
 
 fn memory_list(state: &AppState, doc_id: &str) -> MemoryList {

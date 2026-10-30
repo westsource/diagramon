@@ -378,7 +378,8 @@ window.DGM = window.DGM || {};
   function renderOpts(d) {
     const host = document.getElementById("pv-opts");
     if (!host) return;
-    const key = d ? [d.id, d.format, d.look || "", d.layout || ""].join("|") : "";
+    // 配色也进 key：换了色系按钮上的名字/圆点必须立刻跟上（否则显示还是旧的那档）
+    const key = d ? [d.id, d.format, d.look || "", d.layout || "", d.scheme === undefined || d.scheme === null ? "auto" : d.scheme].join("|") : "";
     if (key === optsKey) return;
     optsKey = key;
     host.innerHTML = "";
@@ -389,6 +390,145 @@ window.DGM = window.DGM || {};
     if (!looks.length && !layouts.length) return;
     if (looks.length) host.appendChild(buildOptBtn(d, "look", t("preview.look"), looks, optsCurLook(d)));
     if (layouts.length) host.appendChild(buildOptBtn(d, "layout", t("preview.layoutName"), layouts, d.layout || layouts[0]));
+    // 配色只在文本型出现（画布型没有节点角色，后端也会拒绝）
+    if (state.isTextDoc(d) && (state.palettes || []).length) host.appendChild(buildPaletteBtn(d));
+  }
+
+  /* ------------------------------------------------------------------ 自动配色 */
+
+  /** 色系的中文/英文名（名字的真源在 `app_info.palettes`，这里只按语言取）。 */
+  function paletteName(id) {
+    const p = state.palette(id);
+    if (!p) return t("preview.paletteOff");
+    return DGM.i18n.lang === "en-US" ? p.name_en : p.name_zh;
+  }
+
+  /** 色系在按钮/菜单里的那个圆点：取 `main` 角色的描边色（当前主题下的那一套）。 */
+  function paletteDot(id) {
+    const p = state.palette(id);
+    const dark = document.documentElement.dataset.theme === "dark";
+    const role = p && (p.roles || []).find((r) => r.role === "main");
+    if (!role) return "var(--faint)";
+    const sw = dark ? role.dark : role.light;
+    return (sw && sw.stroke) || "var(--faint)";
+  }
+
+  /** 把色系落地成正文，并**如实报出**改了几个节点。 */
+  async function applyScheme(d, scheme, mode) {
+    await state.setScheme(d.id, scheme);
+    // setScheme 内部会 `upsertDoc`：`d` 可能是**旧对象**了，重新取一次再读 scheme，
+    // 否则读到的还是改之前的值（真机上表现成"选了色系却提示已关闭"）。
+    const live = state.doc(d.id) || d;
+    const eff = state.schemeOf(live);
+    if (!eff) {
+      DGM.status(t("preview.palette.offDone"), "");
+      schedule();
+      return;
+    }
+    const res = await state.paint(live.body, live.format, eff, mode);
+    const picked = { applied: res.applied, skipped: res.skipped, removed: res.styles_removed };
+    // 走编辑器写回：源码窗口要跟着变（否则预览换了色、左边还是旧文本），
+    // 而且这条路径会把改动算进撤销栈。
+    if (res.changed) await DGM.editor.applyBody(res.body);
+    const bits = [t("preview.palette.applied", { name: paletteName(eff), n: picked.applied })];
+    if (picked.skipped) bits.push(t("preview.palette.skipped", { n: picked.skipped }));
+    if (picked.removed) bits.push(t("preview.palette.removed", { n: picked.removed }));
+    DGM.status(bits.join(" · "), picked.skipped ? "warn" : "ok");
+    schedule();
+  }
+
+  function buildPaletteBtn(d) {
+    const cur = state.schemeOf(d);
+    const b = h("button", "mini-btn pv-opt");
+    b.title = t("preview.paletteTip");
+    b.innerHTML =
+      `<i class="pv-dot" style="background:${esc(paletteDot(cur))}"></i>` +
+      `<span>${esc(t("preview.palette"))} · <span class="pv-opt-val">${esc(paletteName(cur))}</span></span>` +
+      icon("chevD", "ico-sm");
+    b.addEventListener("click", (e) => {
+      e.stopPropagation(); // showPop 的约定：锚点点击不能进文档级「点外关闭」监听
+      openPaletteMenu(d, b);
+    });
+    return b;
+  }
+
+  function openPaletteMenu(d, anchor) {
+    const cur = state.schemeOf(d);
+    const items = (state.palettes || []).map((p) => ({
+      label: paletteName(p.id), check: true, on: p.id === cur, dot: paletteDot(p.id), v: p.id,
+    }));
+    items.unshift({ label2: t("preview.paletteMenu") });
+    items.push({ sep: true });
+    // 只有真的选了"这份文档的色系"才需要"跟随默认"；跟随状态下它没有意义
+    if (d.scheme !== undefined && d.scheme !== null) {
+      items.push({
+        label: t("preview.paletteFollow", { name: paletteName(state.settings && state.settings.diagram_palette) }),
+        icon: "refresh",
+        act: "follow",
+      });
+    }
+    items.push({ label: t("preview.paletteOff"), icon: "close", check: true, on: cur === "", act: "off" });
+    items.push({ sep: true });
+    items.push({ label: t("preview.paletteRecolor"), icon: "palette", act: "all" });
+    items.push({ label: t("preview.paletteAi"), icon: "sparkles", act: "ai" });
+    items.push({ sep: true }, { label2: t("preview.paletteFooter") });
+
+    const r = anchor.getBoundingClientRect();
+    DGM.pop.show(items, { x: r.left, y: r.bottom + 4 }, async (it) => {
+      DGM.pop.hide();
+      try {
+        if (it.v) await applyScheme(d, it.v, "only_uncolored");
+        else if (it.act === "off") await applyScheme(d, "", "only_uncolored");
+        else if (it.act === "follow") await applyScheme(d, null, "only_uncolored");
+        else if (it.act === "all") {
+          const ok = await DGM.dialogs.confirm({
+            title: t("preview.palette.recolorTitle"),
+            icon: "warn",
+            danger: true,
+            body: esc(t("preview.palette.recolorBody")),
+            warn: t("preview.palette.recolorWarn"),
+            ok: t("preview.palette.recolorOk"),
+          });
+          if (ok) await applyScheme(d, cur, "all");
+        } else if (it.act === "ai") {
+          await pickPaletteWithAi(d);
+        }
+      } catch (err) {
+        DGM.status(t("preview.palette.failed", { msg: (err && err.message) || String(err) }), "err");
+      }
+    });
+  }
+
+  /** 「让 AI 挑」：一次短调用，只许它回一个 `{palette, why}` —— 色值仍然不归它。 */
+  async function pickPaletteWithAi(d) {
+    const list = (state.palettes || [])
+      .map((p) => `${p.id}（${DGM.i18n.lang === "en-US" ? p.name_en : p.name_zh}）`)
+      .join("、");
+    const out = await DGM.ai.askOnce({
+      prompt:
+        `只根据这张图的结构与命名，从下面这些色系里挑一个最合适的，并给一句不超过 40 字的理由。\n` +
+        `只输出一个 JSON 对象：{"palette":"<id>","why":"<理由>"}\n可选：${list}`,
+      format: d.format,
+      context: d.body,
+      docId: d.id,
+    });
+    const text = (out && out.text) || "";
+    const m = /\{[\s\S]*\}/.exec(text);
+    if (!m) throw new Error(t("preview.palette.aiNoJson"));
+    let picked = null;
+    try {
+      picked = JSON.parse(m[0]);
+    } catch (e) {
+      throw new Error(t("preview.palette.aiNoJson"));
+    }
+    const id = String((picked && picked.palette) || "").trim();
+    if (!state.palette(id)) throw new Error(t("preview.palette.aiUnknown", { id }));
+    await applyScheme(d, id, "only_uncolored");
+    DGM.toast({
+      icon: "palette",
+      title: t("preview.palette.aiPicked", { name: paletteName(id) }),
+      sub: String((picked && picked.why) || "").slice(0, 120),
+    });
   }
 
   /** 当前生效的外观（文档级 > 设置默认 > auto）——按钮上显示的就是它。

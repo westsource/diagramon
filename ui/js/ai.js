@@ -1664,6 +1664,28 @@ window.DGM = window.DGM || {};
    */
   let retryCtx = null; // { docId, format, code, tab, tried, reqId }
 
+  /** AI 产出的代码落进编辑器之前，按当前色系把**角色标记**展开成色值。
+   *
+   *  这是"自动配色"真正的落点：模型只写 `:::lvl-*` / `palette_role` / `X.class`，
+   *  色值在这里由 Rust 的确定性展开产生（可复现、暗色阶正确、跨格式一致）。
+   *  失败**不挡应用** —— 配色不该让一次生成白费，但要在状态栏如实说一声。
+   */
+  async function paintForApply(code, d) {
+    if (!d || !state.isTextDoc(d) || !state.schemeOf) return code;
+    const scheme = state.schemeOf(d);
+    if (!scheme) return code;
+    try {
+      // 用「仅未着色」而不是「整篇重排」：提示词已经把模型引到"只写角色"，
+      // 正常情况下它不该带色值；万一漏了一处，代价只是留一个手选色，
+      // 而"整篇重排"会**删掉用户手写的 style** —— 破坏性大得多。
+      const res = await state.paint(code, d.format, scheme, "only_uncolored");
+      return res && res.body ? res.body : code;
+    } catch (e) {
+      DGM.status(t("preview.palette.failed", { msg: (e && e.message) || String(e) }), "warn");
+      return code;
+    }
+  }
+
   async function applyBlock(blk, m) {
     const fmt = langToFormat(blk.lang);
     const fromId = (state.activeDoc() || {}).id || "";
@@ -1698,7 +1720,7 @@ window.DGM = window.DGM || {};
     }
     if (!d) return;
     lastApplied = { id: d.id, body: d.body };
-    await DGM.editor.applyBody(blk.code);
+    await DGM.editor.applyBody(await paintForApply(blk.code, d));
     if (m) m.applied = true;
     // 布防：这一版渲染失败就自动修正一次（开关见「AI 设置 → 渲染失败时…」）。
     const selfRetry = !!(m && retryCtx && retryCtx.reqId && m.req === retryCtx.reqId);

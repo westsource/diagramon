@@ -785,7 +785,23 @@ window.DGM = window.DGM || {};
       <div class="field"><label>${esc(t("set.appearance.accent"))}</label>
         <div class="swatch-row">${accents.map((x) => `<button class="swatch ${s.accent === x ? "on" : ""}" data-act="accent:${x}" title="${esc(t("set.accent." + x))}"><i class="sw-${x}"></i></button>`).join("")}</div>
         <span class="hint">${esc(t("set.accent.hint"))}</span></div>
+      <div class="field"><label>${esc(t("set.appearance.palette"))}</label>
+        <div class="swatch-row">${paletteSwatches(s.diagram_palette)}</div>
+        <span class="hint">${esc(t("set.palette.hint"))}</span></div>
       ${switchRow(!!s.close_to_tray, t("set.general.closeToTray"), "set.general.closeToTrayHint", "closetray")}`;
+  }
+
+  /** 设置里的色系色块：颜色取自 `app_info.palettes`（真源在 Rust），不在这里抄第二份。 */
+  function paletteSwatches(cur) {
+    const dots = (state.palettes || []).map((p) => {
+      const role = (p.roles || []).find((r) => r.role === "main");
+      const sw = role ? (document.documentElement.dataset.theme === "dark" ? role.dark : role.light) : null;
+      const bg = sw ? sw.stroke : "var(--border-strong)";
+      const name = DGM.i18n.lang === "en-US" ? p.name_en : p.name_zh;
+      return `<button class="swatch ${cur === p.id ? "on" : ""}" data-act="palette:${p.id}" title="${esc(name)}"><i style="background:${esc(bg)}"></i></button>`;
+    });
+    const off = `<button class="swatch ${!cur ? "on" : ""}" data-act="palette:" title="${esc(t("set.palette.off"))}"><i style="background:transparent;border:1px dashed var(--faint)"></i></button>`;
+    return dots.join("") + off;
   }
 
   function pEditor() {
@@ -1470,6 +1486,12 @@ window.DGM = window.DGM || {};
       if (act.startsWith("accent:")) {
         const v = act.slice(7);
         state.patchSettings({ accent: v });
+        $$(".swatch", pane).forEach((x) => x.classList.toggle("on", x === btn));
+        return;
+      }
+      if (act.startsWith("palette:")) {
+        // 空串 = 关闭自动配色（与预览顶栏的「关闭」同一个值）
+        state.patchSettings({ diagram_palette: act.slice(8) });
         $$(".swatch", pane).forEach((x) => x.classList.toggle("on", x === btn));
         return;
       }

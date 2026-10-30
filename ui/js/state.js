@@ -44,6 +44,8 @@ window.DGM = window.DGM || {};
     appInfo: null,
     formats: {}, // id -> FormatInfo
     formatList: [],
+    // 色系清单（app_info.palettes）；菜单/设置都吃这一份
+    palettes: [],
     settings: null,
     docs: [],
     active: null,
@@ -240,6 +242,8 @@ window.DGM = window.DGM || {};
   async function load() {
     state.appInfo = await ipc.invoke("app_info");
     state.formatList = (state.appInfo && state.appInfo.formats) || [];
+    // 自动配色的色系清单同样由后端下发（真源 app-core::palette），前端不抄第二份
+    state.palettes = (state.appInfo && state.appInfo.palettes) || [];
     state.formats = {};
     state.formatList.forEach((f) => (state.formats[f.id] = f));
 
@@ -1077,6 +1081,55 @@ window.DGM = window.DGM || {};
     }
   }
 
+  /* ------------------------------------------------------------------ 自动配色 */
+
+  /** 色系表里的一项（`null` = 这个 id 不认识，比如旧配置里的珊瑚）。 */
+  function palette(id) {
+    if (!id) return null;
+    return (state.palettes || []).find((p) => p.id === id) || null;
+  }
+
+  /** 这份文档**实际生效**的色系 id：文档级 > 全局默认；`""` = 不上自动色。
+   *
+   *  三条状态各有含义，别混：`doc.scheme == null` = 跟随默认（后端字段缺省也是 null），
+   *  `doc.scheme === ""` = 这份明确不要，`doc.scheme === "pine"` = 这份指定。
+   */
+  function schemeOf(doc) {
+    const d = doc || state.activeDoc();
+    if (d && d.scheme !== undefined && d.scheme !== null) return d.scheme;
+    return (state.settings && state.settings.diagram_palette) || "";
+  }
+
+  /** 设文档级色系：`null` = 跟随默认，`""` = 关闭，其余必须是注册表里的 id。 */
+  async function setScheme(id, scheme) {
+    const d = state.doc(id);
+    if (!d) return;
+    const prev = d.scheme;
+    d.scheme = scheme;
+    emit("doc:changed");
+    try {
+      const doc = await ipc.invoke("doc_set_scheme", { id, scheme });
+      if (doc && doc.id) upsertDoc(doc);
+    } catch (e) {
+      d.scheme = prev;
+      emit("doc:changed");
+      throw e;
+    }
+  }
+
+  /** 按色系把一份正文重排（确定性展开，Rust 侧实现）。色系为空 / 画布型 ⇒ 原样返回。
+   *
+   *  返回 `{body, changed, applied, skipped, styles_removed}`；**调用方决定写不写回**。
+   *  失败**不吞**：抛出去，由调用方如实报（配色失败不该伪装成"已完成"）。
+   */
+  async function paint(body, format, scheme, mode) {
+    if (!scheme) return { body, changed: false, applied: 0, skipped: 0, styles_removed: 0 };
+    const res = await ipc.invoke("palette_apply", {
+      req: { body, format, palette: scheme, dark: document.documentElement.dataset.theme === "dark", mode: mode || "only_uncolored" },
+    });
+    return res || { body, changed: false, applied: 0, skipped: 0, styles_removed: 0 };
+  }
+
   /* ------------------------------------------------------------------ 派生数据 */
 
   async function refreshDerived(id) {
@@ -1252,6 +1305,10 @@ window.DGM = window.DGM || {};
     setViewMode,
     setLayout,
     setLook,
+    palette,
+    schemeOf,
+    setScheme,
+    paint,
     refreshDerived,
     refreshIssues,
     refreshOutline,

@@ -29,6 +29,7 @@ pub fn from_path(id: String, path: &Path) -> std::io::Result<Doc> {
         caret_col: 1,
         layout: default_layout(format),
         look: None,
+        scheme: None,
     })
 }
 
@@ -48,6 +49,7 @@ pub fn untitled(id: String, format: FormatId, seq: u32) -> Doc {
         caret_col: 1,
         layout: default_layout(format),
         look: None,
+        scheme: None,
     }
 }
 

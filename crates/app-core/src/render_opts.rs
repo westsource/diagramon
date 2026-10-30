@@ -28,7 +28,7 @@ use crate::format;
 /// 记录条数上限：一条几十字节，500 条约几十 KB。
 pub const MAX_DOCS: usize = 500;
 
-/// 单个文件记住的渲染选项。两项都为 `None` 表示"没记过"。
+/// 单个文件记住的渲染选项。三项都为 `None` 表示"没记过"。
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct DocOpts {
@@ -36,11 +36,13 @@ pub struct DocOpts {
     pub look: Option<String>,
     /// 布局引擎（DOT 六种 / D2 三种 / Mermaid 两种）
     pub layout: Option<String>,
+    /// 自动配色的色系 id（`Some("")` = 这个文件明确不上自动色）
+    pub scheme: Option<String>,
 }
 
 impl DocOpts {
     pub fn is_empty(&self) -> bool {
-        self.look.is_none() && self.layout.is_none()
+        self.look.is_none() && self.layout.is_none() && self.scheme.is_none()
     }
 
     /// 按注册表过滤：该格式没有的项一律丢掉（`looks` / `layouts` 为空就等于那一项非法）。
@@ -49,6 +51,11 @@ impl DocOpts {
         Self {
             look: self.look.clone().filter(|v| info.looks.iter().any(|x| x == v)),
             layout: self.layout.clone().filter(|v| info.layouts.iter().any(|x| x == v)),
+            // 色系不是"某格式专有"的东西，但画布型不吃自动配色：存了也没用，直接丢
+            scheme: self
+                .scheme
+                .clone()
+                .filter(|v| v.is_empty() || (info.surface == app_ipc::Surface::Text && crate::palette::is_known(v))),
         }
     }
 }
@@ -159,7 +166,7 @@ mod tests {
     }
 
     fn look(v: &str) -> DocOpts {
-        DocOpts { look: Some(v.into()), layout: None }
+        DocOpts { look: Some(v.into()), ..Default::default() }
     }
 
     #[test]
@@ -167,7 +174,7 @@ mod tests {
         let f = tmp("round-trip.json");
         let mut st = Store::default();
         st.set("E:/proj/a.mmd", look("handDrawn"), 1);
-        st.set("E:/proj/b.dot", DocOpts { look: None, layout: Some("neato".into()) }, 2);
+        st.set("E:/proj/b.dot", DocOpts { layout: Some("neato".into()), ..Default::default() }, 2);
         save(&f, &st).unwrap();
 
         let back = load(&f);
@@ -191,12 +198,12 @@ mod tests {
     #[test]
     fn sanitize_drops_values_the_registry_does_not_have() {
         // DOT 没有外观模式；"nope" 不是任何格式的布局
-        let mixed = DocOpts { look: Some("neo".into()), layout: Some("nope".into()) }.sanitized(FormatId::Dot);
+        let mixed = DocOpts { look: Some("neo".into()), layout: Some("nope".into()), ..Default::default() }.sanitized(FormatId::Dot);
         assert_eq!(mixed, DocOpts::default());
-        let partial = DocOpts { look: Some("neo".into()), layout: Some("neato".into()) }.sanitized(FormatId::Dot);
-        assert_eq!(partial, DocOpts { look: None, layout: Some("neato".into()) });
-        let mmd = DocOpts { look: Some("handDrawn".into()), layout: Some("elk".into()) }.sanitized(FormatId::Mermaid);
-        assert_eq!(mmd, DocOpts { look: Some("handDrawn".into()), layout: Some("elk".into()) });
+        let partial = DocOpts { look: Some("neo".into()), layout: Some("neato".into()), ..Default::default() }.sanitized(FormatId::Dot);
+        assert_eq!(partial, DocOpts { layout: Some("neato".into()), ..Default::default() });
+        let mmd = DocOpts { look: Some("handDrawn".into()), layout: Some("elk".into()), ..Default::default() }.sanitized(FormatId::Mermaid);
+        assert_eq!(mmd, DocOpts { look: Some("handDrawn".into()), layout: Some("elk".into()), ..Default::default() });
     }
 
     #[test]

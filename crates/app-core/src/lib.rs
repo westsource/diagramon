@@ -15,6 +15,7 @@ pub mod guard;
 pub mod lint;
 pub mod memory;
 pub mod outline;
+pub mod palette;
 pub mod pixels;
 pub mod recovery;
 pub mod render_opts;

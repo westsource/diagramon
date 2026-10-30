@@ -561,8 +561,8 @@ window.DGM = window.DGM || {};
           mm && "looks=" + mm.looks.join("/") + " layouts=" + mm.layouts.join("/"),
         );
         ok(
-          "顶栏控件对 Mermaid 出两颗",
-          document.querySelectorAll("#pv-opts .pv-opt").length === 2,
+          "顶栏控件对 Mermaid 出三颗（外观 / 布局 / 配色）",
+          document.querySelectorAll("#pv-opts .pv-opt").length === 3,
           document.querySelectorAll("#pv-opts .pv-opt").length,
         );
         await invoke("doc_set_look", { id: doc.id, look: "handDrawn" });
@@ -1004,6 +1004,93 @@ window.DGM = window.DGM || {};
             await invoke("workspace_delete", { path: p });
           } catch (e) { /* 清理失败不影响断言 */ }
         }
+      }
+
+      // ── 自动配色：色系清单 + 确定性展开 + 按文件记住 ──
+      //  色值的真源在 `app-core::palette`：这里钉的是"展开可复现、换色系只动颜色、
+      //  画布型如实拒绝、选择按文件记住"这四件事，而不是某个具体 hex。
+      {
+        const pals = (info && info.palettes) || [];
+        ok(
+          "app_info 带 8 个色系 × 7 个角色",
+          pals.length === 8 && pals.every((p) => p.roles.length === 7 && p.name_zh && p.name_en),
+          pals.map((p) => p.id).join(","),
+        );
+        const body = "flowchart TD\n    A([开始]):::lvl-entry --> C{是否通过?}:::lvl-decide\n    C --> D[(用户库)]:::lvl-data\n";
+        const r1 = await invoke("palette_apply", {
+          req: { body, format: "mermaid", palette: "pine", dark: false, mode: "all" },
+        });
+        ok(
+          "palette_apply 把角色展开成 classDef",
+          r1.changed && /classDef lvl-data fill:#/.test(r1.body) && /class D lvl-data/.test(r1.body),
+          `${r1.applied} 个节点`,
+        );
+        const r2 = await invoke("palette_apply", {
+          req: { body: r1.body, format: "mermaid", palette: "pine", dark: false, mode: "all" },
+        });
+        ok("重复展开是幂等的（点两次不会多一块）", r2.changed === false && r2.body === r1.body);
+        const r3 = await invoke("palette_apply", {
+          req: { body: r1.body, format: "mermaid", palette: "lotus", dark: true, mode: "all" },
+        });
+        ok(
+          "换色系/换主题只改色值、不动角色",
+          r3.changed && r3.body !== r1.body &&
+            (r3.body.match(/^class .* lvl-/gm) || []).join() === (r1.body.match(/^class .* lvl-/gm) || []).join(),
+          r3.body.length,
+        );
+        let canvasErr = "";
+        try {
+          await invoke("palette_apply", {
+            req: { body: "{}", format: "drawio", palette: "pine", dark: false, mode: "all" },
+          });
+        } catch (e) {
+          canvasErr = String((e && e.message) || e);
+        }
+        ok("画布型如实拒绝配色", canvasErr.includes("画布型"), canvasErr);
+
+        // D2：我们靠"后写的属性覆盖先前的"实现整篇重排 —— 这条假设必须真渲染一次验，
+        // 否则 D2 上的「重排」可能是个空操作（用户点了没变化）。
+        {
+          const pineMain = pals
+            .find((p) => p.id === "pine")
+            .roles.find((r) => r.role === "main").light.fill.toLowerCase();
+          const d2Body = "a: 开始\nb: 写库\na.style.fill: \"#123456\"\n";
+          const painted = await invoke("palette_apply", {
+            req: { body: d2Body, format: "d2", palette: "pine", dark: false, mode: "all" },
+          });
+          let svg = "";
+          try {
+            svg = await DGM.d2.renderSvg(painted.body, "dagre");
+          } catch (e) {
+            svg = "";
+          }
+          const hexes = (svg.match(/#[0-9a-fA-F]{6}/g) || []).map((x) => x.toLowerCase());
+          ok(
+            "D2 的配色真的盖住了手写 style（后写者生效）",
+            !!svg && !hexes.includes("#123456") && hexes.includes(pineMain),
+            svg ? `${hexes.length} 个色值 / 期望 ${pineMain}` : "D2 没渲染出来",
+          );
+        }
+
+        // 用命令**返回的**路径：自己拼的字符串与后端规范化后的可能不等（拖放那条已踩过）
+        const palPath = await invoke("workspace_new_file", { dir: wsDir, name: "selftest-palette", format: "mermaid" });
+        const op = await invoke("doc_open_paths", { paths: [palPath] });
+        const pd = op.docs.find((x) => String(x.path || "").replace(/\\/g, "/") === palPath) || {};
+        ok(
+          "新打开的文档没有文档级色系（跟随默认）",
+          !!pd.id && pd.scheme == null,
+          pd.id ? String(pd.scheme) : "没找到刚打开的那份",
+        );
+        const set = await invoke("doc_set_scheme", { id: pd.id, scheme: "tungsten" });
+        ok("doc_set_scheme 生效", set.scheme === "tungsten", set.scheme);
+        await invoke("doc_close", { id: pd.id });
+        const op2 = await invoke("doc_open_paths", { paths: [palPath] });
+        const pd2 = op2.docs.find((x) => String(x.path || "").replace(/\\/g, "/") === palPath) || {};
+        ok("色系按文件记住（重开还在）", pd2.scheme === "tungsten", String(pd2.scheme));
+        await invoke("doc_close", { id: pd2.id });
+        try {
+          await invoke("workspace_delete", { path: palPath });
+        } catch (e) { /* 清理失败不影响断言 */ }
       }
 
       // ── 拖拽打开文件（3.11.3）：原生拖放事件 → 打开标签页 ──
