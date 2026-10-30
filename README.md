@@ -14,7 +14,7 @@ no external request is ever made**.
 Code or images reach a model only when you actively use AI, and then only the endpoint you chose
 (BYOK talks straight to your own provider, membership goes through the Diagramon cloud gateway).
 
-Version **3.8.7** · Official website <https://www.diagramon.com>
+Version **3.11.2** · Official website <https://www.diagramon.com>
 
 ## Screenshots
 
@@ -39,25 +39,32 @@ Version **3.8.7** · Official website <https://www.diagramon.com>
 ### Editing
 - **Multi-tab** — several formats side by side in one window; when tabs overflow they scroll into
   view, respond to the wheel for horizontal scrolling and fade at both ends, and `Ctrl+Tab` /
-  `Ctrl+PgUp` / `Ctrl+PgDn` cycle through them
-- **Syntax checking with inline errors** — only problems that can actually be *proven* (unbalanced
-  brackets/quotes/tags, JSON that fails to parse) are reported, never style guesses; the Problems panel
-  aggregates every open document and labels each row with its file name and line/column
+  `Ctrl+Shift+Tab` / `Ctrl+PgUp` / `Ctrl+PgDn` cycle through them
+- **Syntax checking, engine-first** — Mermaid and Graphviz DOT problems are parsed by the **graphics
+  engines themselves**, which report the real line (Mermaid also the column); D2 is compiled by its
+  bundled wasm and drawio / Excalidraw get structural validation. The line scanner still proves
+  unbalanced brackets/quotes/tags and unparseable JSON, but an engine finding wins on the same line.
+  When an engine is unavailable or the document is very large (over 5,000 lines) validation is
+  explicitly marked as degraded — never silently reported as "passed"
 - **Mermaid engine 10.9.5 → 12.2.0** — picks up every diagram type and syntax improvement upstream added
   since then, with render output aligned to mermaid.live
-- **Errors point at the line and column** — the Problems panel prints "line N, column M" and its button
-  switches to the source view with the caret pinned to that spot; the offending line gets a red squiggle
-  in the editor (gone the moment it is fixed), and the same location — column included — is fed to the AI
-  repair loop
+- **Errors point at the line and column** — the Problems panel prints "line N, column M" and clicking a
+  row switches to the source view with the caret pinned to that exact spot; the offending line gets a
+  red squiggle in the editor (gone the moment it is fixed), and the same location — column included — is
+  fed to the AI repair loop
 - **Outline and current scope** — nodes and the `subgraph` / `cluster` / D2 container tree are derived
-  from the body; the status bar shows the enclosing subgraph/cluster/container next to the caret
-  position (and nowhere else, so no information is duplicated)
+  from the body; clicking an entry jumps the caret to that element and scrolls it into view, while
+  canvas documents (drawio / Excalidraw) get a group/node outline that selects and centres the item on
+  the canvas. The status bar shows the enclosing subgraph/cluster/container next to the caret position
+  (and nowhere else, so no information is duplicated)
 - **Find & replace**, undo/redo, context menu, command palette (`Ctrl+Shift+P` or `F1`)
 - **Tab behaves like mainstream editors** — with an empty selection Tab fills spaces to the next tab stop
   **at the caret** (at the line start it still inserts a full 4-space unit), a selection is indented as a
   block and `Shift+Tab` outdents; one key press is still one undo step
-- **Large-document guard rail** — past a line/byte threshold the preview asks "render anyway?" instead of
-  silently dragging the engine down (the threshold lives in exactly one place, pushed down from Rust)
+- **Large-document guard rails** — opening or saving a diagram beyond **400 KB / 5,000 lines** asks once
+  per session ("this diagram is large; preview may stall for a few seconds") instead of surprising you
+  later, and past the render threshold the preview asks "render anyway?" rather than silently dragging
+  the engine down (both thresholds live in exactly one place, pushed down from Rust)
 
 ### Preview and export
 - **Three text modes** — source / split / preview (`Ctrl+1/2/3`); the source pane can be hidden entirely
@@ -113,7 +120,7 @@ Version **3.8.7** · Official website <https://www.diagramon.com>
 - **Offline by construction** — a pruned drawio runtime and a locally bundled Excalidraw ship inside the
   installer; zero external requests
 
-### Format conversion (Conversion Center)
+### Format conversion
 - **Directions** — `Mermaid → DOT` / `Mermaid → D2` / `DOT → D2` (implemented in pure Rust),
   `Mermaid → drawio` and `Mermaid → Excalidraw` (handed to each engine's own parser instead of
   reimplementing one), and `D2 → drawio` (D2's own wasm computes the geometry in the page first, then it
@@ -124,6 +131,19 @@ Version **3.8.7** · Official website <https://www.diagramon.com>
 - **One-way semantics** — the product opens in a new tab and the original file's bytes never change
 - **Lossy conversions say so** — the result carries `notes` listing exactly what did not migrate
   (e.g. `subgraph → cluster` drops styling); the dialog shows them, nothing is dropped silently
+- **Post-conversion reconciliation** — after a conversion the app counts nodes and edges on both sides
+  and reports "N nodes / M edges missing". A shortfall on a text target counts as failure (and can
+  enter the AI repair loop); drawio / Excalidraw shortfalls are engine expressiveness differences and
+  only warn. If either side cannot be counted, it says exactly that instead of pretending the counts match
+- **AI-enhanced conversion (optional, off by default)** — the entry appears only when the result is
+  lossy or fails validation, a model is configured and the target is a text format. It does one initial
+  fix plus up to 3 correction rounds ("correction N, M left"), stops early after two identical errors,
+  and shows what will be sent on first use. Success opens a new tab; failure keeps the local result and
+  says so. Every call counts toward usage
+- **`Mermaid → drawio` can re-layout with ELK** — an optional checkbox hands layout to drawio's own ELK
+  layered engine: fewer crossings and no giant detours on back edges. Off by default (identical to
+  before); the conversion record states whether ELK actually ran, including when it was skipped because
+  the source already has a `config` block or is not a flowchart
 - **Unavailable directions are still listed, with a stated reason**, rather than hidden for you to guess
 - **The Mermaid details that used to break the output are handled** — edge endpoint markers are honoured
   (`<-->` becomes DOT's `dir=both` / D2's `<->`), markers the target format has no shape for
@@ -133,33 +153,68 @@ Version **3.8.7** · Official website <https://www.diagramon.com>
 - **`Mermaid → Excalidraw` inherits the document's look** — when the source document picked classic /
   neo / handDrawn in the top bar, the converted Excalidraw is rendered with that same look; the
   conversion record states what was inherited and that the layout was re-done with the engine's defaults
+- **Subgraph diagrams stay editable after `Mermaid → Excalidraw`** — a diagram with `subgraph` boxes is
+  no longer flattened into one static image: it comes back as real frames, arrows and text that can be
+  dragged and edited. Inline `:::class` styles convert too, and rounded labels containing parentheses
+  (e.g. an IP) no longer shred the drawio import
 
 ### Workspace and files
 - **Open a folder** — explorer tree (only extensions this app knows; `.git` / `node_modules` / `target`
-  are skipped)
-- **Whole-workspace search** (`Ctrl+Shift+H`) — streamed from Rust with line/column, click to jump,
-  cancellable
+  are skipped), with **sorting by name or last-modified time** in either direction and a **folders-first**
+  toggle. Time mode shows each row's timestamp (directories use the newest item in their subtree); Chinese
+  names sort by pinyin and numbers compare numerically ("diagram 2" before "diagram 10"). The choice is
+  saved with your settings
+- **Whole-workspace search** (`Ctrl+Shift+H` or `Alt+2`) — the explorer's header search box replaces the
+  tree while the query is non-empty (clear it to get the tree back); results stream from Rust with
+  line/column, click to jump, and the search is cancellable
 - **File watching** — external changes are picked up automatically; when they collide with unsaved local
   edits you get a banner to choose "use disk version / keep mine" (a state that needs a decision is not a
   toast that disappears on its own)
 - **Single instance + file associations** — double-clicking a diagram file opens it in the running window
   instead of starting another process
-- **Autosave and crash recovery** — autosave is owned by Rust (a background thread, not a front-end
-  timer); unsaved documents have a draft store where one corrupt file cannot take down the others
+- **Autosave is off by default** — saving is Ctrl+S / save-as unless you turn autosave on in
+  **Settings → Editor** (delay 500–60,000 ms). When on, it is owned by Rust (a background thread, not a
+  front-end timer); unsaved documents have a draft store where one corrupt file cannot take down the others
 - **Path guarding** — create/rename/delete inside a workspace always go through root validation and
   reject `..` and absolute paths; "save as / export" uses the system dialog (that is the user's own
   authorization), and can be tightened with "only read and write inside the workspace"
 
 ### AI assistant
-- **Four tabs** — generate (natural language → diagram code for the current format), vision
-  (image → code), review (ask for changes to the current document) and explain (a read-only reading of
-  the current diagram: what it says, the main path, module boundaries, risks — no code, no edits)
+- **One timeline, four intents** — generate (natural language → diagram code), vision (image → code),
+  review (ask for changes to the current document) and explain (a read-only reading of the current
+  diagram) no longer own separate tabs: a document has **one chronological conversation**, so review and
+  retry face a single history. Each message carries an intent; a **four-stop slider** shows it before you
+  send, click any stop to override, click "Auto" to return, and the override clears after sending so the
+  next sentence is classified anew
+- **Intent classification is optional — and official for members** — Settings → AI offers
+  `Auto / Official / Custom / Off`. Signed-in members use Diagramon's **official SystemOne** service by
+  default (the login token is the credential; no local key), while Custom points at your own
+  SystemOne / Jev-compatible endpoint. Failures, signed-out state and low confidence all fall back to
+  local rules and never block sending; "Auto-detected 86%" appears only with an actual verdict. No
+  request is made while the panel is collapsed, concurrent classifications of the same sentence share
+  one request, and changing the endpoint/model/thresholds invalidates old verdicts. Send is locked while
+  classification is in flight, so a double-click cannot fire the same sentence twice
+- **Output format selector** — Follow current / Mermaid / Graphviz DOT / D2 / drawio / Excalidraw. When
+  the target differs from the current document, applying opens a new tab in that format; drawio and
+  Excalidraw are converted from Mermaid by the carrier rather than asking the model to write canvas
+  XML/JSON
+- **Explain stays read-only and rendered** — its replies are Markdown by default (headings, lists, bold,
+  inline code, quotes, tables and links), stream as they are generated, and each reply can toggle between
+  preview and source. Model output is treated as plain text: inline HTML/scripts are never executed,
+  `javascript:` links are not clickable and images keep only their alt text. No code card, no Apply
+  button, and the document is never written
 - **Two kinds of credentials, kept visually separate** — the cloud gateway (membership; the credential is
   the current login token, so you fill in nothing) and local BYOK (OpenAI-compatible / Ollama / custom,
-  where you supply the key) are shown as groups, never mixed
-- **Two ways into vision** — pick an image file, or **drag out a region of the screen** (freeze-frame plus
-  a borderless overlay, so multi-monitor and DPI scaling never come into play); the image is compressed to
-  ≤1568px in memory and never written to disk
+  where you supply the key) are shown as groups, never mixed. The AI page in Settings is split into
+  **Text & image models / Intent / Behavior / Memory**, so the official-vs-custom split is visible at a
+  glance. BYOK endpoints on `opencode.ai` automatically carry a stable `x-opencode-session` header (and a
+  dedicated User-Agent), and `max_tokens` is left empty by default so strict upstreams are not handed an
+  out-of-range limit
+- **Vision has four entry points** — pick an image file, **paste with `Ctrl+V`**, **drag files into the
+  dialog**, or **drag out a region of the screen** (freeze-frame plus a borderless overlay, so
+  multi-monitor and DPI scaling never come into play). Up to **two images** can be attached and compared;
+  both thumbnails stay in the chat. Images are compressed to ≤1568px **in memory** and are never written
+  to disk or into the conversation record
 - **External files work as context too** — use the **folder button** in the row above the AI input
   (multi-select), or drop a file **directly onto the AI panel**: up to 8 files, 256 KiB each (larger
   ones are cut on a character boundary and labelled), UTF-8 text only (binary or other encodings
@@ -168,6 +223,15 @@ Version **3.8.7** · Official website <https://www.diagramon.com>
 - **The AI only fixes what the AI wrote** — the render-failure auto-fix fires only while the body is
   still exactly the version the AI applied; syntax errors you introduce yourself are never rewritten
   behind your back (they are still reported in the preview and the problems panel)
+- **Review works on the whole document** — review messages send the **entire current source** and ask
+  for the **complete modified source** back (unchanged parts preserved), so "Apply" can never leave half
+  a diagram. "Ask AI to edit this selection" still sends the whole document and only tells the model
+  which part to change; Apply takes the **last non-empty fenced code block**, so a corrected second
+  version is used instead of the first draft
+- **Message-level operations** — retry (regenerate), edit-and-resend and delete a turn without clearing
+  the conversation; each user and assistant message has a copy icon (copy your input / copy the reply's
+  source), styled as part of the same action group as edit and delete. A retry records `Retry-Of`
+  attribution on the server ledger
 - **Usage is labelled with its source** — only tokens the provider actually reports are accumulated;
   anything unreported shows `—` with an explanation, never `0` and never a local estimate
 - **It actually remembers the conversation** — previous turns are carried into the next request
@@ -196,9 +260,9 @@ Version **3.8.7** · Official website <https://www.diagramon.com>
   produced only reasoning says why and keeps it there. The reasoning is **stored with the
   conversation** (it is billed output), so after a restart expanding the block shows the same text
 - **File open history** — the welcome page lists 5 recent files and its **More…** button opens the
-  complete history (up to 50 entries kept locally, filterable by name or path; click a row to open it —
-  a file already in a tab is focused instead). `Ctrl+R` and **File → Open recent → More…** open this
-  same window
+  complete history (**unlimited**, lazily paged inside the window, filterable by name or path; click a
+  row to open it — a file already in a tab is focused instead). `Ctrl+R` and **File → Open recent →
+  Open history…** open this same window
 - **Long-term memory (optional)** — the AI can propose to remember your preferences and terminology
   (colour scheme, default flow direction, naming habits…). Proposals land as **pending** and only take
   effect once you confirm them; you can also edit them by hand, and the whole thing can be switched off
@@ -225,6 +289,9 @@ Version **3.8.7** · Official website <https://www.diagramon.com>
   credit balance** (measured in *credits*, deliberately not anchored to any currency)
 - **Cloud documents** — folder tree (empty folders included), filter, open; the **save to cloud** dialog
   lets you pick a target folder and create a subfolder
+- **Gateway model tiers** — the model picker includes an **auto** tier that lets the server route by
+  capability and image-input needs; gateway requests also carry `scene` / `retry_of` attribution, which
+  BYOK requests never do
 - **Login is a stop on the way, not the destination** — starting from "save to cloud" continues into the
   save dialog once you are signed in
 - **Registration is not done in the client** — the footer only offers "register on the website", which
@@ -243,7 +310,12 @@ Version **3.8.7** · Official website <https://www.diagramon.com>
   fails the whole acceptance run)
 - **Built-in auto-update** — minisign signature verification; "up to date", "new version available"
   (download → restart) and "error" are three distinct outcomes, and a failed check is never reported as
-  "up to date"
+  "up to date". The check asks `www.diagramon.com/updates/…` first, which routes mainland China to the
+  Gitee mirror and everyone else to GitHub; if that service is unreachable it falls back to GitHub
+  without losing the existing update path
+- **AI settings are grouped** — Text & image models / Intent / Behavior / Memory, so the official
+  SystemOne mode, custom endpoints and behavior switches are visible at a glance instead of buried in one
+  long form
 - **Close to tray (opt-in)** — turned on in Settings → Appearance, ✕ only hides the window; the tray icon
   brings it back, or quits from its menu. The icon is always present, so you can quit under either setting
 - **Default Mermaid look** — a global fallback used when a document has no look of its own (priority:
@@ -385,7 +457,9 @@ tools/               asset fetching (drawio / excalidraw / graphviz / mermaid / 
 | `Ctrl+R` | Recent files |
 | `Ctrl+W` / `Ctrl+Q` | Close current tab / quit |
 | `Ctrl+F` | Find and replace |
+| `Shift+Alt+F` | Format the source |
 | `Ctrl+Shift+H` | Search the whole workspace |
+| `Alt+Shift+C` | Open the conversion dialog |
 | `Ctrl+Shift+P` / `F1` | Command palette |
 | `Ctrl+I` / `Ctrl+Shift+I` / `Ctrl+Shift+E` | AI generate / AI vision / AI explain |
 | `Ctrl+Shift+C` | Copy the active view as an image |
@@ -393,9 +467,11 @@ tools/               asset fetching (drawio / excalidraw / graphviz / mermaid / 
 | `Ctrl+Shift+F` | Zen mode (full-screen editing) |
 | `Ctrl+1` / `Ctrl+2` / `Ctrl+3` | Source / split / preview |
 | `Ctrl+0` / `Ctrl+=` / `Ctrl+-` | Fit to view / zoom in / zoom out |
-| `Ctrl+T` | Toggle light and dark theme |
-| `Ctrl+Tab` / `Ctrl+PgUp` / `Ctrl+PgDn` | Cycle through tabs |
-| `Alt+1` … `Alt+5` | Sidebar views: explorer / search / convert / cloud documents / outline |
+| `Ctrl+K Ctrl+T` | Toggle light and dark theme |
+| `Ctrl+K Ctrl+S` | Shortcut sheet |
+| `Ctrl+Tab` / `Ctrl+Shift+Tab` / `Ctrl+PgUp` / `Ctrl+PgDn` | Cycle through tabs |
+| `Alt+1` / `Alt+4` / `Alt+5` | Sidebar views: explorer / cloud documents / outline |
+| `Alt+2` | Focus the explorer's search box |
 
 Inside the editor: `Ctrl+Z` undo, `Ctrl+Y` redo, `Ctrl+X/C/V/A` cut, copy, paste and select all. When the
 preview or a canvas has focus those application-level shortcuts are intercepted by the carrier page and
