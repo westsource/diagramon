@@ -1072,6 +1072,43 @@ window.DGM = window.DGM || {};
           );
         }
 
+        // 连线与箭头都要跟着色系。用 init 指令的 lineColor（`linkStyle` 只染线、箭头仍是 #333），
+        // 所以这里两条都断言 —— 只验线的话，"箭头没变"这种半吊子实现会被放过。
+        {
+          const edgeHex = String(pals.find((p) => p.id === "pine").edge_light).toLowerCase();
+          const painted = await invoke("palette_apply", {
+            req: {
+              body: "flowchart TD\n    A([开始]) --> B[写库]\n",
+              format: "mermaid",
+              palette: "pine",
+              dark: false,
+              mode: "all",
+            },
+          });
+          const toHex = (rgb) => {
+            const m = /rgba?\((\d+),\s*(\d+),\s*(\d+)/.exec(String(rgb || ""));
+            return m ? "#" + [m[1], m[2], m[3]].map((x) => Number(x).toString(16).padStart(2, "0")).join("") : String(rgb || "");
+          };
+          let stroke = "";
+          let marker = "";
+          try {
+            const out = await window.mermaid.render("dgm-edge-probe", painted.body);
+            const host = document.createElement("div");
+            host.style.cssText = "position:fixed;left:-9999px;top:0";
+            host.innerHTML = out.svg;
+            document.body.appendChild(host);
+            const path = host.querySelector("path.flowchart-link, .edgePath path");
+            const mk = host.querySelector("marker path");
+            stroke = path ? getComputedStyle(path).stroke : "";
+            marker = mk ? getComputedStyle(mk).fill : "";
+            host.remove();
+          } catch (e) {
+            stroke = "ERR " + ((e && e.message) || e);
+          }
+          ok("连线颜色跟着色系", toHex(stroke) === edgeHex, `${toHex(stroke)} 期望 ${edgeHex}`);
+          ok("箭头颜色也跟着（不只是线）", toHex(marker) === edgeHex, `${toHex(marker)} 期望 ${edgeHex}`);
+        }
+
         // 用命令**返回的**路径：自己拼的字符串与后端规范化后的可能不等（拖放那条已踩过）
         const palPath = await invoke("workspace_new_file", { dir: wsDir, name: "selftest-palette", format: "mermaid" });
         const op = await invoke("doc_open_paths", { paths: [palPath] });

@@ -735,6 +735,9 @@ pub struct PaletteInfo {
     pub name_zh: String,
     pub name_en: String,
     pub roles: Vec<PaletteRole>,
+    /// 这个色系的连线颜色（亮 / 暗）。线只借一点色相倾向，不按角色染。
+    pub edge_light: String,
+    pub edge_dark: String,
 }
 
 /// 重着色的范围。

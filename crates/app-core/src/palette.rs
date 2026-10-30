@@ -122,6 +122,8 @@ pub fn infos() -> Vec<PaletteInfo> {
                     }
                 })
                 .collect(),
+            edge_light: edge_swatch(s, false),
+            edge_dark: edge_swatch(s, true),
         })
         .collect()
 }
@@ -223,6 +225,16 @@ fn role_sat(seed_sat: f32, role: &str) -> f32 {
         "note" => 0.06,
         _ => seed_sat,
     }
+}
+
+/// 连线的颜色：同一个色系的种子色相，但**压低饱和、暗一档**。
+///
+/// 线的职责是"结构"，不该跟角色抢注意力 —— 所以只用主色相的一点点倾向，
+/// 而不是按源节点的角色染色（那需要按边序号写 `linkStyle`，文档一改就错位）。
+fn edge_swatch(seed: &Seed, dark: bool) -> String {
+    // 中性色系（钨灰）也给一条近乎无彩的线，保持"线框风"一致
+    let s = (seed.sat * 0.45).min(0.30);
+    hsl_hex(seed.hue, s, if dark { 0.66 } else { 0.40 })
 }
 
 /// 一个角色在某个主题下的 (fill, stroke, text)。
@@ -433,7 +445,10 @@ fn apply_mermaid(
     dark: bool,
     mode: PaletteMode,
 ) -> Result<PaletteApplyRes, String> {
-    let facts = convert::flow_facts(body)?;
+    // **先剥掉自己上次生成的块再扫描**：块里有 `linkStyle` 与 `class …`，
+    // 让它们参与"这份图现在长什么样"的判断会把幂等性弄坏（换色系时还会读到自己写的类）。
+    let (base, _) = strip_block(body, "%% dgm-palette:begin", "%% dgm-palette:end");
+    let facts = convert::flow_facts(&base)?;
     if facts.nodes.is_empty() {
         return Ok(PaletteApplyRes { body: body.to_string(), changed: false, applied: 0, skipped: 0, styles_removed: 0 });
     }
@@ -447,7 +462,7 @@ fn apply_mermaid(
     });
     let (by_role, skipped) = plan(items, mode);
 
-    let (mut out, _) = strip_block(body, "%% dgm-palette:begin", "%% dgm-palette:end");
+    let mut out = base;
     let mut styles_removed = 0usize;
     if mode == PaletteMode::All {
         let colored_ids: Vec<&String> = by_role.values().flatten().collect();
@@ -472,6 +487,13 @@ fn apply_mermaid(
         applied += ids.len();
         block.push_str(&format!("class {} {}\n", ids.join(","), role_class(role)));
     }
+    // 连线统一跟随色系。**用 init 指令而不是 `linkStyle default`**：后者只改 `stroke`，
+    // 箭头（marker）仍是主题的 #333，肉眼能看到"线是灰绿、箭头是深灰"的错位；
+    // `themeVariables.lineColor` 把线和箭头一起换掉（mermaid 12 实测两种位置都生效）。
+    let line = edge_swatch(seed, dark);
+    block.push_str(&format!(
+        "%%{{init: {{'themeVariables': {{'lineColor': '{line}'}}}}}}%%\n"
+    ));
     block.push_str("%% dgm-palette:end\n");
     if !out.ends_with('\n') {
         out.push('\n');
@@ -822,7 +844,10 @@ fn dot_is_colored(node: &DotNode) -> bool {
 }
 
 fn apply_dot(body: &str, seed: &Seed, dark: bool, mode: PaletteMode) -> Result<PaletteApplyRes, String> {
-    let nodes = dot_nodes(body);
+    // 同 Mermaid：先剥块再扫描，否则上一轮写进去的 fillcolor 会被当成"用户已有颜色"，
+    // 于是换色系时（only_uncolored）一个节点都不动 —— 看起来像"点了没反应"。
+    let (base, _) = strip_block(body, "// dgm-palette:begin", "// dgm-palette:end");
+    let nodes = dot_nodes(&base);
     if nodes.is_empty() {
         return Ok(PaletteApplyRes { body: body.to_string(), changed: false, applied: 0, skipped: 0, styles_removed: 0 });
     }
@@ -839,7 +864,7 @@ fn apply_dot(body: &str, seed: &Seed, dark: bool, mode: PaletteMode) -> Result<P
 
     // DOT 不用删任何东西：后出现的属性语句会覆盖先前的，所以"整篇重排"就是追加。
     // （Mermaid 的 `style` 语句优先级高于 classDef，那边才必须删。）
-    let (mut out, _) = strip_block(body, "// dgm-palette:begin", "// dgm-palette:end");
+    let mut out = base;
     let styles_removed = 0usize;
 
     let mut block = String::from("  // dgm-palette:begin（Diagramon 自动配色 · ");
@@ -873,6 +898,7 @@ fn apply_dot(body: &str, seed: &Seed, dark: bool, mode: PaletteMode) -> Result<P
             ));
         }
     }
+    block.push_str(&format!("  edge [color=\"{}\"];\n", edge_swatch(seed, dark)));
     block.push_str("  // dgm-palette:end\n");
     if applied == 0 {
         return Ok(PaletteApplyRes { body: body.to_string(), changed: false, applied: 0, skipped, styles_removed });
@@ -901,8 +927,16 @@ struct D2Node {
     has_fill: bool,
 }
 
-fn d2_nodes(body: &str) -> Vec<D2Node> {
+/// D2 的扫描结果：节点 + 边（边的两端要保持顺序，才好写 `(a -> b).style.stroke`）。
+#[derive(Debug, Default)]
+struct D2Scan {
+    nodes: Vec<D2Node>,
+    edges: Vec<(String, String)>,
+}
+
+fn d2_nodes(body: &str) -> D2Scan {
     let mut out: Vec<D2Node> = Vec::new();
+    let mut edges: Vec<(String, String)> = Vec::new();
     let touch = |out: &mut Vec<D2Node>, id: &str| -> usize {
         if let Some(i) = out.iter().position(|n| n.id == id) {
             return i;
@@ -919,16 +953,35 @@ fn d2_nodes(body: &str) -> Vec<D2Node> {
         let (lhs, rhs) = match line.split_once(':') {
             Some((l, r)) => (l.trim(), r.trim()),
             None => {
-                for seg in split_d2_path(line) {
-                    touch(&mut out, &seg);
+                let path = split_d2_path(line);
+                for seg in &path {
+                    touch(&mut out, seg);
+                }
+                for w in path.windows(2) {
+                    edges.push((w[0].clone(), w[1].clone()));
                 }
                 continue;
             }
         };
+        // 逐条边的样式：`(a -> b).style.stroke: …`（用户手写或我们生成的形态）
+        if let Some(inner) = lhs.strip_prefix('(').and_then(|r| r.split(')').next()) {
+            let path = split_d2_path(inner);
+            for seg in &path {
+                touch(&mut out, seg);
+            }
+            for w in path.windows(2) {
+                edges.push((w[0].clone(), w[1].clone()));
+            }
+            continue;
+        }
         if lhs.contains("->") || lhs.contains("--") {
             // 边：两端都是节点，冒号右边是**边标签**，别当成节点标签
-            for seg in split_d2_path(lhs) {
-                touch(&mut out, &seg);
+            let path = split_d2_path(lhs);
+            for seg in &path {
+                touch(&mut out, seg);
+            }
+            for w in path.windows(2) {
+                edges.push((w[0].clone(), w[1].clone()));
             }
             continue;
         }
@@ -962,7 +1015,7 @@ fn d2_nodes(body: &str) -> Vec<D2Node> {
             out[i].label = Some(rhs.trim_matches('"').to_string());
         }
     }
-    out
+    D2Scan { nodes: out, edges }
 }
 
 fn split_d2_path(text: &str) -> Vec<String> {
@@ -988,7 +1041,10 @@ fn split_d2_attr(lhs: &str) -> Option<(String, String)> {
 }
 
 fn apply_d2(body: &str, seed: &Seed, dark: bool, mode: PaletteMode) -> Result<PaletteApplyRes, String> {
-    let nodes = d2_nodes(body);
+    // 同上面两个格式：先剥块再扫描（自己写的 `a.style.fill` / `(a -> b).style.stroke` 不算"用户已有"）
+    let (base, _) = strip_block(body, "# dgm-palette:begin", "# dgm-palette:end");
+    let scan = d2_nodes(&base);
+    let nodes = &scan.nodes;
     if nodes.is_empty() {
         return Ok(PaletteApplyRes { body: body.to_string(), changed: false, applied: 0, skipped: 0, styles_removed: 0 });
     }
@@ -1000,7 +1056,7 @@ fn apply_d2(body: &str, seed: &Seed, dark: bool, mode: PaletteMode) -> Result<Pa
     });
     let (by_role, skipped) = plan(items, mode);
 
-    let (mut out, _) = strip_block(body, "# dgm-palette:begin", "# dgm-palette:end");
+    let mut out = base;
     let mut block = String::from("# dgm-palette:begin（Diagramon 自动配色 · ");
     block.push_str(seed.zh);
     block.push_str(if dark { " · 暗色" } else { " · 亮色" });
@@ -1014,6 +1070,12 @@ fn apply_d2(body: &str, seed: &Seed, dark: bool, mode: PaletteMode) -> Result<Pa
             block.push_str(&format!("{id}.style.stroke: \"{stroke}\"\n"));
             block.push_str(&format!("{id}.style.font-color: \"{text}\"\n"));
         }
+    }
+    // 连线：D2 没有"全局边样式"，只能逐条写（`(a -> b).style.stroke`）。
+    // 端点是扫描时按文档顺序记下的，重跑同序，所以幂等。
+    let line = edge_swatch(seed, dark);
+    for (from, to) in &scan.edges {
+        block.push_str(&format!("({from} -> {to}).style.stroke: \"{line}\"\n"));
     }
     block.push_str("# dgm-palette:end\n");
     if applied == 0 {
@@ -1163,6 +1225,8 @@ mod tests {
             assert_eq!(p.roles.len(), ROLES.len());
             assert!(!p.name_zh.is_empty() && !p.name_en.is_empty());
             assert!(p.roles.iter().all(|r| r.light.fill.starts_with('#') && r.dark.fill.starts_with('#')));
+            assert!(p.edge_light.starts_with('#') && p.edge_dark.starts_with('#'));
+            assert_ne!(p.edge_light, p.roles[0].light.stroke, "线色不该与节点描边同色");
         }
     }
 
@@ -1309,6 +1373,66 @@ b -> c
         let twice = apply(&once.body, FormatId::D2, "pine", false, PaletteMode::All).unwrap();
         assert_eq!(twice.body, once.body);
         assert!(!twice.changed);
+    }
+
+    #[test]
+    fn edges_take_the_palette_but_stay_quiet() {
+        // 线是"结构"，只借一点色系倾向：三种格式各有一条统一定义
+        let m = apply(&mermaid_flow(), FormatId::Mermaid, "pine", false, PaletteMode::All).unwrap();
+        assert!(m.body.contains("'lineColor': '#"), "{}", m.body);
+        let d = apply("digraph G {\n  A -> B;\n}\n", FormatId::Dot, "pine", false, PaletteMode::All).unwrap();
+        assert!(d.body.contains("edge [color=\"#"), "{}", d.body);
+        let t = apply("a -> b\n", FormatId::D2, "pine", false, PaletteMode::All).unwrap();
+        assert!(t.body.contains("(a -> b).style.stroke: \"#"), "{}", t.body);
+
+        // 换色系 ⇒ 线色跟着换
+        let line = |s: &str| {
+            s.lines().find(|l| l.contains("lineColor")).unwrap_or("").trim().to_string()
+        };
+        let m2 = apply(&m.body, FormatId::Mermaid, "lotus", false, PaletteMode::All).unwrap();
+        assert_ne!(line(&m.body), line(&m2.body), "线色没跟着色系走");
+
+        // 线色要比节点描边更淡（饱和度压低），否则 5 条以上边会抢注意力
+        let edge_hex = line(&m.body)
+            .split("lineColor': '")
+            .nth(1)
+            .and_then(|r| r.split('\'').next())
+            .unwrap_or("")
+            .to_string();
+        let (_, main_stroke, _) = swatch(find("pine").unwrap(), "main", false);
+        assert_ne!(edge_hex, main_stroke, "线色不该与节点描边同色");
+        let sat = |hex: &str| {
+            let rgb: Vec<f32> = (1..).step_by(2).take(3)
+                .map(|k| u8::from_str_radix(&hex[k..k + 2], 16).unwrap_or(0) as f32 / 255.0)
+                .collect();
+            let mx = rgb.iter().cloned().fold(0.0f32, f32::max);
+            let mn = rgb.iter().cloned().fold(1.0f32, f32::min);
+            if mx <= 0.0 { 0.0 } else { (mx - mn) / mx }
+        };
+        assert!(sat(&edge_hex) < sat(&main_stroke), "线色 {edge_hex} 应比节点描边 {main_stroke} 更淡");
+    }
+
+    /// 关键回归：上一轮**自己写进去的**填充/类名，不能被当成"用户已有颜色"。
+    ///
+    /// 曾经三个格式都在"剥自己那块"之前扫描，于是第二次换色系时：
+    /// DOT 看到自己写的 fillcolor → 跳过全部节点；D2 看到自己写的 style.fill → 同样跳过；
+    /// 用户看到的是"点了没反应"。
+    #[test]
+    fn switching_palette_in_only_uncolored_mode_recolors_our_own_output() {
+        let cases: [(FormatId, &str); 3] = [
+            (FormatId::Mermaid, "flowchart TD\n    A([开始]) --> B[写库]\n"),
+            (FormatId::Dot, "digraph G {\n  A -> B;\n}\n"),
+            (FormatId::D2, "a -> b\n"),
+        ];
+        for (fmt, body) in cases {
+            let first = apply(body, fmt, "pine", false, PaletteMode::OnlyUncolored).unwrap();
+            assert!(first.changed, "{fmt:?} 第一次应当上色");
+            let second = apply(&first.body, fmt, "lotus", false, PaletteMode::OnlyUncolored).unwrap();
+            assert!(second.changed, "{fmt:?} 换色系后应当变色（不是跳过全部节点）");
+            assert_eq!(second.skipped, 0, "{fmt:?} 不该把上一轮自己的输出当成用户颜色");
+            let (fill, _, _) = swatch(find("lotus").unwrap(), "main", false);
+            assert!(second.body.contains(&fill), "{fmt:?} 没写进新色值：{}", second.body);
+        }
     }
 
     #[test]
