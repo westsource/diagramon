@@ -463,7 +463,8 @@ window.DGM = window.DGM || {};
     const picked = { applied: res.applied, skipped: res.skipped, removed: res.styles_removed };
     // 走编辑器写回：源码窗口要跟着变（否则预览换了色、左边还是旧文本），
     // 而且这条路径会把改动算进撤销栈。
-    if (res.changed) await DGM.editor.applyBody(res.body);
+    // 「写入正文」也是缓冲区动作：真正落盘仍然是用户自己的 Ctrl+S
+    if (res.changed) await DGM.editor.applyBody(res.body, { hold: true });
     const bits = [t("preview.palette.applied", { name: paletteName(eff), n: picked.applied })];
     if (picked.skipped) bits.push(t("preview.palette.skipped", { n: picked.skipped }));
     if (picked.removed) bits.push(t("preview.palette.removed", { n: picked.removed }));
@@ -576,7 +577,8 @@ window.DGM = window.DGM || {};
     if (!ok) return;
     // ① 本地：删掉我们生成的那一段（确定性、零成本）
     const res = await state.clearPalette(live.body, live.format);
-    if (res.changed) await DGM.editor.applyBody(res.body);
+    // 只改缓冲区：磁盘不动（关掉标签也不会问你保存；文件本来就是干净的）
+    if (res.changed) await DGM.editor.applyBody(res.body, { hold: true });
     await state.setScheme(live.id, "");
     schedule();
 
@@ -606,7 +608,7 @@ window.DGM = window.DGM || {};
         DGM.status(t("preview.palette.clearRefused"), "err");
         return;
       }
-      await DGM.editor.applyBody(code);
+      await DGM.editor.applyBody(code, { hold: true });
       DGM.status(t("preview.palette.clearAiDone", { n: after ? after.traces : 0 }), "ok");
     } catch (e) {
       DGM.status(t("preview.palette.clearAiFailed", { msg: (e && e.message) || String(e) }), "err");

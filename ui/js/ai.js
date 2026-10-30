@@ -1698,8 +1698,9 @@ window.DGM = window.DGM || {};
     }
     if (!d) return;
     lastApplied = { id: d.id, body: d.body };
-    // 不再在应用时烘焙配色：颜色是**渲染期**按当前色系展开的（写进来反而会让"无"失效）
-    await DGM.editor.applyBody(blk.code);
+    // 不再在应用时烘焙配色：颜色是**渲染期**按当前色系展开的（写进来反而会让"无"失效）。
+    // `hold: true` —— 只进缓冲区：先看效果，满意再自己 Ctrl+S（开了自动保存也不会被偷偷写盘）。
+    await DGM.editor.applyBody(blk.code, { hold: true });
     if (m) m.applied = true;
     // 布防：这一版渲染失败就自动修正一次（开关见「AI 设置 → 渲染失败时…」）。
     const selfRetry = !!(m && retryCtx && retryCtx.reqId && m.req === retryCtx.reqId);
@@ -1740,7 +1741,7 @@ window.DGM = window.DGM || {};
     }
     const d = state.doc(lastApplied.id);
     if (d) {
-      await DGM.editor.applyBody(lastApplied.body);
+      await DGM.editor.applyBody(lastApplied.body, { hold: true });
       render();
       DGM.toast({ icon: "undo", title: t("ai.reverted"), sub: t("ai.revertedSub") });
     }

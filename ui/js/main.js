@@ -1166,6 +1166,60 @@ window.DGM = window.DGM || {};
           } catch (e) { /* 清理失败不影响断言 */ }
         }
 
+        // 只写缓冲区、不落盘：开了自动保存也一样（应用配色 / 清除 / AI 结果都走这条路）
+        {
+          const holdPath = await invoke("export_write", {
+            path: wsDir + "/selftest-hold.mmd",
+            base64: encRaw("flowchart TD\n    A --> B\n"),
+          });
+          const norm2 = (x) => String(x || "").replace(/\\/g, "/").toLowerCase();
+          const read = async () => {
+            try {
+              return (await invoke("file_read_text", { path: holdPath })).text;
+            } catch (e) {
+              return "";
+            }
+          };
+          // 记下原来的设置再改：后面的"草稿"断言**依赖自动保存**（草稿由 autosave 落盘），
+          // 这里强制关掉会把别人铺好的前置条件拆了
+          const prevAuto = !!(DGM.state.settings.editor && DGM.state.settings.editor.autosave);
+          const prevMs = (DGM.state.settings.editor && DGM.state.settings.editor.autosave_ms) || 5000;
+          await invoke("settings_patch", { patch: { editor: { autosave: true, autosave_ms: 500 } } });
+          await DGM.state.openPaths([holdPath]);
+          const hd = DGM.state.docs.find((x) => norm2(x.path) === norm2(holdPath)) || {};
+          if (hd.id) {
+            await DGM.state.setBodyNow(hd.id, "flowchart TD\n    A --> B\n    B --> C\n", { hold: true });
+            // 自动保存的工作线程 1 秒醒一次 + 500ms 延迟 ⇒ 等 2.5s 才算"它本来会写"
+            await new Promise((r) => setTimeout(r, 2500));
+            const disk1 = await read();
+            ok(
+              "hold 写入不落盘（自动保存开着也不写）",
+              !String(disk1).includes("B --> C"),
+              `磁盘：${String(disk1).replace(/\s+/g, " ").slice(0, 60)}`,
+            );
+            ok("但文档确实变了（缓冲区里有）", String(((DGM.state.doc(hd.id) || {}).body || "")).includes("B --> C"));
+            await DGM.state.setBodyNow(hd.id, "flowchart TD\n    A --> B\n    B --> D\n", {});
+            await new Promise((r) => setTimeout(r, 2500));
+            const disk2 = await read();
+            ok(
+              "普通写入照旧走自动保存",
+              String(disk2).includes("B --> D"),
+              `磁盘：${String(disk2).replace(/\s+/g, " ").slice(0, 60)}`,
+            );
+            await invoke("doc_close", { id: hd.id });
+          } else {
+            ok("hold 写入不落盘（自动保存开着也不写）", false, "没打开文件");
+            ok("但文档确实变了（缓冲区里有）", false, "没打开文件");
+            ok("普通写入照旧走自动保存", false, "没打开文件");
+          }
+          await invoke("settings_patch", {
+            patch: { editor: { autosave: prevAuto, autosave_ms: prevMs } },
+          });
+          try {
+            await invoke("workspace_delete", { path: holdPath });
+          } catch (e) { /* 清理失败不影响断言 */ }
+        }
+
         // 恢复默认配色 + 连线开关（3.11.4）
         {
           const src = "flowchart TD\n    A([开始]) --> B[写库]\n";
@@ -1346,6 +1400,11 @@ window.DGM = window.DGM || {};
       //  数据来自 `conversation_list`（只读 meta）。草稿的「活着」是现算的：草稿仓里还有
       //  那份才叫草稿，否则就是「已失联」—— 所以这里等 autosave（5s）把草稿落下来。
       {
+        // 这段**依赖自动保存**（草稿是 autosave 落盘的）——自己打开它、用完还原，
+        // 别赌用户的设置里正好开着（曾经因为上游测试把开关关掉而红过一次）。
+        const prevAuto2 = !!(DGM.state.settings.editor && DGM.state.settings.editor.autosave);
+        const prevMs2 = (DGM.state.settings.editor && DGM.state.settings.editor.autosave_ms) || 5000;
+        await invoke("settings_patch", { patch: { editor: { autosave: true, autosave_ms: 500 } } });
         const hd = await invoke("doc_new", { format: "mermaid" });
         await invoke("doc_set_body", { id: hd.id, body: "flowchart TD\n    A([草稿]) --> B[未保存]\n" });
         await invoke("conversation_save", {
@@ -1373,6 +1432,9 @@ window.DGM = window.DGM || {};
         if (row) await invoke("conversation_delete", { key: row.key });
         const after = await invoke("conversation_list");
         ok("删除后列表里不再有这段会话", !after.some((m) => m.key === (row ? row.key : "-")), after.length);
+        await invoke("settings_patch", {
+          patch: { editor: { autosave: prevAuto2, autosave_ms: prevMs2 } },
+        });
         try {
           await invoke("doc_close", { id: hd.id });
         } catch (e) {

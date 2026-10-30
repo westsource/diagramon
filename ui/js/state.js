@@ -1030,13 +1030,18 @@ window.DGM = window.DGM || {};
   }
 
   /** AI 应用 / 回退等整块替换正文：立即落盘，不等去抖。 */
-  async function setBodyNow(id, body) {
+  /** 写正文（**只动缓冲区**，磁盘要等用户保存/自动保存）。
+   *
+   *  `opts.hold = true` ⇒ 这次改动不参与自动保存，并撤掉已排定的那次：
+   *  "先看看效果、满意再存"的动作（应用配色、清除配色、AI 结果应用到编辑器）用它。
+   */
+  async function setBodyNow(id, body, opts) {
     const d = state.doc(id);
     if (!d) return;
     d.body = body;
     d.dirty = true;
     emit("doc:changed");
-    const doc = await ipc.invoke("doc_set_body", { id, body });
+    const doc = await ipc.invoke("doc_set_body", { id, body, hold: !!(opts && opts.hold) });
     if (doc) upsertDoc(doc);
     emit("session:changed");
     await refreshDerived(id);

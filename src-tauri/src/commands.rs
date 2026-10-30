@@ -157,15 +157,28 @@ pub fn doc_close(state: State<'_, Arc<AppState>>, id: String) -> R<SessionPayloa
 
 /// 改正文。返回"现在是否脏"，前端据此显示/清除标签页上的脏标。
 #[tauri::command]
-pub fn doc_set_body(state: State<'_, Arc<AppState>>, id: String, body: String) -> R<bool> {
+/// 改正文。返回"现在是否脏"，前端据此显示/清除标签页上的脏标。
+///
+/// `hold = true` 表示这次改动**只留在缓冲区**：不参与自动保存，并撤掉已排定的那次。
+/// 给"先看看效果、满意再存"的动作（应用配色、清除配色、AI 结果应用到编辑器）用；
+/// 默认 `false`，普通键入照旧走自动保存（用户自己开的开关）。
+pub fn doc_set_body(
+    state: State<'_, Arc<AppState>>,
+    id: String,
+    body: String,
+    hold: Option<bool>,
+) -> R<bool> {
     let mut s = state.session();
     if !s.set_body(&id, body) {
         return Err(format!("文档不存在：{id}"));
     }
     let dirty = s.get(&id).map(|d| d.dirty).unwrap_or(false);
     drop(s);
-    // autosave 计时归 Rust：正文一改就重新起表
-    if state.settings().editor.autosave {
+    if hold.unwrap_or(false) {
+        // 撤掉已经排定的自动保存：不然 5 秒后它会把这次"只想看看"的改动写进磁盘
+        state.cancel_autosave(&id);
+    } else if state.settings().editor.autosave {
+        // autosave 计时归 Rust：正文一改就重新起表
         state.mark_autosave(&id);
     }
     Ok(dirty)

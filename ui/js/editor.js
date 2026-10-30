@@ -474,11 +474,12 @@ window.DGM = window.DGM || {};
   }
 
   /** 整块替换正文：落盘 + 刷新编辑器与派生数据（AI 应用 / 格式化用）。 */
-  async function applyBody(text) {
+  /** 把一段正文写进编辑器。`opts.hold = true` ⇒ 只留缓冲区，不触发自动保存。 */
+  async function applyBody(text, opts) {
     const d = state.activeDoc();
     if (!d) return;
     setValue(text);
-    await state.setBodyNow(d.id, text);
+    await state.setBodyNow(d.id, text, opts);
     if (DGM.preview && DGM.preview.schedule) DGM.preview.schedule();
   }
 
