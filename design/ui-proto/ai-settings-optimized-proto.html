@@ -1,0 +1,506 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>原型 · 设置窗口 · AI（优化）</title>
+<link rel="stylesheet" href="proto.css">
+<style>
+  body { margin: 0; min-height: 100vh; padding: 24px 30px 60px; background: var(--bg); color: var(--ink); font: var(--fs-md) var(--font-ui); }
+  .page-head { display: flex; align-items: flex-start; gap: 18px; margin-bottom: 16px; }
+  .page-head h1 { font-size: 18px; margin: 0 0 6px; }
+  .page-head p { margin: 0; max-width: 1040px; line-height: 1.65; color: var(--ink-2); }
+  .page-head p code { font: var(--fs-xs) var(--font-mono); background: var(--surface-3); border-radius: 3px; padding: 1px 5px; }
+  .page-head .sp { flex: 1; }
+
+  .demo-wrap { display: flex; justify-content: center; align-items: flex-start; padding: 20px 0 10px; border: 1px dashed var(--border-strong); border-radius: var(--radius); background: var(--surface-2); }
+  .dialog.settings-wide { width: min(980px, 97vw); height: 86vh; max-height: 86vh; display: flex; flex-direction: column; }
+  .dialog.settings-wide .dialog-body.has-tabs { grid-template-columns: 176px minmax(0, 1fr); flex: 1; min-height: 0; overflow: hidden; }
+  .dialog.settings-wide .dlg-pane { padding: 12px 18px 18px 0; height: 100%; max-height: 100%; min-height: 0; overflow: auto; }
+
+  .ai-topbar { position: sticky; top: 0; z-index: 3; display: flex; align-items: center; gap: 8px; padding: 2px 0 10px; background: linear-gradient(var(--surface) 78%, transparent); }
+  .ai-topbar .title { font-weight: 650; font-size: var(--fs-lg); }
+  .ai-topbar .sp { flex: 1; }
+  .save-state { font-size: 10px; color: var(--muted); }
+  .save-state.dirty { color: var(--warn); }
+
+  .ai-subnav { display: flex; gap: 4px; padding: 3px; margin: 0 0 12px; background: var(--surface-inset); border: 1px solid var(--border); border-radius: 999px; overflow-x: auto; }
+  .ai-subnav button { flex: 1 0 auto; border: 0; background: transparent; color: var(--muted); font: inherit; font-size: var(--fs-xs); padding: 5px 10px; border-radius: 999px; cursor: pointer; white-space: nowrap; }
+  .ai-subnav button:hover { color: var(--ink); }
+  .ai-subnav button.on { background: var(--surface); color: var(--ai); font-weight: 600; box-shadow: 0 1px 2px rgba(0,0,0,.06); }
+
+  .ai-sec[hidden] { display: none; }
+  .sec-head { display: flex; align-items: center; gap: 8px; margin: 0 0 3px; }
+  .sec-head h3 { margin: 0; font-size: var(--fs-md); font-weight: 650; }
+  .sec-head .sp { flex: 1; }
+  .sec-desc { margin: 0 0 11px; font-size: var(--fs-xs); line-height: 1.6; color: var(--muted); }
+
+  .status-strip { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin-bottom: 12px; }
+  .status-card { min-width: 0; padding: 9px 10px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); }
+  .status-card .k { font-size: 10px; color: var(--faint); }
+  .status-card .v { margin-top: 2px; font-size: var(--fs-sm); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .status-card .s { margin-top: 1px; font-size: 10px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .status-card.accent { border-color: var(--ai-line); background: var(--ai-soft); }
+  .status-card.accent .v { color: var(--ai); }
+
+  .panel-block { padding: 11px 12px; margin: 0 0 10px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); }
+  .panel-block > h4 { display: flex; align-items: center; gap: 7px; margin: 0 0 8px; font-size: var(--fs-sm); font-weight: 650; }
+  .panel-block > h4 .count { font-size: 10px; font-weight: 500; color: var(--faint); }
+  .panel-block > h4 .sp { flex: 1; }
+  .panel-block .hint { display: block; margin-top: 5px; }
+
+  .provider-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+  .provider-card { padding: 10px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface-inset); }
+  .provider-head { display: flex; align-items: center; gap: 7px; }
+  .provider-logo { width: 24px; height: 24px; flex: 0 0 auto; display: grid; place-items: center; border-radius: 6px; background: var(--surface); border: 1px solid var(--border); font-size: 9px; font-weight: 700; color: var(--ink-2); }
+  .provider-head b { font-size: var(--fs-sm); font-weight: 600; }
+  .provider-head .sp { flex: 1; }
+  .provider-card .url { margin: 5px 0 7px; font: 10px var(--font-mono); color: var(--faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .provider-models { display: flex; flex-wrap: wrap; gap: 4px; min-height: 20px; }
+  .model-chip { display: inline-flex; align-items: center; gap: 3px; padding: 1px 5px; font-size: 9.5px; color: var(--ink-2); background: var(--surface); border: 1px solid var(--border); border-radius: 999px; }
+  .model-chip code { font: 9.5px var(--font-mono); }
+  .provider-foot { display: flex; align-items: center; gap: 4px; margin-top: 8px; }
+  .provider-foot .sp { flex: 1; }
+
+  .intent-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; margin-bottom: 10px; }
+  .intent-card { text-align: left; padding: 9px 10px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); cursor: pointer; font: inherit; color: var(--ink); }
+  .intent-card:hover { border-color: var(--border-strong); }
+  .intent-card.on { border-color: var(--ai-line); background: var(--ai-soft); box-shadow: 0 0 0 1px var(--ai-line); }
+  .intent-card b { display: flex; align-items: center; gap: 6px; font-size: var(--fs-sm); }
+  .intent-card b .tag { margin-left: auto; }
+  .intent-card p { margin: 3px 0 0; font-size: 10.5px; line-height: 1.5; color: var(--muted); }
+  .intent-card.on p { color: var(--ink-2); }
+  .tag { display: inline-flex; align-items: center; padding: 1px 6px; border-radius: 999px; font-size: 9px; font-weight: 500; color: var(--muted); background: var(--surface-3); border: 1px solid var(--border); white-space: nowrap; }
+  .tag.ok { color: var(--ok); background: color-mix(in srgb, var(--ok) 9%, transparent); border-color: color-mix(in srgb, var(--ok) 30%, transparent); }
+  .tag.warn { color: var(--warn); background: var(--warn-soft); border-color: color-mix(in srgb, var(--warn) 34%, transparent); }
+
+  .conditional { margin-top: 8px; padding: 10px; border: 1px dashed var(--border-strong); border-radius: var(--radius-sm); background: var(--surface-inset); }
+  .conditional[hidden] { display: none; }
+  .readonly-row { display: grid; grid-template-columns: 100px 1fr; gap: 5px 10px; font-size: var(--fs-xs); }
+  .readonly-row .k { color: var(--faint); }
+  .readonly-row .v { color: var(--ink-2); }
+
+  .field-row { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; }
+  .field-row .field { margin-bottom: 8px; }
+  .mini-actions { display: flex; align-items: center; gap: 6px; margin-top: 8px; }
+  .mini-actions .hint { flex: 1; }
+
+  .test-result { margin-top: 8px; padding: 8px 10px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); font-size: var(--fs-xs); }
+  .test-result[hidden] { display: none; }
+  .test-result .res-head { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; }
+  .test-result .res-head b { color: var(--ai); }
+  .test-result .res-head .sp { flex: 1; }
+  .test-result .res-head span:last-child { font: 9.5px var(--font-mono); color: var(--muted); }
+  .res-bars { display: grid; gap: 3px; }
+  .res-bar { display: grid; grid-template-columns: 36px minmax(0,1fr) 36px; gap: 7px; align-items: center; font-size: 10px; }
+  .res-bar .k { color: var(--muted); }
+  .res-bar .bar { height: 4px; border-radius: 999px; background: var(--surface-3); overflow: hidden; }
+  .res-bar .bar i { display: block; height: 100%; background: var(--ai); border-radius: inherit; }
+  .res-bar .n { text-align: right; font: 9.5px var(--font-mono); color: var(--ink-2); }
+
+  .behavior-group { margin-bottom: 10px; }
+  .behavior-group .group-title { margin: 0 0 4px; font-size: 9.5px; font-weight: 650; letter-spacing: .35px; text-transform: uppercase; color: var(--faint); }
+  .switch { margin: 2px 0; }
+
+  .callout { display: flex; align-items: flex-start; gap: 7px; padding: 8px 10px; margin: 9px 0; border-radius: var(--radius-sm); background: var(--surface-inset); border: 1px solid var(--border); font-size: 10.5px; line-height: 1.6; color: var(--muted); }
+  .callout .ico { flex: 0 0 auto; margin-top: 1px; color: var(--ai); }
+  .callout b { color: var(--ink-2); font-weight: 500; }
+
+  .mem-row { display: flex; align-items: center; gap: 8px; padding: 9px 10px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); }
+  .mem-row .sp { flex: 1; }
+  .mem-row b { font-size: var(--fs-sm); }
+  .mem-row small { display: block; margin-top: 1px; font-size: 10.5px; color: var(--muted); }
+
+  .toasts { position: fixed; right: 22px; bottom: 22px; display: flex; flex-direction: column; gap: 7px; z-index: 50; }
+  .toast { display: flex; align-items: center; gap: 7px; padding: 8px 12px; background: var(--surface); border: 1px solid var(--border-strong); border-radius: var(--radius-sm); box-shadow: 0 8px 24px rgba(0,0,0,.18); font-size: var(--fs-xs); color: var(--ink); animation: toast-in .16s ease-out; }
+  @keyframes toast-in { from { transform: translateY(6px); opacity: 0 } }
+
+  .proto-tag { position: fixed; left: 18px; bottom: 14px; display: flex; align-items: center; gap: 6px; font-size: 10.5px; color: var(--muted); }
+  .proto-tag b { color: var(--ink-2); font-weight: 500; }
+
+  @media (max-width: 760px) { .status-strip, .provider-grid, .intent-grid { grid-template-columns: 1fr 1fr; } .dialog.settings-wide .dialog-body.has-tabs { grid-template-columns: 132px minmax(0,1fr); } }
+</style>
+</head>
+<body>
+<div class="page-head">
+  <div>
+    <h1>设置窗口 · AI（优化原型）</h1>
+    <p>
+      当前 AI 页把「云网关 / 提供商 / 默认模型 / 六个开关 / 意图判定 / 记忆」堆在一列里，越往下越像表单仓库。
+      这个原型把它们拆成四组：<b>连接与模型、意图识别、对话行为、记忆</b>；顶部只保留四个状态数字，
+      常用的「换默认模型 / 切意图 / 重测」都能在第一屏完成。
+    </p>
+  </div>
+  <span class="sp"></span>
+  <button class="btn sm" id="theme-btn"><svg class="ico ico-sm"><use href="#i-moon"></use></svg><span>暗色</span></button>
+</div>
+
+<div class="demo-wrap">
+  <div class="dialog settings-wide" role="dialog" aria-label="设置">
+    <div class="dialog-head">
+      <svg class="ico"><use href="#i-settings"></use></svg>
+      <h2>设置</h2>
+      <span class="sp"></span>
+      <button class="icon-btn" id="close-btn" title="关闭"><svg class="ico ico-sm"><use href="#i-close"></use></svg></button>
+    </div>
+
+    <div class="dialog-body has-tabs">
+      <div class="dlg-tabs" id="tabs">
+        <button class="dlg-tab" data-tab="appearance"><svg class="ico ico-sm"><use href="#i-palette"></use></svg>外观</button>
+        <button class="dlg-tab" data-tab="editor"><svg class="ico ico-sm"><use href="#i-code"></use></svg>编辑器</button>
+        <button class="dlg-tab on" data-tab="ai"><svg class="ico ico-sm"><use href="#i-sparkles"></use></svg>AI</button>
+        <button class="dlg-tab" data-tab="convert"><svg class="ico ico-sm"><use href="#i-swap"></use></svg>转换</button>
+        <button class="dlg-tab" data-tab="account"><svg class="ico ico-sm"><use href="#i-user"></use></svg>账户</button>
+      </div>
+
+      <div class="dlg-pane" id="panes">
+        <section class="pane" data-pane="appearance" hidden>
+          <div class="field"><label>主题</label><div class="seg"><button class="on">亮色</button><button>暗色</button><button>跟随系统</button></div></div>
+          <div class="inline-note"><svg class="ico ico-sm"><use href="#i-info"></use></svg><span>本原型只聚焦 AI 页；其它页保留占位。</span></div>
+        </section>
+
+        <section class="pane" data-pane="editor" hidden>
+          <div class="field"><label>默认视图模式</label><div class="seg"><button>仅源码</button><button class="on">分屏</button><button>仅预览</button></div></div>
+          <div class="inline-note"><svg class="ico ico-sm"><use href="#i-info"></use></svg><span>本原型只聚焦 AI 页；其它页保留占位。</span></div>
+        </section>
+
+        <section class="pane" data-pane="ai">
+          <div class="ai-topbar">
+            <span class="title">AI</span>
+            <span class="sp"></span>
+            <span class="save-state" id="save-state">已保存</span>
+          </div>
+
+          <div class="ai-subnav" id="ai-nav">
+            <button class="on" data-ai="models">连接与模型</button>
+            <button data-ai="intent">意图识别</button>
+            <button data-ai="behavior">对话行为</button>
+            <button data-ai="memory">记忆</button>
+          </div>
+
+          <!-- 连接与模型 -->
+          <div class="ai-sec" data-ai-pane="models">
+            <div class="status-strip">
+              <div class="status-card"><div class="k">默认模型</div><div class="v" id="sum-model">GLM-5.2</div><div class="s">云网关 · 自动选档</div></div>
+              <div class="status-card"><div class="k">云网关</div><div class="v">已登录</div><div class="s">Pro 会员 · 2026-11-03 到期</div></div>
+              <div class="status-card"><div class="k">本周期额度</div><div class="v">3.2 / 20</div><div class="s">信用点 · 11/1 重置</div></div>
+              <div class="status-card accent"><div class="k">意图判定</div><div class="v" id="sum-intent">自动 · 官方</div><div class="s">会员包含</div></div>
+            </div>
+
+            <div class="panel-block">
+              <h4>默认模型 <span class="sp"></span><span class="count">影响所有新对话</span></h4>
+              <div class="field-row">
+                <div class="field" style="margin-bottom:0">
+                  <select id="default-model">
+                    <option>自动选档（按请求内容）</option>
+                    <option selected>GLM-5.2</option>
+                    <option>Qwen3 Max</option>
+                    <option>gpt-4o（BYOK）</option>
+                  </select>
+                  <span class="hint">选「自动选档」时由服务端按请求内容选；BYOK 只在用户明确选择时使用。</span>
+                </div>
+                <div class="field" style="margin-bottom:0">
+                  <label class="hint" style="margin:0 0 3px">当前会话</label>
+                  <div class="readonly-row" style="grid-template-columns:64px 1fr">
+                    <span class="k">模型</span><span class="v">GLM-5.2</span>
+                    <span class="k">来源</span><span class="v">Diagramon 云网关</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="panel-block">
+              <h4>提供商 <span class="count">2</span><span class="sp"></span>
+                <button class="btn sm" id="add-provider"><svg class="ico ico-sm"><use href="#i-plus"></use></svg>添加提供商</button>
+              </h4>
+              <p class="sec-desc" style="margin-bottom:8px">云网关优先；下面是你自己的 OpenAI 兼容上游。Key 存在系统凭据库，不写进 settings.json。</p>
+              <div class="provider-grid">
+                <article class="provider-card">
+                  <div class="provider-head"><span class="provider-logo">OA</span><b>OpenAI</b><span class="sp"></span><span class="tag ok">Key 已配置</span></div>
+                  <div class="url">https://api.openai.com/v1</div>
+                  <div class="provider-models"><span class="model-chip"><code>gpt-4o</code></span><span class="model-chip"><code>gpt-4o-mini</code></span></div>
+                  <div class="provider-foot">
+                    <button class="btn sm ghost">编辑</button>
+                    <button class="btn sm ghost">刷新模型</button>
+                    <span class="sp"></span>
+                    <button class="icon-btn" title="删除"><svg class="ico ico-sm"><use href="#i-trash"></use></svg></button>
+                  </div>
+                </article>
+                <article class="provider-card">
+                  <div class="provider-head"><span class="provider-logo">OL</span><b>Ollama</b><span class="sp"></span><span class="tag">本机 · 无需 Key</span></div>
+                  <div class="url">http://localhost:11434</div>
+                  <div class="provider-models"><span class="model-chip"><code>qwen3:8b</code></span></div>
+                  <div class="provider-foot">
+                    <button class="btn sm ghost">编辑</button>
+                    <button class="btn sm ghost">刷新模型</button>
+                    <span class="sp"></span>
+                    <button class="icon-btn" title="删除"><svg class="ico ico-sm"><use href="#i-trash"></use></svg></button>
+                  </div>
+                </article>
+              </div>
+              <div class="callout" style="margin-bottom:0">
+                <svg class="ico ico-sm"><use href="#i-cloud"></use></svg>
+                <span><b>云网关不可用时</b>，默认模型会回退到本机 BYOK（按上面的顺序）；不会静默把请求发到未配置的提供商。</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- 意图识别 -->
+          <div class="ai-sec" data-ai-pane="intent" hidden>
+            <div class="sec-head"><h3>意图识别</h3><span class="sp"></span><span class="tag ok" id="intent-status">官方可用</span></div>
+            <p class="sec-desc">发送前判断这条是生图 / 识图 / 改图 / 解图。它是建议性能力：失败、超时、无权限都只回退本地规则，不阻塞发送。</p>
+
+            <div class="intent-grid" id="intent-modes">
+              <button class="intent-card on" data-mode="auto">
+                <b>自动 <span class="tag">推荐</span></b>
+                <p>登录会员默认走官方；未登录/无会员时完全本地判断。</p>
+              </button>
+              <button class="intent-card" data-mode="official">
+                <b>官方 SystemOne <span class="tag ok">会员包含</span></b>
+                <p>零配置，使用当前账号的会员权益，不读取本机 Key。</p>
+              </button>
+              <button class="intent-card" data-mode="custom">
+                <b>自定义 SystemOne</b>
+                <p>填入你自己的 Jev / TypeSafe 端点和 Key。</p>
+              </button>
+              <button class="intent-card" data-mode="off">
+                <b>关闭</b>
+                <p>只走本地硬规则：有图→识图、无文档→生图、有文档→改图。</p>
+              </button>
+            </div>
+
+            <div class="conditional" id="official-box">
+              <div class="readonly-row">
+                <span class="k">服务</span><span class="v">Diagramon 官方 SystemOne（会员包含）</span>
+                <span class="k">端点</span><span class="v"><code>由登录账号自动选择</code></span>
+                <span class="k">模型</span><span class="v">jev-latest → jev-1.14.0</span>
+                <span class="k">凭证</span><span class="v">当前 access token；不保存任何本地 Key</span>
+              </div>
+              <div class="mini-actions">
+                <button class="btn sm" id="test-official"><svg class="ico ico-sm"><use href="#i-bolt"></use></svg>测试官方判定</button>
+                <span class="hint">发一条固定短句，不发送文档。</span>
+              </div>
+            </div>
+
+            <div class="conditional" id="custom-box" hidden>
+              <div class="field"><label>Base URL</label><input id="custom-url" value="https://api.typesafe.ai/v1/systemone" spellcheck="false"><span class="hint">填完整端点，不是 base host。</span></div>
+              <div class="field-row">
+                <div class="field"><label>模型</label><input id="custom-model" value="jev-latest" spellcheck="false"></div>
+                <div class="field"><label>超时</label><input id="custom-timeout" value="2000" spellcheck="false"><span class="hint">毫秒；超时只回退。</span></div>
+              </div>
+              <div class="field"><label>API Key</label><input id="custom-key" type="password" placeholder="只写系统凭据库"><span class="hint">不进 settings.json，不回显。</span></div>
+              <div class="mini-actions">
+                <button class="btn sm" id="test-custom"><svg class="ico ico-sm"><use href="#i-bolt"></use></svg>测试自定义</button>
+                <span class="hint" id="custom-hint">先填 Key 再测试。</span>
+              </div>
+            </div>
+
+            <div class="test-result" id="intent-result" hidden>
+              <div class="res-head"><span class="dot" style="width:6px;height:6px;border-radius:50%;background:var(--ok)"></span><b>改图</b><span class="sp"></span><span>0.96 · jev-1.14.0 · 1.7s</span></div>
+              <div class="res-bars">
+                <div class="res-bar"><span class="k">生图</span><span class="bar"><i style="width:1%"></i></span><span class="n">0.01</span></div>
+                <div class="res-bar"><span class="k">改图</span><span class="bar"><i style="width:97%"></i></span><span class="n">0.97</span></div>
+                <div class="res-bar"><span class="k">解图</span><span class="bar"><i style="width:2%"></i></span><span class="n">0.02</span></div>
+                <div class="res-bar"><span class="k">识图</span><span class="bar"><i style="width:0%"></i></span><span class="n">0.00</span></div>
+              </div>
+            </div>
+
+            <div class="field-row" style="margin-top:10px">
+              <div class="field"><label>高置信阈值</label><input value="0.75"><span class="hint">≥ 此值直接采用。</span></div>
+              <div class="field"><label>最低可用阈值</label><input value="0.55"><span class="hint">低于此值回退；中间值仍显示但标“不太确定”。</span></div>
+            </div>
+
+            <div class="callout">
+              <svg class="ico ico-sm"><use href="#i-warn"></use></svg>
+              <span><b>隐私：</b>官方判定会把当前一句话、布尔界面状态和文档前 40 行发给 Diagramon → TypeSafe；不发送完整文档、不发送图片。自定义端点则直接发往你填写的上游。</span>
+            </div>
+          </div>
+
+          <!-- 对话行为 -->
+          <div class="ai-sec" data-ai-pane="behavior" hidden>
+            <div class="sec-head"><h3>对话行为</h3></div>
+            <p class="sec-desc">这些开关影响每一轮 AI 请求与本机编辑行为。默认值已经适合大多数人，只有明确知道代价时再改。</p>
+
+            <div class="behavior-group">
+              <div class="group-title">上下文与修正</div>
+              <div class="switch on" data-switch><span class="track"></span><span class="txt">把当前图表源码作为上下文<small>AI 会自动带上当前文档；关掉后只能靠手写提示词</small></span></div>
+              <div class="switch on" data-switch><span class="track"></span><span class="txt">渲染失败时把报错发回模型修正一次<small>一次额外真实调用；每轮最多一次，防死循环</small></span></div>
+              <div class="field narrow" style="max-width:220px;margin:5px 0 0 27px">
+                <label>增强转换重试上限</label>
+                <select><option>1 轮</option><option>2 轮</option><option selected>3 轮</option></select>
+              </div>
+            </div>
+
+            <div class="behavior-group">
+              <div class="group-title">工具与识图</div>
+              <div class="switch" data-switch><span class="track"></span><span class="txt">启用工具循环（试验）<small>多步读取/校验文档；改用非流式，可能有多次真实调用</small></span></div>
+              <div class="switch on" data-switch><span class="track"></span><span class="txt">识图前显示上传告知<small>首次使用后不再重复弹</small></span></div>
+            </div>
+
+            <div class="callout"><svg class="ico ico-sm"><use href="#i-info"></use></svg><span>“渲染失败自动修正”和“工具循环”都会增加真实调用；开关描述里已经写清，不再藏到高级里。</span></div>
+          </div>
+
+          <!-- 记忆 -->
+          <div class="ai-sec" data-ai-pane="memory" hidden>
+            <div class="sec-head"><h3>记忆</h3><span class="sp"></span><span class="tag">本机保存</span></div>
+            <p class="sec-desc">记忆只存在本机，并随每次请求注入；只有你确认过的条目才会生效。</p>
+            <div class="switch on" data-switch><span class="track"></span><span class="txt">让 AI 记住长期偏好<small>关掉后请求体与没有记忆时完全一致</small></span></div>
+            <div class="switch on" data-switch><span class="track"></span><span class="txt">自动提取候选记忆<small>每轮多一次模型调用；候选不会自动生效</small></span></div>
+            <div class="mem-row" style="margin-top:9px">
+              <svg class="ico ico-sm"><use href="#i-sparkles"></use></svg>
+              <div><b>已确认 12 条 · 待确认 3 条</b><small>术语、偏好与项目约定；可逐条停用或清空</small></div>
+              <span class="sp"></span>
+              <button class="btn sm">管理记忆…</button>
+            </div>
+          </div>
+        </section>
+
+        <section class="pane" data-pane="convert" hidden>
+          <div class="field"><label>转换结果</label><div class="seg"><button class="on">另开新标签页</button><button>替换当前标签页</button></div></div>
+          <div class="inline-note"><svg class="ico ico-sm"><use href="#i-info"></use></svg><span>本原型只聚焦 AI 页；其它页保留占位。</span></div>
+        </section>
+
+        <section class="pane" data-pane="account" hidden>
+          <div class="field"><label>账户</label><div class="acct"><span class="avatar">道</span><span class="who"><b>道荣</b><small>westsource@126.com</small></span><span class="chip">Pro 会员</span></div></div>
+          <div class="inline-note"><svg class="ico ico-sm"><use href="#i-info"></use></svg><span>本原型只聚焦 AI 页；其它页保留占位。</span></div>
+        </section>
+      </div>
+    </div>
+
+    <div class="dialog-foot">
+      <span class="note">设置写入 settings.json；API Key 走系统凭据库</span>
+      <span class="sp"></span>
+      <button class="btn ghost" id="cancel-btn">关闭</button>
+      <button class="btn primary" id="save-btn"><svg class="ico ico-sm"><use href="#i-check"></use></svg>保存</button>
+    </div>
+  </div>
+</div>
+
+<dialog id="provider-dialog" style="width:min(560px,92vw);padding:0;border:1px solid var(--border);border-radius:var(--radius);background:var(--surface)">
+  <form method="dialog" id="provider-form">
+    <div style="display:flex;align-items:center;gap:8px;padding:13px 16px;border-bottom:1px solid var(--border)">
+      <b style="font-size:var(--fs-md)">添加提供商</b><span class="sp" style="flex:1"></span>
+      <button class="icon-btn" value="cancel" aria-label="关闭"><svg class="ico ico-sm"><use href="#i-close"></use></svg></button>
+    </div>
+    <div style="padding:14px 16px">
+      <div class="field"><label>名称</label><input id="prov-name" value="TypeSafe" spellcheck="false"></div>
+      <div class="field"><label>Base URL</label><input id="prov-url" value="https://api.typesafe.ai/v1" spellcheck="false"></div>
+      <div class="field-row">
+        <div class="field"><label>提供商类型</label><select><option>OpenAI 兼容</option><option>Ollama</option></select></div>
+        <div class="field"><label>API Key</label><input type="password" placeholder="只写系统凭据库"></div>
+      </div>
+      <div class="callout" style="margin-bottom:0"><svg class="ico ico-sm"><use href="#i-info"></use></svg><span>添加后可在卡片里刷新模型、调整最大输出与温度。</span></div>
+    </div>
+    <div style="display:flex;justify-content:flex-end;gap:8px;padding:11px 16px;border-top:1px solid var(--border);background:var(--surface-2)">
+      <button class="btn ghost" value="cancel">取消</button>
+      <button class="btn primary" value="save">添加</button>
+    </div>
+  </form>
+</dialog>
+
+<div class="toasts" id="toasts"></div>
+<div class="proto-tag"><svg class="ico ico-sm"><use href="#i-info"></use></svg><span>原型 · 设置窗口 / AI 重组 · <b>不发起真实请求</b></span></div>
+
+<script src="./proto-icons.js"></script>
+<script>
+(function () {
+  "use strict";
+  const $ = (s, r) => (r || document).querySelector(s);
+  const $$ = (s, r) => Array.from((r || document).querySelectorAll(s));
+  const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+  const S = {
+    tab: "ai",
+    section: "models",
+    mode: "auto",
+    dark: new URLSearchParams(location.search).get("theme") === "dark",
+    tested: false,
+  };
+
+  function toast(text) {
+    const el = document.createElement("div");
+    el.className = "toast";
+    el.innerHTML = '<svg class="ico ico-sm"><use href="#i-check"></use></svg><span>' + esc(text) + "</span>";
+    $("#toasts").appendChild(el);
+    setTimeout(() => el.remove(), 2400);
+  }
+
+  function markDirty() { $("#save-state").textContent = "未保存"; $("#save-state").classList.add("dirty"); }
+  function markSaved() { $("#save-state").textContent = "已保存"; $("#save-state").classList.remove("dirty"); }
+
+  function applyTheme() {
+    document.documentElement.dataset.theme = S.dark ? "dark" : "light";
+    $("#theme-btn").innerHTML = '<svg class="ico ico-sm"><use href="#i-' + (S.dark ? "sun" : "moon") + '"></use></svg><span>' + (S.dark ? "亮色" : "暗色") + "</span>";
+  }
+
+  function showTab(tab) {
+    S.tab = tab;
+    $$("#tabs .dlg-tab").forEach((b) => b.classList.toggle("on", b.dataset.tab === tab));
+    $$("#panes .pane").forEach((p) => { p.hidden = p.dataset.pane !== tab; });
+  }
+
+  function showSection(section) {
+    S.section = section;
+    $$("#ai-nav button").forEach((b) => b.classList.toggle("on", b.dataset.ai === section));
+    $$("[data-ai-pane]").forEach((p) => { p.hidden = p.dataset.aiPane !== section; });
+    $("#panes").scrollTop = 0;
+  }
+
+  function setMode(mode) {
+    S.mode = mode;
+    $$("#intent-modes .intent-card").forEach((b) => b.classList.toggle("on", b.dataset.mode === mode));
+    $("#official-box").hidden = !(mode === "auto" || mode === "official");
+    $("#custom-box").hidden = mode !== "custom";
+    $("#intent-result").hidden = true;
+    const official = mode === "official" || mode === "custom" || mode === "off";
+    $("#intent-status").className = "tag " + (mode === "off" ? "warn" : "ok");
+    $("#intent-status").textContent = mode === "off" ? "已关闭" : mode === "custom" ? "自定义" : "官方可用";
+    $("#sum-intent").textContent = mode === "auto" ? "自动 · 官方" : mode === "official" ? "官方" : mode === "custom" ? "自定义" : "关闭";
+    markDirty();
+  }
+
+  $$("#tabs .dlg-tab").forEach((b) => b.addEventListener("click", () => showTab(b.dataset.tab)));
+  $$("#ai-nav button").forEach((b) => b.addEventListener("click", () => showSection(b.dataset.ai)));
+  $$("#intent-modes .intent-card").forEach((b) => b.addEventListener("click", () => setMode(b.dataset.mode)));
+
+  $$(".switch").forEach((sw) => sw.addEventListener("click", () => { sw.classList.toggle("on"); markDirty(); }));
+
+  $("#default-model").addEventListener("change", (e) => {
+    $("#sum-model").textContent = e.target.value.replace("（BYOK）", "");
+    markDirty();
+  });
+
+  $("#add-provider").addEventListener("click", () => $("#provider-dialog").showModal());
+  $("#provider-form").addEventListener("submit", (e) => {
+    if (e.submitter && e.submitter.value === "cancel") return;
+    markDirty();
+    toast("已添加提供商（原型）");
+  });
+
+  function showTest() {
+    S.tested = true;
+    $("#intent-result").hidden = false;
+    toast("测试完成：改图 · 0.96（模拟）");
+  }
+  $("#test-official").addEventListener("click", showTest);
+  $("#test-custom").addEventListener("click", () => {
+    const key = $("#custom-key").value.trim();
+    if (!key) { $("#custom-hint").textContent = "先填 Key 再测试。"; toast("请先填自定义 Key"); return; }
+    $("#custom-hint").textContent = "已使用自定义端点（模拟）。";
+    showTest();
+  });
+
+  $("#save-btn").addEventListener("click", () => { markSaved(); toast("设置已保存（原型）"); });
+  $("#cancel-btn").addEventListener("click", () => toast("关闭（原型）"));
+  $("#close-btn").addEventListener("click", () => toast("关闭（原型）"));
+  $("#theme-btn").addEventListener("click", () => { S.dark = !S.dark; applyTheme(); });
+
+  applyTheme();
+  showTab("ai");
+  showSection("models");
+  setMode("auto");
+  markSaved();
+})();
+</script>
+</body>
+</html>
