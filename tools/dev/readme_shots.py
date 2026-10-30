@@ -60,6 +60,9 @@ MOUNTS = {
     # D2 的入口是 index.js 不是 index.html（wasm 以内联 base64 藏在里面）—— 前端按
     # `/d2/index.js` 取，所以这条映射只服务那一个请求
     "d2": _mount(("tools", "d2")),
+    # Mermaid 的 ELK 离线包：3.11.3 起它是默认布局，缺了这份页面会回退 dagre 并在状态栏
+    # 打出"加载失败"—— 截图里就成了产品缺陷（与 ui_probe 的挂载表同口径）。
+    "mermaid-elk": _mount(("tools", "mermaid-elk")),
 }
 
 # 挂载点 → 入口文件。判「资产在不在位」与兜底请求（`/drawio/` 这种不带文件名的）都看它，
@@ -70,6 +73,7 @@ MOUNT_ENTRY = {
     "graphviz": "graphviz.js",
     "mermaid": "mermaid.min.js",
     "d2": "index.js",
+    "mermaid-elk": "mermaid-layout-elk.esm.js",
 }
 
 WIDTH, HEIGHT = 1440, 900

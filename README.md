@@ -9,7 +9,7 @@ have open, writes back code you can diff, roll back and review, and gets the fai
 to repair when a render breaks. Rendering, validation and conversion all run on your machine, and content
 leaves it only when you use AI, only to the endpoint you chose.
 
-Version **3.11.3** · Official website <https://www.diagramon.com>
+Version **3.12.0** · Official website <https://www.diagramon.com>
 
 ## Problems it solves
 
@@ -62,7 +62,9 @@ own model (OpenAI-compatible / Ollama / self-hosted). Keys live inside the Rust 
 Windows) and never reach the front end; content goes out only when you actively use AI and only to the
 endpoint you chose, with the payload shown before the first send; usage counts only tokens the provider
 actually reports. Want it to draw the way you do? Preferences go into long-term memory and only take effect
-once you confirm them. And to end up with something draggable, AI output can land in any of the five
+once you confirm them. Colours do not come from the model either: it only tags "this is the main path /
+decision / data / external / failure", and the palette turns those tags into values — switching schemes never
+rewrites a character of your source. And to end up with something draggable, AI output can land in any of the five
 formats — drawio / Excalidraw are converted by the carrier page, so the result is an editable canvas, not a
 static picture.
 
@@ -115,6 +117,16 @@ static picture.
   offers `dagre` and `elk` (ELK is the default); Mermaid look is `classic` / `neo` / `handDrawn`. The
   controls sit in the
   preview top bar, the choice is **remembered per file**, and the diagram re-renders immediately
+- **Automatic colouring (the AI tags roles, the app picks the values)** — six schemes (Pine / Indigo / Lotus /
+  Olive / Ochre / Tungsten) across seven roles (main / entry / decision / data / external / failure / note).
+  The AI writes roles, never hex values, so the same sentence never yields two different palettes twice;
+  edges follow the scheme too (switchable in Settings). Colours are a **preview-time** effect — changing the
+  scheme or the theme never touches the source; use 「Bake into source」 to make them part of the file
+- **Picked on open** — when a file has no remembered scheme, one is chosen locally from the role mix and the
+  labels (lots of data/storage → Indigo, several failures → Ochre, many external calls → Olive, UI wording →
+  Lotus, otherwise Pine); new documents start with **None**
+- **「None」 clears** — removes the generated colours from the source; with a model configured it also strips
+  hand-written colours (colours only — if the structure changes, the cleanup is discarded)
 - **Export** — PNG at a selectable scale or straight to the clipboard; bitmaps carry the same background
   as the preview, and a diagram past Chromium's canvas limit has its scale reduced with a note instead of
   producing an empty image
@@ -192,7 +204,8 @@ static picture.
   bubble, it folds away at the end, and it is stored with the conversation
 - **Long-term memory (optional)** — the AI proposes preferences and terminology as **pending** entries that
   only take effect once you confirm them, stored locally
-- **Controlled tool loop (experimental)** — up to 5 steps of read document → check grammar → validate, on the
+- **Controlled tool loop (experimental)** — up to 5 steps of read document → check grammar → validate → list
+  palettes, on the
   in-memory document model only; it never touches the filesystem, shell or network
 - **Usage is labelled with its source** — only tokens the provider reports are accumulated; unreported
   values show `—`, never `0`, never a local estimate
