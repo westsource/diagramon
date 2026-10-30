@@ -7,7 +7,7 @@
 - `app.html` —— 主界面原型（全部交互可点）
 - `ai-intent-proto.html` —— 档位 3 交互原型：无页签、单时间线、胶囊滑块；可模拟配置 Jev 与回退
 - `ai-intent-settings-proto.html` —— 设置窗口原型：AI 页里的「智能判断 / 意图判定」配置、测试与未配置回退
-- `ai-settings-optimized-proto.html` —— AI 设置重组原型：连接与模型 / 意图识别 / 对话行为 / 记忆四组，含官方/自定义意图切换
+- `ai-settings-optimized-proto.html` —— AI 设置重组原型：图文模型 / 意图识别 / 对话行为 / 记忆四组，含官方/自定义意图切换
 - `proto.css` —— 设计系统（明暗双主题全走 CSS 变量）+ 全部组件样式
 - `proto-data.js` —— 数据层：格式注册表 / 转换矩阵 / 文档 / 命令表 / 菜单 / AI 会话（对应 `crates/app-core/src/format.rs` 的镜像）
 - `proto-icons.js` —— 内联 SVG 图标精灵（不引图标库）

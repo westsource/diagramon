@@ -35,14 +35,6 @@
   .sec-head .sp { flex: 1; }
   .sec-desc { margin: 0 0 11px; font-size: var(--fs-xs); line-height: 1.6; color: var(--muted); }
 
-  .status-strip { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin-bottom: 12px; }
-  .status-card { min-width: 0; padding: 9px 10px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); }
-  .status-card .k { font-size: 10px; color: var(--faint); }
-  .status-card .v { margin-top: 2px; font-size: var(--fs-sm); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .status-card .s { margin-top: 1px; font-size: 10px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .status-card.accent { border-color: var(--ai-line); background: var(--ai-soft); }
-  .status-card.accent .v { color: var(--ai); }
-
   .panel-block { padding: 11px 12px; margin: 0 0 10px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); }
   .panel-block > h4 { display: flex; align-items: center; gap: 7px; margin: 0 0 8px; font-size: var(--fs-sm); font-weight: 650; }
   .panel-block > h4 .count { font-size: 10px; font-weight: 500; color: var(--faint); }
@@ -118,7 +110,7 @@
   .proto-tag { position: fixed; left: 18px; bottom: 14px; display: flex; align-items: center; gap: 6px; font-size: 10.5px; color: var(--muted); }
   .proto-tag b { color: var(--ink-2); font-weight: 500; }
 
-  @media (max-width: 760px) { .status-strip, .provider-grid, .intent-grid { grid-template-columns: 1fr 1fr; } .dialog.settings-wide .dialog-body.has-tabs { grid-template-columns: 132px minmax(0,1fr); } }
+  @media (max-width: 760px) { .provider-grid, .intent-grid { grid-template-columns: 1fr 1fr; } .dialog.settings-wide .dialog-body.has-tabs { grid-template-columns: 132px minmax(0,1fr); } }
 </style>
 </head>
 <body>
@@ -127,8 +119,8 @@
     <h1>设置窗口 · AI（优化原型）</h1>
     <p>
       当前 AI 页把「云网关 / 提供商 / 默认模型 / 六个开关 / 意图判定 / 记忆」堆在一列里，越往下越像表单仓库。
-      这个原型把它们拆成四组：<b>连接与模型、意图识别、对话行为、记忆</b>；顶部只保留四个状态数字，
-      常用的「换默认模型 / 切意图 / 重测」都能在第一屏完成。
+      这个原型把它们拆成四组：<b>图文模型、意图识别、对话行为、记忆</b>；顶部只保留保存状态，
+      常用的「换默认模型 / 切意图 / 重测」都留在对应分组里。
     </p>
   </div>
   <span class="sp"></span>
@@ -172,20 +164,16 @@
           </div>
 
           <div class="ai-subnav" id="ai-nav">
-            <button class="on" data-ai="models">连接与模型</button>
+            <button class="on" data-ai="models">图文模型</button>
             <button data-ai="intent">意图识别</button>
             <button data-ai="behavior">对话行为</button>
             <button data-ai="memory">记忆</button>
           </div>
 
-          <!-- 连接与模型 -->
+          <!-- 图文模型 -->
           <div class="ai-sec" data-ai-pane="models">
-            <div class="status-strip">
-              <div class="status-card"><div class="k">默认模型</div><div class="v" id="sum-model">GLM-5.2</div><div class="s">云网关 · 自动选档</div></div>
-              <div class="status-card"><div class="k">云网关</div><div class="v">已登录</div><div class="s">Pro 会员 · 2026-11-03 到期</div></div>
-              <div class="status-card"><div class="k">本周期额度</div><div class="v">3.2 / 20</div><div class="s">信用点 · 11/1 重置</div></div>
-              <div class="status-card accent"><div class="k">意图判定</div><div class="v" id="sum-intent">自动 · 官方</div><div class="s">会员包含</div></div>
-            </div>
+            <div class="sec-head"><h3>图文模型</h3><span class="sp"></span><span class="tag ok">云网关优先</span></div>
+            <p class="sec-desc">选择默认模型，管理云网关与自带（BYOK）提供商；这里只决定聊天/看图用哪条链路。</p>
 
             <div class="panel-block">
               <h4>默认模型 <span class="sp"></span><span class="count">影响所有新对话</span></h4>
@@ -455,8 +443,7 @@
     const official = mode === "official" || mode === "custom" || mode === "off";
     $("#intent-status").className = "tag " + (mode === "off" ? "warn" : "ok");
     $("#intent-status").textContent = mode === "off" ? "已关闭" : mode === "custom" ? "自定义" : "官方可用";
-    $("#sum-intent").textContent = mode === "auto" ? "自动 · 官方" : mode === "official" ? "官方" : mode === "custom" ? "自定义" : "关闭";
-    markDirty();
+      markDirty();
   }
 
   $$("#tabs .dlg-tab").forEach((b) => b.addEventListener("click", () => showTab(b.dataset.tab)));
@@ -466,7 +453,6 @@
   $$(".switch").forEach((sw) => sw.addEventListener("click", () => { sw.classList.toggle("on"); markDirty(); }));
 
   $("#default-model").addEventListener("change", (e) => {
-    $("#sum-model").textContent = e.target.value.replace("（BYOK）", "");
     markDirty();
   });
 
