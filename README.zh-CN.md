@@ -162,8 +162,8 @@
 - **AI**：Rust 侧 `reqwest` + SSE 流式，凭据走 DPAPI
 - **打包**：NSIS 安装包，渲染运行时与前端资源一并入包
 
-架构与设计决策（同源承载页与自定义协议、运行时分工、阈值来历、转换语义、发版纪律）见
-[《客户端设计与技术决策》](https://github.com/westsource/diagramon_service/blob/main/docs/diagramon客户端设计与技术决策.md)。
+架构与设计决策（同源承载页与自定义协议、运行时分工、阈值来历、转换语义、AI 架构、发版纪律）
+不在 README 展开，随内部设计文档与仓库规则文件维护。
 
 ## 运行环境
 

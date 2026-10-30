@@ -208,8 +208,8 @@ points the wrong way — and the tool reports "success".
 - **Packaging**: NSIS installer, with the rendering runtimes and front-end assets bundled
 
 Architecture and design decisions (same-origin carriers and the custom protocol, the Rust/WebView split,
-where the thresholds come from, conversion semantics, release discipline) live in
-[Design and technical decisions](https://github.com/westsource/diagramon_service/blob/main/docs/diagramon客户端设计与技术决策.md).
+where the thresholds come from, conversion semantics, AI architecture, release discipline) are not
+expanded here; they live with the internal design documents and the repository's rules file.
 
 ## Requirements
 
