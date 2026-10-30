@@ -11,41 +11,58 @@ Version **3.11.2** · Official website <https://www.diagramon.com>
 
 ## Problems it solves
 
-**1. One diagram, five tools.** You write Mermaid in an editor and open mermaid.live to see it; halfway
-through you want to drag a box, so you rebuild the thing in drawio; DOT and D2 mean two more browser tabs.
-Every move is copy-paste-realign-check-the-styling again.
+Today's AI diagramming gets you **a picture quickly, and a diagram you can keep maintaining almost never.**
 
-**2. Online diagram tools want your content first.** Architecture and flow diagrams carry real service
-names, internal hostnames and customer names. Online editors upload before they render — a leak before a
-picture. Purely offline tools, on the other hand, have no AI at all, so polishing a description means
-writing prompts somewhere else and pasting back.
+**1. AI hands you *a picture*, not *a picture you can change*.** You get a PNG in a chat, or an SVG nobody
+wants to read; moving one node means describing the whole diagram again, and there is nothing to diff,
+nothing to roll back, nothing to commit — review means sending a screenshot.
 
-**3. AI you cannot audit.** Diagram tools usually ship the whole document to one fixed service: you cannot
-see what was sent, how much of it, or what it cost; your own model or self-hosted gateway cannot be
-plugged in; the key lives in the browser.
+**2. The conversation and the diagram live in different places.** The diagram is a file on your machine,
+the conversation is in some web page; the model cannot see the document you are editing and can only
+redraw it from your description. Lose the context and dozens of turns of alignment are gone.
 
-**4. Canvas files do not fit a repository.** A dragged-together diagram arrives as a compressed blob or a
-wall of JSON; a diff tells you nothing and code review cannot look at it.
+**3. Generated syntax often does not run — and nobody says which line.** Models remember outdated Mermaid
+and DOT syntax: an arrow points the wrong way, a node name collides with a keyword, D2's stroke width is
+out of range. The tool answers "render failed" and the investigation is yours.
 
-**5. Converters break diagrams and stay quiet about it.** Borders go missing, styling is lost, an arrow
-points the wrong way — and the tool reports "success".
+**4. Once it is generated, collaborating is hard.** You cannot see what changed in this version, accept
+half of it, change just one branch, or ask it to follow your colours, flow direction and naming habits —
+every round feels like the first day of working together.
+
+**5. You cannot see what went out, or where it went.** The whole document goes to one fixed service by
+default, the key sits in a browser, and token spend cannot be attributed; an architecture diagram with real
+service names and internal hostnames simply cannot be handed over.
 
 ## How we solve them
 
-1. **One window, five formats, conversions between them.** Text and canvas formats open side by side;
-   Mermaid / DOT / D2 convert into drawio / Excalidraw and stay editable, and D2 converts into drawio with
-   its geometry intact.
-2. **Everything renders locally.** The Mermaid, Graphviz and D2 engines ship inside the installer (packaged
-   JS, WASM, the official D2 wasm build), and drawio / Excalidraw run on their own bundled runtimes.
-   **No subprocess is ever spawned and no external request is ever made** — it works offline.
-3. **What lands on disk is always text.** A `.drawio` file is mxfile XML and a `.excalidraw` file is scene
-   JSON; the canvas is just a view of it, so changes stay diffable, committable and reviewable.
-4. **AI on the channel you pick.** Members use the official gateway (the credential is the login token, so
-   you fill in nothing); BYOK talks straight to your own OpenAI-compatible service, Ollama or self-hosted
-   endpoint. Keys live inside the Rust process only (DPAPI on Windows) and never reach the front end.
-   Content goes to a model only when you actively use AI, and only to the endpoint you chose.
-5. **Lossy conversions say so.** Every result carries a list of what did not migrate, and both sides are
-   counted afterwards — if nodes or edges went missing, you are told how many.
+**1. What AI produces is source code, not a screenshot.** All five formats land on disk as text (`.mmd` /
+`.dot` / `.d2` / mxfile XML / scene JSON), so what the AI wrote can be diffed, rolled back, committed and
+reviewed — the precondition for a human and an AI maintaining the same diagram.
+
+**2. The AI reads the diagram you are editing.** A document has exactly one chronological conversation,
+shared by generate / vision / review / explain; review sends the complete current source and asks for the
+complete modified source, and Apply takes the last non-empty fenced block — so Apply can never leave half a
+diagram, and the conversation never lives apart from the file.
+
+**3. Generated means validated, and errors go back to the model.** Problems are parsed and reported by the
+graphics engines themselves, with the real line (and column, for Mermaid), and that same location is fed
+back for repair; a failed render is auto-fixed once, up to 3 rounds, stopping early after two identical
+errors. An unavailable engine or an oversized document is labelled **degraded** — "not checked" is never
+reported as "passed".
+
+**4. The human keeps the final say.** The AI only rewrites the version the AI itself wrote — syntax errors
+you introduce by hand are never overwritten behind your back; apply, retry and edit-and-resend are explicit
+actions; a lossy conversion lists what did not migrate and counts nodes and edges on both sides, telling you
+how many went missing.
+
+**5. Boundaries, cost and style are yours.** Members use the official gateway, or BYOK talks straight to your
+own model (OpenAI-compatible / Ollama / self-hosted). Keys live inside the Rust process only (DPAPI on
+Windows) and never reach the front end; content goes out only when you actively use AI and only to the
+endpoint you chose, with the payload shown before the first send; usage counts only tokens the provider
+actually reports. Want it to draw the way you do? Preferences go into long-term memory and only take effect
+once you confirm them. And to end up with something draggable, AI output can land in any of the five
+formats — drawio / Excalidraw are converted by the carrier page, so the result is an editable canvas, not a
+static picture.
 
 ## Screenshots
 
