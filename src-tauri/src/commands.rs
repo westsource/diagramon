@@ -42,8 +42,6 @@ pub fn app_info(state: State<'_, Arc<AppState>>) -> AppInfo {
         platform: std::env::consts::OS.to_string(),
         formats: app_core::format::registry(),
         limits: app_core::guard::limits(),
-        // 「以前用过 elk 吗」——前端据此决定要不要在启动后台预热那份 2.4MB 离线包
-        warm_elk: state.render_opts().wants_elk_warmup(),
         dev: dev_flags(&state.paths),
     }
 }
@@ -218,7 +216,7 @@ fn commit_render_opt(state: &AppState, id: &str) -> R<Doc> {
     // 未落盘文档没有稳定身份（路径），没处可记 —— 保存时 `save_to` 会按新路径记上
     if let Some(path) = doc.path.clone() {
         let opts = app_core::render_opts::DocOpts { look: doc.look.clone(), layout: doc.layout.clone() };
-        state.remember_render_opts(None, &path, opts.sanitized(format), format);
+        state.remember_render_opts(None, &path, opts.sanitized(format));
     }
     Ok(doc)
 }
@@ -358,7 +356,6 @@ fn save_to(state: &AppState, id: &str, path: &Path) -> R<Doc> {
             old_path.as_deref(),
             saved.path.as_deref().unwrap_or_default(),
             opts.sanitized(saved.format),
-            saved.format,
         );
     }
     Ok(saved)

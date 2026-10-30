@@ -351,8 +351,8 @@ mod tests {
 
         assert_eq!(s.get(&dot.id).unwrap().layout.as_deref(), Some("dot"), "DOT 出生即带默认布局");
         assert_eq!(s.get(&d2.id).unwrap().layout.as_deref(), Some("dagre"), "D2 默认布局是快的那个");
-        // Mermaid 现在也有布局清单（dagre 内建 / elk 离线包），出生即带 dagre
-        assert_eq!(s.get(&mmd.id).unwrap().layout.as_deref(), Some("dagre"));
+        // Mermaid 现在也有布局清单（elk 离线包 / dagre 内建），出生即带默认的 elk
+        assert_eq!(s.get(&mmd.id).unwrap().layout.as_deref(), Some("elk"));
         assert_eq!(s.get(&mmd.id).unwrap().look, None, "外观出生不带，走设置/内建默认");
 
         assert!(s.set_layout(&dot.id, "neato".into()));
@@ -443,15 +443,15 @@ mod tests {
         let mut s = Session::default();
         let (opened, _) = s.open_paths(&[p.to_string_lossy().to_string()]);
         let id = opened[0].clone();
-        assert_eq!(s.get(&id).unwrap().layout.as_deref(), Some("dagre"), "刚打开是注册表默认");
-        assert_eq!(s.render_opts(&id), Some(crate::render_opts::DocOpts { look: None, layout: Some("dagre".into()) }));
+        assert_eq!(s.get(&id).unwrap().layout.as_deref(), Some("elk"), "刚打开是注册表默认");
+        assert_eq!(s.render_opts(&id), Some(crate::render_opts::DocOpts { look: None, layout: Some("elk".into()) }));
 
         let remembered =
-            crate::render_opts::DocOpts { look: Some("handDrawn".into()), layout: Some("elk".into()) };
+            crate::render_opts::DocOpts { look: Some("handDrawn".into()), layout: Some("dagre".into()) };
         assert!(s.restore_render_opts(&id, &remembered), "两项都合法，应被接受");
         let d = s.get(&id).unwrap();
         assert_eq!(d.look.as_deref(), Some("handDrawn"));
-        assert_eq!(d.layout.as_deref(), Some("elk"));
+        assert_eq!(d.layout.as_deref(), Some("dagre"));
         assert_eq!(s.render_opts(&id), Some(remembered.clone()));
 
         // 磁盘上被手改过的值：不进文档（注册表是唯一真源），现值保持不变
@@ -459,7 +459,7 @@ mod tests {
         assert!(!s.restore_render_opts(&id, &bad));
         let d = s.get(&id).unwrap();
         assert_eq!(d.look.as_deref(), Some("handDrawn"));
-        assert_eq!(d.layout.as_deref(), Some("elk"));
+        assert_eq!(d.layout.as_deref(), Some("dagre"));
         assert!(!s.restore_render_opts("no-such-doc", &remembered), "文档不存在时不该谎报成功");
     }
 

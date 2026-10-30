@@ -1103,6 +1103,14 @@ window.DGM = window.DGM || {};
       paths = ["E:/OpenCode/diagramon/docs/flows/支付回调.mmd"];
     }
     if (!paths.length) return;
+    await openPathsIntoUi(paths);
+  }
+
+  /** 打开一组路径并把界面跟上去（文件对话框与拖放共用）。
+   *
+   *  `paths` 是用户明确点名的东西：这里不再做扩展名过滤（对话框已经过滤过），
+   *  拖放那条由调用方先筛（见 `handleFileDrop`）。 */
+  async function openPathsIntoUi(paths) {
     const before = new Set(state.docs.map((dd) => dd.id));
     try {
       await state.openPaths(paths);
@@ -1134,6 +1142,88 @@ window.DGM = window.DGM || {};
     } catch (e) {
       status(t("status.openFailed") + ": " + (e && e.message), "err");
     }
+  }
+
+  /* ------------------------------------------------------------------ 拖拽打开文件 */
+
+  /** 注册表里的可打开扩展名（小写带点）。真源仍是 Rust 的 `format.rs`，这里只读 app_info。 */
+  function openableExts() {
+    const set = new Set();
+    for (const f of state.formatList || []) for (const e of f.exts || []) set.add(String(e).toLowerCase());
+    return set;
+  }
+
+  /** 把拖进来的路径分拣成「认得的」与「不认得的」。
+   *
+   *  不认的（.png / .zip / 目录…）不能往 `doc_open_paths` 里塞：那边对未知扩展名会
+   *  **回退 Mermaid**（见 app-core::document::from_path），拖一张图进来就会得到一个
+   *  满屏解析错误的标签页。这里如实跳过，并在状态栏说一声。 */
+  function splitDroppable(paths) {
+    const exts = openableExts();
+    const ok = [];
+    const skipped = [];
+    for (const p of paths) {
+      const name = String(p).split(/[\\/]/).pop() || "";
+      const dot = name.lastIndexOf(".");
+      const ext = dot > 0 ? name.slice(dot).toLowerCase() : "";
+      (exts.has(ext) ? ok : skipped).push(p);
+    }
+    return { ok, skipped };
+  }
+
+  function dropVeil(on) {
+    const veil = $("#drop-veil");
+    if (veil) veil.hidden = !on;
+  }
+
+  /**
+   * 原生拖放分发（Tauri `tauri://drag-drop`）。
+   *
+   * 为什么不用 HTML5 的 drop：WebView2 下 Tauri 默认**接管**窗口的文件拖放，页面里
+   * 收不到 `dataTransfer.files`；原生事件给的是**真实路径**（与 AI 面板同一条通道，
+   * 见 ai.js::handleDrop）。
+   *
+   * 落在 AI 面板上的**不归这里**：那边把文件收进对话上下文，两个订阅者靠落点分工。
+   *
+   * 公开出去（`DGM.shell.handleFileDrop`）是为了让自检能直接喂一个 payload 验
+   * 「拖进来 → 开标签页」这条链路 —— 操作系统级的拖放没法在脚本里制造。
+   */
+  async function handleFileDrop(payload) {
+    const type = String((payload && payload.type) || "drop");
+    const pos = payload && payload.position;
+    const ownedByAi = !!(DGM.ai && DGM.ai.ownsDropAt && DGM.ai.ownsDropAt(pos));
+    if (type !== "drop") {
+      // enter / over 亮提示层，leave 与"落在 AI 面板上"都不亮
+      const paths = (payload && payload.paths) || [];
+      dropVeil(type !== "leave" && !ownedByAi && splitDroppable(paths).ok.length > 0);
+      return false;
+    }
+    dropVeil(false);
+    if (ownedByAi) return false;
+    const all = ((payload && payload.paths) || []).filter(Boolean);
+    if (!all.length) return false;
+    const { ok, skipped } = splitDroppable(all);
+    if (!ok.length) {
+      status(t("drop.unsupported", { n: skipped.length }), "warn");
+      return false;
+    }
+    await openPathsIntoUi(ok);
+    if (skipped.length) status(t("drop.skipped", { n: skipped.length }), "warn");
+    return true;
+  }
+
+  /** 接上原生拖放。没有原生拖放（mock 浏览器原型 / 老 API）就关掉支持，
+   *  不做假的"已支持" —— 提示层也永远不出现。 */
+  function setupFileDrop() {
+    state.ui.fileDrop = !!ipc.onDragDrop((payload) => {
+      Promise.resolve(handleFileDrop(payload)).catch((e) => {
+        dropVeil(false); // 出错时别把提示层留在屏幕上
+        status(t("status.openFailed") + ": " + (e && e.message), "err");
+      });
+    });
+    if (!state.ui.fileDrop) dropVeil(false);
+    const ico = $("#drop-ico");
+    if (ico) ico.innerHTML = icon("file", "ico-lg");
   }
 
   async function closeActive() {
@@ -1459,6 +1549,9 @@ window.DGM = window.DGM || {};
     // **曾因从未调用而整体失效**（定义在、调用不在，语法检查/自检都发现不了）——
     // ui_probe 的真实鼠标序列断言就是为这类"接线缺失"准备的。
     setupDrag();
+
+    // 拖拽打开文件（原生 Tauri 拖放事件；与 AI 面板的拖放按落点分工）
+    setupFileDrop();
 
     // 标签条 / 视图模式切换器（tabs.js）
     if (DGM.tabs && DGM.tabs.bind) DGM.tabs.bind();
@@ -1920,6 +2013,8 @@ window.DGM = window.DGM || {};
     saveActive,
     openFile,
     openPath,
+    /** 原生拖放分发（供自检/探针直接喂 payload；OS 级拖放没法脚本化）。 */
+    handleFileDrop,
     closeActive,
     closeDocWithConfirm,
     formatSource,

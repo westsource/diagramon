@@ -950,6 +950,16 @@ window.DGM = window.DGM || {};
     return n > 0;
   }
 
+  /** 落点是否归 AI 面板消费（拖进来的文件当作对话上下文，**不**开成标签页）。
+   *
+   *  与 `insideAiPane` 的区别：拿不到坐标时这里返回 `false`（不认领）—— 别处（shell.js
+   *  的整窗拖放打开）也要判断归属，宁可让它开文件，也不要两个订阅者都沉默。
+   */
+  function dropOwnedByAi(pos) {
+    if (!pos || typeof pos.x !== "number") return false;
+    return insideAiPane(pos);
+  }
+
   /* ------------------------------------------------------------------ 附件 / 选区 */
 
   function renderAttachment() {
@@ -2187,6 +2197,8 @@ window.DGM = window.DGM || {};
     addContextFile,
     removeContextFile,
     handleDrop,
+    /** 落点归不归 AI 面板（供 shell.js 的整窗拖放打开避让）。 */
+    ownsDropAt: dropOwnedByAi,
     contextFiles: ctxFiles,
     // 会话持久化：`ensureConversation` 供启动与「历史会话」对话框用；
     // `turnCount` 让对话框显示**真实**轮次数（以前拿 `state.usage.calls` 冒充，

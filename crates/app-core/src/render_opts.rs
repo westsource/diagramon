@@ -68,12 +68,6 @@ struct Record {
 #[serde(default)]
 pub struct Store {
     docs: BTreeMap<String, Record>,
-    /// 用过 Mermaid 的 `elk` 布局吗？—— 启动预热 ELK 离线包的**唯一依据**（见 `AppInfo.warm_elk`）。
-    ///
-    /// 一次下拉选择留下的痕迹，与"每个文件记着什么"同源同文件，所以放这里而不是 `settings`
-    /// （settings 是用户偏好，不该被一次布局选择改写）。一旦为真就一直是真：用过 elk 的人
-    /// 大概率还会用，而下次提前加载能让首次切换少等约 0.5 秒。
-    used_elk: bool,
 }
 
 impl Store {
@@ -83,22 +77,6 @@ impl Store {
 
     pub fn is_empty(&self) -> bool {
         self.docs.is_empty()
-    }
-
-    /// 记下"这份文档用了哪个布局"。只有 **Mermaid + elk** 会让启动预热成立 ——
-    /// D2 也有同名 `elk`，但那个跑在 D2 自己的 wasm 里，跟这个离线包无关。
-    pub fn note_layout(&mut self, format: FormatId, layout: Option<&str>) {
-        if format == FormatId::Mermaid && layout == Some("elk") {
-            self.used_elk = true;
-        }
-    }
-
-    /// 启动时要不要在后台预热 Mermaid 的 ELK 离线包（消费者：`ui/js/main.js`）。
-    ///
-    /// 成本是**一次性且常驻**的（实测：JS 堆 +7.7MB、应用进程工作集 +16MB、加载约 0.5s），
-    /// 所以没有依据的人一分不付，只在首次切换时加载（那时布局菜单也会顺手预热）。
-    pub fn wants_elk_warmup(&self) -> bool {
-        self.used_elk
     }
 
     /// 某路径记着的选项（没记过 → `None`）。
@@ -250,32 +228,6 @@ mod tests {
         assert!(!st.forget("E:/a.mmd"), "删第二次是 no-op");
         assert_eq!(st.get("E:/a.mmd"), None);
         assert!(st.get("E:/b.mmd").is_some());
-    }
-
-    #[test]
-    fn elk_warmup_signal_only_comes_from_mermaid_layouts() {
-        let mut st = Store::default();
-        assert!(!st.wants_elk_warmup(), "新库不该有预热依据");
-
-        // D2 也叫 elk，但那是 D2 wasm 自己的布局，跟 Mermaid 的离线包无关
-        st.note_layout(FormatId::D2, Some("elk"));
-        assert!(!st.wants_elk_warmup(), "D2 的 elk 不该让 Mermaid 的离线包预热");
-        // Mermaid 的其它布局同理
-        st.note_layout(FormatId::Mermaid, Some("dagre"));
-        assert!(!st.wants_elk_warmup());
-        st.note_layout(FormatId::Mermaid, None);
-        assert!(!st.wants_elk_warmup());
-
-        st.note_layout(FormatId::Mermaid, Some("elk"));
-        assert!(st.wants_elk_warmup(), "Mermaid 选过 elk 就是依据");
-        // 一次就够，且**不会被后来的别的布局抹掉**（用过的人大概率还会用）
-        st.note_layout(FormatId::Mermaid, Some("dagre"));
-        assert!(st.wants_elk_warmup());
-
-        // 落盘/读回要保住这个信号（它决定了下次启动预不预热）
-        let f = tmp("elk-signal.json");
-        save(&f, &st).unwrap();
-        assert!(load(&f).wants_elk_warmup());
     }
 
     #[test]

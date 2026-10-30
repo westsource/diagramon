@@ -322,13 +322,10 @@ window.DGM = window.DGM || {};
       setTimeout(() => DGM.d2.warmup(), 3000);
     }
 
-    // Mermaid ELK 离线包预热：同样**按需**，依据由 Rust 下发（`app_info.warm_elk` = 以前把某个
-    // Mermaid 文档的布局选成过 elk，见 app-core::render_opts）。
-    //
-    // 那份包（2.4MB ESM）是一次性且**常驻**的成本：实测 JS 堆 +7.7MB、应用进程工作集 +16MB、
-    // 加载约 0.5 秒。没用过 elk 的人一分不该付 —— 他们首次把布局切到 elk 时才加载，
-    // 打开布局菜单也会顺手预热（见 preview.js::buildOptBtn）。失败必须静默。
-    if (state.appInfo && state.appInfo.warm_elk && DGM.preview && DGM.preview.warmElk) {
+    // Mermaid ELK 离线包预热：3.11.3 起 `elk` 是 Mermaid 的**默认布局**，每次开 Mermaid 都要用，
+    // 所以启动 3 秒后就后台加载（2.4MB ESM，实测加载约 0.5s、JS 堆 +7.7MB —— 一次性且常驻）。
+    // 失败必须静默：资产缺失 / 离线守卫拦下都不该在启动时弹错（渲染时另有兜底）。
+    if (DGM.preview && DGM.preview.warmElk) {
       setTimeout(() => DGM.preview.warmElk(), 3000);
     }
     note("boot:done");
@@ -454,20 +451,15 @@ window.DGM = window.DGM || {};
       // 版本号**别硬编码** —— 真源在 Cargo.toml（workspace version），它随每次发版变。
       // 曾经这里写死 "3.0.0"，把「关于窗口永远显示 3.0.0」这个 bug 盖了三个版本。
       ok("app_info 版本号是合法 semver", !!info && /^\d+\.\d+\.\d+$/.test(info.version || ""), info && info.version);
-      // ELK 离线包的启动预热信号：Rust 只看"以前用过 elk 吗"（app_core::render_opts）。
-      // 有依据 → main.js boot 里 3 秒后**后台静默** import；没依据的人一分不付。
-      ok("app_info 带 ELK 预热信号", !!info && typeof info.warm_elk === "boolean", info && String(info.warm_elk));
+      // ELK 离线包：3.11.3 起 elk 是 Mermaid 的默认布局，boot 里 3 秒后**无条件后台**加载。
+      // 这里只钉"真的加载上了"，不再有"有没有依据"的分支。
       {
         let elkNow = DGM.preview.elkLoaded ? DGM.preview.elkLoaded() : null;
-        if (info && info.warm_elk) {
-          for (let i = 0; i < 60 && !elkNow; i++) {
-            await new Promise((r) => setTimeout(r, 250));
-            elkNow = DGM.preview.elkLoaded();
-          }
-          ok("有依据 → 启动后台预热了 ELK 离线包", elkNow === true, String(elkNow));
-        } else {
-          ok("没依据 → 启动不加载 ELK（省下常驻内存）", elkNow === false, String(elkNow));
+        for (let i = 0; i < 60 && !elkNow; i++) {
+          await new Promise((r) => setTimeout(r, 250));
+          elkNow = DGM.preview.elkLoaded();
         }
+        ok("启动后台预热了 ELK 离线包", elkNow === true, String(elkNow));
       }
       ok(
         "注册表五种格式",
@@ -564,8 +556,8 @@ window.DGM = window.DGM || {};
       {
         const mm = info.formats.find((f) => f.id === "mermaid");
         ok(
-          "Mermaid 注册 looks×4 + layouts×2",
-          !!mm && mm.looks.length === 4 && mm.layouts.join(",") === "dagre,elk",
+          "Mermaid 注册 looks×4 + layouts×2（默认 elk）",
+          !!mm && mm.looks.length === 4 && mm.layouts.join(",") === "elk,dagre",
           mm && "looks=" + mm.looks.join("/") + " layouts=" + mm.layouts.join("/"),
         );
         ok(
@@ -659,7 +651,7 @@ window.DGM = window.DGM || {};
           ok("小图仍是自适应倍率（没被无谓地压）", small.capped === false && small.scale === 5, `scale=${small.scale}`);
         }
 
-        if (st && st.setLayout) await st.setLayout(doc.id, "dagre");
+        if (st && st.setLayout) await st.setLayout(doc.id, "elk");
         if (st && st.setLook) await st.setLook(doc.id, "auto");
 
         // ── 层叠：源码窗口的搜索/替换面板不该盖住弹出菜单（2026-10-19 用户报的遮挡） ──
@@ -967,35 +959,37 @@ window.DGM = window.DGM || {};
 
         const open1 = await invoke("doc_open_paths", { paths: [keepPath] });
         const first = open1.docs.find((d) => norm(d.path) === norm(keepPath)) || {};
-        ok("按路径打开的文件进了会话", !!first.id && first.look == null && first.layout === "dagre", `${first.id} ${first.layout}`);
+        ok("按路径打开的文件进了会话", !!first.id && first.look == null && first.layout === "elk", `${first.id} ${first.layout}`);
+        // 故意选注册表里的**非默认**布局（dagre）来验"按文件记住"：若记不住，重开就会
+        // 回到默认的 elk —— 断言才分得清"记住了"和"碰巧撞上默认值"。
         await invoke("doc_set_look", { id: first.id, look: "handDrawn" });
-        await invoke("doc_set_layout", { id: first.id, layout: "elk" });
+        await invoke("doc_set_layout", { id: first.id, layout: "dagre" });
         await invoke("doc_close", { id: first.id });
 
         const open2 = await invoke("doc_open_paths", { paths: [keepPath, otherPath] });
         const again = open2.docs.find((d) => norm(d.path) === norm(keepPath)) || {};
         ok("重开文件恢复上次选的外观", again.look === "handDrawn", again.look);
-        ok("重开文件恢复上次选的布局", again.layout === "elk", again.layout);
+        ok("重开文件恢复上次选的布局", again.layout === "dagre", again.layout);
         const other = open2.docs.find((d) => norm(d.path) === norm(otherPath)) || {};
         ok(
           "另一个文件不受影响（按文件记的，不是全局默认）",
-          other.look == null && other.layout === "dagre",
+          other.look == null && other.layout === "elk",
           `look=${other.look} layout=${other.layout}`,
         );
 
         // 另存为：记录要跟着文件走（新路径接着用、旧路径不留）
         const savePath = wsDir + "/flows/moved.mmd";
         const saved = await invoke("doc_save_as", { id: again.id, path: savePath });
-        ok("另存为后渲染选项跟着新路径", saved.look === "handDrawn" && saved.layout === "elk", `${saved.look}/${saved.layout}`);
+        ok("另存为后渲染选项跟着新路径", saved.look === "handDrawn" && saved.layout === "dagre", `${saved.look}/${saved.layout}`);
         await invoke("doc_close", { id: saved.id });
         const open3 = await invoke("doc_open_paths", { paths: [savePath, keepPath] });
         const movedDoc = open3.docs.find((d) => norm(d.path) === norm(savePath)) || {};
         ok("另存为产生的新文件重开后仍是上次选的外观", movedDoc.look === "handDrawn", movedDoc.look);
-        ok("另存为产生的新文件重开后仍是上次选的布局", movedDoc.layout === "elk", movedDoc.layout);
+        ok("另存为产生的新文件重开后仍是上次选的布局", movedDoc.layout === "dagre", movedDoc.layout);
         const oldPath = open3.docs.find((d) => norm(d.path) === norm(keepPath)) || {};
         ok(
           "另存为后旧路径不再留记录",
-          oldPath.look == null && oldPath.layout === "dagre",
+          oldPath.look == null && oldPath.layout === "elk",
           `look=${oldPath.look} layout=${oldPath.layout}`,
         );
 
@@ -1010,6 +1004,60 @@ window.DGM = window.DGM || {};
             await invoke("workspace_delete", { path: p });
           } catch (e) { /* 清理失败不影响断言 */ }
         }
+      }
+
+      // ── 拖拽打开文件（3.11.3）：原生拖放事件 → 打开标签页 ──
+      //  OS 级拖放没法在脚本里制造，直接喂 payload 给公开的分发函数（DGM.shell.handleFileDrop）：
+      //  验的是"悬停亮提示层 / 落下开文件 / 不支持的不静默吞 / 落点在 AI 面板时让给它"。
+      {
+        // 注意：**不能用 `export_write`** 造这个文件 —— 它的白名单只收图片/报告类扩展名，
+        // 写 `.dot` 会被挡（自检第一版就是这么红的）。用工作区新建文件那条路。
+        // 用命令**返回的**路径（而不是自己拼一个）：身份比较得是同一个字符串，
+        // 否则断言失败时说不清是"没打开"还是"路径写法不同"。
+        const dropPath = await invoke("workspace_new_file", { dir: wsDir, name: "selftest-dropped", format: "dot" });
+        const veil0 = document.querySelector("#drop-veil");
+        const over = await DGM.shell.handleFileDrop({ type: "over", paths: [dropPath], position: { x: 400, y: 300 } });
+        const veilOn = !!veil0 && !veil0.hidden;
+        const dropped = await DGM.shell.handleFileDrop({ type: "drop", paths: [dropPath], position: { x: 400, y: 300 } });
+        const veilOff = !!veil0 && veil0.hidden;
+        const ddoc = DGM.state.docs.find((x) => String(x.path || "").replace(/\\/g, "/") === dropPath) || {};
+        ok(
+          "拖入悬停亮起提示层、落下即收",
+          over === false && veilOn && veilOff,
+          `over=${over} on=${veilOn} off=${veilOff}`,
+        );
+        ok(
+          "拖入图表文件开成标签页",
+          dropped === true && ddoc.format === "dot",
+          `${dropped} ${ddoc.format} ${dropPath} docs=${JSON.stringify(DGM.state.docs.map((x) => x.path))}`,
+        );
+
+        // 不认得的扩展名：不开标签页、不静默吞（状态栏出声）
+        const n0 = DGM.state.docs.length;
+        const bad = await DGM.shell.handleFileDrop({ type: "drop", paths: [wsDir + "/selftest-dropped.png"], position: { x: 400, y: 300 } });
+        ok(
+          "拖入不支持的扩展名被挡下并出声",
+          bad === false && DGM.state.docs.length === n0 && String(DGM.state.ui.status.text || "").length > 0,
+          `bad=${bad} docs=${DGM.state.docs.length} status=${DGM.state.ui.status.text}`,
+        );
+
+        // 落点在 AI 面板 → 归它（当对话上下文），这里什么都不做
+        const aiPane = document.querySelector("#ai-pane");
+        let ownsDrop = false;
+        let aiDropped = true;
+        if (aiPane && !aiPane.classList.contains("hidden-pane")) {
+          const r = aiPane.getBoundingClientRect();
+          const s = window.devicePixelRatio || 1;
+          const pos = { x: (r.left + r.width / 2) * s, y: (r.top + r.height / 2) * s };
+          ownsDrop = !!DGM.ai.ownsDropAt(pos);
+          const before = DGM.state.docs.length;
+          aiDropped = await DGM.shell.handleFileDrop({ type: "drop", paths: [dropPath], position: pos });
+          aiDropped = aiDropped === false && DGM.state.docs.length === before;
+        }
+        ok("落在 AI 面板上的拖放不被打开文件抢走", !aiPane || aiPane.classList.contains("hidden-pane") || (ownsDrop && aiDropped));
+
+        try { await invoke("doc_close", { id: ddoc.id }); } catch (e) { /* 不在会话里就算了 */ }
+        try { await invoke("workspace_delete", { path: dropPath }); } catch (e) { /* 清理失败不影响断言 */ }
       }
 
       // ── 外部文件作为 AI 上下文：读盘（含截断/二进制拒绝）、拖放落点、手填路径 ──
@@ -1048,6 +1096,7 @@ window.DGM = window.DGM || {};
         // 拖放：命中 AI 面板才算数（落在面板外的拖动不该被这里吞掉）
         // 注意：自检里没有裸 `state`，要用 `DGM.state`（`st` 就是它）
         ok("原生文件拖放已接上", st && st.ui.aiDragDrop === true, String(st && st.ui.aiDragDrop));
+        ok("整窗拖放打开已接上", st && st.ui.fileDrop === true, String(st && st.ui.fileDrop));
         const paneRect = document.querySelector("#ai-pane").getBoundingClientRect();
         const dpr = window.devicePixelRatio || 1;
         await DGM.ai.handleDrop({

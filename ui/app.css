@@ -1124,6 +1124,30 @@ button.st:hover { background: var(--surface-3); }
 .overlay.center { place-items: center; padding-top: 0; }
 .overlay[hidden] { display: none; }
 
+/* 拖拽打开：整窗提示层。**不接指针事件** —— 拖放是 Tauri 原生事件送进来的，
+   这里只负责"看得见"，不能挡住画布/面板的鼠标手势。 */
+.drop-veil {
+  position: fixed; inset: 0; z-index: 320;
+  display: grid; place-items: center;
+  background: color-mix(in srgb, var(--ink) 26%, transparent);
+  backdrop-filter: blur(1.5px);
+  pointer-events: none;
+}
+.drop-veil[hidden] { display: none; }
+.drop-card {
+  display: flex; flex-direction: column; align-items: center; gap: 6px;
+  padding: 26px 42px;
+  border: 2px dashed var(--accent);
+  border-radius: 12px;
+  background: var(--surface);
+  box-shadow: var(--sh-3);
+  color: var(--ink);
+}
+.drop-card b { font-size: 15px; }
+.drop-card small { color: var(--muted); font-size: 12px; }
+.drop-ico { color: var(--accent); display: inline-flex; }
+.drop-ico .ico { width: 30px; height: 30px; }
+
 .palette {
   width: min(620px, 92vw);
   background: var(--surface);

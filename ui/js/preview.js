@@ -587,8 +587,8 @@ window.DGM = window.DGM || {};
    *
    *  资产在 `/mermaid-elk/mermaid-layout-elk.esm.js`（crates/assets 的第六个挂载点），
    *  **故意不进 `ui/vendor/`**：`build.frontendDist = "../ui"` 会把 ui 再嵌进 exe 一份。
-   *  单例懒加载：首次用到（用户把布局切到 elk）才 `import()`，注册进 mermaid 后复用。
-   *  失败不缓存 —— 资产可能刚被取资产脚本补齐，下次还能重试。
+   *  单例懒加载：第一次渲染 Mermaid（或启动预热、点开布局菜单）才 `import()`，注册进
+   *  mermaid 后复用。失败不缓存 —— 资产可能刚被取资产脚本补齐，下次还能重试。
    */
   let elkPromise = null;
   let elkReady = false;
@@ -617,8 +617,9 @@ window.DGM = window.DGM || {};
     return elkPromise;
   }
 
-  /** 预热 Mermaid 的 ELK 离线包：只在"以前用过 elk"时由 main.js 调（依据见 `AppInfo.warm_elk`），
-   *  失败静默 —— 启动预热不该弹错（与 `DGM.d2.warmup` 同一套约定）。 */
+  /** 预热 Mermaid 的 ELK 离线包：3.11.3 起 elk 是 Mermaid 的默认布局，所以 main.js 启动
+   *  3 秒后就后台加载一次（每次打开 Mermaid 都要用）。失败静默 —— 启动预热不该弹错
+   *  （与 `DGM.d2.warmup` 同一套约定）。 */
   function warmElk() {
     loadElk().catch(() => {});
   }
@@ -630,9 +631,10 @@ window.DGM = window.DGM || {};
     // （12 的流程图 = neo + redux-color 主题，与 mermaid.live 对齐）。
     const setLookPref = state.settings && state.settings.mermaid && state.settings.mermaid.look;
     let look = d.look && d.look !== "auto" ? d.look : setLookPref && setLookPref !== "auto" ? setLookPref : null;
-    // 布局：文档级（Rust 侧按注册表校验过；elk 需要离线包，加载失败回退 dagre 而不是报错断流）
+    // 布局：文档级（Rust 侧按注册表校验过；没记过就取注册表的第一个 —— Mermaid 是 elk）。
+    // elk 需要离线包，加载失败回退 dagre 而不是报错断流。
     const fmt = state.docFmt(d);
-    let layout = d.layout && fmt.layouts && fmt.layouts.includes(d.layout) ? d.layout : null;
+    let layout = d.layout && fmt.layouts && fmt.layouts.includes(d.layout) ? d.layout : fmt.layouts[0] || null;
     if (layout === "elk") {
       try {
         await loadElk();

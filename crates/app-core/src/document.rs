@@ -51,8 +51,8 @@ pub fn untitled(id: String, format: FormatId, seq: u32) -> Doc {
     }
 }
 
-/// 新文档的初始布局引擎：**取注册表里的第一个**（DOT → `dot`，D2 → `dagre`）；
-/// 没有布局的格式（Mermaid / 画布型）为 `None`。
+/// 新文档的初始布局引擎：**取注册表里的第一个**（DOT → `dot`，D2 → `dagre`，
+/// Mermaid → `elk`）；没有布局的格式（画布型）为 `None`。
 ///
 /// 这里以前写死 `format == FormatId::Dot`，加第五种格式时就成了"漏一处、D2 静默没有布局"。
 /// 布局清单本来就是注册表的一部分，按它取是唯一不会再漂的第二份。
@@ -121,6 +121,15 @@ mod tests {
         assert_eq!(d.format, FormatId::D2);
         assert_eq!(d.view_mode, crate::format::default_view_mode(FormatId::D2), "文本型默认分屏");
         assert_eq!(d.layout.as_deref(), Some("dagre"), "新文档的布局取注册表里的第一个（快的那个）");
+    }
+
+    #[test]
+    fn mermaid_documents_default_to_elk_layout() {
+        let p = temp_file("e.mmd", "flowchart TD\n A-->B\n");
+        let d = from_path("d5".into(), &p).unwrap();
+        assert_eq!(d.format, FormatId::Mermaid);
+        assert_eq!(d.layout.as_deref(), Some("elk"), "3.11.3 起 Mermaid 默认 ELK 布局（注册表第一个）");
+        assert_eq!(untitled("e3".into(), FormatId::Mermaid, 3).layout.as_deref(), Some("elk"), "新建的也一样");
     }
 
     #[test]

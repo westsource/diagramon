@@ -13,7 +13,11 @@ pub const D2_LAYOUTS: [&str; 3] = ["dagre", "elk", "tala"];
 
 /// Mermaid 的两种布局引擎：`dagre` 内建；`elk` 走随包离线 bundle
 /// （@mermaid-js/layout-elk，前端经 `mermaid.registerLayoutLoaders` 注册后才可用）。
-pub const MERMAID_LAYOUTS: [&str; 2] = ["dagre", "elk"];
+///
+/// **顺序即默认**（`document::default_layout` 取第一个）：3.11.3 起 Mermaid 默认用
+/// `elk` —— 分层布局的走线更整齐，用户报的"默认图太乱"就是这个。dagre 仍可随时切回；
+/// 显式选过的文件按 `render-opts.json` 记住的选择走。
+pub const MERMAID_LAYOUTS: [&str; 2] = ["elk", "dagre"];
 
 /// Mermaid 的外观模式（mermaid 12 的 `look` 配置）。`auto` = 不干预
 /// （Mermaid 内建默认：流程图为 neo + redux-color 主题）。
@@ -200,8 +204,9 @@ mod tests {
         let d2 = info(FormatId::D2);
         assert_eq!(d2.layouts, vec!["dagre", "elk", "tala"], "D2 的布局清单要如实照抄实测");
         assert_eq!(d2.layouts[0], "dagre", "默认布局必须是快的那个（tala 实测 5.6s）");
-        // Mermaid：dagre 内建 + elk（离线 bundle）；外观模式四档，其余格式没有
-        assert_eq!(info(FormatId::Mermaid).layouts, vec!["dagre", "elk"]);
+        // Mermaid：elk（离线 bundle）+ dagre 内建，**默认 elk**；外观模式四档，其余格式没有
+        assert_eq!(info(FormatId::Mermaid).layouts, vec!["elk", "dagre"]);
+        assert_eq!(info(FormatId::Mermaid).layouts[0], "elk", "3.11.3 起 Mermaid 默认 ELK 布局");
         assert_eq!(
             info(FormatId::Mermaid).looks,
             vec!["auto", "classic", "neo", "handDrawn"]

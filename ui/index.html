@@ -225,6 +225,15 @@
 <div class="pop sub" id="pop-sub" hidden></div>
 <div class="toasts" id="toasts"></div>
 
+<!-- 拖拽打开：拖进来的文件落在窗口上时的整窗提示（只做视觉，不接指针事件） -->
+<div class="drop-veil" id="drop-veil" hidden>
+  <div class="drop-card">
+    <span class="drop-ico" id="drop-ico"></span>
+    <b data-i18n="drop.title">松开以打开</b>
+    <small data-i18n="drop.sub">Mermaid · Graphviz DOT · D2 · drawio · Excalidraw</small>
+  </div>
+</div>
+
 <input type="file" id="file-input" accept="image/*,.*" hidden>
 <input type="file" id="ai-image-file" accept="image/*" hidden>
 

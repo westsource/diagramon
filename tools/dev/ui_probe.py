@@ -410,14 +410,12 @@ def main() -> int:
         except Exception as e:
             fails.append(f"DOT 预览断言解析失败：{e} / {dot_check}")
 
-        # ---- 断言 4c：ELK 离线包的**启动按需预热**（mock 声明 warm_elk = true） ----
-        # 那份 2.4MB ESM 是一次性且常驻的成本（实测 JS 堆 +7.7MB、进程工作集 +16MB、加载约 0.5s），
-        # 所以只在"有依据"（以前把某个 Mermaid 文档的布局选成过 elk，由 Rust 下发 app_info.warm_elk）
-        # 时才在启动 3 秒后后台 import。反向（没依据就不加载）由 Rust 单测
-        # `render_opts::tests::elk_warmup_signal_only_comes_from_mermaid_layouts` 与真机自检钉住。
+        # ---- 断言 4c：ELK 离线包启动预热（3.11.3 起 elk 是 Mermaid 的默认布局） ----
+        # 那份 2.4MB ESM 是一次性且常驻的成本（实测 JS 堆 +7.7MB、进程工作集 +16MB、加载约 0.5s）：
+        # 以前只在"有依据"时预热，现在每次开 Mermaid 都要用它，所以 boot 里 3 秒后无条件加载。
         elk_warm = ev(
             "(async () => {"
-            "  const out = { flag: (DGM.state.appInfo || {}).warm_elk };"
+            "  const out = {};"
             "  for (let i = 0; i < 60 && !out.loaded; i++) {"
             "    out.loaded = !!(DGM.preview.elkLoaded && DGM.preview.elkLoaded());"
             "    if (!out.loaded) await new Promise(r => setTimeout(r, 250));"
@@ -425,16 +423,50 @@ def main() -> int:
             "  return JSON.stringify(out);"
             "})()"
         )
-        log(f"ELK 启动预热（mock 有依据）: {elk_warm}")
+        log(f"ELK 启动预热: {elk_warm}")
         try:
             r = json.loads(elk_warm or "{}")
-            if r.get("flag") is not True:
-                fails.append(f"mock 的 app_info 没带 warm_elk=true：{r}")
             if not r.get("loaded"):
-                fails.append("声明有依据却没在启动后台预热 ELK 离线包（main.js 的预热接线断了？）")
+                fails.append("启动后没在后台预热 ELK 离线包（main.js 的预热接线断了？）")
         except Exception as e:
             log(f"（断言 4c 解析失败：{e}）")
             fails.append("断言 4c 拿不到结果")
+
+        # ---- 断言 4d：拖拽打开（3.11.3）----
+        # mock 里没有原生拖放事件（`ipc.onDragDrop` 返回 null ⇒ `state.ui.fileDrop=false`），
+        # 所以直接把 payload 喂给公开的分发函数：验「悬停亮提示层 → 落下开标签页 → 不认的扩展名挡下」。
+        drop = ev(
+            "(async () => {"
+            "  const n0 = DGM.state.docs.length;"
+            "  const over = await DGM.shell.handleFileDrop({ type: 'over', paths: ['E:/tmp/probe-drop.dot'], position: { x: 300, y: 300 } });"
+            "  const veil = document.querySelector('#drop-veil');"
+            "  const veilOn = !!veil && !veil.hidden;"
+            "  const dropped = await DGM.shell.handleFileDrop({ type: 'drop', paths: ['E:/tmp/probe-drop.dot'], position: { x: 300, y: 300 } });"
+            "  const veilOff = !!veil && veil.hidden;"
+            "  const doc = DGM.state.activeDoc() || {};"
+            "  const n1 = DGM.state.docs.length;"
+            "  const bad = await DGM.shell.handleFileDrop({ type: 'drop', paths: ['E:/tmp/probe-drop.png'], position: { x: 300, y: 300 } });"
+            "  const n2 = DGM.state.docs.length;"
+            "  if (doc.id) await DGM.state.closeDoc(doc.id);"
+            "  return JSON.stringify({ over, veilOn, dropped, veilOff, n0, n1, n2, bad, fmt: doc.format, wired: DGM.state.ui.fileDrop });"
+            "})()"
+        )
+        log(f"拖拽打开: {drop}")
+        try:
+            r = json.loads(drop or "{}")
+            if r.get("wired") is not False:
+                fails.append(f"mock 里不该声称接上了原生拖放：{r}")
+            if r.get("over") is not False or not r.get("veilOn"):
+                fails.append(f"拖入悬停没有亮起提示层：{r}")
+            if not r.get("dropped") or r.get("n1") != (r.get("n0") or 0) + 1 or r.get("fmt") != "dot":
+                fails.append(f"拖入 .dot 没有开成标签页：{r}")
+            if not r.get("veilOff"):
+                fails.append(f"落下后提示层没有收起：{r}")
+            if r.get("bad") is not False or r.get("n2") != r.get("n1"):
+                fails.append(f"拖入 .png 不该开标签页：{r}")
+        except Exception as e:
+            log(f"（断言 4d 解析失败：{e}）")
+            fails.append("断言 4d 拿不到结果")
 
         # ---- 断言 5：标签压测 —— 标签过多时 tabbar 必须保持单行 ----
         stress = ev(

@@ -124,6 +124,8 @@ window.DGM = window.DGM || {};
       aiContextFiles: [],
       // 原生拖放是否接上了（Tauri 的文件拖放事件）。自检钉它，防 API 漂了没人发现。
       aiDragDrop: false,
+      // 整窗"拖进来就打开"是否接上了（与 aiDragDrop 同一条原生通道，落点分工）
+      fileDrop: false,
       aiBusy: false,
       aiRequestId: null,
       zen: false,

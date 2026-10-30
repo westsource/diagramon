@@ -1152,6 +1152,12 @@ window.DGM = window.DGM || {};
     "status.savedImage": "已保存图片 {path}",
     "status.copied": "已复制",
 
+    /* ---- 拖拽打开 ---- */
+    "drop.title": "松开以打开",
+    "drop.sub": "Mermaid · Graphviz DOT · D2 · drawio · Excalidraw",
+    "drop.unsupported": "拖入的 {n} 个文件不是 Diagramon 支持的图表格式",
+    "drop.skipped": "已忽略 {n} 个不支持的文件",
+
     /* ---- 状态栏 ---- */
     "status.togglePanel": "切换底部面板  Ctrl+J",
     "status.problemsTip": "点击查看问题面板",
@@ -2311,6 +2317,11 @@ window.DGM = window.DGM || {};
     "status.updated": "Updated {name}",
     "status.savedImage": "Image saved to {path}",
     "status.copied": "Copied",
+
+    "drop.title": "Drop to open",
+    "drop.sub": "Mermaid · Graphviz DOT · D2 · drawio · Excalidraw",
+    "drop.unsupported": "{n} dropped file(s) are not a diagram format Diagramon can open",
+    "drop.skipped": "Ignored {n} unsupported file(s)",
 
     "status.togglePanel": "Toggle bottom panel  Ctrl+J",
     "status.problemsTip": "Click to open the Problems panel",
