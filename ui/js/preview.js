@@ -399,7 +399,7 @@ window.DGM = window.DGM || {};
   /** 色系的中文/英文名（名字的真源在 `app_info.palettes`，这里只按语言取）。 */
   function paletteName(id) {
     const p = state.palette(id);
-    if (!p) return t("preview.paletteOff");
+    if (!p) return t("preview.paletteNone");
     return DGM.i18n.lang === "en-US" ? p.name_en : p.name_zh;
   }
 
@@ -464,6 +464,15 @@ window.DGM = window.DGM || {};
       label: paletteName(p.id), check: true, on: p.id === cur, dot: paletteDot(p.id), v: p.id,
     }));
     items.unshift({ label2: t("preview.paletteMenu") });
+    // 「无」与色系并列：选中它就是**清掉已上色的那段**并把这份文档的色系置为关闭。
+    // 不再单独挂一个「关闭」——两个入口做同一件事只会让人猜它们有什么区别。
+    items.push({
+      label: t("preview.paletteNone"),
+      check: true,
+      on: cur === "",
+      dot: "var(--faint)",
+      act: "clear",
+    });
     items.push({ sep: true });
     // 只有真的选了"这份文档的色系"才需要"跟随默认"；跟随状态下它没有意义
     if (d.scheme !== undefined && d.scheme !== null) {
@@ -472,10 +481,8 @@ window.DGM = window.DGM || {};
         icon: "refresh",
         act: "follow",
       });
+      items.push({ sep: true });
     }
-    items.push({ label: t("preview.paletteOff"), icon: "close", check: true, on: cur === "", act: "off" });
-    items.push({ label: t("preview.paletteClear"), icon: "undo", act: "clear" });
-    items.push({ sep: true });
     items.push({ label: t("preview.paletteRecolor"), icon: "palette", act: "all" });
     items.push({ label: t("preview.paletteAi"), icon: "sparkles", act: "ai" });
     items.push({ sep: true });
@@ -494,7 +501,6 @@ window.DGM = window.DGM || {};
       DGM.pop.hide();
       try {
         if (it.v) await applyScheme(d, it.v, "only_uncolored");
-        else if (it.act === "off") await applyScheme(d, "", "only_uncolored");
         else if (it.act === "follow") await applyScheme(d, null, "only_uncolored");
         else if (it.act === "all") {
           const ok = await DGM.dialogs.confirm({

@@ -66,8 +66,8 @@ struct Seed {
 ///
 /// `tungsten`（钨灰）是特例：饱和度接近 0，角色靠**明度阶梯**分开（打印/线框风）。
 const SEEDS: [Seed; 6] = [
-    Seed { id: "pine", zh: "松绿", en: "Pine", hue: 168.0, sat: 0.42 },
     Seed { id: "indigo", zh: "黛蓝", en: "Indigo", hue: 210.0, sat: 0.40 },
+    Seed { id: "pine", zh: "松绿", en: "Pine", hue: 168.0, sat: 0.42 },
     Seed { id: "lotus", zh: "藕紫", en: "Lotus", hue: 258.0, sat: 0.34 },
     Seed { id: "olive", zh: "橄榄", en: "Olive", hue: 95.0, sat: 0.40 },
     Seed { id: "ochre", zh: "赭石", en: "Ochre", hue: 42.0, sat: 0.48 },

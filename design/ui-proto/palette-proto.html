@@ -165,7 +165,7 @@ const TABLE = {"pine":{"zh":"松绿","en":"Pine","edge":{"light":"#537972","dark
 
 const ROLES = ["main", "entry", "decide", "data", "ext", "risk", "note"];
 const ROLE_ZH = { main: "主链路", entry: "入口", decide: "判断", data: "数据", ext: "外部", risk: "异常", note: "说明" };
-const ORDER = ["pine", "indigo", "lotus", "olive", "ochre", "tungsten"];
+const ORDER = ["indigo", "pine", "lotus", "olive", "ochre", "tungsten"];
 
 const ui = { palette: "pine", dark: false, edges: true };
 
@@ -334,8 +334,7 @@ function openPop() {
   }).join("");
   pop.innerHTML =
     `<div class="pop-row head">配色色系（本文档）</div>` + items +
-    `<div class="pop-row ${!ui.palette ? "on" : ""}" data-p=""><span class="pv-dot" style="background:var(--faint)"></span><span>关闭（不上自动色）</span>${!ui.palette ? '<span class="chk">✓</span>' : ""}</div>` +
-    `<div class="pop-row" data-clear="1"><span>恢复默认配色（清除已上色）</span></div>` +
+    `<div class="pop-row ${!ui.palette ? "on" : ""}" data-clear="1"><span class="pv-dot" style="background:var(--faint)"></span><span>无</span>${!ui.palette ? '<span class="chk">✓</span>' : ""}</div>` +
     `<div class="pop-sep"></div>` +
     `<div class="pop-row" data-mode="all"><span>整篇重排（覆盖手选颜色）</span><span class="kbd">会先确认</span></div>` +
     `<div class="pop-row" data-ai="1"><span>让 AI 挑一个…</span><span class="kbd">1 次请求</span></div>` +
