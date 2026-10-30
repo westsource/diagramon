@@ -8,24 +8,6 @@
 
 版本 **3.11.2** · 官网 <https://www.diagramon.com>
 
-## 界面截图
-
-![主界面](screenshots/01-main-light.png)
-
-![AI 识图](screenshots/02-ai-vision.png)
-
-![drawio 画布](screenshots/03-drawio-canvas.png)
-
-![Excalidraw 画布](screenshots/04-excalidraw-canvas.png)
-
-![深色主题](screenshots/05-dark-preview.png)
-
-![云端文档](screenshots/06-cloud-docs.png)
-
-![账户与 AI 额度](screenshots/07-cloud-account.png)
-
-![D2 预览](screenshots/08-d2-preview.png)
-
 ## 它解决的问题
 
 **1. 一张图要在五个工具之间搬。** 写 Mermaid 用编辑器、看效果开 mermaid.live；画到一半想手拖一下，
@@ -56,6 +38,24 @@
    只有你主动使用 AI 时，选中的内容才会发往你选定的上游。
 5. **有损转换必须说清楚**：每个结果都带一份"没迁移什么"的清单，转换后还会对账节点与连线数量，
    少了就告诉你少了多少。
+
+## 界面截图
+
+![主界面](screenshots/01-main-light.png)
+
+![AI 识图](screenshots/02-ai-vision.png)
+
+![drawio 画布](screenshots/03-drawio-canvas.png)
+
+![Excalidraw 画布](screenshots/04-excalidraw-canvas.png)
+
+![深色主题](screenshots/05-dark-preview.png)
+
+![云端文档](screenshots/06-cloud-docs.png)
+
+![账户与 AI 额度](screenshots/07-cloud-account.png)
+
+![D2 预览](screenshots/08-d2-preview.png)
 
 ## 功能特性
 

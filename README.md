@@ -9,24 +9,6 @@ server.
 
 Version **3.11.2** · Official website <https://www.diagramon.com>
 
-## Screenshots
-
-![Main window](screenshots/01-main-light.png)
-
-![AI image recognition](screenshots/02-ai-vision.png)
-
-![drawio canvas](screenshots/03-drawio-canvas.png)
-
-![Excalidraw canvas](screenshots/04-excalidraw-canvas.png)
-
-![Dark theme](screenshots/05-dark-preview.png)
-
-![Cloud documents](screenshots/06-cloud-docs.png)
-
-![Account and AI credits](screenshots/07-cloud-account.png)
-
-![D2 preview](screenshots/08-d2-preview.png)
-
 ## Problems it solves
 
 **1. One diagram, five tools.** You write Mermaid in an editor and open mermaid.live to see it; halfway
@@ -64,6 +46,24 @@ points the wrong way — and the tool reports "success".
    Content goes to a model only when you actively use AI, and only to the endpoint you chose.
 5. **Lossy conversions say so.** Every result carries a list of what did not migrate, and both sides are
    counted afterwards — if nodes or edges went missing, you are told how many.
+
+## Screenshots
+
+![Main window](screenshots/01-main-light.png)
+
+![AI image recognition](screenshots/02-ai-vision.png)
+
+![drawio canvas](screenshots/03-drawio-canvas.png)
+
+![Excalidraw canvas](screenshots/04-excalidraw-canvas.png)
+
+![Dark theme](screenshots/05-dark-preview.png)
+
+![Cloud documents](screenshots/06-cloud-docs.png)
+
+![Account and AI credits](screenshots/07-cloud-account.png)
+
+![D2 preview](screenshots/08-d2-preview.png)
 
 ## Features
 
