@@ -552,7 +552,7 @@ window.DGM = window.DGM || {};
         } else if (it.act === "clear") {
           await clearScheme(d);
         } else if (it.act === "edges") {
-          await toggleEdges(d);
+          await toggleEdges();
         }
       } catch (err) {
         DGM.status(t("preview.palette.failed", { msg: (err && err.message) || String(err) }), "err");
@@ -615,13 +615,16 @@ window.DGM = window.DGM || {};
     }
   }
 
-  /** 「连线跟随配色」：全局偏好，改完**立刻重跑**当前文档 —— 否则老图的彩线不会消失。 */
-  async function toggleEdges(d) {
+  /** 「连线跟随配色」：全局偏好，改完**立刻重渲染** —— 否则老图还带着彩线。
+   *
+   *  注意这里只 `schedule()`，**不能走 paintDoc**：那是"写入正文"的路径。
+   *  配色是渲染期展开的，重画一次就够；写进正文会把"只改预览"变成"改缓冲区"。
+   */
+  async function toggleEdges() {
     const on = !(state.settings && state.settings.palette_edges === false);
     await state.patchSettings({ palette_edges: !on });
     DGM.status(t(on ? "preview.palette.edgesOff" : "preview.palette.edgesOn"), "");
-    const live = state.doc(d ? d.id : "") || state.activeDoc();
-    if (live) await paintDoc(live, "only_uncolored");
+    schedule();
   }
 
   /** 「让 AI 挑」：一次短调用，只许它回一个 `{palette, why}` —— 色值仍然不归它。 */
@@ -1495,10 +1498,9 @@ window.DGM = window.DGM || {};
     elkLoaded,
     warmElk,
     effectiveLook: optsCurLook,
-    /** 按当前设置重跑一次当前文档的配色（连线开关变化后要立刻生效，否则老图还带着彩线）。 */
+    /** 配色/连线开关变化后重画一次（**纯视图**：不写正文，见 paletteBody）。 */
     reapplyPalette: async () => {
-      const live = state.activeDoc();
-      if (live && state.isTextDoc(live)) await paintDoc(live, "only_uncolored");
+      schedule();
     },
     exportPng,
     exportSvg,

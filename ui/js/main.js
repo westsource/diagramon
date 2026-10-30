@@ -1152,6 +1152,20 @@ window.DGM = window.DGM || {};
           }
           ok("设置色系后预览真的上了色", got, `等 ${want}`);
           ok("但正文里没有 classDef（渲染期上色）", !String((DGM.state.doc(dd.id) || {}).body).includes("classDef"));
+
+          // 连线开关也是纯视图：切一下不能把正文改脏（曾经它走的是"写入正文"那条路）
+          const b0 = (DGM.state.doc(dd.id) || {}).body;
+          const d0 = (DGM.state.doc(dd.id) || {}).dirty;
+          await DGM.state.patchSettings({ palette_edges: false });
+          await DGM.preview.reapplyPalette();
+          await new Promise((r) => setTimeout(r, 400));
+          const after = DGM.state.doc(dd.id) || {};
+          ok(
+            "连线开关只改预览（正文与脏标都不动）",
+            after.body === b0 && after.dirty === d0,
+            `正文${after.body === b0 ? "未变" : "被改了"} · dirty ${d0}→${after.dirty}`,
+          );
+          await DGM.state.patchSettings({ palette_edges: true });
           await DGM.state.setScheme(dd.id, "");
           let gone = false;
           for (let i = 0; i < 40 && !gone; i++) {
