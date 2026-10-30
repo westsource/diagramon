@@ -974,6 +974,8 @@ body.no-ai #ai-gutter { display: none; }
 .ai-sec-head { display: flex; align-items: center; gap: 8px; margin: 0 0 3px; }
 .ai-sec-head h4 { margin: 0; font-size: var(--fs-md); font-weight: 650; }
 .ai-sec-hint { margin: 0 0 11px; font-size: var(--fs-xs); line-height: 1.6; color: var(--muted); }
+/* 云网关状态与下方「提供商 / 添加提供商」之间留一口气，避免两个块贴成一条 */
+.ai-gateway-note { margin-bottom: 12px; }
 .ai-group-title { margin: 12px 0 2px; font-size: 9.5px; font-weight: 650; letter-spacing: .35px; text-transform: uppercase; color: var(--faint); }
 .ai-group-title:first-of-type { margin-top: 2px; }
 .ai-intent-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; margin-bottom: 10px; }

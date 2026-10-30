@@ -924,7 +924,7 @@ window.DGM = window.DGM || {};
             <select data-act="noop" id="ai-default">${defaultOpts}</select>
             <span class="hint">${esc(t("set.ai.defaultModelHint"))}</span>
           </div>
-          <div class="callout${gwTipWarn ? " warn" : ""}">${icon("cloud")}<span>${esc(gwTip)}</span></div>
+          <div class="callout ai-gateway-note${gwTipWarn ? " warn" : ""}">${icon("cloud")}<span>${esc(gwTip)}</span></div>
           <div class="field">
             <div class="row-head"><label>${esc(t("set.ai.providers"))}</label><span class="sp"></span>
               <button class="btn sm" data-act="addprov">${icon("plus", "ico-sm")}${esc(t("set.ai.addProvider"))}</button></div>
