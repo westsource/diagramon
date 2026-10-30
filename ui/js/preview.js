@@ -413,18 +413,24 @@ window.DGM = window.DGM || {};
     return (sw && sw.stroke) || "var(--faint)";
   }
 
-  /** 把色系落地成正文，并**如实报出**改了几个节点。 */
+  /** 选一个色系：先落选择，再按它重排正文。 */
   async function applyScheme(d, scheme, mode) {
     await state.setScheme(d.id, scheme);
     // setScheme 内部会 `upsertDoc`：`d` 可能是**旧对象**了，重新取一次再读 scheme，
     // 否则读到的还是改之前的值（真机上表现成"选了色系却提示已关闭"）。
     const live = state.doc(d.id) || d;
-    const eff = state.schemeOf(live);
-    if (!eff) {
+    if (!state.schemeOf(live)) {
       DGM.status(t("preview.palette.offDone"), "");
       schedule();
       return;
     }
+    await paintDoc(live, mode);
+  }
+
+  /** 按"当前生效的色系"重排正文（不动选择）。连线开关变化后也走这条。 */
+  async function paintDoc(live, mode) {
+    const eff = state.schemeOf(live);
+    if (!eff) return;
     const res = await state.paint(live.body, live.format, eff, mode);
     const picked = { applied: res.applied, skipped: res.skipped, removed: res.styles_removed };
     // 走编辑器写回：源码窗口要跟着变（否则预览换了色、左边还是旧文本），
@@ -468,9 +474,19 @@ window.DGM = window.DGM || {};
       });
     }
     items.push({ label: t("preview.paletteOff"), icon: "close", check: true, on: cur === "", act: "off" });
+    items.push({ label: t("preview.paletteClear"), icon: "undo", act: "clear" });
     items.push({ sep: true });
     items.push({ label: t("preview.paletteRecolor"), icon: "palette", act: "all" });
     items.push({ label: t("preview.paletteAi"), icon: "sparkles", act: "ai" });
+    items.push({ sep: true });
+    // 连线开关：全局偏好（设置 → 外观里也有），这里只是就近入口
+    items.push({
+      label: t("preview.paletteEdges"),
+      icon: "swap",
+      check: true,
+      on: !(state.settings && state.settings.palette_edges === false),
+      act: "edges",
+    });
     items.push({ sep: true }, { label2: t("preview.paletteFooter") });
 
     const r = anchor.getBoundingClientRect();
@@ -492,11 +508,46 @@ window.DGM = window.DGM || {};
           if (ok) await applyScheme(d, cur, "all");
         } else if (it.act === "ai") {
           await pickPaletteWithAi(d);
+        } else if (it.act === "clear") {
+          await clearScheme(d);
+        } else if (it.act === "edges") {
+          await toggleEdges(d);
         }
       } catch (err) {
         DGM.status(t("preview.palette.failed", { msg: (err && err.message) || String(err) }), "err");
       }
     });
+  }
+
+  /** 「恢复默认配色」：把程序生成的那一段整块删掉，并把这份文档的色系置为关闭。
+   *
+   *  为什么置关闭：只删块不改选择的话，下次 AI 应用又会把它染回去 —— 用户会觉得
+   *  "清除了但没清掉"。手写样式不碰（只删我们自己标记块里的行）。
+   */
+  async function clearScheme(d) {
+    const live = state.doc(d.id) || d;
+    const ok = await DGM.dialogs.confirm({
+      title: t("preview.palette.clearTitle"),
+      icon: "warn",
+      danger: true,
+      body: esc(t("preview.palette.clearBody")),
+      ok: t("preview.palette.clearOk"),
+    });
+    if (!ok) return;
+    const res = await state.clearPalette(live.body, live.format);
+    if (res.changed) await DGM.editor.applyBody(res.body);
+    await state.setScheme(live.id, "");
+    DGM.status(res.changed ? t("preview.palette.cleared") : t("preview.palette.clearNothing"), res.changed ? "ok" : "");
+    schedule();
+  }
+
+  /** 「连线跟随配色」：全局偏好，改完**立刻重跑**当前文档 —— 否则老图的彩线不会消失。 */
+  async function toggleEdges(d) {
+    const on = !(state.settings && state.settings.palette_edges === false);
+    await state.patchSettings({ palette_edges: !on });
+    DGM.status(t(on ? "preview.palette.edgesOff" : "preview.palette.edgesOn"), "");
+    const live = state.doc(d ? d.id : "") || state.activeDoc();
+    if (live) await paintDoc(live, "only_uncolored");
   }
 
   /** 「让 AI 挑」：一次短调用，只许它回一个 `{palette, why}` —— 色值仍然不归它。 */
@@ -1367,6 +1418,11 @@ window.DGM = window.DGM || {};
     elkLoaded,
     warmElk,
     effectiveLook: optsCurLook,
+    /** 按当前设置重跑一次当前文档的配色（连线开关变化后要立刻生效，否则老图还带着彩线）。 */
+    reapplyPalette: async () => {
+      const live = state.activeDoc();
+      if (live && state.isTextDoc(live)) await paintDoc(live, "only_uncolored");
+    },
     exportPng,
     exportSvg,
     copyImage,

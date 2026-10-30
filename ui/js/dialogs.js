@@ -788,6 +788,7 @@ window.DGM = window.DGM || {};
       <div class="field"><label>${esc(t("set.appearance.palette"))}</label>
         <div class="swatch-row">${paletteSwatches(s.diagram_palette)}</div>
         <span class="hint">${esc(t("set.palette.hint"))}</span></div>
+      <div class="field"><label>${esc(t("preview.paletteEdges"))}</label>${switchRow(!!s.palette_edges, t("preview.paletteEdges"), "set.palette.edgesHint", "paletteedges")}</div>
       ${switchRow(!!s.close_to_tray, t("set.general.closeToTray"), "set.general.closeToTrayHint", "closetray")}`;
   }
 
@@ -1368,6 +1369,12 @@ window.DGM = window.DGM || {};
         else if (a === "autosave") state.patchSettings({ editor: { autosave: on } });
         else if (a === "restrict") state.patchSettings({ editor: { restrict_to_workspace: on } });
         else if (a === "closetray") state.patchSettings({ close_to_tray: on });
+        // 连线开关改完立刻重跑当前文档：否则开关只对新上色生效，老图还带着彩线
+        else if (a === "paletteedges") {
+          state.patchSettings({ palette_edges: on }).then(() => {
+            if (DGM.preview && DGM.preview.reapplyPalette) DGM.preview.reapplyPalette();
+          });
+        }
         else if (a === "ctxdoc") state.patchSettings({ ai: { context_from_doc: on } });
         else if (a === "retry") state.patchSettings({ ai: { render_retry: on } });
         else if (a === "enhance") state.patchSettings({ ai: { enhance_enabled: on } });

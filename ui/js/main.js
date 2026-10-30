@@ -1109,6 +1109,33 @@ window.DGM = window.DGM || {};
           ok("箭头颜色也跟着（不只是线）", toHex(marker) === edgeHex, `${toHex(marker)} 期望 ${edgeHex}`);
         }
 
+        // 恢复默认配色 + 连线开关（3.11.4）
+        {
+          const src = "flowchart TD\n    A([开始]) --> B[写库]\n";
+          const painted = await invoke("palette_apply", {
+            req: { body: src, format: "mermaid", palette: "pine", dark: false, edges: true, mode: "all" },
+          });
+          const noEdges = await invoke("palette_apply", {
+            req: { body: src, format: "mermaid", palette: "pine", dark: false, edges: false, mode: "all" },
+          });
+          ok(
+            "关掉连线开关后不再写线色（节点照常上色）",
+            !noEdges.body.includes("lineColor") && noEdges.body.includes("classDef lvl-main"),
+            noEdges.body.includes("lineColor") ? "仍有 lineColor" : "ok",
+          );
+          const cleared = await invoke("palette_clear", { req: { body: painted.body, format: "mermaid" } });
+          ok(
+            "恢复默认配色只删程序生成的那块",
+            cleared.changed && !cleared.body.includes("dgm-palette") && !cleared.body.includes("classDef"),
+            cleared.changed ? `${cleared.body.length} 字节` : "没变",
+          );
+          const again = await invoke("palette_clear", { req: { body: cleared.body, format: "mermaid" } });
+          ok("再清一次如实报「没变」", again.changed === false);
+          const s1 = await invoke("settings_patch", { patch: { palette_edges: false } });
+          ok("连线开关能落设置", s1.palette_edges === false, String(s1.palette_edges));
+          await invoke("settings_patch", { patch: { palette_edges: true } });
+        }
+
         // 用命令**返回的**路径：自己拼的字符串与后端规范化后的可能不等（拖放那条已踩过）
         const palPath = await invoke("workspace_new_file", { dir: wsDir, name: "selftest-palette", format: "mermaid" });
         const op = await invoke("doc_open_paths", { paths: [palPath] });

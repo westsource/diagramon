@@ -438,6 +438,9 @@ pub struct Settings {
     /// 自动配色的**默认色系**（`""` = 关闭自动上色；文档级选择永远优先）。
     /// 真源在 `app_core::palette`，这里只存 id。
     pub diagram_palette: String,
+    /// 连线是否跟随色系。全局偏好而不是按文件记：这是"我喜不喜欢彩线"的口味，
+    /// 同一台机器上两份文档表现不一致只会让人困惑。
+    pub palette_edges: bool,
     /// 资源管理器（工作区树）的视图偏好
     pub explorer: ExplorerPrefs,
     pub recent: Vec<RecentEntry>,
@@ -488,6 +491,7 @@ impl Default for Settings {
             mermaid: MermaidPrefs::default(),
             // 默认开：模型只管角色、色值由应用按色系落地 —— 用户随时可在预览顶栏换成别的或关掉
             diagram_palette: "pine".into(),
+            palette_edges: true,
             explorer: ExplorerPrefs::default(),
             recent: Vec::new(),
         }
@@ -759,7 +763,17 @@ pub struct PaletteApplyReq {
     pub palette: String,
     /// 当前是不是暗色主题：色值会**落进文档**，之后切主题不会重算，所以这里选一次色阶
     pub dark: bool,
+    /// 连线是否跟随色系（关掉就只上节点色，线保持渲染器默认）
+    #[serde(default = "default_true")]
+    pub edges: bool,
     pub mode: PaletteMode,
+}
+
+/// 清除配色：把程序生成的那一段整块删掉（手写样式不动）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PaletteClearReq {
+    pub body: String,
+    pub format: FormatId,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

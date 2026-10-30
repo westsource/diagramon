@@ -367,18 +367,50 @@ pub fn apply(
     format: FormatId,
     palette_id: &str,
     dark: bool,
+    edges: bool,
     mode: PaletteMode,
 ) -> Result<PaletteApplyRes, String> {
     let seed = find(palette_id)
         .ok_or_else(|| format!("没有这个色系：「{palette_id}」（可选：{}）", ids().join(" / ")))?;
     match format {
-        FormatId::Mermaid => apply_mermaid(body, seed, dark, mode),
-        FormatId::Dot => apply_dot(body, seed, dark, mode),
-        FormatId::D2 => apply_d2(body, seed, dark, mode),
+        FormatId::Mermaid => apply_mermaid(body, seed, dark, edges, mode),
+        FormatId::Dot => apply_dot(body, seed, dark, edges, mode),
+        FormatId::D2 => apply_d2(body, seed, dark, edges, mode),
         FormatId::Drawio | FormatId::Excalidraw => Err(
             "画布型格式没有稳定的节点角色，自动配色只在 Mermaid / DOT / D2 上生效"
                 .to_string(),
         ),
+    }
+}
+
+/// 清除配色：把程序生成的那一段**整块**删掉。
+///
+/// 与「关闭自动配色」的区别：那个只是不再上色，已经写进文档的 `classDef` 会一直留着；
+/// 这里是真正把它拿掉。手写样式/用户自己的 class **一个都不碰** —— 我们只删自己标记块里的行。
+///
+/// 画布型没有我们的块，返回"没变"（不是错误：在画布型上点清除本来就该是空操作）。
+pub fn clear(body: &str, format: FormatId) -> PaletteApplyRes {
+    let (begin, end) = match format {
+        FormatId::Mermaid => ("%% dgm-palette:begin", "%% dgm-palette:end"),
+        FormatId::Dot => ("// dgm-palette:begin", "// dgm-palette:end"),
+        FormatId::D2 => ("# dgm-palette:begin", "# dgm-palette:end"),
+        FormatId::Drawio | FormatId::Excalidraw => {
+            return PaletteApplyRes {
+                body: body.to_string(),
+                changed: false,
+                applied: 0,
+                skipped: 0,
+                styles_removed: 0,
+            }
+        }
+    };
+    let (out, removed) = strip_block(body, begin, end);
+    PaletteApplyRes {
+        changed: removed && out != body,
+        body: if removed { out } else { body.to_string() },
+        applied: 0,
+        skipped: 0,
+        styles_removed: 0,
     }
 }
 
@@ -443,6 +475,7 @@ fn apply_mermaid(
     body: &str,
     seed: &Seed,
     dark: bool,
+    edges: bool,
     mode: PaletteMode,
 ) -> Result<PaletteApplyRes, String> {
     // **先剥掉自己上次生成的块再扫描**：块里有 `linkStyle` 与 `class …`，
@@ -490,10 +523,12 @@ fn apply_mermaid(
     // 连线统一跟随色系。**用 init 指令而不是 `linkStyle default`**：后者只改 `stroke`，
     // 箭头（marker）仍是主题的 #333，肉眼能看到"线是灰绿、箭头是深灰"的错位；
     // `themeVariables.lineColor` 把线和箭头一起换掉（mermaid 12 实测两种位置都生效）。
-    let line = edge_swatch(seed, dark);
-    block.push_str(&format!(
-        "%%{{init: {{'themeVariables': {{'lineColor': '{line}'}}}}}}%%\n"
-    ));
+    if edges {
+        let line = edge_swatch(seed, dark);
+        block.push_str(&format!(
+            "%%{{init: {{'themeVariables': {{'lineColor': '{line}'}}}}}}%%\n"
+        ));
+    }
     block.push_str("%% dgm-palette:end\n");
     if !out.ends_with('\n') {
         out.push('\n');
@@ -843,7 +878,13 @@ fn dot_is_colored(node: &DotNode) -> bool {
     node.attrs.contains_key("fillcolor") || node.attrs.contains_key("bgcolor")
 }
 
-fn apply_dot(body: &str, seed: &Seed, dark: bool, mode: PaletteMode) -> Result<PaletteApplyRes, String> {
+fn apply_dot(
+    body: &str,
+    seed: &Seed,
+    dark: bool,
+    edges: bool,
+    mode: PaletteMode,
+) -> Result<PaletteApplyRes, String> {
     // 同 Mermaid：先剥块再扫描，否则上一轮写进去的 fillcolor 会被当成"用户已有颜色"，
     // 于是换色系时（only_uncolored）一个节点都不动 —— 看起来像"点了没反应"。
     let (base, _) = strip_block(body, "// dgm-palette:begin", "// dgm-palette:end");
@@ -898,7 +939,9 @@ fn apply_dot(body: &str, seed: &Seed, dark: bool, mode: PaletteMode) -> Result<P
             ));
         }
     }
-    block.push_str(&format!("  edge [color=\"{}\"];\n", edge_swatch(seed, dark)));
+    if edges {
+        block.push_str(&format!("  edge [color=\"{}\"];\n", edge_swatch(seed, dark)));
+    }
     block.push_str("  // dgm-palette:end\n");
     if applied == 0 {
         return Ok(PaletteApplyRes { body: body.to_string(), changed: false, applied: 0, skipped, styles_removed });
@@ -1040,7 +1083,13 @@ fn split_d2_attr(lhs: &str) -> Option<(String, String)> {
     None
 }
 
-fn apply_d2(body: &str, seed: &Seed, dark: bool, mode: PaletteMode) -> Result<PaletteApplyRes, String> {
+fn apply_d2(
+    body: &str,
+    seed: &Seed,
+    dark: bool,
+    edges: bool,
+    mode: PaletteMode,
+) -> Result<PaletteApplyRes, String> {
     // 同上面两个格式：先剥块再扫描（自己写的 `a.style.fill` / `(a -> b).style.stroke` 不算"用户已有"）
     let (base, _) = strip_block(body, "# dgm-palette:begin", "# dgm-palette:end");
     let scan = d2_nodes(&base);
@@ -1073,9 +1122,11 @@ fn apply_d2(body: &str, seed: &Seed, dark: bool, mode: PaletteMode) -> Result<Pa
     }
     // 连线：D2 没有"全局边样式"，只能逐条写（`(a -> b).style.stroke`）。
     // 端点是扫描时按文档顺序记下的，重跑同序，所以幂等。
-    let line = edge_swatch(seed, dark);
-    for (from, to) in &scan.edges {
-        block.push_str(&format!("({from} -> {to}).style.stroke: \"{line}\"\n"));
+    if edges {
+        let line = edge_swatch(seed, dark);
+        for (from, to) in &scan.edges {
+            block.push_str(&format!("({from} -> {to}).style.stroke: \"{line}\"\n"));
+        }
     }
     block.push_str("# dgm-palette:end\n");
     if applied == 0 {
@@ -1091,6 +1142,17 @@ fn apply_d2(body: &str, seed: &Seed, dark: bool, mode: PaletteMode) -> Result<Pa
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 绝大多数用例只关心节点配色：默认"连线跟随"。
+    fn paint(
+        body: &str,
+        format: FormatId,
+        palette: &str,
+        dark: bool,
+        mode: PaletteMode,
+    ) -> Result<PaletteApplyRes, String> {
+        apply(body, format, palette, dark, true, mode)
+    }
 
     // 色相间隔门禁与实现共用 `MIN_SEP_HUE`（两处各写一个数迟早漂开）。
 
@@ -1232,7 +1294,7 @@ mod tests {
 
     #[test]
     fn mermaid_gets_one_classdef_per_role_and_a_class_per_node() {
-        let res = apply(&mermaid_flow(), FormatId::Mermaid, "pine", false, PaletteMode::All).unwrap();
+        let res = paint(&mermaid_flow(), FormatId::Mermaid, "pine", false, PaletteMode::All).unwrap();
         assert!(res.changed);
         for role in ROLES {
             assert!(res.body.contains(&format!("classDef lvl-{role} fill:#")), "缺 {role} 的 classDef");
@@ -1247,16 +1309,16 @@ mod tests {
 
     #[test]
     fn mermaid_apply_is_idempotent() {
-        let once = apply(&mermaid_flow(), FormatId::Mermaid, "pine", false, PaletteMode::All).unwrap();
-        let twice = apply(&once.body, FormatId::Mermaid, "pine", false, PaletteMode::All).unwrap();
+        let once = paint(&mermaid_flow(), FormatId::Mermaid, "pine", false, PaletteMode::All).unwrap();
+        let twice = paint(&once.body, FormatId::Mermaid, "pine", false, PaletteMode::All).unwrap();
         assert_eq!(twice.body, once.body, "重跑必须逐字节一致（否则点两次就多一块）");
         assert!(!twice.changed);
     }
 
     #[test]
     fn switching_palette_only_changes_colors_not_node_roles() {
-        let pine = apply(&mermaid_flow(), FormatId::Mermaid, "pine", false, PaletteMode::All).unwrap();
-        let lotus = apply(&pine.body, FormatId::Mermaid, "lotus", false, PaletteMode::All).unwrap();
+        let pine = paint(&mermaid_flow(), FormatId::Mermaid, "pine", false, PaletteMode::All).unwrap();
+        let lotus = paint(&pine.body, FormatId::Mermaid, "lotus", false, PaletteMode::All).unwrap();
         assert!(lotus.changed);
         let classes = |s: &str| -> Vec<String> {
             s.lines().filter(|l| l.trim_start().starts_with("class ")).map(|l| l.trim().to_string()).collect()
@@ -1272,8 +1334,8 @@ mod tests {
 
     #[test]
     fn dark_theme_uses_a_different_ladder() {
-        let light = apply(&mermaid_flow(), FormatId::Mermaid, "pine", false, PaletteMode::All).unwrap();
-        let dark = apply(&mermaid_flow(), FormatId::Mermaid, "pine", true, PaletteMode::All).unwrap();
+        let light = paint(&mermaid_flow(), FormatId::Mermaid, "pine", false, PaletteMode::All).unwrap();
+        let dark = paint(&mermaid_flow(), FormatId::Mermaid, "pine", true, PaletteMode::All).unwrap();
         assert!(light.body.contains("亮色"));
         assert!(dark.body.contains("暗色"));
         // 暗色阶的填充明显更深
@@ -1291,7 +1353,7 @@ mod tests {
     #[test]
     fn only_uncolored_skips_hand_picked_colors() {
         let body = "flowchart TD\n    A[开始]\n    style A fill:#f00\n    B[结束]\n".to_string();
-        let res = apply(&body, FormatId::Mermaid, "pine", false, PaletteMode::OnlyUncolored).unwrap();
+        let res = paint(&body, FormatId::Mermaid, "pine", false, PaletteMode::OnlyUncolored).unwrap();
         assert_eq!((res.applied, res.skipped), (1, 1), "A 被跳过、B 上色");
         // A 被跳过 ⇒ 不在任何 class 语句里；B 在
         let class_lines: Vec<&str> = res.body.lines().filter(|l| l.trim_start().starts_with("class ")).collect();
@@ -1304,7 +1366,7 @@ mod tests {
     #[test]
     fn all_mode_removes_the_inline_style_that_would_win() {
         let body = "flowchart TD\n    A[开始]\n    style A fill:#f00\n".to_string();
-        let res = apply(&body, FormatId::Mermaid, "pine", false, PaletteMode::All).unwrap();
+        let res = paint(&body, FormatId::Mermaid, "pine", false, PaletteMode::All).unwrap();
         assert!(!res.body.contains("style A fill:#f00"), "整篇重排必须删掉覆盖用的 style");
         assert!(res.body.contains("class A lvl-entry"));
         assert_eq!(res.styles_removed, 1, "被覆盖的 style 必须删掉并如实计数");
@@ -1312,7 +1374,7 @@ mod tests {
 
     #[test]
     fn mermaid_refuses_non_flowchart() {
-        let err = apply("sequenceDiagram\n A->>B: hi\n", FormatId::Mermaid, "pine", false, PaletteMode::All)
+        let err = paint("sequenceDiagram\n A->>B: hi\n", FormatId::Mermaid, "pine", false, PaletteMode::All)
             .unwrap_err();
         assert!(err.contains("flowchart"), "{err}");
     }
@@ -1328,7 +1390,7 @@ digraph G {
     C [label=\"外部网关\"];
 }
 ";
-        let res = apply(body, FormatId::Dot, "indigo", false, PaletteMode::OnlyUncolored).unwrap();
+        let res = paint(body, FormatId::Dot, "indigo", false, PaletteMode::OnlyUncolored).unwrap();
         assert!(res.changed);
         // 追加在收尾大括号之前
         let end = res.body.rfind('}').unwrap();
@@ -1342,10 +1404,10 @@ digraph G {
     #[test]
     fn dot_apply_is_idempotent_and_skips_explicit_fills() {
         let body = "digraph G {\n  A [fillcolor=\"#123456\"];\n  B [shape=diamond];\n}\n";
-        let once = apply(body, FormatId::Dot, "pine", false, PaletteMode::OnlyUncolored).unwrap();
+        let once = paint(body, FormatId::Dot, "pine", false, PaletteMode::OnlyUncolored).unwrap();
         assert_eq!(once.skipped, 1, "A 已有 fillcolor，跳过它");
         assert!(!once.body.contains("A [fillcolor=\"#") || once.body.contains("#123456"));
-        let twice = apply(&once.body, FormatId::Dot, "pine", false, PaletteMode::OnlyUncolored).unwrap();
+        let twice = paint(&once.body, FormatId::Dot, "pine", false, PaletteMode::OnlyUncolored).unwrap();
         assert_eq!(twice.body, once.body);
     }
 
@@ -1359,7 +1421,7 @@ c: 外部网关
 a -> b
 b -> c
 ";
-        let res = apply(body, FormatId::D2, "ochre", true, PaletteMode::OnlyUncolored).unwrap();
+        let res = paint(body, FormatId::D2, "ochre", true, PaletteMode::OnlyUncolored).unwrap();
         assert!(res.changed);
         assert!(res.body.contains("b.style.fill:"));
         assert!(res.body.contains("dgm-palette:end"));
@@ -1369,8 +1431,8 @@ b -> c
     #[test]
     fn d2_apply_is_idempotent() {
         let body = "a -> b\nb: 外部\n";
-        let once = apply(body, FormatId::D2, "pine", false, PaletteMode::All).unwrap();
-        let twice = apply(&once.body, FormatId::D2, "pine", false, PaletteMode::All).unwrap();
+        let once = paint(body, FormatId::D2, "pine", false, PaletteMode::All).unwrap();
+        let twice = paint(&once.body, FormatId::D2, "pine", false, PaletteMode::All).unwrap();
         assert_eq!(twice.body, once.body);
         assert!(!twice.changed);
     }
@@ -1378,18 +1440,18 @@ b -> c
     #[test]
     fn edges_take_the_palette_but_stay_quiet() {
         // 线是"结构"，只借一点色系倾向：三种格式各有一条统一定义
-        let m = apply(&mermaid_flow(), FormatId::Mermaid, "pine", false, PaletteMode::All).unwrap();
+        let m = paint(&mermaid_flow(), FormatId::Mermaid, "pine", false, PaletteMode::All).unwrap();
         assert!(m.body.contains("'lineColor': '#"), "{}", m.body);
-        let d = apply("digraph G {\n  A -> B;\n}\n", FormatId::Dot, "pine", false, PaletteMode::All).unwrap();
+        let d = paint("digraph G {\n  A -> B;\n}\n", FormatId::Dot, "pine", false, PaletteMode::All).unwrap();
         assert!(d.body.contains("edge [color=\"#"), "{}", d.body);
-        let t = apply("a -> b\n", FormatId::D2, "pine", false, PaletteMode::All).unwrap();
+        let t = paint("a -> b\n", FormatId::D2, "pine", false, PaletteMode::All).unwrap();
         assert!(t.body.contains("(a -> b).style.stroke: \"#"), "{}", t.body);
 
         // 换色系 ⇒ 线色跟着换
         let line = |s: &str| {
             s.lines().find(|l| l.contains("lineColor")).unwrap_or("").trim().to_string()
         };
-        let m2 = apply(&m.body, FormatId::Mermaid, "lotus", false, PaletteMode::All).unwrap();
+        let m2 = paint(&m.body, FormatId::Mermaid, "lotus", false, PaletteMode::All).unwrap();
         assert_ne!(line(&m.body), line(&m2.body), "线色没跟着色系走");
 
         // 线色要比节点描边更淡（饱和度压低），否则 5 条以上边会抢注意力
@@ -1425,9 +1487,9 @@ b -> c
             (FormatId::D2, "a -> b\n"),
         ];
         for (fmt, body) in cases {
-            let first = apply(body, fmt, "pine", false, PaletteMode::OnlyUncolored).unwrap();
+            let first = paint(body, fmt, "pine", false, PaletteMode::OnlyUncolored).unwrap();
             assert!(first.changed, "{fmt:?} 第一次应当上色");
-            let second = apply(&first.body, fmt, "lotus", false, PaletteMode::OnlyUncolored).unwrap();
+            let second = paint(&first.body, fmt, "lotus", false, PaletteMode::OnlyUncolored).unwrap();
             assert!(second.changed, "{fmt:?} 换色系后应当变色（不是跳过全部节点）");
             assert_eq!(second.skipped, 0, "{fmt:?} 不该把上一轮自己的输出当成用户颜色");
             let (fill, _, _) = swatch(find("lotus").unwrap(), "main", false);
@@ -1436,16 +1498,78 @@ b -> c
     }
 
     #[test]
+    fn edges_can_be_turned_off() {
+        // 关掉时：节点照常上色，但一个线色都不写（三种格式各自验证）
+        let m = apply(&mermaid_flow(), FormatId::Mermaid, "pine", false, false, PaletteMode::All).unwrap();
+        assert!(m.body.contains("classDef lvl-main fill:#"), "节点色仍要在");
+        assert!(!m.body.contains("lineColor"), "不该再写线色：{}", m.body);
+
+        let d = apply("digraph G {\n  A -> B;\n}\n", FormatId::Dot, "pine", false, false, PaletteMode::All).unwrap();
+        assert!(d.body.contains("fillcolor=\"#"));
+        assert!(!d.body.contains("edge [color="), "{}", d.body);
+
+        let t = apply("a -> b\n", FormatId::D2, "pine", false, false, PaletteMode::All).unwrap();
+        assert!(t.body.contains("a.style.fill:"));
+        assert!(!t.body.contains(".style.stroke: \"#5"), "不该写线色：{}", t.body);
+    }
+
+    #[test]
+    fn turning_edges_back_on_adds_them_without_touching_node_colors() {
+        let off = apply(&mermaid_flow(), FormatId::Mermaid, "pine", false, false, PaletteMode::All).unwrap();
+        let on = apply(&off.body, FormatId::Mermaid, "pine", false, true, PaletteMode::All).unwrap();
+        assert!(on.body.contains("lineColor"), "{}", on.body);
+        // 节点色那几行不变（只多了线色一行）
+        let defs = |s: &str| -> Vec<String> {
+            s.lines().filter(|l| l.starts_with("classDef")).map(|l| l.to_string()).collect()
+        };
+        assert_eq!(defs(&off.body), defs(&on.body));
+    }
+
+    #[test]
+    fn clear_removes_only_what_we_generated() {
+        let body = "flowchart TD\n    A([开始]) --> B[写库]\n    style B fill:#f00\n";
+        let painted = paint(body, FormatId::Mermaid, "pine", false, PaletteMode::OnlyUncolored).unwrap();
+        assert!(painted.body.contains("dgm-palette:begin"));
+        let cleared = clear(&painted.body, FormatId::Mermaid);
+        assert!(cleared.changed);
+        assert!(!cleared.body.contains("classDef"), "我们的块必须整块消失：{}", cleared.body);
+        assert!(!cleared.body.contains("dgm-palette"), "{}", cleared.body);
+        assert!(cleared.body.contains("style B fill:#f00"), "手写样式一个都不能碰");
+        // 再清一次：没东西可删，如实报"没变"
+        let again = clear(&cleared.body, FormatId::Mermaid);
+        assert!(!again.changed);
+        assert_eq!(again.body, cleared.body);
+    }
+
+    #[test]
+    fn clear_covers_all_three_formats_and_ignores_canvas() {
+        for (fmt, body) in [
+            (FormatId::Mermaid, "flowchart TD\n    A --> B\n"),
+            (FormatId::Dot, "digraph G {\n  A -> B;\n}\n"),
+            (FormatId::D2, "a -> b\n"),
+        ] {
+            let painted = paint(body, fmt, "pine", false, PaletteMode::All).unwrap();
+            let cleared = clear(&painted.body, fmt);
+            assert!(cleared.changed, "{fmt:?} 应能清掉");
+            assert!(!cleared.body.contains("dgm-palette"), "{fmt:?}: {}", cleared.body);
+        }
+        // 画布型本来就没什么可清：返回"没变"，不报错
+        let c = clear("{}", FormatId::Drawio);
+        assert!(!c.changed);
+        assert_eq!(c.body, "{}");
+    }
+
+    #[test]
     fn canvas_formats_are_rejected_with_a_reason() {
         for f in [FormatId::Drawio, FormatId::Excalidraw] {
-            let err = apply("<mxfile/>", f, "pine", false, PaletteMode::All).unwrap_err();
+            let err = paint("<mxfile/>", f, "pine", false, PaletteMode::All).unwrap_err();
             assert!(err.contains("画布型"), "{err}");
         }
     }
 
     #[test]
     fn unknown_palette_is_a_loud_error() {
-        let err = apply("flowchart TD\n A\n", FormatId::Mermaid, "nope", false, PaletteMode::All).unwrap_err();
+        let err = paint("flowchart TD\n A\n", FormatId::Mermaid, "nope", false, PaletteMode::All).unwrap_err();
         assert!(err.contains("nope") && err.contains("pine"), "{err}");
     }
 

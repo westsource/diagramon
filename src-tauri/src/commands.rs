@@ -21,7 +21,7 @@ use app_ipc::{
     AiThinking, IntentClassifyRequest, IntentClassifyResult,
     AppInfo, ConvMeta, Conversation, ConversationTurn, ConvertOutcome, ConvertRequest, DevFlags, Doc, FormatId,
     Issue, MemoryEntry, MemoryList, MemoryScope, MemoryState, OutlineGroup, PaletteApplyReq,
-    PaletteApplyRes, Session as SessionPayload, Settings, ViewMode,
+    PaletteApplyRes, PaletteClearReq, Session as SessionPayload, Settings, ViewMode,
 };
 use base64::Engine as _;
 use tauri::{AppHandle, Emitter, State};
@@ -258,7 +258,15 @@ pub fn doc_set_scheme(
 /// ② AI 把代码应用进编辑器之前 → 把模型写的角色标记展开成色值。
 #[tauri::command]
 pub fn palette_apply(req: PaletteApplyReq) -> R<PaletteApplyRes> {
-    app_core::palette::apply(&req.body, req.format, &req.palette, req.dark, req.mode)
+    app_core::palette::apply(&req.body, req.format, &req.palette, req.dark, req.edges, req.mode)
+}
+
+/// 清除配色：把程序生成的那一段整块删掉（手写样式不动）。
+///
+/// 与「关闭自动配色」是两件事：关掉只是不再上色，已经写进去的 `classDef` 会一直留着。
+#[tauri::command]
+pub fn palette_clear(req: PaletteClearReq) -> PaletteApplyRes {
+    app_core::palette::clear(&req.body, req.format)
 }
 
 #[tauri::command]

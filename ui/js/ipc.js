@@ -901,6 +901,15 @@ digraph Pipeline {
           );
         }
 
+        // 清除同样只存在于 Rust 侧
+        case "palette_clear": {
+          const r = args.req || {};
+          throw new Error(
+            `mock 模式没有配色清除器（${r.format}）：真实实现（只删程序生成的那一段）在 Rust 侧，` +
+              "请用 node tools/dev/check.mjs 起真实客户端",
+          );
+        }
+
         case "doc_set_look": {
           const d = this._doc(args.id);
           if (d) d.look = args.look;

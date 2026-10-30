@@ -1125,8 +1125,22 @@ window.DGM = window.DGM || {};
   async function paint(body, format, scheme, mode) {
     if (!scheme) return { body, changed: false, applied: 0, skipped: 0, styles_removed: 0 };
     const res = await ipc.invoke("palette_apply", {
-      req: { body, format, palette: scheme, dark: document.documentElement.dataset.theme === "dark", mode: mode || "only_uncolored" },
+      req: {
+        body,
+        format,
+        palette: scheme,
+        dark: document.documentElement.dataset.theme === "dark",
+        // 连线开关是**全局偏好**（设置 → 外观），缺省视为开
+        edges: !(state.settings && state.settings.palette_edges === false),
+        mode: mode || "only_uncolored",
+      },
     });
+    return res || { body, changed: false, applied: 0, skipped: 0, styles_removed: 0 };
+  }
+
+  /** 清除配色：只删程序生成的那一段（手写样式不动）。 */
+  async function clearPalette(body, format) {
+    const res = await ipc.invoke("palette_clear", { req: { body, format } });
     return res || { body, changed: false, applied: 0, skipped: 0, styles_removed: 0 };
   }
 
@@ -1309,6 +1323,7 @@ window.DGM = window.DGM || {};
     schemeOf,
     setScheme,
     paint,
+    clearPalette,
     refreshDerived,
     refreshIssues,
     refreshOutline,

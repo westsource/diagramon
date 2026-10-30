@@ -167,7 +167,7 @@ const ROLES = ["main", "entry", "decide", "data", "ext", "risk", "note"];
 const ROLE_ZH = { main: "主链路", entry: "入口", decide: "判断", data: "数据", ext: "外部", risk: "异常", note: "说明" };
 const ORDER = ["pine", "indigo", "lotus", "olive", "ochre", "tungsten"];
 
-const ui = { palette: "pine", dark: false };
+const ui = { palette: "pine", dark: false, edges: true };
 
 /* 图：七个角色各一个节点（原型不追求自动布局，位置写死） */
 const NODES = [
@@ -221,6 +221,7 @@ function shapeOf(n, fill, stroke) {
 
 /** 连线颜色：与 Rust 的 `edge_swatch` 同口径（主色相，饱和度压低，亮 40% / 暗 66%）。 */
 function edgeColor() {
+  if (!ui.edges) return ui.dark ? "#6b7574" : "#9aa5ae"; // 连线开关关掉：中性深灰
   const p = ui.palette ? TABLE[ui.palette] : null;
   if (!p) return ui.dark ? "#6b7574" : "#9aa5ae";
   if (p.edge) return ui.dark ? p.edge.dark : p.edge.light;
@@ -334,10 +335,12 @@ function openPop() {
   pop.innerHTML =
     `<div class="pop-row head">配色色系（本文档）</div>` + items +
     `<div class="pop-row ${!ui.palette ? "on" : ""}" data-p=""><span class="pv-dot" style="background:var(--faint)"></span><span>关闭（不上自动色）</span>${!ui.palette ? '<span class="chk">✓</span>' : ""}</div>` +
+    `<div class="pop-row" data-clear="1"><span>恢复默认配色（清除已上色）</span></div>` +
     `<div class="pop-sep"></div>` +
     `<div class="pop-row" data-mode="all"><span>整篇重排（覆盖手选颜色）</span><span class="kbd">会先确认</span></div>` +
     `<div class="pop-row" data-ai="1"><span>让 AI 挑一个…</span><span class="kbd">1 次请求</span></div>` +
     `<div class="pop-sep"></div>` +
+    `<div class="pop-row ${ui.edges ? "on" : ""}" data-edges="1"><span>连线跟随配色</span>${ui.edges ? '<span class="chk">✓</span>' : ""}</div>` +
     `<div class="pop-row hint">默认只给<b>还没上色</b>的节点上色；「整篇重排」会删掉节点上手写的 style（否则它优先级更高，等于没重排）。画布型格式没有这一组。</div>`;
   const r = $("#btn-palette").getBoundingClientRect();
   const wr = $("#win").getBoundingClientRect();
@@ -353,6 +356,22 @@ function openPop() {
     pop.hidden = true;
     const ok = window.confirm("整篇重排会覆盖这个文档里手选的节点颜色（并删掉手写的 style 语句）。继续？");
     if (ok) renderAll();
+  };
+  const clr = pop.querySelector("[data-clear]");
+  if (clr) clr.onclick = () => {
+    pop.hidden = true;
+    ui.palette = "";   // 清除 = 把程序生成的那段删掉，并把这份文档的色系置为关闭
+    renderAll();
+    $("#note").textContent = "已清除这份文档的配色（手写样式不动）；这份文档的色系同时置为关闭。";
+  };
+  const ed = pop.querySelector("[data-edges]");
+  if (ed) ed.onclick = () => {
+    pop.hidden = true;
+    ui.edges = !ui.edges;
+    renderAll();
+    $("#note").textContent = ui.edges
+      ? "连线已跟随配色（菜单/设置是同一个全局偏好，改完会立即重跑当前文档）。"
+      : "连线已改为中性色：线是「结构」，关掉后只给节点上色。";
   };
   const ai = pop.querySelector("[data-ai]");
   if (ai) ai.onclick = () => {
