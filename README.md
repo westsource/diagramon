@@ -3,9 +3,11 @@
 [中文文档](README.zh-CN.md)
 
 A **local-first** multi-format diagram editor: **Mermaid**, **Graphviz DOT**, **D2**, **drawio** and
-**Excalidraw** in one window — edit, live-preview and convert between them, with AI on a channel you
-choose. Rendering, validation and conversion all run on your machine, and no diagram is ever sent to a
-server.
+**Excalidraw** in one window — edit, live-preview and convert between them. The AI does not draw a
+separate picture in another tab: it works on **the same source you are editing**, reads the diagram you
+have open, writes back code you can diff, roll back and review, and gets the failing line and column back
+to repair when a render breaks. Rendering, validation and conversion all run on your machine, and content
+leaves it only when you use AI, only to the endpoint you chose.
 
 Version **3.11.2** · Official website <https://www.diagramon.com>
 
