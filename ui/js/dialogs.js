@@ -27,6 +27,7 @@ window.DGM = window.DGM || {};
   let draftAi = null;
   let draftKeys = {};
   let providerForm = null;
+  let aiSection = "models";
   let refreshingProvider = "";
   let removedProviders = new Set();
 
@@ -901,60 +902,113 @@ window.DGM = window.DGM || {};
         ? `<option value="${esc(ai.default_model)}" selected>${esc(ai.default_model)}</option>`
         : "");
 
+    const intentMode = (ai.intent && (ai.intent.mode || (ai.intent.enabled ? "custom" : "auto"))) || "auto";
+    const tab = (id, label) =>
+      `<button class="ai-subtab${aiSection === id ? " on" : ""}" data-ai-tab="${id}">${esc(label)}</button>`;
+    const secHead = (title, hint) =>
+      `<div class="ai-sec-head"><h4>${esc(title)}</h4></div>${hint ? `<p class="ai-sec-hint">${esc(hint)}</p>` : ""}`;
+
     return `
-      <div class="field">
-        <div class="row-head"><label>${esc(t("set.ai.providers"))}</label><span class="sp"></span>
-          <button class="btn sm" data-act="addprov">${icon("plus", "ico-sm")}${esc(t("set.ai.addProvider"))}</button></div>
-        <div class="staging-note">${icon("info", "ico-sm")}<span>${t("set.ai.stagingHint")}</span></div>
-        <div class="callout${gwTipWarn ? " warn" : ""}">${icon("cloud")}<span>${esc(gwTip)}</span></div>
-        <div class="ai-prov-list">${rows}</div>
-      </div>
-      ${providerForm ? providerFormHTML() : ""}
-      <div class="field"><label>${esc(t("set.ai.defaultModel"))}</label><select data-act="noop" id="ai-default">${defaultOpts}</select><span class="hint">${esc(t("set.ai.defaultModelHint"))}</span></div>
-      ${switchRow(!!ai.context_from_doc, t("set.ai.contextFromDoc"), null, "ctxdoc")}
-      ${switchRow(!!ai.render_retry, t("set.ai.renderRetry"), "set.ai.renderRetryHint", "retry")}
-      ${switchRow(!!ai.enhance_enabled, t("set.ai.enhance"), "set.ai.enhanceHint", "enhance", { max: retryMax })}
-      <div class="field narrow">
-        <label for="ai-retry-max">${esc(t("set.ai.retryMax"))}</label>
-        <select id="ai-retry-max">
-          ${[1, 2, 3].map((n) => `<option value="${n}"${n === retryMax ? " selected" : ""}>${n}</option>`).join("")}
-        </select>
-        <span class="hint">${esc(t("set.ai.retryMaxHint"))}</span>
-      </div>
-      ${switchRow(!!ai.tools_enabled, t("set.ai.tools"), "set.ai.toolsHint", "tools")}
-      ${switchRow(!!ai.vision_notice_accepted, t("set.ai.visionNotice"), null, "vnotice")}
-      ${switchRow(!!ai.memory_enabled, t("set.ai.memoryOn"), "set.ai.memoryOnHint", "memory")}
-      ${switchRow(!!ai.memory_auto, t("set.ai.memoryAuto"), "set.ai.memoryAutoHint", "memoryauto")}
-      <div class="field narrow">
-        <label for="ai-intent-mode">${esc(t("set.ai.intent"))}</label>
-        <select id="ai-intent-mode">
-          ${[
-            ["auto", "set.ai.intentModeAuto"],
-            ["official", "set.ai.intentModeOfficial"],
-            ["custom", "set.ai.intentModeCustom"],
-            ["off", "set.ai.intentModeOff"],
-          ]
-            .map(([v, k]) => `<option value="${v}"${(ai.intent && (ai.intent.mode || (ai.intent.enabled ? "custom" : "auto"))) === v ? " selected" : ""}>${esc(t(k))}</option>`)
-            .join("")}
-        </select>
-        <span class="hint">${esc(t("set.ai.intentHint"))}</span>
-      </div>
-      <details class="ai-prov-adv">
-        <summary>${esc(t("set.ai.advanced"))}</summary>
-        <div class="ai-prov-adv-grid">
-          <label>${esc(t("set.ai.intentUrl"))}<input id="ai-intent-url" value="${esc((ai.intent && ai.intent.base_url) || "")}" spellcheck="false"></label>
-          <label>${esc(t("set.ai.intentModel"))}<input id="ai-intent-model" value="${esc((ai.intent && ai.intent.model) || "")}" spellcheck="false"></label>
-          <label>${esc(t("set.ai.intentTimeout"))}<input id="ai-intent-timeout" type="number" min="300" max="2000" step="50" value="${(ai.intent && ai.intent.timeout_ms) || 700}"></label>
-          <label>${esc(t("set.ai.intentHigh"))}<input id="ai-intent-high" type="number" min="0" max="1" step="0.05" value="${(ai.intent && ai.intent.high_confidence) || 0.75}"></label>
-          <label>${esc(t("set.ai.intentMin"))}<input id="ai-intent-min" type="number" min="0" max="1" step="0.05" value="${(ai.intent && ai.intent.min_confidence) || 0.55}"></label>
-          <label title="${esc(t("set.ai.intentKeyHint"))}">${esc(t("set.ai.intentKey"))}<input type="password" data-key="intent-classifier" placeholder="${esc(t("set.ai.intentKeyHint"))}" spellcheck="false"></label>
+      <div class="ai-settings">
+        <div class="ai-subnav">
+          ${tab("models", t("set.ai.tab.models"))}
+          ${tab("intent", t("set.ai.tab.intent"))}
+          ${tab("behavior", t("set.ai.tab.behavior"))}
+          ${tab("memory", t("set.ai.tab.memory"))}
         </div>
-        <span class="hint">${esc(t("set.ai.intentKeyHint"))}</span>
-        <span class="hint">${esc(t("set.ai.intentOfficialHint"))}</span>
-      </details>
-      <div class="field"><label>${esc(t("set.ai.memory"))}</label>
-        <div class="btn-row"><button class="btn sm" data-act="memory">${icon("sparkles")}${esc(t("set.ai.memoryManage"))}</button>
-        <span class="hint">${esc(t("set.ai.memoryManageHint"))}</span></div></div>`;
+
+        <section class="ai-sec" data-ai-pane="models"${aiSection === "models" ? "" : " hidden"}>
+          ${secHead(t("set.ai.tab.models"), t("set.ai.modelsHint"))}
+          <div class="field">
+            <label>${esc(t("set.ai.defaultModel"))}</label>
+            <select data-act="noop" id="ai-default">${defaultOpts}</select>
+            <span class="hint">${esc(t("set.ai.defaultModelHint"))}</span>
+          </div>
+          <div class="callout${gwTipWarn ? " warn" : ""}">${icon("cloud")}<span>${esc(gwTip)}</span></div>
+          <div class="field">
+            <div class="row-head"><label>${esc(t("set.ai.providers"))}</label><span class="sp"></span>
+              <button class="btn sm" data-act="addprov">${icon("plus", "ico-sm")}${esc(t("set.ai.addProvider"))}</button></div>
+            <div class="staging-note">${icon("info", "ico-sm")}<span>${t("set.ai.stagingHint")}</span></div>
+            <div class="ai-prov-list">${rows}</div>
+          </div>
+          ${providerForm ? providerFormHTML() : ""}
+        </section>
+
+        <section class="ai-sec" data-ai-pane="intent"${aiSection === "intent" ? "" : " hidden"}>
+          ${secHead(t("set.ai.tab.intent"), t("set.ai.intentHint"))}
+          <input type="hidden" id="ai-intent-mode" value="${esc(intentMode)}">
+          <div class="ai-intent-grid">
+            ${[
+              ["auto", "set.ai.intentModeAuto", "set.ai.intentAutoHint"],
+              ["official", "set.ai.intentModeOfficial", "set.ai.intentOfficialBadge"],
+              ["custom", "set.ai.intentModeCustom", "set.ai.intentCustomHint"],
+              ["off", "set.ai.intentModeOff", "set.ai.intentOffHint"],
+            ]
+              .map(
+                ([v, labelKey, hintKey]) => `<button class="ai-intent-card${intentMode === v ? " on" : ""}" data-ai-intent="${v}">
+                  <b>${esc(t(labelKey))}</b><small>${esc(t(hintKey))}</small>
+                </button>`,
+              )
+              .join("")}
+          </div>
+
+          <div class="ai-intent-official" data-intent-box="official"${intentMode === "auto" || intentMode === "official" ? "" : " hidden"}>
+            <div class="ai-kv">
+              <span class="k">${esc(t("set.ai.intentOfficialEndpoint"))}</span><span class="v">${esc(t("set.ai.intentOfficialEndpointV"))}</span>
+              <span class="k">${esc(t("set.ai.intentModel"))}</span><span class="v"><code>jev-latest</code></span>
+              <span class="k">${esc(t("set.ai.intentKey"))}</span><span class="v">${esc(t("set.ai.intentOfficialKeyV"))}</span>
+            </div>
+          </div>
+
+          <div class="ai-intent-custom" data-intent-box="custom"${intentMode === "custom" ? "" : " hidden"}>
+            <div class="field"><label>${esc(t("set.ai.intentUrl"))}</label><input id="ai-intent-url" value="${esc((ai.intent && ai.intent.base_url) || "")}" spellcheck="false"></div>
+            <div class="field-row">
+              <div class="field"><label>${esc(t("set.ai.intentModel"))}</label><input id="ai-intent-model" value="${esc((ai.intent && ai.intent.model) || "")}" spellcheck="false"></div>
+              <div class="field"><label>${esc(t("set.ai.intentTimeout"))}</label><input id="ai-intent-timeout" type="number" min="300" max="15000" step="50" value="${(ai.intent && ai.intent.timeout_ms) || 700}"></div>
+            </div>
+            <div class="field"><label>${esc(t("set.ai.intentKey"))}</label><input type="password" data-key="intent-classifier" placeholder="${esc(t("set.ai.intentKeyHint"))}" spellcheck="false"><span class="hint">${esc(t("set.ai.intentKeyHint"))}</span></div>
+          </div>
+
+          <div class="field-row">
+            <div class="field"><label>${esc(t("set.ai.intentHigh"))}</label><input id="ai-intent-high" type="number" min="0" max="1" step="0.05" value="${(ai.intent && ai.intent.high_confidence) || 0.75}"><span class="hint">${esc(t("set.ai.intentHighHint"))}</span></div>
+            <div class="field"><label>${esc(t("set.ai.intentMin"))}</label><input id="ai-intent-min" type="number" min="0" max="1" step="0.05" value="${(ai.intent && ai.intent.min_confidence) || 0.55}"><span class="hint">${esc(t("set.ai.intentMinHint"))}</span></div>
+          </div>
+
+          <div class="ai-test-row">
+            <button class="btn sm" id="ai-intent-test">${icon("bolt", "ico-sm")}${esc(t("set.ai.intentTest"))}</button>
+            <span class="hint" id="ai-intent-test-hint">${esc(t("set.ai.intentTestHint"))}</span>
+          </div>
+          <div class="ai-test-result" id="ai-intent-test-result" hidden></div>
+          <div class="callout">${icon("warn")}<span>${esc(t("set.ai.intentOfficialHint"))}</span></div>
+        </section>
+
+        <section class="ai-sec" data-ai-pane="behavior"${aiSection === "behavior" ? "" : " hidden"}>
+          ${secHead(t("set.ai.tab.behavior"), t("set.ai.behaviorHint"))}
+          <div class="ai-group-title">${esc(t("set.ai.behaviorContext"))}</div>
+          ${switchRow(!!ai.context_from_doc, t("set.ai.contextFromDoc"), null, "ctxdoc")}
+          ${switchRow(!!ai.render_retry, t("set.ai.renderRetry"), "set.ai.renderRetryHint", "retry")}
+          ${switchRow(!!ai.enhance_enabled, t("set.ai.enhance"), "set.ai.enhanceHint", "enhance", { max: retryMax })}
+          <div class="field narrow">
+            <label for="ai-retry-max">${esc(t("set.ai.retryMax"))}</label>
+            <select id="ai-retry-max">${[1, 2, 3].map((n) => `<option value="${n}"${n === retryMax ? " selected" : ""}>${n}</option>`).join("")}</select>
+            <span class="hint">${esc(t("set.ai.retryMaxHint"))}</span>
+          </div>
+          <div class="ai-group-title">${esc(t("set.ai.behaviorTools"))}</div>
+          ${switchRow(!!ai.tools_enabled, t("set.ai.tools"), "set.ai.toolsHint", "tools")}
+          ${switchRow(!!ai.vision_notice_accepted, t("set.ai.visionNotice"), null, "vnotice")}
+        </section>
+
+        <section class="ai-sec" data-ai-pane="memory"${aiSection === "memory" ? "" : " hidden"}>
+          ${secHead(t("set.ai.tab.memory"), t("set.ai.memoryHint"))}
+          ${switchRow(!!ai.memory_enabled, t("set.ai.memoryOn"), "set.ai.memoryOnHint", "memory")}
+          ${switchRow(!!ai.memory_auto, t("set.ai.memoryAuto"), "set.ai.memoryAutoHint", "memoryauto")}
+          <div class="ai-memory-row">
+            <div><b>${esc(t("set.ai.memory"))}</b><small>${esc(t("set.ai.memoryManageHint"))}</small></div>
+            <span class="sp"></span>
+            <button class="btn sm" data-act="memory">${icon("sparkles")}${esc(t("set.ai.memoryManage"))}</button>
+          </div>
+        </section>
+      </div>`;
   }
 
   /** 兼容旧设置 / mock：没有 providers 时按 `(provider, base_url)` 现场分组。 */
@@ -1260,6 +1314,7 @@ window.DGM = window.DGM || {};
     removedProviders = new Set();
     providerForm = null;
     refreshingProvider = "";
+    if (cur === "ai") aiSection = "models";
     renderSettings(cur);
   }
 
@@ -1306,6 +1361,71 @@ window.DGM = window.DGM || {};
         else if (a === "memoryauto") state.patchSettings({ ai: { memory_auto: on } });
       });
     });
+
+    // AI 页内分组：只切换显示，不重渲染（保留未保存的输入）
+    $$("[data-ai-tab]", pane).forEach((b) =>
+      b.addEventListener("click", () => {
+        aiSection = b.dataset.aiTab;
+        $$("[data-ai-tab]", pane).forEach((x) => x.classList.toggle("on", x === b));
+        $$("[data-ai-pane]", pane).forEach((p) => { p.hidden = p.dataset.aiPane !== aiSection; });
+        pane.scrollTop = 0;
+      }),
+    );
+
+    // 意图模式：auto/official/custom/off；隐藏字段供保存读取，条件区只显示相关字段
+    const setIntentMode = (v) => {
+      const hid = $("#ai-intent-mode");
+      if (hid) hid.value = v;
+      $$("[data-ai-intent]", pane).forEach((b) => b.classList.toggle("on", b.dataset.aiIntent === v));
+      $$("[data-intent-box]", pane).forEach((box) => {
+        box.hidden = box.dataset.intentBox === "official" ? !(v === "auto" || v === "official") : v !== "custom";
+      });
+      const testBtn = $("#ai-intent-test");
+      if (testBtn) testBtn.disabled = v === "off";
+    };
+    $$("[data-ai-intent]", pane).forEach((b) => b.addEventListener("click", () => setIntentMode(b.dataset.aiIntent)));
+
+    const intentTest = $("#ai-intent-test");
+    if (intentTest) {
+      intentTest.addEventListener("click", async () => {
+        const out = $("#ai-intent-test-result");
+        const hint = $("#ai-intent-test-hint");
+        const mode = ($("#ai-intent-mode") || {}).value || "auto";
+        intentTest.disabled = true;
+        if (hint) hint.textContent = t("set.ai.intentTestRunning");
+        try {
+          const r = await DGM.ipc.invoke("ai_resolve_intent", {
+            req: {
+              prompt: t("set.ai.intentTestPrompt"),
+              has_document: true,
+              has_selection: true,
+              has_image: false,
+              has_text_files: false,
+              current_intent: "review",
+              document_head: null,
+              override_intent: null,
+            },
+          });
+          if (out) {
+            out.hidden = false;
+            const intent = (r && r.intent) || "review";
+            const conf = Math.round((Number(r && r.confidence) || 0) * 100);
+            out.innerHTML = r && r.fallback
+              ? `<b>${esc(t("set.ai.intentTestFallback"))}</b><span>${esc((r && r.reason) || "")}</span>`
+              : `<b>${esc(t("ai.intent." + intent))} · ${conf}%</b><span>${esc((r && r.model) || "")} · ${Number((r && r.elapsed_ms) || 0)} ms</span>`;
+          }
+          if (hint) hint.textContent = t("set.ai.intentTestHint");
+        } catch (e) {
+          if (out) {
+            out.hidden = false;
+            out.innerHTML = `<b>${esc(t("set.ai.intentTestFail"))}</b><span>${esc((e && e.message) || String(e))}</span>`;
+          }
+          if (hint) hint.textContent = "";
+        } finally {
+          intentTest.disabled = false;
+        }
+      });
+    }
 
     const split = $("#e-split");
     if (split) split.addEventListener("input", () => state.patchSettings({ panels: { split_src: Number(split.value) } }));
@@ -1456,7 +1576,7 @@ window.DGM = window.DGM || {};
       ip.enabled = mode !== "off"; // 旧版本字段：只用于回滚/旧设置读取
       ip.base_url = str("ai-intent-url") || ip.base_url;
       ip.model = str("ai-intent-model") || ip.model;
-      ip.timeout_ms = Math.round(num("ai-intent-timeout", 300, 2000, 700));
+      ip.timeout_ms = Math.round(num("ai-intent-timeout", 300, 15000, 700));
       ip.high_confidence = num("ai-intent-high", 0, 1, 0.75);
       ip.min_confidence = num("ai-intent-min", 0, 1, 0.55);
       if (ip.min_confidence > ip.high_confidence) ip.min_confidence = ip.high_confidence;

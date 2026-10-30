@@ -965,6 +965,40 @@ body.no-ai #ai-gutter { display: none; }
 .send-btn:hover { background: var(--ai-hover); }
 .send-btn[disabled] { background: var(--surface-3); color: var(--faint); cursor: not-allowed; }
 
+/* AI 设置页内部分组（设置窗口 → AI）：顶部胶囊切换，四组各自滚动，避免一列到底 */
+.ai-subnav { display: flex; gap: 4px; padding: 3px; margin: 0 0 12px; background: var(--surface-inset); border: 1px solid var(--border); border-radius: 999px; overflow-x: auto; }
+.ai-subtab { flex: 1 0 auto; border: 0; background: transparent; color: var(--muted); font: inherit; font-size: var(--fs-xs); padding: 5px 10px; border-radius: 999px; white-space: nowrap; }
+.ai-subtab:hover { color: var(--ink); }
+.ai-subtab.on { background: var(--surface); color: var(--ai); font-weight: 600; box-shadow: 0 1px 2px rgba(0,0,0,.06); }
+.ai-sec[hidden] { display: none; }
+.ai-sec-head { display: flex; align-items: center; gap: 8px; margin: 0 0 3px; }
+.ai-sec-head h4 { margin: 0; font-size: var(--fs-md); font-weight: 650; }
+.ai-sec-hint { margin: 0 0 11px; font-size: var(--fs-xs); line-height: 1.6; color: var(--muted); }
+.ai-group-title { margin: 12px 0 2px; font-size: 9.5px; font-weight: 650; letter-spacing: .35px; text-transform: uppercase; color: var(--faint); }
+.ai-group-title:first-of-type { margin-top: 2px; }
+.ai-intent-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; margin-bottom: 10px; }
+.ai-intent-card { text-align: left; padding: 9px 10px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); cursor: pointer; font: inherit; color: var(--ink); }
+.ai-intent-card:hover { border-color: var(--border-strong); }
+.ai-intent-card.on { border-color: var(--ai-line); background: var(--ai-soft); box-shadow: 0 0 0 1px var(--ai-line); }
+.ai-intent-card b { display: block; font-size: var(--fs-sm); font-weight: 600; }
+.ai-intent-card small { display: block; margin-top: 2px; font-size: 10.5px; line-height: 1.5; color: var(--muted); }
+.ai-intent-card.on small { color: var(--ink-2); }
+.ai-intent-official, .ai-intent-custom { margin: 0 0 10px; padding: 10px; border: 1px dashed var(--border-strong); border-radius: var(--radius-sm); background: var(--surface-inset); }
+.ai-intent-official[hidden], .ai-intent-custom[hidden] { display: none; }
+.ai-kv { display: grid; grid-template-columns: 84px 1fr; gap: 5px 10px; font-size: var(--fs-xs); }
+.ai-kv .k { color: var(--faint); }
+.ai-kv .v { color: var(--ink-2); min-width: 0; overflow-wrap: anywhere; }
+.ai-test-row { display: flex; align-items: center; gap: 8px; margin: 8px 0; }
+.ai-test-row .hint { flex: 1; }
+.ai-test-result { margin: 0 0 9px; padding: 8px 10px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); font-size: var(--fs-xs); line-height: 1.55; }
+.ai-test-result[hidden] { display: none; }
+.ai-test-result b { color: var(--ai); margin-right: 8px; }
+.ai-memory-row { display: flex; align-items: center; gap: 8px; margin-top: 9px; padding: 9px 10px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); }
+.ai-memory-row .sp { flex: 1; }
+.ai-memory-row b { display: block; font-size: var(--fs-sm); }
+.ai-memory-row small { display: block; margin-top: 1px; font-size: 10.5px; color: var(--muted); }
+@media (max-width: 720px) { .ai-intent-grid { grid-template-columns: 1fr; } }
+
 /* 记忆：待确认候选提示条（AI 面板顶部）+ 记忆管理对话框里的条目行 */
 .ai-memory-bar {
   display: flex;

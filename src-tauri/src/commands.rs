@@ -1139,7 +1139,7 @@ pub async fn ai_resolve_intent(
         _ => return Ok(done(req.current_intent, 0.0, true, "not-configured")),
     };
 
-    let timeout = std::time::Duration::from_millis(prefs.timeout_ms.clamp(300, 2000) as u64);
+    let timeout = std::time::Duration::from_millis(prefs.timeout_ms.clamp(300, 15000) as u64);
     let http = st.http_for_idle(timeout);
     let input = ai::decision::DecisionInput {
         prompt: &req.prompt,
