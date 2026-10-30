@@ -9,7 +9,7 @@ have open, writes back code you can diff, roll back and review, and gets the fai
 to repair when a render breaks. Rendering, validation and conversion all run on your machine, and content
 leaves it only when you use AI, only to the endpoint you chose.
 
-Version **3.11.2** · Official website <https://www.diagramon.com>
+Version **3.11.3** · Official website <https://www.diagramon.com>
 
 ## Problems it solves
 
@@ -112,7 +112,8 @@ static picture.
   frame is deliberately ignored); the view refits when panels, splitters or the window resize (can be
   turned off); the status bar shows the active view's zoom only
 - **Layout and look on the fly** — DOT offers six layouts, D2 offers `dagre` / `elk` / `tala`, Mermaid
-  offers `dagre` and `elk`; Mermaid look is `classic` / `neo` / `handDrawn`. The controls sit in the
+  offers `dagre` and `elk` (ELK is the default); Mermaid look is `classic` / `neo` / `handDrawn`. The
+  controls sit in the
   preview top bar, the choice is **remembered per file**, and the diagram re-renders immediately
 - **Export** — PNG at a selectable scale or straight to the clipboard; bitmaps carry the same background
   as the preview, and a diagram past Chromium's canvas limit has its scale reduced with a note instead of
@@ -151,6 +152,9 @@ static picture.
 - **File watching** — external changes are picked up; a collision with unsaved local edits raises a banner
   to choose "use disk version / keep mine"
 - **Single instance + file associations** — double-clicking a diagram file opens it in the running window
+- **Drag to open** — drop a diagram file on the window and it opens as a tab (a full-window hint while
+  dragging; unsupported extensions are rejected with a message). Dropping on the AI panel still attaches
+  the file as conversation context — the drop target decides
 - **Autosave is off by default**, switchable in Settings (500–60000 ms); unsaved documents have a draft
   store where one corrupt file cannot take down the others
 - **Path guarding** — create/rename/delete inside a workspace are root-validated and reject `..` and
@@ -234,7 +238,7 @@ expanded here; they live with the internal design documents and the repository's
 
 - Windows 10 / 11 64-bit with the WebView2 runtime (normally pre-installed)
 - **No** VC++ redistributable: the release build statically links the CRT
-- The rendering / canvas runtimes (about 105 MB) and the front-end assets are inside the installer —
+- The rendering / canvas runtimes (about 110 MB) and the front-end assets are inside the installer —
   nothing extra to download
 
 ## License
