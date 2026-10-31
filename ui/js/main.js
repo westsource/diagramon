@@ -1290,6 +1290,15 @@ window.DGM = window.DGM || {};
             await new Promise((r) => setTimeout(r, 300));
             const tint0 = document.querySelectorAll(".editor-swatch-tint").length;
             ok("关掉行底色后没有底色层", tint0 === 0, String(tint0));
+            // 按钮自己要把状态标出来（3.12.2 只改了设置、按钮看不出开没开）
+            {
+              const b = document.querySelector("#btn-tint");
+              ok(
+                "关闭时按钮不亮",
+                !!b && !b.classList.contains("on") && b.getAttribute("aria-pressed") === "false",
+                b ? `${b.className} aria=${b.getAttribute("aria-pressed")}` : "没找到按钮",
+              );
+            }
             // 走 state 的封装：裸 invoke 不会更新前端那份 settings，标注层读的是它
             await DGM.state.patchSettings({ editor: { source_tint: true } });
             let tinted = 0;
@@ -1297,6 +1306,14 @@ window.DGM = window.DGM || {};
               DGM.editor.refreshSwatches();
               await new Promise((r) => setTimeout(r, 100));
               tinted = document.querySelectorAll(".editor-swatch-tint").length;
+            }
+            {
+              const b = document.querySelector("#btn-tint");
+              ok(
+                "打开后按钮亮起（状态自明）",
+                !!b && b.classList.contains("on") && b.getAttribute("aria-pressed") === "true",
+                b ? `${b.className} aria=${b.getAttribute("aria-pressed")}` : "没找到按钮",
+              );
             }
             // 光有元素不够：行底色画在**文字下面**，CM 自带的不透明底会把它整块盖住
             //（3.12.1 就是这样"开关没生效"）。这里连"CM 那层是否让开"一起断言。

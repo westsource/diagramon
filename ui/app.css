@@ -564,6 +564,13 @@ body.no-ai #ai-gutter { display: none; }
   background: var(--surface);
 }
 .mini-btn:hover { color: var(--accent); border-color: var(--accent-line); background: var(--accent-soft); }
+/* 开关型 mini-btn（目前只有「行底色」）：按下时用强调色底，状态要一眼看得出，
+   而不是只有 title 里那句提示。 */
+.mini-btn.on {
+  color: var(--accent); border-color: var(--accent-line); background: var(--accent-soft);
+  box-shadow: inset 0 0 0 1px var(--accent-line);
+}
+.mini-btn.on:hover { color: var(--accent-ink); background: var(--accent); border-color: var(--accent); }
 
 /* 竖向拖拽把手（侧栏宽 / AI 面板宽）：本体 5px，命中区向两侧各加宽 3px */
 .v-gutter { position: relative; cursor: col-resize; background: transparent; z-index: 2; }

@@ -517,6 +517,7 @@ window.DGM = window.DGM || {};
     const sync = () => {
       const on = !!(state.settings && state.settings.editor && state.settings.editor.source_tint);
       btn.classList.toggle("on", on);
+      btn.setAttribute("aria-pressed", on ? "true" : "false");
       btn.title = t(on ? "src.tintOn" : "src.tintTip");
     };
     btn.addEventListener("click", () => {
