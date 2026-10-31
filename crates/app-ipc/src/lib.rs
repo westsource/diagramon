@@ -1362,6 +1362,14 @@ pub mod commands {
 
 #[cfg(test)]
 mod tests {
+    /// 行底色是"可选装饰"，默认必须关：整行染色会和错误行、选中行、搜索命中打架。
+    #[test]
+    fn row_tint_is_off_by_default() {
+        let e = crate::EditorPrefs::default();
+        assert!(!e.source_tint, "source_tint 默认必须是 false");
+        assert!(!e.autosave, "autosave 默认也必须是 false（写盘是不可逆副作用）");
+    }
+
     use super::*;
 
     /// 自动保存**默认关闭**：写盘是不可逆副作用，不能替用户按 Ctrl+S。

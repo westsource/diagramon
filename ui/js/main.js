@@ -1271,11 +1271,14 @@ window.DGM = window.DGM || {};
             const got = await waitSw(2);
             const swatches = document.querySelectorAll(".editor-swatch").length;
             ok("源码窗格按行标出色块", got, `${swatches} 个`);
-            ok(
-              "行底色默认关（没有底色层）",
-              document.querySelectorAll(".editor-swatch-tint").length === 0,
-              String(document.querySelectorAll(".editor-swatch-tint").length),
-            );
+            // 先显式关掉再断言：这是**用户可持久化**的开关，不能赌它当前是关的
+            // （"默认关"本身由 Rust 侧 `row_tint_is_off_by_default` 钉着）
+            await DGM.state.patchSettings({ editor: { source_tint: false } });
+            await new Promise((r) => setTimeout(r, 300));
+            DGM.editor.refreshSwatches();
+            await new Promise((r) => setTimeout(r, 300));
+            const tint0 = document.querySelectorAll(".editor-swatch-tint").length;
+            ok("关掉行底色后没有底色层", tint0 === 0, String(tint0));
             // 走 state 的封装：裸 invoke 不会更新前端那份 settings，标注层读的是它
             await DGM.state.patchSettings({ editor: { source_tint: true } });
             let tinted = 0;
