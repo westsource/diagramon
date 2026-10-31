@@ -280,6 +280,20 @@ fn slot_swatch(seed: &Seed, slot: &str, dark: bool, groups: usize) -> (String, S
     }
 }
 
+/// 分组**框**的取色：和组内节点同色相，但明显更浅。
+///
+/// 框和节点用同一个填充色的话，节点会"溶"进背景里（实测 事件数据流：中间的
+/// 数智中枢框 #dddfe9，里面的节点也是 #dddfe9，一眼看过去像几个白框）。
+fn frame_swatch(seed: &Seed, idx: usize, groups: usize, dark: bool) -> (String, String, String) {
+    let h = group_hue(seed.hue, idx, groups);
+    let s = seed.sat;
+    if dark {
+        (hsl_hex(h, s * 0.40, 0.17), hsl_hex(h, s * 0.75, 0.45), hsl_hex(h, s * 0.40, 0.92))
+    } else {
+        (hsl_hex(h, s * 0.35, 0.955), hsl_hex(h, s * 0.75, 0.72), hsl_hex(h, s * 0.60, 0.28))
+    }
+}
+
 /// 一个角色在某个主题下的 (fill, stroke, text)。
 ///
 /// 明度梯度是全局的：亮色 94/50/22、暗色 22/60/90。于是"文字压在填充上"的对比度
@@ -608,6 +622,8 @@ pub fn annotate(body: &str, format: FormatId, dark: bool) -> Vec<PaletteLine> {
         FormatId::Drawio | FormatId::Excalidraw => return Vec::new(),
     };
 
+    // 分组名的结构顺序（与 `apply` 同一份编号）
+    let mut order: Vec<String> = Vec::new();
     // 节点：(id, 行号, 显式角色, 是否已有颜色, 标签, 形状, 分组)
     let mut nodes: Vec<(
         String,
@@ -621,6 +637,7 @@ pub fn annotate(body: &str, format: FormatId, dark: bool) -> Vec<PaletteLine> {
     match format {
         FormatId::Mermaid => match convert::flow_facts(&base) {
             Ok(facts) => {
+                order = facts.subgraphs.iter().map(|(_, n)| n.clone()).collect();
                 for n in &facts.nodes {
                     let explicit = n.classes.iter().find_map(|c| role_of_class(c));
                     let colored = n.styled
@@ -674,7 +691,7 @@ pub fn annotate(body: &str, format: FormatId, dark: bool) -> Vec<PaletteLine> {
     }
 
     // 与 `apply` 用同一套判定：被跳过的（已有颜色）不在 `by_slot` 里
-    let (by_slot, _) = plan(
+    let (by_slot, _, group_count) = plan(
         nodes
             .iter()
             .map(|(id, _, explicit, colored, label, shape, group)| {
@@ -688,8 +705,9 @@ pub fn annotate(body: &str, format: FormatId, dark: bool) -> Vec<PaletteLine> {
                 )
             }),
         PaletteMode::OnlyUncolored,
+        &order,
     );
-    let groups = by_slot.keys().filter(|k| k.starts_with('g')).count().max(1);
+    let groups = group_count.max(1);
     // 与 `apply` 同源：文档里已有我们那块就按块里的色系，没有就按建议色系
     let auto = block_palette(&base, format)
         .or_else(|| suggest(&base, format).map(|(id, _)| id.to_string()))
@@ -800,21 +818,29 @@ pub fn scan(body: &str, format: FormatId) -> PaletteScan {
 
 /// 收集"这批节点各自是什么角色"，并把要不要跳过一起算出来。
 ///
-/// 返回 (角色 → 节点列表, 跳过的个数)。**顺序稳定**（BTreeMap + 文档顺序），
+/// 返回 (槽位 → 节点列表, 跳过的个数, 分组总数)。**顺序稳定**（BTreeMap + 文档顺序），
 /// 这样同一份文档两次展开产出的字节完全一致 —— 幂等是靠这个成立的。
 fn plan<'a>(
     nodes: impl IntoIterator<Item = (String, Option<&'static str>, bool, Option<String>, Option<&'a str>, Option<String>)>,
     mode: PaletteMode,
-) -> (BTreeMap<String, Vec<String>>, usize) {
+    // 文档里分组名的**结构顺序**（Mermaid 的 subgraph 出现顺序）。有它的话，
+    // 只包着子分组的"外壳"也能拿到自己的编号 —— 否则那些框永远没有颜色。
+    group_order: &[String],
+) -> (BTreeMap<String, Vec<String>>, usize, usize) {
     let nodes: Vec<_> = nodes.into_iter().collect();
-    // 分组按**首次出现顺序**编号：同一份文档重跑得到同一套编号（幂等的前提）
+    // 编号按结构顺序定：同一份文档重跑得到同一套编号（幂等的前提）
     let mut group_idx: BTreeMap<String, usize> = BTreeMap::new();
+    for g in group_order {
+        let n = group_idx.len();
+        group_idx.entry(g.clone()).or_insert(n);
+    }
     for (_, _, _, _, _, group) in &nodes {
         if let Some(g) = group {
             let n = group_idx.len();
             group_idx.entry(g.clone()).or_insert(n);
         }
     }
+    let group_count = group_idx.len();
     let mut by_slot: BTreeMap<String, Vec<String>> = BTreeMap::new();
     let mut skipped = 0usize;
     for (id, explicit, colored, label, shape, group) in nodes {
@@ -839,7 +865,7 @@ fn plan<'a>(
         };
         by_slot.entry(slot).or_default().push(id);
     }
-    (by_slot, skipped)
+    (by_slot, skipped, group_count)
 }
 
 fn strip_block<'a>(body: &'a str, begin: &str, end: &str) -> (String, bool) {
@@ -907,7 +933,8 @@ fn apply_mermaid(
             n.group.clone(),
         )
     });
-    let (by_slot, skipped) = plan(items, mode);
+    let order: Vec<String> = facts.subgraphs.iter().map(|(_, n)| n.clone()).collect();
+    let (by_slot, skipped, group_count) = plan(items, mode, &order);
 
     let mut out = base;
     let mut styles_removed = 0usize;
@@ -924,7 +951,7 @@ fn apply_mermaid(
     block.push_str(seed.zh);
     block.push_str(if dark { " · 暗色" } else { " · 亮色" });
     block.push_str("）\n");
-    let groups = by_slot.keys().filter(|k| k.starts_with('g')).count().max(1);
+    let groups = group_count.max(1);
     let mut applied = 0usize;
     for (slot, ids) in &by_slot {
         let (fill, stroke, text) = slot_swatch(seed, slot, dark, groups);
@@ -939,6 +966,10 @@ fn apply_mermaid(
     // 一眼看过去仍然是几个大白框。`style <subgraphId>` 是 Mermaid 唯一能给框上色的方式
     // （只有标题、没有引用名的 subgraph 引用不了，跳过）。
     let mut group_idx: BTreeMap<&str, usize> = BTreeMap::new();
+    for g in &order {
+        let k = group_idx.len();
+        group_idx.entry(g.as_str()).or_insert(k);
+    }
     for n in &facts.nodes {
         if let Some(g) = &n.group {
             let k = group_idx.len();
@@ -948,7 +979,7 @@ fn apply_mermaid(
     for (id, name) in &facts.subgraphs {
         let Some(id) = id else { continue };
         let Some(i) = group_idx.get(name.as_str()) else { continue };
-        let (fill, stroke, text) = slot_swatch(seed, &format!("g{i}"), dark, groups);
+        let (fill, stroke, text) = frame_swatch(seed, *i, groups, dark);
         block.push_str(&format!("style {id} fill:{fill},stroke:{stroke},color:{text}\n"));
     }
     // 连线统一跟随色系。**用 init 指令而不是 `linkStyle default`**：后者只改 `stroke`，
@@ -1378,7 +1409,7 @@ fn apply_dot(
             n.group.clone(),
         )
     });
-    let (by_slot, skipped) = plan(items, mode);
+    let (by_slot, skipped, group_count) = plan(items, mode, &[]);
 
     // DOT 不用删任何东西：后出现的属性语句会覆盖先前的，所以"整篇重排"就是追加。
     // （Mermaid 的 `style` 语句优先级高于 classDef，那边才必须删。）
@@ -1393,7 +1424,7 @@ fn apply_dot(
     block.push_str("）\n");
     let mut applied = 0usize;
     let by_id: BTreeMap<&str, &DotNode> = nodes.iter().map(|n| (n.id.as_str(), n)).collect();
-    let groups = by_slot.keys().filter(|k| k.starts_with('g')).count().max(1);
+    let groups = group_count.max(1);
     for (slot, ids) in &by_slot {
         let (fill, stroke, text) = slot_swatch(seed, slot, dark, groups);
         for id in ids {
@@ -1693,7 +1724,7 @@ fn apply_d2(
             n.group.clone(),
         )
     });
-    let (by_slot, skipped) = plan(items, mode);
+    let (by_slot, skipped, group_count) = plan(items, mode, &[]);
 
     let mut out = base;
     let mut block = String::from("# dgm-palette:begin id=");
@@ -1703,7 +1734,7 @@ fn apply_d2(
     block.push_str(if dark { " · 暗色" } else { " · 亮色" });
     block.push_str("）\n");
     let mut applied = 0usize;
-    let groups = by_slot.keys().filter(|k| k.starts_with('g')).count().max(1);
+    let groups = group_count.max(1);
     for (slot, ids) in &by_slot {
         let (fill, stroke, text) = slot_swatch(seed, slot, dark, groups);
         for id in ids {
@@ -1972,6 +2003,36 @@ mod tests {
         let dark = annotate(body, FormatId::Mermaid, true);
         let dark_fill = dark.iter().flat_map(|l| l.nodes.iter()).find(|n| n.id == "A1").and_then(|n| n.fill.clone());
         assert_ne!(fill_of("A1"), dark_fill);
+    }
+
+    #[test]
+    fn wrapper_subgraphs_and_frames_get_their_own_tint() {
+        // 只包着子分组的"外壳"没有直属节点，按节点首见顺序编号的话它永远拿不到槽位
+        // 于是外壳永远是默认的淡黄框（实测 应急防汛部署 的 首发云）。
+        let body = concat!(
+            "flowchart TD\n",
+            "    subgraph OUT [外壳]\n",
+            "        subgraph IN [内层]\n",
+            "            A1[甲]\n",
+            "        end\n",
+            "    end\n",
+        );
+        let res = paint(body, FormatId::Mermaid, "pine", false, PaletteMode::All).unwrap();
+        assert!(res.body.contains("style OUT "), "外壳也要有颜色：\n{}", res.body);
+        assert!(res.body.contains("style IN "), "{}", res.body);
+        // 框与节点的填充不能同色，否则节点会"溶"进背景
+        let fill_of = |prefix: &str| -> String {
+            res.body
+                .lines()
+                .find(|l| l.starts_with(prefix))
+                .and_then(|l| l.split("fill:").nth(1))
+                .map(|x| x.chars().take(7).collect())
+                .unwrap_or_default()
+        };
+        let node_fill = fill_of("classDef lvl-g1"); // A1 的槽位（内层）
+        let frame_fill = fill_of("style IN ");
+        assert_ne!(node_fill, frame_fill, "框必须比节点浅：\n{}", res.body);
+        assert!(node_fill.starts_with('#') && frame_fill.starts_with('#'), "{} {}", node_fill, frame_fill);
     }
 
     #[test]
