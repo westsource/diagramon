@@ -19,7 +19,7 @@
 //!
 //! | 格式 | 怎么写 | 为什么这么写 |
 //! |---|---|---|
-//! | Mermaid | 文档末尾追加 `classDef lvl-* …` + `class A,B lvl-*` | classDef 是 Mermaid 唯一不给节点加噪音的批量上色方式 |
+//! | Mermaid | 文档末尾追加 `classDef lvl-* …` + `class A,B lvl-*`（分组再追加 `style <subgraphId>`） | classDef 是 Mermaid 唯一不给节点加噪音的批量上色方式；`style` 是唯一能给**框**上色的方式 |
 //! | DOT | 文档末尾追加 `A [fillcolor=…, color=…, fontcolor=…]` | DOT 允许后出现的语句覆盖属性，不必改原文 |
 //! | D2 | 文档末尾追加 `A.style.fill: …` | D2 的属性后写者生效；不碰用户已有的 `classes:` 块 |
 //!
@@ -547,7 +547,13 @@ fn collect_signals(
                     .iter()
                     .find_map(|c| role_of_class(c))
                     .or_else(|| role_from_shape(&n.shape.key()))
-                    .or_else(|| n.label.as_deref().and_then(role_from_label))
+                    .or_else(|| {
+                        if n.group.is_some() {
+                            None // 分组优先于标签推断
+                        } else {
+                            n.label.as_deref().and_then(role_from_label)
+                        }
+                    })
                     .unwrap_or("main");
                 *counts.entry(role.to_string()).or_default() += 1;
                 if let Some(l) = &n.label {
@@ -816,15 +822,19 @@ fn plan<'a>(
             skipped += 1;
             continue;
         }
-        // 优先级：显式角色 > 形状/标签推断 > 分组 > 主链路
-        let role = explicit
-            .or_else(|| shape.and_then(role_from_shape))
-            .or_else(|| label.as_deref().and_then(role_from_label));
-        let slot = match role {
+        // 优先级：显式角色 > 形状 > **分组** > 标签推断 > 主链路。
+        //
+        // 分组为什么高于标签：`subgraph` / 容器是作者**亲手写的结构**，而标签只是我们
+        // 对几个词做子串匹配（`数据`/`外部`/`失败`…）。分层架构图里几乎每个标签都带"数据"，
+        // 让标签优先会把 94 个节点全染成同一个 `data` 紫 —— 比"一片 main"更糟。
+        let slot = match explicit.or_else(|| shape.and_then(role_from_shape)) {
             Some(r) => r.to_string(),
             None => match group.and_then(|g| group_idx.get(&g).copied()) {
                 Some(i) => format!("g{i}"),
-                None => "main".to_string(),
+                None => match label.as_deref().and_then(role_from_label) {
+                    Some(r) => r.to_string(),
+                    None => "main".to_string(),
+                },
             },
         };
         by_slot.entry(slot).or_default().push(id);
@@ -924,6 +934,22 @@ fn apply_mermaid(
         ));
         applied += ids.len();
         block.push_str(&format!("class {} {}\n", ids.join(","), role_class(slot)));
+    }
+    // 分组还要把**框**染上同色相：只染节点的话，"分区"感全靠节点自己，
+    // 一眼看过去仍然是几个大白框。`style <subgraphId>` 是 Mermaid 唯一能给框上色的方式
+    // （只有标题、没有引用名的 subgraph 引用不了，跳过）。
+    let mut group_idx: BTreeMap<&str, usize> = BTreeMap::new();
+    for n in &facts.nodes {
+        if let Some(g) = &n.group {
+            let k = group_idx.len();
+            group_idx.entry(g.as_str()).or_insert(k);
+        }
+    }
+    for (id, name) in &facts.subgraphs {
+        let Some(id) = id else { continue };
+        let Some(i) = group_idx.get(name.as_str()) else { continue };
+        let (fill, stroke, text) = slot_swatch(seed, &format!("g{i}"), dark, groups);
+        block.push_str(&format!("style {id} fill:{fill},stroke:{stroke},color:{text}\n"));
     }
     // 连线统一跟随色系。**用 init 指令而不是 `linkStyle default`**：后者只改 `stroke`，
     // 箭头（marker）仍是主题的 #333，肉眼能看到"线是灰绿、箭头是深灰"的错位；
@@ -1422,6 +1448,8 @@ struct D2Node {
     line: u32,
     /// 所属容器（D2 的 `组名: { … }`，取最内层）
     group: Option<String>,
+    /// `class: xxx`（D2 的类引用）。用户自己的类里带填充色 ⇒ 这个节点算"已有颜色"
+    class: Option<String>,
     role: Option<&'static str>,
     shape: Option<String>,
     label: Option<String>,
@@ -1440,6 +1468,12 @@ fn d2_nodes(body: &str) -> D2Scan {
     let mut edges: Vec<(String, String)> = Vec::new();
     // 首次见到就记下行号（同一节点后面再出现不改）
     let mut groups: Vec<String> = Vec::new();
+    // `classes: { … }` / `style: { … }` 里面全是属性，不是节点。
+    // 不拦的话 `fill: "#FFF1F0"`、`stroke-width: 2` 会被当成名叫 fill / stroke 的节点，
+    // 然后给它们写 `fill.style.fill:` —— 图里凭空多出十几个假节点。
+    let mut def_depth: usize = 0; // >0 = 当前在定义块里（值 = 进入时的 groups.len()）
+    // `classes: { gov: { style: { fill: … } } }` 里真的设了颜色的类名
+    let mut colored_classes: std::collections::HashSet<String> = std::collections::HashSet::new();
     let touch = |out: &mut Vec<D2Node>, id: &str, line: u32, group: Option<&str>| -> usize {
         if let Some(i) = out.iter().position(|n| n.id == id) {
             return i;
@@ -1458,16 +1492,34 @@ fn d2_nodes(body: &str) -> D2Scan {
             continue;
         }
         if line == "}" {
+            if def_depth > 0 && groups.len() == def_depth {
+                def_depth = 0;
+            }
             groups.pop();
             continue;
         }
         if line.ends_with('{') {
             // `组名: {` / `组名 {` → 这是一个容器
-            let name = line.trim_end_matches('{').trim().trim_end_matches(':').trim().trim_matches('"');
+            let head = line.trim_end_matches('{').trim();
+            let name = head.trim_end_matches(':').trim().trim_matches('"');
+            let is_def = matches!(name, "classes" | "style");
             if !name.is_empty() {
                 groups.push(name.to_string());
+                if is_def && def_depth == 0 {
+                    def_depth = groups.len();
+                }
             }
             continue;
+        }
+        if def_depth > 0 && groups.len() >= def_depth {
+            // 记下"这个类真的有颜色"：`classes: { gov: { style: { fill: … } } }`
+            if (line.starts_with("fill:") || line.starts_with("stroke:"))
+                && groups.first().map(|g| g == "classes").unwrap_or(false)
+                && groups.len() >= 2
+            {
+                colored_classes.insert(groups[1].clone());
+            }
+            continue; // 定义块里的属性行
         }
         // 只认 `左: 右` 这一种形态；没有冒号的行（`a -> b`）只登记端点
         let (lhs, rhs) = match line.split_once(':') {
@@ -1492,6 +1544,14 @@ fn d2_nodes(body: &str) -> D2Scan {
             for w in path.windows(2) {
                 edges.push((w[0].clone(), w[1].clone()));
             }
+            continue;
+        }
+        const D2_PROPS: [&str; 20] = [
+            "shape", "label", "class", "style", "icon", "near", "direction", "tooltip", "link",
+            "fill", "stroke", "font-color", "font-size", "stroke-width", "stroke-dash",
+            "border-radius", "bold", "italic", "opacity", "shadow",
+        ];
+        if D2_PROPS.contains(&lhs) || D2_PROPS.iter().any(|p| lhs.starts_with(&format!("{p}.")) && !lhs.contains('.')) {
             continue;
         }
         if lhs.contains("->") || lhs.contains("--") {
@@ -1529,10 +1589,34 @@ fn d2_nodes(body: &str) -> D2Scan {
         if DIRECTIVES.contains(&lhs) {
             continue;
         }
-        // 纯声明：`a: 标签`
+        // 纯声明：`a: 标签` / `a: "标签" {class: gov}`
         let i = touch(&mut out, lhs, (idx + 1) as u32, groups.last().map(|s| s.as_str()));
-        if !rhs.is_empty() && !rhs.starts_with('{') {
-            out[i].label = Some(rhs.trim_matches('"').to_string());
+        let (label_part, attrs) = split_d2_inline_attrs(rhs);
+        if !label_part.is_empty() {
+            out[i].label = Some(label_part.trim_matches('"').to_string());
+        }
+        for (k, v) in attrs {
+            let v = v.trim().trim_matches('"');
+            match k.as_str() {
+                "class" => {
+                    out[i].class = Some(v.to_string());
+                    let r = v.strip_prefix(ROLE_PREFIX).unwrap_or(v);
+                    if let Some(known) = ROLES.iter().copied().find(|k| *k == r) {
+                        out[i].role = Some(known);
+                    }
+                }
+                "shape" => out[i].shape = Some(v.to_string()),
+                "style.fill" | "fill" => out[i].has_fill = true,
+                _ => {}
+            }
+        }
+    }
+    // 类里有颜色的节点算"已有颜色"（用户手写配色，OnlyUncolored 要跳过）
+    for n in out.iter_mut() {
+        if let Some(c) = &n.class {
+            if colored_classes.contains(c) {
+                n.has_fill = true;
+            }
         }
     }
     D2Scan { nodes: out, edges }
@@ -1547,6 +1631,28 @@ fn split_d2_path(text: &str) -> Vec<String> {
 }
 
 /// `a.b.style.fill` → (`a.b`, `style.fill`)；`a.b`（普通节点路径）→ None。
+/// 拆出 D2 的行内属性块：`"标签" {class: gov, shape: cylinder}` → ("\"标签\"", [("class","gov"), …])
+///
+/// 不拆的话，`class: gov` 会被当成标签文本的一部分，角色/颜色全都推断错。
+fn split_d2_inline_attrs(rhs: &str) -> (String, Vec<(String, String)>) {
+    let rhs = rhs.trim();
+    let Some(open) = rhs.find('{') else {
+        return (rhs.to_string(), Vec::new());
+    };
+    if !rhs.ends_with('}') {
+        return (rhs.to_string(), Vec::new());
+    }
+    let label = rhs[..open].trim().to_string();
+    let inner = &rhs[open + 1..rhs.len() - 1];
+    let mut attrs = Vec::new();
+    for part in inner.split(',') {
+        if let Some((k, v)) = part.split_once(':') {
+            attrs.push((k.trim().to_string(), v.trim().to_string()));
+        }
+    }
+    (label, attrs)
+}
+
 fn split_d2_attr(lhs: &str) -> Option<(String, String)> {
     let (path, key) = lhs.rsplit_once('.')?;
     const ATTRS: [&str; 6] = ["shape", "label", "class", "style", "icon", "link"];
@@ -1869,6 +1975,36 @@ mod tests {
     }
 
     #[test]
+    fn mermaid_paints_the_subgraph_frame_too() {
+        // 只染节点的话"分区"全靠节点自己，几个大白框还是白框
+        let body = concat!(
+            "flowchart TD\n",
+            "    subgraph L_A [接入层]\n",
+            "        A1[甲] --> A2[乙]\n",
+            "    end\n",
+        );
+        let res = paint(body, FormatId::Mermaid, "pine", false, PaletteMode::All).unwrap();
+        assert!(res.body.contains("style L_A fill:#"), "框要跟组同色：\n{}", res.body);
+        // 嵌套：父框先写、子框后写（后写的赢），否则父色会把子分区盖平
+        let nested = concat!(
+            "flowchart TD\n",
+            "    subgraph OUT [外层]\n",
+            "        A0[外]\n",
+            "        subgraph IN [内层]\n",
+            "            A1[甲]\n",
+            "        end\n",
+            "    end\n",
+        );
+        let res2 = paint(nested, FormatId::Mermaid, "pine", false, PaletteMode::All).unwrap();
+        let out_at = res2.body.find("style OUT ").expect("父框要上色");
+        let in_at = res2.body.find("style IN ").expect("子框要上色");
+        assert!(out_at < in_at, "父框必须在子框之前：\n{}", res2.body);
+        // 重跑仍然幂等（style 行在我们自己的块里，会被整块替换）
+        let twice = paint(&res.body, FormatId::Mermaid, "pine", false, PaletteMode::All).unwrap();
+        assert_eq!(twice.body, res.body);
+    }
+
+    #[test]
     fn dot_clusters_share_a_group_slot() {
         let body = concat!(
             "digraph G {\n",
@@ -1892,6 +2028,45 @@ mod tests {
         };
         assert_eq!(slot_of("A"), slot_of("B"), "同一个 cluster 同色：\n{}", res.body);
         assert_ne!(slot_of("A"), slot_of("C"), "不同 cluster 不同色：\n{}", res.body);
+    }
+
+    #[test]
+    fn d2_style_blocks_do_not_become_nodes() {
+        // 分层架构图开头一大段 `classes: { gov: { style: { fill: … } } }`。
+        // 不拦的话 `fill:` / `stroke-width:` 会被当成名叫 fill / stroke-width 的节点，
+        // 然后文末给它们各写三行样式 —— 图里凭空多出十几个假节点。
+        let body = concat!(
+            "classes: {\n",
+            "  gov: {\n",
+            "    style: {\n",
+            "      fill: \"#FFF1F0\"\n",
+            "      stroke-width: 2\n",
+            "    }\n",
+            "  }\n",
+            "}\n",
+            "a: 甲 {class: gov}\n",
+        );
+        let scan = d2_nodes(body);
+        let ids: Vec<&str> = scan.nodes.iter().map(|n| n.id.as_str()).collect();
+        assert_eq!(ids, vec!["a"], "只该有真正的节点：{ids:?}");
+        // 类里有填充 ⇒ 这个节点算"已有颜色"
+        assert!(scan.nodes[0].has_fill);
+
+        let res = paint(body, FormatId::D2, "pine", false, PaletteMode::OnlyUncolored).unwrap();
+        assert_eq!((res.applied, res.skipped), (0, 1), "{}", res.body);
+        // 整篇重排时要照常上色，且不能把假节点写出来
+        let all = paint(body, FormatId::D2, "pine", false, PaletteMode::All).unwrap();
+        assert!(all.body.contains("a.style.fill:"));
+        assert!(!all.body.contains("fill.style.fill:"));
+    }
+
+    #[test]
+    fn d2_inline_class_marks_roles() {
+        let body = "a: 甲 {class: lvl-risk}\nb: 乙 {shape: diamond}\n";
+        let scan = d2_nodes(body);
+        assert_eq!(scan.nodes[0].role, Some("risk"), "行内类名要认得出是我们的角色");
+        assert_eq!(scan.nodes[0].label.as_deref(), Some("甲"), "标签不能把 class 属性带上");
+        assert_eq!(scan.nodes[1].shape.as_deref(), Some("diamond"));
     }
 
     #[test]

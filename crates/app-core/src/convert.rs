@@ -1019,6 +1019,11 @@ pub struct FlowFacts {
     /// 只"有 class"不算有颜色：删掉 classDef 之后，节点上的 `:::catalog` 还在，
     /// 按"有类就算有颜色"会把它们全部跳过 —— 用户看到的就是"清了色也上不了色"。
     pub colored_classes: std::collections::HashSet<String>,
+    /// 文档里的 subgraph（引用名, 标题），按出现顺序。
+    ///
+    /// 引用名是给 `style <id> …` 用的：有 id 才能给**框**上色；只有标题的 subgraph
+    /// 没法在文末引用（Mermaid 不支持按标题选）。
+    pub subgraphs: Vec<(Option<String>, String)>,
 }
 
 /// Mermaid flowchart 的节点事实：**只读**，不改文档、不生成任何代码。
@@ -1037,6 +1042,7 @@ pub fn flow_facts(src: &str) -> Result<FlowFacts, String> {
     // 打开中的 subgraph（最内层在栈顶）：节点归属就取它
     let mut groups: Vec<String> = Vec::new();
     let mut group_of: HashMap<String, String> = HashMap::new();
+    let mut subgraphs: Vec<(Option<String>, String)> = Vec::new();
 
     let touch = |id: &str, info: &mut HashMap<_, _>, order: &mut Vec<String>| {
         if !info.contains_key(id) {
@@ -1053,6 +1059,9 @@ pub fn flow_facts(src: &str) -> Result<FlowFacts, String> {
                 // 否则会出现"框是绿的、里面的节点是蓝灰的"这种割裂。
                 if let Some(id) = id.as_ref().filter(|s| !s.is_empty()) {
                     group_of.entry(id.clone()).or_insert_with(|| name.clone());
+                }
+                if !subgraphs.iter().any(|(_, n)| n == &name) {
+                    subgraphs.push((id.clone().filter(|s| !s.is_empty()), name.clone()));
                 }
                 groups.push(name);
             }
@@ -1128,7 +1137,7 @@ pub fn flow_facts(src: &str) -> Result<FlowFacts, String> {
             }
         })
         .collect();
-    Ok(FlowFacts { nodes, class_defs, colored_classes })
+    Ok(FlowFacts { nodes, class_defs, colored_classes, subgraphs })
 }
 
 /* ------------------------------------------------------------------ 生成 */
