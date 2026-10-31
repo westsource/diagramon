@@ -285,7 +285,7 @@ pub fn palette_probe(req: PaletteClearReq) -> app_ipc::PaletteProbe {
 /// 源码窗格的"行 → 角色"标注（纯函数：只回答"这一行的节点会被染成什么色"）。
 #[tauri::command]
 pub fn palette_annotate(req: PaletteClearReq) -> Vec<app_ipc::PaletteLine> {
-    app_core::palette::annotate(&req.body, req.format)
+    app_core::palette::annotate(&req.body, req.format, req.dark)
 }
 
 /// 体检：我们那块之外还剩多少处颜色痕迹 + 结构签名（给"无"的 AI 清洗用）。

@@ -581,6 +581,8 @@ window.DGM = window.DGM || {};
     "palette.group.format": "格式与导出",
     "palette.group.help": "帮助",
     "palette.unavail": "不可用：{why}",
+    "palette.groupSlot": "按分组上色",
+    "palette.handColor": "手写色，保持",
 
     /* ---- 转换方向（可用给实现方式，不可用给理由） ---- */
     "conv.title": "转换",
@@ -1804,6 +1806,8 @@ window.DGM = window.DGM || {};
     "palette.group.format": "Format & Export",
     "palette.group.help": "Help",
     "palette.unavail": "Unavailable: {why}",
+    "palette.groupSlot": "Group color",
+    "palette.handColor": "Hand-picked color, kept",
 
     "conv.title": "Convert",
     "conv.notes": "Fidelity notes (conversion is lossy — listed item by item)",

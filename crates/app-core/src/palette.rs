@@ -6,8 +6,12 @@
 //!
 //!   * **模型只写角色**（`:::lvl-entry` / `palette_role="ext"` / `X.class: decide`），
 //!     语义判断是它擅长的，色值不是；
-//!   * **色系 = 一个种子色相 + 一条明度/饱和度梯度**，六个角色按固定色相偏移派生。
+//!   * **色系 = 一个种子色相 + 一条明度/饱和度梯度**，七个角色按固定色相偏移派生。
 //!     于是"加一个色系"是在 [`SEEDS`] 里加一行，而不是手抄 36 个 hex；
+//!   * **颜色还编码结构**：没有语义特征的节点按它所在的 `subgraph` / `cluster` /
+//!     D2 容器分子组上色（色相轮，最多 9 档）。七个角色只覆盖"入口/判断/数据/外部/
+//!     异常"这些**语义**，而真实架构图里的绝大多数节点是普通节点 —— 只按角色上色会
+//!     出现"一大片同色"，分组才是它们真正的区分维度。
 //!   * 落地是**纯函数**（正文进、正文出，不读会话），可以在单测里钉死，也可以被
 //!     前端在任何时刻重跑（换色系 = 重新展开，0 次模型调用）。
 //!
@@ -25,7 +29,9 @@
 //! 已知边界（如实写下来，不假装支持）：
 //!   * 画布型（drawio / Excalidraw）没有稳定的节点角色，直接拒绝；
 //!   * Mermaid 只有 flowchart 能这么上色（序列图/状态图/类图没有 classDef）；
-//!   * 色值落进文档后**不跟随主题** —— 换主题要重新点一次配色。
+//!   * 色值落进文档后**不跟随主题** —— 换主题要重新点一次配色；
+//!   * "已有颜色"只认**真的带颜色**的 `classDef`（或 `style`）：用户把 `classDef` 删了、
+//!     节点上的 `:::catalog` 还在，不该被当成"已经有色"而整批跳过。
 
 use app_ipc::{
     FormatId, PaletteApplyRes, PaletteInfo, PaletteLine, PaletteMode, PaletteNode, PaletteProbe,
@@ -238,6 +244,40 @@ fn edge_swatch(seed: &Seed, dark: bool) -> String {
     // 中性色系（钨灰）也给一条近乎无彩的线，保持"线框风"一致
     let s = (seed.sat * 0.45).min(0.30);
     hsl_hex(seed.hue, s, if dark { 0.66 } else { 0.40 })
+}
+
+/// 分组色相：按"首次出现顺序"编号的组依次旋转色轮。
+///
+/// `step` 取自组数（6 组以内保持 60°，组多了自动收窄），并避开固定的告警红 ——
+/// 分组是**背景信息**，不能把"这里会出事"的红抢走。
+fn group_hue(seed_hue: f32, idx: usize, groups: usize) -> f32 {
+    // 色轮最多分 9 档（40° 一档）：22 个 subgraph 也照样能看出"不同块"，
+    // 但不会出现 19 个 19° 间隔、肉眼分不开的色相。超出部分按顺序复用。
+    let ring = groups.clamp(1, 9);
+    let step = 360.0 / ring.max(6) as f32;
+    let mut h = seed_hue + step * (idx % ring) as f32;
+    let mut guard = 0;
+    while hue_dist(h, RISK_HUE) < 26.0 && guard < 12 {
+        h += 7.0; // 撞红就整体挪一点，确定性的
+        guard += 1;
+    }
+    h
+}
+
+/// 槽位取色：`main/entry/…` 走角色槽位；`g0/g1/…` 走分组色轮。
+///
+/// 分组的填充比语义角色**再浅一档**：它表达"这是同一块"，不该和"这是异常/判断"抢注意力。
+fn slot_swatch(seed: &Seed, slot: &str, dark: bool, groups: usize) -> (String, String, String) {
+    let Some(idx) = slot.strip_prefix('g').and_then(|d| d.parse::<usize>().ok()) else {
+        return swatch(seed, slot, dark);
+    };
+    let h = group_hue(seed.hue, idx, groups);
+    let s = seed.sat;
+    if dark {
+        (hsl_hex(h, s * 0.52, 0.26), hsl_hex(h, s, 0.58), hsl_hex(h, s * 0.45, 0.90))
+    } else {
+        (hsl_hex(h, s * 0.52, 0.89), hsl_hex(h, s, 0.46), hsl_hex(h, s * 0.90, 0.22))
+    }
 }
 
 /// 一个角色在某个主题下的 (fill, stroke, text)。
@@ -548,13 +588,13 @@ fn collect_signals(
 
 /// 源码窗格的"行 → 角色"标注：这一行上有哪些节点、各会被染成什么色。
 ///
-/// 为什么由后端算：角色是**推断**出来的（显式标记 > 形状 > 标签词 > 主链路），
+/// 为什么由后端算：角色是**推断**出来的（显式标记 > 形状 > 标签词 > 分组 > 主链路），
 /// 前端再写一份就是第二套规则；而且"这个节点会不会被上色"还取决于它有没有手写颜色，
 /// 只有展开器自己知道。这里直接复用 `apply` 的判定（`plan` + 同样的入参），
-/// 所以标出来的颜色**必然**等于真渲染出来的颜色。
+/// 所以标出来的颜色**必然**等于真渲染出来的颜色 —— 连分组色轮也是同一份计算。
 ///
 /// 返回按行号升序；同一行多个节点按出现顺序。
-pub fn annotate(body: &str, format: FormatId) -> Vec<PaletteLine> {
+pub fn annotate(body: &str, format: FormatId, dark: bool) -> Vec<PaletteLine> {
     let (base, _) = match format {
         FormatId::Mermaid => strip_block(body, "%% dgm-palette:begin", "%% dgm-palette:end"),
         FormatId::Dot => strip_block(body, "// dgm-palette:begin", "// dgm-palette:end"),
@@ -562,23 +602,34 @@ pub fn annotate(body: &str, format: FormatId) -> Vec<PaletteLine> {
         FormatId::Drawio | FormatId::Excalidraw => return Vec::new(),
     };
 
-    // 节点：(id, 行号, 显式角色, 是否已有颜色, 标签, 形状)
-    let ours: Vec<String> = ROLES.iter().map(|r| role_class(r)).collect();
-    let mut nodes: Vec<(String, u32, Option<&'static str>, bool, Option<String>, Option<String>)> =
-        Vec::new();
+    // 节点：(id, 行号, 显式角色, 是否已有颜色, 标签, 形状, 分组)
+    let mut nodes: Vec<(
+        String,
+        u32,
+        Option<&'static str>,
+        bool,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+    )> = Vec::new();
     match format {
         FormatId::Mermaid => match convert::flow_facts(&base) {
             Ok(facts) => {
                 for n in &facts.nodes {
                     let explicit = n.classes.iter().find_map(|c| role_of_class(c));
-                    let foreign = n.classes.iter().any(|c| !ours.contains(c));
+                    let colored = n.styled
+                        || n
+                            .classes
+                            .iter()
+                            .any(|c| !c.starts_with(ROLE_PREFIX) && facts.colored_classes.contains(c));
                     nodes.push((
                         n.id.clone(),
                         n.line,
                         explicit,
-                        n.styled || foreign,
+                        colored,
                         n.label.clone(),
                         Some(n.shape.key().to_string()),
+                        n.group.clone(),
                     ));
                 }
             }
@@ -593,6 +644,7 @@ pub fn annotate(body: &str, format: FormatId) -> Vec<PaletteLine> {
                     dot_is_colored(&n),
                     n.attrs.get("label").cloned(),
                     n.attrs.get("shape").cloned(),
+                    n.group.clone(),
                 ));
             }
         }
@@ -601,25 +653,50 @@ pub fn annotate(body: &str, format: FormatId) -> Vec<PaletteLine> {
                 let explicit = n
                     .role
                     .or_else(|| n.shape.as_deref().and_then(role_from_d2_shape));
-                nodes.push((n.id.clone(), n.line, explicit, n.has_fill, n.label.clone(), None));
+                nodes.push((
+                    n.id.clone(),
+                    n.line,
+                    explicit,
+                    n.has_fill,
+                    n.label.clone(),
+                    None,
+                    n.group.clone(),
+                ));
             }
         }
         FormatId::Drawio | FormatId::Excalidraw => return Vec::new(),
     }
 
-    // 与 `apply` 用同一套判定：被跳过的（已有颜色）不在 `by_role` 里
-    let (by_role, _) = plan(
+    // 与 `apply` 用同一套判定：被跳过的（已有颜色）不在 `by_slot` 里
+    let (by_slot, _) = plan(
         nodes
             .iter()
-            .map(|(id, _, explicit, colored, label, shape)| {
-                (id.clone(), *explicit, *colored, label.clone(), shape.as_deref())
+            .map(|(id, _, explicit, colored, label, shape, group)| {
+                (
+                    id.clone(),
+                    *explicit,
+                    *colored,
+                    label.clone(),
+                    shape.as_deref(),
+                    group.clone(),
+                )
             }),
         PaletteMode::OnlyUncolored,
     );
-    let mut role_of: std::collections::HashMap<&str, &str> = std::collections::HashMap::new();
-    for (role, ids) in &by_role {
+    let groups = by_slot.keys().filter(|k| k.starts_with('g')).count().max(1);
+    // 与 `apply` 同源：文档里已有我们那块就按块里的色系，没有就按建议色系
+    let auto = block_palette(&base, format)
+        .or_else(|| suggest(&base, format).map(|(id, _)| id.to_string()))
+        .unwrap_or_else(|| "pine".to_string());
+    let seed = find(&auto).unwrap_or_else(|| find("pine").expect("pine 一定存在"));
+    let mut slot_of: std::collections::HashMap<&str, &str> = std::collections::HashMap::new();
+    let mut colors: std::collections::HashMap<&str, (String, String, String)> =
+        std::collections::HashMap::new();
+    for (slot, ids) in &by_slot {
+        let c = slot_swatch(seed, slot, dark, groups);
         for id in ids {
-            role_of.insert(id.as_str(), role);
+            slot_of.insert(id.as_str(), slot);
+            colors.insert(id.as_str(), c.clone());
         }
     }
 
@@ -629,9 +706,12 @@ pub fn annotate(body: &str, format: FormatId) -> Vec<PaletteLine> {
         if *line == 0 {
             continue;
         }
+        let c = colors.get(id.as_str());
         lines.entry(*line).or_default().push(PaletteNode {
             id: id.clone(),
-            role: role_of.get(id.as_str()).map(|r| r.to_string()),
+            role: slot_of.get(id.as_str()).map(|r| r.to_string()),
+            fill: c.map(|c| c.0.clone()),
+            stroke: c.map(|c| c.1.clone()),
         });
     }
     lines
@@ -696,16 +776,12 @@ pub fn structure_sig(body: &str, format: FormatId) -> Option<String> {
         FormatId::D2 => strip_block(body, "# dgm-palette:begin", "# dgm-palette:end"),
         FormatId::Drawio | FormatId::Excalidraw => return None,
     };
-    let mut ids: Vec<String> = Vec::new();
-    match format {
-        FormatId::Mermaid => {
-            let facts = convert::flow_facts(&base).ok()?;
-            ids = facts.nodes.into_iter().map(|n| n.id).collect();
-        }
-        FormatId::Dot => ids = dot_nodes(&base).into_iter().map(|n| n.id).collect(),
-        FormatId::D2 => ids = d2_nodes(&base).nodes.into_iter().map(|n| n.id).collect(),
+    let mut ids: Vec<String> = match format {
+        FormatId::Mermaid => convert::flow_facts(&base).ok()?.nodes.into_iter().map(|n| n.id).collect(),
+        FormatId::Dot => dot_nodes(&base).into_iter().map(|n| n.id).collect(),
+        FormatId::D2 => d2_nodes(&base).nodes.into_iter().map(|n| n.id).collect(),
         FormatId::Drawio | FormatId::Excalidraw => return None,
-    }
+    };
     ids.sort();
     ids.dedup();
     Some(ids.join(","))
@@ -721,23 +797,39 @@ pub fn scan(body: &str, format: FormatId) -> PaletteScan {
 /// 返回 (角色 → 节点列表, 跳过的个数)。**顺序稳定**（BTreeMap + 文档顺序），
 /// 这样同一份文档两次展开产出的字节完全一致 —— 幂等是靠这个成立的。
 fn plan<'a>(
-    nodes: impl IntoIterator<Item = (String, Option<&'static str>, bool, Option<String>, Option<&'a str>)>,
+    nodes: impl IntoIterator<Item = (String, Option<&'static str>, bool, Option<String>, Option<&'a str>, Option<String>)>,
     mode: PaletteMode,
-) -> (BTreeMap<&'static str, Vec<String>>, usize) {
-    let mut by_role: BTreeMap<&'static str, Vec<String>> = BTreeMap::new();
+) -> (BTreeMap<String, Vec<String>>, usize) {
+    let nodes: Vec<_> = nodes.into_iter().collect();
+    // 分组按**首次出现顺序**编号：同一份文档重跑得到同一套编号（幂等的前提）
+    let mut group_idx: BTreeMap<String, usize> = BTreeMap::new();
+    for (_, _, _, _, _, group) in &nodes {
+        if let Some(g) = group {
+            let n = group_idx.len();
+            group_idx.entry(g.clone()).or_insert(n);
+        }
+    }
+    let mut by_slot: BTreeMap<String, Vec<String>> = BTreeMap::new();
     let mut skipped = 0usize;
-    for (id, explicit, colored, label, shape) in nodes {
+    for (id, explicit, colored, label, shape, group) in nodes {
         if mode == PaletteMode::OnlyUncolored && colored && explicit.is_none() {
             skipped += 1;
             continue;
         }
+        // 优先级：显式角色 > 形状/标签推断 > 分组 > 主链路
         let role = explicit
             .or_else(|| shape.and_then(role_from_shape))
-            .or_else(|| label.as_deref().and_then(role_from_label))
-            .unwrap_or("main");
-        by_role.entry(role).or_default().push(id);
+            .or_else(|| label.as_deref().and_then(role_from_label));
+        let slot = match role {
+            Some(r) => r.to_string(),
+            None => match group.and_then(|g| group_idx.get(&g).copied()) {
+                Some(i) => format!("g{i}"),
+                None => "main".to_string(),
+            },
+        };
+        by_slot.entry(slot).or_default().push(id);
     }
-    (by_role, skipped)
+    (by_slot, skipped)
 }
 
 fn strip_block<'a>(body: &'a str, begin: &str, end: &str) -> (String, bool) {
@@ -787,20 +879,30 @@ fn apply_mermaid(
     if facts.nodes.is_empty() {
         return Ok(PaletteApplyRes { body: body.to_string(), changed: false, applied: 0, skipped: 0, styles_removed: 0 });
     }
-    let ours: Vec<String> = ROLES.iter().map(|r| role_class(r)).collect();
     let items = facts.nodes.iter().map(|n| {
         let explicit = n.classes.iter().find_map(|c| role_of_class(c));
-        // 用户自己的类（不是 lvl-*）说明这个节点有别的上色意图；手写 style 更是明确的颜色
-        let foreign = n.classes.iter().any(|c| !ours.contains(c));
-        let colored = n.styled || foreign;
-        (n.id.clone(), explicit, colored, n.label.clone(), Some(n.shape.key()))
+        // "已有颜色"必须是**真的带颜色**：删掉 classDef 之后残留的 `:::catalog` 不该拦配色
+        // （以前只要"有类就算有颜色"，把你清过的图又悄悄跳掉八成节点）。
+        let colored = n.styled
+            || n
+                .classes
+                .iter()
+                .any(|c| !c.starts_with(ROLE_PREFIX) && facts.colored_classes.contains(c));
+        (
+            n.id.clone(),
+            explicit,
+            colored,
+            n.label.clone(),
+            Some(n.shape.key()),
+            n.group.clone(),
+        )
     });
-    let (by_role, skipped) = plan(items, mode);
+    let (by_slot, skipped) = plan(items, mode);
 
     let mut out = base;
     let mut styles_removed = 0usize;
     if mode == PaletteMode::All {
-        let colored_ids: Vec<&String> = by_role.values().flatten().collect();
+        let colored_ids: Vec<&String> = by_slot.values().flatten().collect();
         let (next, dropped) = drop_style_statements(&out, &colored_ids);
         out = next;
         styles_removed = dropped;
@@ -812,17 +914,16 @@ fn apply_mermaid(
     block.push_str(seed.zh);
     block.push_str(if dark { " · 暗色" } else { " · 亮色" });
     block.push_str("）\n");
-    for role in ROLES {
-        let (fill, stroke, text) = swatch(seed, role, dark);
+    let groups = by_slot.keys().filter(|k| k.starts_with('g')).count().max(1);
+    let mut applied = 0usize;
+    for (slot, ids) in &by_slot {
+        let (fill, stroke, text) = slot_swatch(seed, slot, dark, groups);
         block.push_str(&format!(
             "classDef {} fill:{fill},stroke:{stroke},color:{text}\n",
-            role_class(role)
+            role_class(slot)
         ));
-    }
-    let mut applied = 0usize;
-    for (role, ids) in &by_role {
         applied += ids.len();
-        block.push_str(&format!("class {} {}\n", ids.join(","), role_class(role)));
+        block.push_str(&format!("class {} {}\n", ids.join(","), role_class(slot)));
     }
     // 连线统一跟随色系。**用 init 指令而不是 `linkStyle default`**：后者只改 `stroke`，
     // 箭头（marker）仍是主题的 #333，肉眼能看到"线是灰绿、箭头是深灰"的错位；
@@ -871,6 +972,8 @@ struct DotNode {
     id: String,
     /// 首次出现的行号（1 基），给源码窗格的"行 → 角色"标注用
     line: u32,
+    /// 所属 cluster（`subgraph cluster_x {` 的最内层）
+    group: Option<String>,
     /// 合并后的属性（后出现的覆盖前面的）
     attrs: BTreeMap<String, String>,
 }
@@ -885,6 +988,10 @@ fn dot_nodes(body: &str) -> Vec<DotNode> {
     let mut out: Vec<DotNode> = Vec::new();
     let mut i = 0usize;
     let mut in_edge = false; // 当前语句是边（属性归边）
+    // `subgraph cluster_x { … }` 的嵌套栈：节点归属取最内层
+    let mut groups: Vec<String> = Vec::new();
+    let mut pending_group: Option<String> = None; // 刚读到 subgraph 后面的名字，等 `{` 确认
+    let mut expect_subgraph = false;
     let mut line: u32 = 1; // 扫描到第几行（`\n` 自增）
     let mut skip_next_atom = false; // `digraph G` / `subgraph cluster_x`：下一个原子不是节点
     let mut skip_next_bracket = false; // `node [shape=…]` / `edge [...]`：默认属性
@@ -895,11 +1002,32 @@ fn dot_nodes(body: &str) -> Vec<DotNode> {
         if c == '\n' {
             line += 1;
             in_edge = false;
+            // `subgraph` 后面必须紧跟名字再跟 `{`；换行/分号就说明那里没有名字
+            expect_subgraph = false;
+            pending_group = None;
             i += 1;
             continue;
         }
-        if c == ';' || c == '{' || c == '}' {
+        if c == '{' {
             in_edge = false;
+            // 匿名子图（`subgraph { … }`）没有名字：不能把里面第一个节点当成组名
+            expect_subgraph = false;
+            if let Some(g) = pending_group.take() {
+                groups.push(g);
+            }
+            i += 1;
+            continue;
+        }
+        if c == '}' {
+            in_edge = false;
+            groups.pop();
+            i += 1;
+            continue;
+        }
+        if c == ';' {
+            in_edge = false;
+            expect_subgraph = false;
+            pending_group = None;
             i += 1;
             continue;
         }
@@ -940,7 +1068,7 @@ fn dot_nodes(body: &str) -> Vec<DotNode> {
                 skip_next_atom = false;
                 continue;
             }
-            push_dot_node(&mut out, &text, line);
+            push_dot_node(&mut out, &text, line, groups.last().map(|s| s.as_str()));
             continue;
         }
         let (atom, next) = read_bare(&chars, i);
@@ -963,9 +1091,18 @@ fn dot_nodes(body: &str) -> Vec<DotNode> {
             continue;
         }
         let lower = atom.to_ascii_lowercase();
+        if expect_subgraph {
+            expect_subgraph = false;
+            pending_group = Some(atom.clone());
+            continue;
+        }
         match lower.as_str() {
-            "digraph" | "subgraph" | "strict" => {
+            "digraph" | "strict" => {
                 skip_next_atom = true;
+                continue;
+            }
+            "subgraph" => {
+                expect_subgraph = true;
                 continue;
             }
             "graph" | "node" | "edge" => {
@@ -979,17 +1116,17 @@ fn dot_nodes(body: &str) -> Vec<DotNode> {
             skip_next_atom = false;
             continue;
         }
-        push_dot_node(&mut out, &atom, line);
+        push_dot_node(&mut out, &atom, line, groups.last().map(|s| s.as_str()));
     }
     out
 }
 
-fn push_dot_node(out: &mut Vec<DotNode>, id: &str, line: u32) {
+fn push_dot_node(out: &mut Vec<DotNode>, id: &str, line: u32, group: Option<&str>) {
     if let Some(n) = out.iter_mut().find(|n| n.id == id) {
         let _ = n; // 已存在：属性后面再合并
         return;
     }
-    out.push(DotNode { id: id.to_string(), line, attrs: BTreeMap::new() });
+    out.push(DotNode { id: id.to_string(), line, group: group.map(str::to_string), attrs: BTreeMap::new() });
 }
 
 fn read_quoted(chars: &[char], start: usize) -> (String, usize) {
@@ -1212,9 +1349,10 @@ fn apply_dot(
             dot_is_colored(n),
             n.attrs.get("label").cloned(),
             n.attrs.get("shape").map(|v| v.as_str()),
+            n.group.clone(),
         )
     });
-    let (by_role, skipped) = plan(items, mode);
+    let (by_slot, skipped) = plan(items, mode);
 
     // DOT 不用删任何东西：后出现的属性语句会覆盖先前的，所以"整篇重排"就是追加。
     // （Mermaid 的 `style` 语句优先级高于 classDef，那边才必须删。）
@@ -1229,8 +1367,9 @@ fn apply_dot(
     block.push_str("）\n");
     let mut applied = 0usize;
     let by_id: BTreeMap<&str, &DotNode> = nodes.iter().map(|n| (n.id.as_str(), n)).collect();
-    for (role, ids) in &by_role {
-        let (fill, stroke, text) = swatch(seed, role, dark);
+    let groups = by_slot.keys().filter(|k| k.starts_with('g')).count().max(1);
+    for (slot, ids) in &by_slot {
+        let (fill, stroke, text) = slot_swatch(seed, slot, dark, groups);
         for id in ids {
             applied += 1;
             // 节点自己的 style 要保住（`rounded` / `dashed`…），只补一个 filled
@@ -1281,6 +1420,8 @@ struct D2Node {
     id: String,
     /// 首次出现的行号（1 基）
     line: u32,
+    /// 所属容器（D2 的 `组名: { … }`，取最内层）
+    group: Option<String>,
     role: Option<&'static str>,
     shape: Option<String>,
     label: Option<String>,
@@ -1298,16 +1439,34 @@ fn d2_nodes(body: &str) -> D2Scan {
     let mut out: Vec<D2Node> = Vec::new();
     let mut edges: Vec<(String, String)> = Vec::new();
     // 首次见到就记下行号（同一节点后面再出现不改）
-    let touch = |out: &mut Vec<D2Node>, id: &str, line: u32| -> usize {
+    let mut groups: Vec<String> = Vec::new();
+    let touch = |out: &mut Vec<D2Node>, id: &str, line: u32, group: Option<&str>| -> usize {
         if let Some(i) = out.iter().position(|n| n.id == id) {
             return i;
         }
-        out.push(D2Node { id: id.to_string(), line, ..Default::default() });
+        out.push(D2Node {
+            id: id.to_string(),
+            line,
+            group: group.map(str::to_string),
+            ..Default::default()
+        });
         out.len() - 1
     };
     for (idx, raw) in body.lines().enumerate() {
         let line = raw.trim();
-        if line.is_empty() || line.starts_with('#') || line.ends_with('{') || line == "}" {
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        if line == "}" {
+            groups.pop();
+            continue;
+        }
+        if line.ends_with('{') {
+            // `组名: {` / `组名 {` → 这是一个容器
+            let name = line.trim_end_matches('{').trim().trim_end_matches(':').trim().trim_matches('"');
+            if !name.is_empty() {
+                groups.push(name.to_string());
+            }
             continue;
         }
         // 只认 `左: 右` 这一种形态；没有冒号的行（`a -> b`）只登记端点
@@ -1316,7 +1475,7 @@ fn d2_nodes(body: &str) -> D2Scan {
             None => {
                 let path = split_d2_path(line);
                 for seg in &path {
-                    touch(&mut out, seg, (idx + 1) as u32);
+                    touch(&mut out, seg, (idx + 1) as u32, groups.last().map(|s| s.as_str()));
                 }
                 for w in path.windows(2) {
                     edges.push((w[0].clone(), w[1].clone()));
@@ -1328,7 +1487,7 @@ fn d2_nodes(body: &str) -> D2Scan {
         if let Some(inner) = lhs.strip_prefix('(').and_then(|r| r.split(')').next()) {
             let path = split_d2_path(inner);
             for seg in &path {
-                touch(&mut out, seg, (idx + 1) as u32);
+                touch(&mut out, seg, (idx + 1) as u32, groups.last().map(|s| s.as_str()));
             }
             for w in path.windows(2) {
                 edges.push((w[0].clone(), w[1].clone()));
@@ -1339,7 +1498,7 @@ fn d2_nodes(body: &str) -> D2Scan {
             // 边：两端都是节点，冒号右边是**边标签**，别当成节点标签
             let path = split_d2_path(lhs);
             for seg in &path {
-                touch(&mut out, seg, (idx + 1) as u32);
+                touch(&mut out, seg, (idx + 1) as u32, groups.last().map(|s| s.as_str()));
             }
             for w in path.windows(2) {
                 edges.push((w[0].clone(), w[1].clone()));
@@ -1348,7 +1507,7 @@ fn d2_nodes(body: &str) -> D2Scan {
         }
         // 属性行：`a.b.style.fill: "#fff"`
         if let Some((path, key)) = split_d2_attr(lhs) {
-            let i = touch(&mut out, &path, (idx + 1) as u32);
+            let i = touch(&mut out, &path, (idx + 1) as u32, groups.last().map(|s| s.as_str()));
             match key.as_str() {
                 "shape" => out[i].shape = Some(rhs.trim_matches('"').to_string()),
                 "label" => out[i].label = Some(rhs.trim_matches('"').to_string()),
@@ -1371,7 +1530,7 @@ fn d2_nodes(body: &str) -> D2Scan {
             continue;
         }
         // 纯声明：`a: 标签`
-        let i = touch(&mut out, lhs, (idx + 1) as u32);
+        let i = touch(&mut out, lhs, (idx + 1) as u32, groups.last().map(|s| s.as_str()));
         if !rhs.is_empty() && !rhs.starts_with('{') {
             out[i].label = Some(rhs.trim_matches('"').to_string());
         }
@@ -1419,9 +1578,16 @@ fn apply_d2(
         let explicit = n
             .role
             .or_else(|| n.shape.as_deref().and_then(role_from_d2_shape));
-        (n.id.clone(), explicit, n.has_fill, n.label.clone(), None)
+        (
+            n.id.clone(),
+            explicit,
+            n.has_fill,
+            n.label.clone(),
+            None,
+            n.group.clone(),
+        )
     });
-    let (by_role, skipped) = plan(items, mode);
+    let (by_slot, skipped) = plan(items, mode);
 
     let mut out = base;
     let mut block = String::from("# dgm-palette:begin id=");
@@ -1431,8 +1597,9 @@ fn apply_d2(
     block.push_str(if dark { " · 暗色" } else { " · 亮色" });
     block.push_str("）\n");
     let mut applied = 0usize;
-    for (role, ids) in &by_role {
-        let (fill, stroke, text) = swatch(seed, role, dark);
+    let groups = by_slot.keys().filter(|k| k.starts_with('g')).count().max(1);
+    for (slot, ids) in &by_slot {
+        let (fill, stroke, text) = slot_swatch(seed, slot, dark, groups);
         for id in ids {
             applied += 1;
             block.push_str(&format!("{id}.style.fill: \"{fill}\"\n"));
@@ -1613,18 +1780,164 @@ mod tests {
     }
 
     #[test]
-    fn mermaid_gets_one_classdef_per_role_and_a_class_per_node() {
+    fn mermaid_gets_one_classdef_per_used_slot_and_a_class_per_node() {
         let res = paint(&mermaid_flow(), FormatId::Mermaid, "pine", false, PaletteMode::All).unwrap();
         assert!(res.changed);
-        for role in ROLES {
-            assert!(res.body.contains(&format!("classDef lvl-{role} fill:#")), "缺 {role} 的 classDef");
+        // 只写"这一份文档真的用到的槽位"：不再无脑铺满七个角色（分组槽位是按文档算的，
+        // 铺满七个反而看不出哪些是分组色）
+        for slot in ["entry", "decide", "ext", "main"] {
+            assert!(res.body.contains(&format!("classDef lvl-{slot} fill:#")), "缺 {slot} 的 classDef");
         }
+        assert!(!res.body.contains("classDef lvl-note"), "没有 note 节点就不该写它的 classDef");
+        assert!(!res.body.contains("classDef lvl-data"));
         // 形状/标签推断：A 是体育场形（入口），C 是菱形（判断），E 标签里有"外部"
         // A 体育场形 = 入口；F 的标签是「结束」也是入口；C 的标签含 "?"
         assert!(res.body.contains("class A,F lvl-entry"), "{}", res.body);
         assert!(res.body.contains("class C lvl-decide"), "{}", res.body);
         assert!(res.body.contains("class E lvl-ext"), "E 的标签里有「外部」：\n{}", res.body);
         assert!(res.body.contains("class B,D lvl-main"), "剩下的走主链路：\n{}", res.body);
+    }
+
+    #[test]
+    fn dangling_class_def_does_not_block_coloring() {
+        // 用户"清掉手写配色"最自然的做法就是删 `classDef` 行，节点上的 `:::catalog` 还在。
+        // 以前只要"有类"就算有颜色，这批节点会被整批跳过（实测 80%）。
+        let body = "flowchart TD\n    A[开始]:::catalog --> B[写库]:::catalog\n";
+        let res = paint(body, FormatId::Mermaid, "pine", false, PaletteMode::OnlyUncolored).unwrap();
+        assert_eq!(res.skipped, 0, "没有 classDef 的类名不构成颜色：\n{}", res.body);
+        assert_eq!(res.applied, 2);
+
+        // 真的定义了颜色才拦
+        let colored = "flowchart TD\n    A[开始]:::catalog --> B[写库]\n    classDef catalog fill:#f00\n";
+        let res = paint(colored, FormatId::Mermaid, "pine", false, PaletteMode::OnlyUncolored).unwrap();
+        assert_eq!((res.applied, res.skipped), (1, 1));
+    }
+
+    #[test]
+    fn subgraph_members_share_a_group_slot() {
+        let body = concat!(
+            "flowchart TD\n",
+            "    subgraph L_A [接入层]\n",
+            "        A1[甲] --> A2[乙]\n",
+            "    end\n",
+            "    subgraph L_B [业务层]\n",
+            "        B1[丙] --> B2[丁]\n",
+            "    end\n",
+            "    A2 --> B1\n",
+        );
+        let res = paint(body, FormatId::Mermaid, "pine", false, PaletteMode::All).unwrap();
+        // 两个组 + 四个节点：组内同槽位、组间不同槽位
+        assert!(res.body.contains("class A1,A2 lvl-g"), "接入层要同槽：\n{}", res.body);
+        assert!(res.body.contains("class B1,B2 lvl-g"), "业务层要同槽：\n{}", res.body);
+        let defs: Vec<&str> = res
+            .body
+            .lines()
+            .filter(|l| l.starts_with("classDef lvl-g"))
+            .collect();
+        assert_eq!(defs.len(), 2, "两组两个分组槽位：\n{}", res.body);
+        assert_ne!(defs[0], defs[1], "不同组必须不同色");
+    }
+
+    #[test]
+    fn annotate_hands_out_colors_for_every_painted_node() {
+        // 前端不再自己查角色表：有槽位的节点必须带回 fill/stroke，
+        // 否则源码窗格的色块会退化成空框（而它正是"看得见配色"的全部意义）。
+        let body = concat!(
+            "flowchart TD\n",
+            "    subgraph L_A [接入层]\n",
+            "        A1[甲] --> A2[乙]\n",
+            "    end\n",
+            "    B[丙]:::lvl-risk\n",
+        );
+        let lines = annotate(body, FormatId::Mermaid, false);
+        let nodes: Vec<_> = lines.iter().flat_map(|l| l.nodes.iter()).collect();
+        assert!(!nodes.is_empty());
+        for n in &nodes {
+            assert!(n.role.is_some(), "{} 应该有槽位", n.id);
+            let fill = n.fill.as_deref().unwrap_or("");
+            let stroke = n.stroke.as_deref().unwrap_or("");
+            assert!(fill.starts_with('#') && fill.len() == 7, "{} 没有填充色：{fill:?}", n.id);
+            assert!(stroke.starts_with('#'), "{} 没有描边色", n.id);
+        }
+        let fill_of = |id: &str| nodes.iter().find(|n| n.id == id).and_then(|n| n.fill.clone());
+        assert_eq!(fill_of("A1"), fill_of("A2"), "同组同色");
+        assert_ne!(fill_of("A1"), fill_of("B"), "分组色与语义角色不同槽");
+        // 暗色必须真的换一套（否则"跟随主题"是假的）
+        let dark = annotate(body, FormatId::Mermaid, true);
+        let dark_fill = dark.iter().flat_map(|l| l.nodes.iter()).find(|n| n.id == "A1").and_then(|n| n.fill.clone());
+        assert_ne!(fill_of("A1"), dark_fill);
+    }
+
+    #[test]
+    fn dot_clusters_share_a_group_slot() {
+        let body = concat!(
+            "digraph G {\n",
+            "  subgraph cluster_a {\n",
+            "    A [label=\"甲\"];\n",
+            "    B [label=\"乙\"];\n",
+            "  }\n",
+            "  subgraph cluster_b {\n",
+            "    C [label=\"丙\"];\n",
+            "  }\n",
+            "}\n",
+        );
+        let res = paint(body, FormatId::Dot, "pine", false, PaletteMode::All).unwrap();
+        let slot_of = |id: &str| -> String {
+            res.body
+                .lines()
+                .find(|l| l.trim_start().starts_with(&format!("{id} [")) && l.contains("fillcolor="))
+                .and_then(|l| l.split("fillcolor=\"").nth(1))
+                .map(|x| x.chars().take(7).collect())
+                .unwrap_or_default()
+        };
+        assert_eq!(slot_of("A"), slot_of("B"), "同一个 cluster 同色：\n{}", res.body);
+        assert_ne!(slot_of("A"), slot_of("C"), "不同 cluster 不同色：\n{}", res.body);
+    }
+
+    #[test]
+    fn d2_containers_share_a_group_slot() {
+        let body = concat!(
+            "组一: {\n",
+            "  a: 甲\n",
+            "  b: 乙\n",
+            "}\n",
+            "组二: {\n",
+            "  c: 丙\n",
+            "}\n",
+        );
+        let res = paint(body, FormatId::D2, "pine", false, PaletteMode::All).unwrap();
+        let fill_of = |id: &str| -> String {
+            res.body
+                .lines()
+                .find(|l| l.starts_with(&format!("{id}.style.fill:")))
+                .map(|l| l.split('"').nth(1).unwrap_or("").to_string())
+                .unwrap_or_default()
+        };
+        assert_eq!(fill_of("a"), fill_of("b"), "同一容器同色：\n{}", res.body);
+        assert_ne!(fill_of("a"), fill_of("c"), "不同容器不同色：\n{}", res.body);
+    }
+
+    #[test]
+    fn explicit_role_beats_group() {
+        let body = concat!(
+            "flowchart TD\n",
+            "    subgraph L_A [接入层]\n",
+            "        A1[甲] --> A2[乙]:::lvl-risk\n",
+            "    end\n",
+        );
+        let res = paint(body, FormatId::Mermaid, "pine", false, PaletteMode::All).unwrap();
+        assert!(res.body.contains("class A2 lvl-risk"), "语义角色优先于分组：\n{}", res.body);
+        assert!(res.body.contains("class A1 lvl-g"), "{}", res.body);
+    }
+
+    #[test]
+    fn group_color_ring_caps_at_nine() {
+        // 22 个 subgraph 不能变成 19 个 19° 间隔的色相：超过 9 组按顺序复用
+        assert_eq!(group_hue(150.0, 0, 22), group_hue(150.0, 9, 22));
+        assert_ne!(group_hue(150.0, 0, 22), group_hue(150.0, 1, 22));
+        // 少组时保持 60°（6 组以内）
+        let d = (group_hue(150.0, 1, 4) - group_hue(150.0, 0, 4)).rem_euclid(360.0);
+        assert!((d - 60.0).abs() < 0.01, "4 组应 60° 一档，实际 {d}");
     }
 
     #[test]
@@ -1923,7 +2236,7 @@ b -> c
             "    C --> D[发送通知]\n",
             "    style D fill:#f00\n",
         );
-        let lines = annotate(body, FormatId::Mermaid);
+        let lines = annotate(body, FormatId::Mermaid, false);
         let at = |n: u32| -> Vec<(String, Option<String>)> {
             lines
                 .iter()
@@ -1942,14 +2255,14 @@ b -> c
 
     #[test]
     fn annotate_covers_dot_and_d2_and_ignores_canvas() {
-        let dot = annotate("digraph G {\n  A [shape=diamond];\n  B [fillcolor=red];\n}", FormatId::Dot);
+        let dot = annotate("digraph G {\n  A [shape=diamond];\n  B [fillcolor=red];\n}", FormatId::Dot, false);
         assert_eq!(dot[0].line, 2);
         assert_eq!(dot[0].nodes[0].role.as_deref(), Some("decide"));
         assert!(dot.iter().any(|l| l.nodes.iter().any(|n| n.id == "B" && n.role.is_none())));
 
-        let d2 = annotate("a: 开始\nb.shape: diamond\n", FormatId::D2);
+        let d2 = annotate("a: 开始\nb.shape: diamond\n", FormatId::D2, false);
         assert!(d2.iter().any(|l| l.line == 1 && l.nodes[0].role.as_deref() == Some("entry")));
-        assert!(annotate("{}", FormatId::Drawio).is_empty());
+        assert!(annotate("{}", FormatId::Drawio, false).is_empty());
     }
 
     #[test]

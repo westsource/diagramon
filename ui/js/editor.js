@@ -422,7 +422,13 @@ window.DGM = window.DGM || {};
     const mine = ++annSeq;
     let lines = [];
     try {
-      lines = await ipc.invoke("palette_annotate", { req: { body: d.body, format: d.format } });
+      lines = await ipc.invoke("palette_annotate", {
+        req: {
+          body: d.body,
+          format: d.format,
+          dark: document.documentElement.dataset.theme === "dark",
+        },
+      });
     } catch (e) {
       lines = []; // 解析不了 / mock 里没有实现：不画，也不打扰用户（预览那边会报真错）
     }
@@ -432,13 +438,13 @@ window.DGM = window.DGM || {};
     drawSwatches();
   }
 
-  function roleSwatch(role) {
-    const d = state.activeDoc();
-    const scheme = d && state.schemeOf ? state.schemeOf(d) : "";
-    const p = scheme && state.palette ? state.palette(scheme) : null;
-    const r = p && (p.roles || []).find((x) => x.role === role);
-    if (!r) return null;
-    return document.documentElement.dataset.theme === "dark" ? r.dark : r.light;
+  /** 节点的色块取色：**后端已经算好了**（`fill`/`stroke`）。
+   *
+   *  为什么不再查角色表：颜色现在有两个来源（角色槽位 + 分组色轮），
+   *  前端再实现一遍色轮就是第二套规则；后端连槽位带色值一起返回，这里只负责画。 */
+  function nodeSwatch(n) {
+    if (!n || !n.fill || !n.stroke) return null;
+    return { fill: n.fill, stroke: n.stroke };
   }
 
   /** 按当前视口画标记。视口外的行 coordsAtPos 拿不到坐标，跳过等下次滚动。 */
@@ -468,7 +474,7 @@ window.DGM = window.DGM || {};
       const left = a.left - hostRect.left;
       if (top + lineH < 0 || top > hostRect.height) continue;
       const first = row.nodes.find((n) => n.role) || row.nodes[0];
-      const c = first.role ? roleSwatch(first.role) : null;
+      const c = nodeSwatch(first);
       // 行底色（可选）：先铺，色块盖在上面
       if (tintOn && c && tintLayer) {
         const t = h("div", "editor-swatch-tint");
@@ -486,9 +492,11 @@ window.DGM = window.DGM || {};
         dot.style.background = c.fill;
         dot.style.boxShadow = "inset 0 0 0 1px " + c.stroke;
       }
+      // 槽位 `g0/g1/…` 是分组色轮，直接展示槽位名对用户没意义
+      const slotLabel = (r) => (/^g\d+$/.test(r) ? t("palette.groupSlot") : r);
       dot.title =
         row.nodes
-          .map((n) => (n.role ? `${n.id} · ${n.role}` : `${n.id} · 手写色，保持`))
+          .map((n) => (n.role ? `${n.id} · ${slotLabel(n.role)}` : `${n.id} · ${t("palette.handColor")}`))
           .join("  ") + (c ? `\n${c.fill} / ${c.stroke}` : "");
       layer.appendChild(dot);
     }

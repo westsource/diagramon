@@ -791,9 +791,16 @@ pub struct PaletteProbe {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PaletteNode {
     pub id: String,
-    /// 角色；`None` = 这个节点**不会**被上色（带手写颜色 / 自己的 class），源码里标成"保持原样"
+    /// 槽位：`main/entry/decide/data/ext/risk/note` 或分组 `g0/g1/…`；
+    /// `None` = 这个节点**不会**被上色（带手写颜色 / 自己的 class），源码里标成"保持原样"
     #[serde(default)]
     pub role: Option<String>,
+    /// 实际填充色（后端算好，前端直接画 —— 分组色轮前端没有第二份实现）
+    #[serde(default)]
+    pub fill: Option<String>,
+    /// 实际描边色
+    #[serde(default)]
+    pub stroke: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -818,6 +825,9 @@ pub struct PaletteScan {
 pub struct PaletteClearReq {
     pub body: String,
     pub format: FormatId,
+    /// 只给 `palette_annotate` 用：按哪套主题算分组色轮（清除/体检不关心）
+    #[serde(default)]
+    pub dark: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

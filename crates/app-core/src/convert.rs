@@ -1005,6 +1005,8 @@ pub struct FlowNode {
     pub classes: Vec<String>,
     /// 有 `style <id> …` 语句。这类语句**优先级高于 classDef**，配色要动它得先删。
     pub styled: bool,
+    /// 所属分组（最内层 subgraph 的引用名/标题）；不在任何 subgraph 里就是 `None`。
+    pub group: Option<String>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -1012,6 +1014,11 @@ pub struct FlowFacts {
     pub nodes: Vec<FlowNode>,
     /// 文档里出现过的 classDef 名字（判断"某个类是我们的角色类还是用户自己的"）。
     pub class_defs: Vec<String>,
+    /// **真的设了颜色**（fill/stroke/color）的 classDef。
+    ///
+    /// 只"有 class"不算有颜色：删掉 classDef 之后，节点上的 `:::catalog` 还在，
+    /// 按"有类就算有颜色"会把它们全部跳过 —— 用户看到的就是"清了色也上不了色"。
+    pub colored_classes: std::collections::HashSet<String>,
 }
 
 /// Mermaid flowchart 的节点事实：**只读**，不改文档、不生成任何代码。
@@ -1025,7 +1032,11 @@ pub fn flow_facts(src: &str) -> Result<FlowFacts, String> {
     let mut info: HashMap<String, (Option<String>, FlowShape, Vec<String>, u32)> = HashMap::new();
     let mut class_of: HashMap<String, Vec<String>> = HashMap::new();
     let mut class_defs: Vec<String> = Vec::new();
+    let mut colored_classes: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut styled: std::collections::HashSet<String> = std::collections::HashSet::new();
+    // 打开中的 subgraph（最内层在栈顶）：节点归属就取它
+    let mut groups: Vec<String> = Vec::new();
+    let mut group_of: HashMap<String, String> = HashMap::new();
 
     let touch = |id: &str, info: &mut HashMap<_, _>, order: &mut Vec<String>| {
         if !info.contains_key(id) {
@@ -1035,9 +1046,26 @@ pub fn flow_facts(src: &str) -> Result<FlowFacts, String> {
     };
     for stmt in &stmts {
         match stmt {
+            Stmt::SubgraphOpen { id, label } => {
+                // 引用名优先（`subgraph L_MGMT ["…"]` 里 L_MGMT 才是图里能被引用的名字）
+                let name = id.clone().filter(|s| !s.is_empty()).unwrap_or_else(|| label.clone());
+                // subgraph 自己的 id 也是个节点（能连边、能被上色）。让它和**组内**用同一个槽位，
+                // 否则会出现"框是绿的、里面的节点是蓝灰的"这种割裂。
+                if let Some(id) = id.as_ref().filter(|s| !s.is_empty()) {
+                    group_of.entry(id.clone()).or_insert_with(|| name.clone());
+                }
+                groups.push(name);
+            }
+            Stmt::SubgraphClose => {
+                groups.pop();
+            }
             Stmt::Chain { operands, .. } => {
                 for op in operands {
                     touch(&op.id, &mut info, &mut order);
+                    // 归属按**首次出现**定：先在外面提到、后写进 subgraph 的节点仍算外层
+                    if let Some(g) = groups.last() {
+                        group_of.entry(op.id.clone()).or_insert_with(|| g.clone());
+                    }
                     let slot = info.get_mut(&op.id).expect("刚 inserted");
                     if slot.3 == 0 {
                         // 只记**首次**出现：源码里标色的位置就取"这个节点第一次被提到的那行"
@@ -1057,9 +1085,13 @@ pub fn flow_facts(src: &str) -> Result<FlowFacts, String> {
                     }
                 }
             }
-            Stmt::ClassDef { name, .. } => {
+            Stmt::ClassDef { name, style } => {
                 if !class_defs.contains(name) {
                     class_defs.push(name.clone());
+                }
+                let t = style.to_ascii_lowercase();
+                if t.contains("fill:") || t.contains("stroke:") || t.contains("color:") {
+                    colored_classes.insert(name.clone());
                 }
             }
             Stmt::ClassAssign { name, ids } => {
@@ -1085,10 +1117,18 @@ pub fn flow_facts(src: &str) -> Result<FlowFacts, String> {
                     classes.push(c);
                 }
             }
-            FlowNode { id: id.clone(), line, label, shape, classes, styled: styled.contains(&id) }
+            FlowNode {
+                group: group_of.get(&id).cloned(),
+                id: id.clone(),
+                line,
+                label,
+                shape,
+                classes,
+                styled: styled.contains(&id),
+            }
         })
         .collect();
-    Ok(FlowFacts { nodes, class_defs })
+    Ok(FlowFacts { nodes, class_defs, colored_classes })
 }
 
 /* ------------------------------------------------------------------ 生成 */
