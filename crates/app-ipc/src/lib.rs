@@ -869,6 +869,26 @@ pub struct ConvertOutcome {
     pub notes: Vec<String>,
 }
 
+/// 源码格式化的入参。
+///
+/// 与 `ConvertRequest` 分开：格式化**不改格式**，只重排空白；后端不需要知道文档 id
+/// （纯函数，便于单测与探针直接调用）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FormatRequest {
+    pub format: FormatId,
+    pub body: String,
+}
+
+/// 一次格式化的结果。
+///
+/// `changed=false` 时 `body` 与入参逐字节相同 —— 界面据此说「已是规范格式」，
+/// 而不是假装修了一遍。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FormatOutcome {
+    pub body: String,
+    pub changed: bool,
+}
+
 /* ---------------- 工作区与文件系统 ---------------- */
 
 /// 工作区树的一个节点。目录带 `children`，文件不带。

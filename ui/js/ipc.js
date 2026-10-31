@@ -751,6 +751,13 @@ digraph Pipeline {
           );
         }
 
+        // 格式化与转换同一套约定：真实的空白重排只在 Rust 侧（app-core/formatter.rs）
+        case "format_text":
+          throw new Error(
+            `mock 模式没有源码格式器（${(args.req || {}).format}）：真实格式器在 Rust 侧，` +
+              "请用 node tools/dev/check.mjs 起真实客户端",
+          );
+
         case "settings_get":
           this._hydrateCreds();
           return this._clone(this.settings);

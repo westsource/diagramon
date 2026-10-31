@@ -11,6 +11,7 @@ pub mod convert_dot;
 mod d2syntax;
 pub mod document;
 pub mod format;
+pub mod formatter;
 pub mod guard;
 pub mod lint;
 pub mod memory;

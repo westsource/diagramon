@@ -236,6 +236,7 @@ pub fn run() {
             commands::doc_save_as,
             commands::export_write,
             commands::convert_text,
+            commands::format_text,
             commands::debug_note,
             commands::ai_provider_models,
             commands::ai_provider_key_set,

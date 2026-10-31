@@ -901,6 +901,44 @@ window.DGM = window.DGM || {};
       );
       ok("D2 → mxfile 附保真度说明", !!(mxRes && mxRes.notes && mxRes.notes.length), ((mxRes && mxRes.notes) || []).join(" / "));
 
+      // ── 源码格式化（Rust `formatter.rs`）：命令契约 + 界面路径 ──
+      {
+        const mm = await invoke("format_text", {
+          req: { format: "mermaid", body: "flowchart TD\nsubgraph S\nA --> B\nend\n" },
+        });
+        ok(
+          "格式化重排 Mermaid subgraph 缩进",
+          !!mm && mm.changed === true && mm.body === "flowchart TD\nsubgraph S\n    A --> B\nend\n",
+          mm && mm.body,
+        );
+        const dd = await invoke("format_text", { req: { format: "dot", body: "digraph G{a->b;b->c}" } });
+        ok(
+          "格式化把一行式 DOT 展开成缩进块",
+          !!dd && dd.changed === true && dd.body === "digraph G {\n    a -> b\n    b -> c\n}\n",
+          dd && dd.body,
+        );
+        const same = await invoke("format_text", { req: { format: "mermaid", body: "flowchart TD\n" } });
+        ok(
+          "规范正文如实报 changed=false（不假装修了一遍）",
+          !!same && same.changed === false && same.body === "flowchart TD\n",
+          same && same.body,
+        );
+
+        // 界面路径：按钮/快捷键最终都走 `DGM.shell.formatSource`（编辑器与缓冲区一起变）
+        const fd = await DGM.state.newDoc("mermaid");
+        const src = "flowchart TD\nsubgraph S\nA --> B\nend\n";
+        const want = "flowchart TD\nsubgraph S\n    A --> B\nend\n";
+        await DGM.state.setBodyNow(fd.id, src);
+        DGM.editor.loadActive();
+        await DGM.shell.formatSource();
+        ok(
+          "「格式化」按钮路径重排正文并同步编辑器",
+          DGM.state.doc(fd.id).body === want && DGM.editor.getValue() === want,
+          DGM.state.doc(fd.id).body,
+        );
+        await DGM.state.closeDoc(fd.id);
+      }
+
       // ── 工作区与文件系统（第 4 步）：全是纯 IPC，不靠定时器 ──
       // 造一个真实目录：借 export_write 的"父目录会自动建"这一特性
       // 每次自检用**独立**目录：上一次失败留下的文件不该让这一次误报"同名已存在"

@@ -1275,20 +1275,40 @@ window.DGM = window.DGM || {};
     }
   }
 
-  function formatSource() {
+  async function formatSource() {
     const d = state.activeDoc();
     if (!d) return;
     if (state.isCanvasDoc(d)) {
       toast({ icon: "wand", title: t("status.canvasFormat"), sub: t("status.canvasFormatSub") });
       return;
     }
-    // 真实实现里格式化由 Rust 侧的格式器完成；这里只做一次无害的空格规整（原型同款行为）
-    const body = d.body.split("\n").map((ln) => ln.replace(/\s+$/, "")).join("\n");
-    if (body !== d.body) {
-      state.setBodyNow(d.id, body).then(() => DGM.editor.setValue(body));
+    // 真正的格式器在 Rust 侧（crates/app-core/src/formatter.rs）：这里只把结果走
+    // 「整块替换正文」那条路落盘 —— 与 AI 应用、配色展开同一条，不再维护第二份规则。
+    let res;
+    try {
+      res = await ipc.invoke("format_text", { req: { format: d.format, body: d.body } });
+    } catch (e) {
+      toast({
+        icon: "alert",
+        title: t("status.formatFailed"),
+        sub: (e && e.message) || String(e),
+        warn: true,
+      });
+      return;
     }
-    status(t("mi.format"), "ok");
-    toast({ icon: "wand", title: t("mi.format"), sub: "" });
+    if (!res || typeof res.body !== "string") {
+      toast({ icon: "alert", title: t("status.formatFailed"), sub: t("common.none"), warn: true });
+      return;
+    }
+    if (!res.changed) {
+      status(t("mi.format"), "");
+      toast({ icon: "wand", title: t("mi.format"), sub: t("status.formatNoopSub") });
+      return;
+    }
+    // applyBody = 编辑器整块替换 + 立即写进后端缓冲区（磁盘仍等保存/自动保存）
+    await DGM.editor.applyBody(res.body);
+    status(t("status.formatted"), "ok");
+    toast({ icon: "wand", title: t("mi.format"), sub: t("status.formattedSub") });
   }
 
   /* ------------------------------------------------------------------ 分隔条 / 面板高度拖拽 */

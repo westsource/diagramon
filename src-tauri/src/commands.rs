@@ -19,7 +19,8 @@ use std::sync::Arc;
 use app_ipc::{
     events, AiAgentStep, AiChatRequest, AiContextFile, AiDelta, AiDone, AiFailed, AiIntent, AiModel,
     AiThinking, IntentClassifyRequest, IntentClassifyResult,
-    AppInfo, ConvMeta, Conversation, ConversationTurn, ConvertOutcome, ConvertRequest, DevFlags, Doc, FormatId,
+    AppInfo, ConvMeta, Conversation, ConversationTurn, ConvertOutcome, ConvertRequest, DevFlags, Doc,
+    FormatId, FormatOutcome, FormatRequest,
     Issue, MemoryEntry, MemoryList, MemoryScope, MemoryState, OutlineGroup, PaletteApplyReq,
     PaletteApplyRes, PaletteClearReq, PaletteScan, Session as SessionPayload, Settings, ViewMode,
 };
@@ -508,6 +509,15 @@ pub fn convert_text(req: ConvertRequest) -> Result<ConvertOutcome, String> {
         body: String::new(),
         notes: vec![plan.reason],
     })
+}
+
+/* ---------------- 源码格式化 ---------------- */
+
+/// 重排空白。纯函数（不读文档状态）：前端拿到结果自己走 `doc_set_body`，
+/// 与「应用配色」同一条落盘路径；探针也能直接调它。
+#[tauri::command]
+pub fn format_text(req: FormatRequest) -> FormatOutcome {
+    app_core::formatter::format_body(req.format, &req.body)
 }
 
 /* ---------------- 凭据（密钥永不回传前端） ---------------- */

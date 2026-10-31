@@ -971,12 +971,16 @@ def main() -> int:
         except Exception as e:
             fails.append(f"快捷键总表断言解析失败：{e} / {keys_dlg}")
 
-        # Shift+Alt+F：格式化源码（同样属于"菜单印了但没接线"的一类）
+        # Shift+Alt+F：格式化源码。**本探针跑 mock 后端**，格式化器只在 Rust 侧，
+        # 所以这里能验的是「快捷键真的接到了 formatSource、失败如实报出来」；
+        # 真正的重排由 Rust 单测 + 真机自检（main.js 里的 format_text 断言）覆盖。
+        fmt_src = "flowchart TD\nsubgraph S\nA --> B\nend\n"
         fmt_probe = ev(
             "(async () => {"
             "  const d = await DGM.state.newDoc('mermaid');"
-            "  await DGM.state.setBodyNow(d.id, 'flowchart TD   \\n    A --> B\\t\\n');"
+            "  await DGM.state.setBodyNow(d.id, " + json.dumps(fmt_src) + ");"
             "  DGM.editor.loadActive();"
+            "  document.querySelectorAll('#toasts .toast').forEach(n => n.remove());"
             "  return JSON.stringify({id: d.id, before: DGM.state.doc(d.id).body});"
             "})()"
         )
@@ -986,9 +990,12 @@ def main() -> int:
         try:
             fp = json.loads(fmt_probe or "{}")
             after = ev("DGM.state.doc(" + json.dumps(fp.get("id")) + ").body")
-            log(f"Shift+Alt+F 格式化: {fp.get('before')!r} → {after!r}")
-            if after == fp.get("before"):
-                fails.append("Shift+Alt+F 没有格式化源码（行尾空白还在）")
+            toast = ev("Array.from(document.querySelectorAll('#toasts .toast')).map(n => n.textContent).join('|')")
+            log(f"Shift+Alt+F 格式化（mock）: toast={toast!r} body 变为 {after != fp.get('before')}")
+            if after != fp.get("before"):
+                fails.append(f"mock 后端不该改正文（格式化器在 Rust 侧）：{after!r}")
+            if not toast or "格式化失败" not in toast:
+                fails.append(f"Shift+Alt+F 没有走到 formatSource（没看到失败提示）：{toast!r}")
             ev("DGM.state.closeDoc(" + json.dumps(fp.get("id")) + ")")
         except Exception as e:
             fails.append(f"格式化快捷键断言解析失败：{e} / {fmt_probe}")
