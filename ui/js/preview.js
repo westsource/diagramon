@@ -413,58 +413,72 @@ window.DGM = window.DGM || {};
     return (sw && sw.stroke) || "var(--faint)";
   }
 
-  /** 渲染期上色：**只为出图**把正文过一遍色系展开，正文与磁盘都不动。
+  /** 选一个色系：**写进正文**（配色是内容，不是视图）。
    *
-   *  为什么放在渲染期而不是写回正文：打开文件时才有资格"自动检测配色"—— 写回正文意味着
-   *  打开即弄脏、关掉就问你保存；换色系也变成纯视图操作（0 次写盘）。
-   *  需要固化给别的工具看时，菜单里有一条显式的「写入文件」。
-   *
-   *  缓存按 (body 引用, scheme, 主题, 连线开关) 判定：`d.body` 没变就是同一个字符串对象，
-   *  比较是 O(1)；敲一个字就换对象 → 自动失效。
+   *  于是 `源码窗口 → 渲染` 是同一份真源；是否落盘交给「设置 → 编辑器 → 自动保存」。
+   *  不写正文的话，用户换了工具/离开本应用就看不到颜色，而"文件里有什么"才是可交付的东西。
    */
-  let paintCache = { src: null, scheme: "", dark: false, edges: true, out: "" };
-  async function paletteBody(body, d) {
-    const scheme = state.schemeOf(d);
-    if (!scheme || !state.isTextDoc(d)) return body;
-    const dark = document.documentElement.dataset.theme === "dark";
-    const edges = !(state.settings && state.settings.palette_edges === false);
-    const c = paintCache;
-    if (c.src === body && c.scheme === scheme && c.dark === dark && c.edges === edges) return c.out;
-    try {
-      const res = await state.paint(body, d.format, scheme, "only_uncolored");
-      paintCache = { src: body, scheme, dark, edges, out: res.body };
-      return res.body;
-    } catch (e) {
-      // 上色失败**不能**挡住出图（例如序列图不支持 classDef）：原样渲染，并如实说一次
-      DGM.status(t("preview.palette.failed", { msg: (e && e.message) || String(e) }), "warn");
-      return body;
-    }
-  }
-
-  /** 选一个色系：只落选择，颜色交给渲染期展开（换色系 = 纯视图操作）。 */
   async function applyScheme(d, scheme, mode) {
     await state.setScheme(d.id, scheme);
     // setScheme 内部会 `upsertDoc`：`d` 可能是**旧对象**了，重新取一次再读 scheme，
     // 否则读到的还是改之前的值（真机上表现成"选了色系却提示已关闭"）。
     const live = state.doc(d.id) || d;
     if (!state.schemeOf(live)) {
-      schedule(); // 置空 = 不上色；渲染期展开自然什么都不加
+      schedule(); // 置空 = 不上色（清块由「无」那条路径负责）
       return;
     }
-    // 不写正文：预览会按新色系重新展开（「写入文件」才是显式固化动作）
-    schedule();
+    await paintDoc(live, mode || "only_uncolored");
+  }
+
+  /** 把正文写回某个文档：活动文档走编辑器（撤销栈 + 源码窗格），其余走状态层。 */
+  async function writeBodyFor(docId, text, hold) {
+    const act = state.activeDoc();
+    if (act && act.id === docId && DGM.editor && DGM.editor.applyBody) {
+      await DGM.editor.applyBody(text, { hold: !!hold });
+    } else {
+      await state.setBodyNow(docId, text, { hold: !!hold });
+    }
+  }
+
+  /** 这份正文里有没有我们自己写的配色块（三种格式的注释前缀不同）。 */
+  function hasPaletteBlock(d) {
+    const body = String((d && d.body) || "");
+    return body.includes("dgm-palette:begin");
+  }
+
+  /** 老文件迁移：应用里记过色系、但正文里还没有块 ⇒ 补写进缓冲区。
+   *
+   *  `hold: true`：只改缓冲区、**不参与自动保存** —— 打开文件不该悄悄写盘。
+   *  每个文档只试一次（失败/无可上色不反复打扰）。
+   */
+  const migrated = new Set();
+  async function migratePalette(d) {
+    if (!d || !state.isTextDoc(d) || migrated.has(d.id)) return false;
+    migrated.add(d.id);
+    const eff = state.schemeOf(d);
+    if (!eff || hasPaletteBlock(d)) return false;
+    try {
+      const res = await state.paint(d.body, d.format, eff, "only_uncolored");
+      if (!res.changed) return false;
+      await writeBodyFor(d.id, res.body, true);
+      DGM.status(t("preview.palette.migrated", { name: paletteName(eff) }), "");
+      return true;
+    } catch (e) {
+      return false; // 序列图之类不支持：静默，预览照常
+    }
   }
 
   /** 按"当前生效的色系"重排正文（不动选择）。连线开关变化后也走这条。 */
-  async function paintDoc(live, mode) {
+  async function paintDoc(live, mode, opts) {
     const eff = state.schemeOf(live);
     if (!eff) return;
     const res = await state.paint(live.body, live.format, eff, mode);
     const picked = { applied: res.applied, skipped: res.skipped, removed: res.styles_removed };
     // 走编辑器写回：源码窗口要跟着变（否则预览换了色、左边还是旧文本），
     // 而且这条路径会把改动算进撤销栈。
-    // 「写入正文」也是缓冲区动作：真正落盘仍然是用户自己的 Ctrl+S
-    if (res.changed) await DGM.editor.applyBody(res.body, { hold: true });
+    // 缓冲区的改动：**不再 hold** —— 落不落盘由「设置 → 编辑器 → 自动保存」决定
+    // （hold 会把这轮改动从自动保存里摘掉，那正是旧"视图色"的语义）。
+    if (res.changed) await writeBodyFor(live.id, res.body, !!(opts && opts.hold));
     const bits = [t("preview.palette.applied", { name: paletteName(eff), n: picked.applied })];
     if (picked.skipped) bits.push(t("preview.palette.skipped", { n: picked.skipped }));
     if (picked.removed) bits.push(t("preview.palette.removed", { n: picked.removed }));
@@ -502,16 +516,6 @@ window.DGM = window.DGM || {};
       dot: "var(--faint)",
       act: "clear",
     });
-    items.push({ sep: true });
-    // 只有真的选了"这份文档的色系"才需要"跟随默认"；跟随状态下它没有意义
-    if (d.scheme !== undefined && d.scheme !== null) {
-      items.push({
-        label: t("preview.paletteFollow", { name: paletteName(state.settings && state.settings.diagram_palette) }),
-        icon: "refresh",
-        act: "follow",
-      });
-      items.push({ sep: true });
-    }
     items.push({ label: t("preview.paletteWrite"), icon: "save", act: "write" });
     items.push({ label: t("preview.paletteAi"), icon: "sparkles", act: "ai" });
     items.push({ sep: true });
@@ -530,7 +534,6 @@ window.DGM = window.DGM || {};
       DGM.pop.hide();
       try {
         if (it.v) await applyScheme(d, it.v, "only_uncolored");
-        else if (it.act === "follow") await applyScheme(d, null, "only_uncolored");
         else if (it.act === "write") {
           // 把当前色系**固化进正文**：跨工具/离线分享才需要（平时颜色只是视图）
           const live = state.doc(d.id) || d;
@@ -546,7 +549,8 @@ window.DGM = window.DGM || {};
             warn: t("preview.palette.writeWarn"),
             ok: t("preview.palette.writeOk"),
           });
-          if (ok) await paintDoc(live, "all");
+          // 只重排"我们的"节点：手写颜色不该被一次换主题的点击覆盖
+          if (ok) await paintDoc(live, "only_uncolored");
         } else if (it.act === "ai") {
           await pickPaletteWithAi(d);
         } else if (it.act === "clear") {
@@ -577,8 +581,8 @@ window.DGM = window.DGM || {};
     if (!ok) return;
     // ① 本地：删掉我们生成的那一段（确定性、零成本）
     const res = await state.clearPalette(live.body, live.format);
-    // 只改缓冲区：磁盘不动（关掉标签也不会问你保存；文件本来就是干净的）
-    if (res.changed) await DGM.editor.applyBody(res.body, { hold: true });
+    // 正文改动：落盘由自动保存设置决定（同 applyScheme）
+    if (res.changed) await writeBodyFor(live.id, res.body, false);
     await state.setScheme(live.id, "");
     schedule();
 
@@ -620,11 +624,14 @@ window.DGM = window.DGM || {};
    *  注意这里只 `schedule()`，**不能走 paintDoc**：那是"写入正文"的路径。
    *  配色是渲染期展开的，重画一次就够；写进正文会把"只改预览"变成"改缓冲区"。
    */
+  /** 连线开关：连线颜色现在也算**正文内容**（写在配色块里），所以切完要重排正文。 */
   async function toggleEdges() {
     const on = !(state.settings && state.settings.palette_edges === false);
     await state.patchSettings({ palette_edges: !on });
     DGM.status(t(on ? "preview.palette.edgesOff" : "preview.palette.edgesOn"), "");
-    schedule();
+    const d = state.activeDoc();
+    if (d && state.isTextDoc(d) && state.schemeOf(d) && hasPaletteBlock(d)) await paintDoc(d, "only_uncolored");
+    else schedule();
   }
 
   /** 「让 AI 挑」：一次短调用，只许它回一个 `{palette, why}` —— 色值仍然不归它。 */
@@ -790,8 +797,10 @@ window.DGM = window.DGM || {};
       return;
     }
 
-    // 配色是渲染期选项：正文本身不动（见 paletteBody）
-    const paintBody = await paletteBody(body, d);
+    // 老文件（记过色系但正文还没有块）先补写进缓冲区，再走正常渲染
+    if (await migratePalette(d)) return;
+    // 配色已经在正文里（选色系时写进去的），渲染就是照正文来
+    const paintBody = body;
 
     const mine = ++renderToken;
     // 同一份文档的重渲染（敲字、换主题、切视图模式）**不清舞台**：清一次就闪一次
@@ -1497,10 +1506,21 @@ window.DGM = window.DGM || {};
     describeMermaid,
     elkLoaded,
     warmElk,
+    /** 选色系 ⇒ 写进正文（新建文档的默认配色也走这条）。 */
+    applyScheme,
+    /** 正文被别处替换过（AI/转换）之后，按这份文档的色系重新写入配色块。 */
+    repaint: async (id) => {
+      const d = state.doc(id);
+      if (!d || !state.isTextDoc(d) || !state.schemeOf(d)) return false;
+      await paintDoc(d, "only_uncolored", { hold: true }); // AI/转换的产物都不落盘，重排跟着不落盘
+      return true;
+    },
     effectiveLook: optsCurLook,
-    /** 配色/连线开关变化后重画一次（**纯视图**：不写正文，见 paletteBody）。 */
+    /** 连线开关等"影响正文里色值"的变化：重排一次（写进正文）。 */
     reapplyPalette: async () => {
-      schedule();
+      const d = state.activeDoc();
+      if (d && state.isTextDoc(d) && state.schemeOf(d) && hasPaletteBlock(d)) await paintDoc(d, "only_uncolored");
+      else schedule();
     },
     exportPng,
     exportSvg,

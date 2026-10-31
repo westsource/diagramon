@@ -918,6 +918,16 @@ window.DGM = window.DGM || {};
     applyResult(doc);
     state.active = doc && doc.id ? doc.id : state.active;
     emit("session:changed");
+    // 「设置 → 默认配色」只作用于**新建文档**：选一次就把块写进新正文，
+    // 之后再打开任何文件都不会凭空上色（打开文件不变脏）。
+    const def = (state.settings && state.settings.diagram_palette) || "";
+    if (def && doc && doc.id && state.isTextDoc(state.doc(doc.id) || doc) && DGM.preview && DGM.preview.applyScheme) {
+      try {
+        await DGM.preview.applyScheme(state.doc(doc.id) || doc, def, "only_uncolored");
+      } catch (e) {
+        /* 展开失败（如引擎缺失）不该挡住新建 */
+      }
+    }
     return doc;
   }
 
@@ -948,19 +958,26 @@ window.DGM = window.DGM || {};
       } catch (e) {
         continue; // 探测失败不该挡住打开
       }
-      const pick = probe && (probe.baked || probe.suggested);
-      if (!pick) continue;
-      try {
-        await setScheme(d.id, pick);
-      } catch (e) {
+      // ① 文件里自带我们的块 ⇒ 采纳它（文件即真源；换台机器/换工具也一致）
+      if (probe && probe.baked) {
+        try {
+          await setScheme(d.id, probe.baked);
+        } catch (e) {
+          /* 色系已下线之类：忽略 */
+        }
         continue;
       }
-      if (probe.suggested && DGM.status) {
-        const why = probe.why ? DGM.i18n.t("preview.palette.why." + probe.why) : "";
-        const name = (state.palette(pick) || {}).name_zh && DGM.i18n.lang === "en-US"
-          ? state.palette(pick).name_en
-          : (state.palette(pick) || {}).name_zh || pick;
-        DGM.status(DGM.i18n.t("preview.palette.detected", { name, why }), "");
+      // ② 只按内容**推测**：不落 scheme、不写正文 —— 打开文件不该变脏。
+      //    （以前这里会静默把推测结果存成这份文档的色系，等于打开就上色。）
+      if (probe && probe.suggested) {
+        d.suggested = probe.suggested;
+        if (DGM.status) {
+          const why = probe.why ? DGM.i18n.t("preview.palette.why." + probe.why) : "";
+          const name = (state.palette(probe.suggested) || {}).name_zh && DGM.i18n.lang === "en-US"
+            ? state.palette(probe.suggested).name_en
+            : (state.palette(probe.suggested) || {}).name_zh || probe.suggested;
+          DGM.status(DGM.i18n.t("preview.palette.detected", { name, why }), "");
+        }
       }
     }
   }
@@ -1136,10 +1153,16 @@ window.DGM = window.DGM || {};
    *  三条状态各有含义，别混：`doc.scheme == null` = 跟随默认（后端字段缺省也是 null），
    *  `doc.scheme === ""` = 这份明确不要，`doc.scheme === "pine"` = 这份指定。
    */
+  /** 这份文档生效的色系：**只认文档自己的选择**。
+   *
+   *  以前 `null` 会回落到「设置 → 默认配色」，但配色现在是**正文内容**（选一次就写进文件），
+   *  回落会让"没选过的文档"在渲染期凭空上色 —— 那正是我们要去掉的隐藏状态。
+   *  默认配色改为只作用于**新建文档**（见 `newDoc`）。
+   */
   function schemeOf(doc) {
     const d = doc || state.activeDoc();
     if (d && d.scheme !== undefined && d.scheme !== null) return d.scheme;
-    return (state.settings && state.settings.diagram_palette) || "";
+    return "";
   }
 
   /** 设文档级色系：`null` = 跟随默认，`""` = 关闭，其余必须是注册表里的 id。 */

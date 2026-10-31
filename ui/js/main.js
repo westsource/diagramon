@@ -1130,12 +1130,13 @@ window.DGM = window.DGM || {};
           await DGM.state.openPaths([detPath]);
           // 读**状态里**的文档：`doc_open_paths` 的响应是打开那一刻的快照，探测是在之后做的
           const dd = DGM.state.docs.find((x) => samePath(x.path)) || {};
-          ok("打开文件按图内容探测配色", dd.scheme === "indigo", String(dd.scheme));
-          ok("探测不写正文（文件不变脏）", String(dd.body).includes("style C fill:#f00") && !String(dd.body).includes("classDef"), "正文被改过");
+          ok("按图内容给出配色建议（只建议、不落选）", dd.suggested === "indigo" && !dd.scheme, `suggested=${dd.suggested} scheme=${dd.scheme}`);
+          ok("打开文件不写正文（不变脏）", String(dd.body).includes("style C fill:#f00") && !String(dd.body).includes("classDef"), "正文被改过");
           const scan = await invoke("palette_scan", { req: { body: dd.body, format: "mermaid" } });
           ok("体检数出手写颜色", scan.traces === 1 && scan.sig === "A,B,C", `traces=${scan.traces} sig=${scan.sig}`);
 
-          // 渲染期上色：设了色系 → 预览里有色；正文里没有；置「无」→ 颜色消失
+          // 配色是正文内容：设了色系 → 正文里立刻出现我们的块，预览照它渲染；
+          // 置「无」→ 块被删掉、颜色消失
           // 这份图全是"数据/存储"节点（C 带手写颜色会被跳过），所以要验 **data 角色**的色
           const fmtPal = (info.palettes.find((p) => p.id === "indigo") || {}).roles.find((r) => r.role === "data");
           const dark = document.documentElement.dataset.theme === "dark";
@@ -1144,6 +1145,8 @@ window.DGM = window.DGM || {};
             const svg = document.querySelector("#canvas-stage svg");
             return !!svg && svg.outerHTML.toLowerCase().includes(want);
           };
+          // 真的走"用户选色系"那条路（现在选色系 = 写正文，不再有渲染期展开）
+          await DGM.preview.applyScheme(dd, "indigo", "only_uncolored");
           let got = false;
           for (let i = 0; i < 40 && !got; i++) {
             if (DGM.preview && DGM.preview.schedule) DGM.preview.schedule();
@@ -1151,29 +1154,37 @@ window.DGM = window.DGM || {};
             got = stageHas();
           }
           ok("设置色系后预览真的上了色", got, `等 ${want}`);
-          ok("但正文里没有 classDef（渲染期上色）", !String((DGM.state.doc(dd.id) || {}).body).includes("classDef"));
+          const pb = String((DGM.state.doc(dd.id) || {}).body);
+          ok("配色块已经写进正文（选色系 = 正文改动）", pb.includes("dgm-palette:begin") && pb.includes("classDef lvl-data"), pb.slice(-120));
+          ok("块出现在正文末尾、只一份", pb.split("dgm-palette:begin").length === 2, `块数 ${pb.split("dgm-palette:begin").length - 1}`);
 
-          // 连线开关也是纯视图：切一下不能把正文改脏（曾经它走的是"写入正文"那条路）
+          // 连线开关也算正文内容：切一下会改正文里的线色（不再是"纯视图"）
           const b0 = (DGM.state.doc(dd.id) || {}).body;
-          const d0 = (DGM.state.doc(dd.id) || {}).dirty;
           await DGM.state.patchSettings({ palette_edges: false });
           await DGM.preview.reapplyPalette();
-          await new Promise((r) => setTimeout(r, 400));
+          await new Promise((r) => setTimeout(r, 600));
           const after = DGM.state.doc(dd.id) || {};
           ok(
-            "连线开关只改预览（正文与脏标都不动）",
-            after.body === b0 && after.dirty === d0,
-            `正文${after.body === b0 ? "未变" : "被改了"} · dirty ${d0}→${after.dirty}`,
+            "连线开关会重排正文里的连线色",
+            after.body !== b0 && !after.body.includes("lineColor"),
+            `正文${after.body === b0 ? "未变" : "被改了"}`,
           );
           await DGM.state.patchSettings({ palette_edges: true });
-          await DGM.state.setScheme(dd.id, "");
+          // 「无」= 删掉正文里的块 + 把这份文档的色系置为关闭（clearScheme 去掉确认框后的那两步）
+          {
+            const cur = DGM.state.doc(dd.id) || {};
+            const cl = await DGM.state.clearPalette(cur.body, "mermaid");
+            if (cl.changed) await DGM.editor.applyBody(cl.body, { hold: false });
+            await DGM.state.setScheme(dd.id, "");
+          }
           let gone = false;
           for (let i = 0; i < 40 && !gone; i++) {
             if (DGM.preview && DGM.preview.schedule) DGM.preview.schedule();
             await new Promise((r) => setTimeout(r, 100));
             gone = !stageHas();
           }
-          ok("选「无」后预览颜色消失（正文本来就干净）", gone);
+          ok("选「无」后预览颜色消失", gone);
+          ok("选「无」后正文里的块也被删掉", !String((DGM.state.doc(dd.id) || {}).body).includes("dgm-palette:begin"));
           await invoke("doc_close", { id: dd.id });
           try {
             await invoke("workspace_delete", { path: detPath });
@@ -1298,11 +1309,14 @@ window.DGM = window.DGM || {};
               tinted > 0 && cmBg === "rgba(0, 0, 0, 0)",
               `${tinted} 行 · cm-editor 底色 ${cmBg}`,
             );
+            // 选色系本身会写进一个配色块（那是**功能**，不是标注干的）；
+            // 这里要钉的是"行首色块/行底色只读"：抠掉配色块之后正文必须一字不差。
             const bodyNow = String((DGM.state.doc(ad.id) || {}).body);
+            const trimmed = bodyNow.replace(/\s*%% dgm-palette:begin[\s\S]*$/, "").trimEnd();
             ok(
-              "标注与行底色都不改正文",
-              bodyNow === anBody,
-              bodyNow === anBody ? "正文未变" : `正文变成：${bodyNow.slice(0, 60)}`,
+              "标注与行底色都不改正文（只多了一个配色块）",
+              trimmed === anBody.trimEnd() && bodyNow.includes("dgm-palette:begin"),
+              trimmed === anBody.trimEnd() ? "正文未变" : `抠掉配色块后：${trimmed.slice(-60)}`,
             );
             await DGM.state.patchSettings({ editor: { source_tint: false } });
             await invoke("doc_close", { id: ad.id });

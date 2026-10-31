@@ -597,6 +597,16 @@ window.DGM = window.DGM || {};
       return;
     }
     if (!created) return;
+    // 配色跟着格式走：源文档有色系 ⇒ 目标文档按同一色系重新展开（颜色是内容，不是格式的附属）
+    const srcScheme = state.schemeOf(srcDoc);
+    if (srcScheme && state.isTextDoc(state.doc(created.id) || created) && DGM.preview && DGM.preview.repaint) {
+      try {
+        await state.setScheme(created.id, srcScheme);
+        await DGM.preview.repaint(created.id);
+      } catch (e) {
+        /* 目标格式不支持配色（画布型）就保持原样 */
+      }
+    }
     finishConvert(created, dir, srcDoc, (p.notes || []).concat(extraNotes));
     // 两段对账（只读提示，不阻塞、不改结果）：B 段（引擎生成 drawio/Excalidraw）的
     // 缺失是表达力差异，AI 修不好，所以**只提示**；数不出来就什么都不说。

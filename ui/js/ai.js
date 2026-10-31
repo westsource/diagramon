@@ -1701,6 +1701,9 @@ window.DGM = window.DGM || {};
     // 不再在应用时烘焙配色：颜色是**渲染期**按当前色系展开的（写进来反而会让"无"失效）。
     // `hold: true` —— 只进缓冲区：先看效果，满意再自己 Ctrl+S（开了自动保存也不会被偷偷写盘）。
     await DGM.editor.applyBody(blk.code, { hold: true });
+    // AI 写回的是"干净"的正文（没有我们的配色块），按这份文档的色系补回去，
+    // 否则用户会看到"应用了 AI 结果，颜色没了"。
+    if (DGM.preview && DGM.preview.repaint) await DGM.preview.repaint(d.id);
     if (m) m.applied = true;
     // 布防：这一版渲染失败就自动修正一次（开关见「AI 设置 → 渲染失败时…」）。
     const selfRetry = !!(m && retryCtx && retryCtx.reqId && m.req === retryCtx.reqId);
@@ -1742,6 +1745,7 @@ window.DGM = window.DGM || {};
     const d = state.doc(lastApplied.id);
     if (d) {
       await DGM.editor.applyBody(lastApplied.body, { hold: true });
+      if (DGM.preview && DGM.preview.repaint) await DGM.preview.repaint(d.id);
       render();
       DGM.toast({ icon: "undo", title: t("ai.reverted"), sub: t("ai.revertedSub") });
     }
