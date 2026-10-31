@@ -79,6 +79,9 @@ struct Operand {
     /// 用户拿到的是「第 26 行：语句尾部有没解析完的内容」这种与真实原因无关的报错
     /// （真实语料实测：带 `:::` 的部署图 100% 失败）。
     classes: Vec<String>,
+    /// 这条语句在正文里的行号（1 基）。配色在源码里标"行 → 角色"要用它；
+    /// `expand_groups` 之后由 `parse_stmt` 统一补上，构造时先给 0。
+    line: u32,
     /// 这个操作数**显式写了形状**吗（`B[x]` / `B{x}`）？
     ///
     /// 必须区分：`A[x] --> B` 里第二次提到的 `A` 是裸 id，不能把先前解析出的形状
@@ -324,7 +327,16 @@ fn parse_stmt(text: &str, line_no: usize) -> Result<Vec<Stmt>, String> {
             truncate(t, 60)
         ));
     }
-    Ok(expand_groups(groups, links))
+    let mut stmts = expand_groups(groups, links);
+    // 行号在这里统一补：`parse_operand` 看不到行（它只处理一条语句的片段）
+    for st in &mut stmts {
+        if let Stmt::Chain { operands, .. } = st {
+            for op in operands.iter_mut() {
+                op.line = line_no as u32;
+            }
+        }
+    }
+    Ok(stmts)
 }
 
 /// `subgraph` 后面的部分 → 引用名 + 显示标题。
@@ -492,7 +504,7 @@ fn parse_operand(text: &str, start: usize) -> Option<(Operand, usize)> {
         // 裸 id 也可能带内联类名（`A:::cls`），那它在解析里算"没有形状"的一个操作数
         let (classes, end_ci) = parse_inline_classes(&chars, ci);
         return Some((
-            Operand { id, label: None, shape: Shape::Box, classes, shaped: false },
+            Operand { id, label: None, shape: Shape::Box, classes, line: 0, shaped: false },
             char_to_byte(text, end_ci),
         ));
     }
@@ -538,6 +550,7 @@ fn parse_operand(text: &str, start: usize) -> Option<(Operand, usize)> {
             label: if label.is_empty() { None } else { Some(label) },
             shape,
             classes,
+            line: 0,
             shaped: true,
         },
         char_to_byte(text, end_ci),
@@ -984,6 +997,8 @@ impl FlowShape {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FlowNode {
     pub id: String,
+    /// 首次出现在哪一行（1 基）。源码窗格的"行 → 角色"标注要用它。
+    pub line: u32,
     pub label: Option<String>,
     pub shape: FlowShape,
     /// 内联 `:::cls` 与 `class X cls` 合并后的类名（按出现顺序去重）。
@@ -1006,7 +1021,8 @@ pub struct FlowFacts {
 pub fn flow_facts(src: &str) -> Result<FlowFacts, String> {
     let (_, stmts) = parse(src)?;
     let mut order: Vec<String> = Vec::new();
-    let mut info: HashMap<String, (Option<String>, FlowShape, Vec<String>, bool)> = HashMap::new();
+    // (标签, 形状, 内联类, 首次出现行)
+    let mut info: HashMap<String, (Option<String>, FlowShape, Vec<String>, u32)> = HashMap::new();
     let mut class_of: HashMap<String, Vec<String>> = HashMap::new();
     let mut class_defs: Vec<String> = Vec::new();
     let mut styled: std::collections::HashSet<String> = std::collections::HashSet::new();
@@ -1014,7 +1030,7 @@ pub fn flow_facts(src: &str) -> Result<FlowFacts, String> {
     let touch = |id: &str, info: &mut HashMap<_, _>, order: &mut Vec<String>| {
         if !info.contains_key(id) {
             order.push(id.to_string());
-            info.insert(id.to_string(), (None, FlowShape::Box, Vec::new(), false));
+            info.insert(id.to_string(), (None, FlowShape::Box, Vec::new(), 0));
         }
     };
     for stmt in &stmts {
@@ -1023,6 +1039,10 @@ pub fn flow_facts(src: &str) -> Result<FlowFacts, String> {
                 for op in operands {
                     touch(&op.id, &mut info, &mut order);
                     let slot = info.get_mut(&op.id).expect("刚 inserted");
+                    if slot.3 == 0 {
+                        // 只记**首次**出现：源码里标色的位置就取"这个节点第一次被提到的那行"
+                        slot.3 = op.line;
+                    }
                     if op.label.is_some() {
                         slot.0 = op.label.clone();
                     }
@@ -1059,13 +1079,13 @@ pub fn flow_facts(src: &str) -> Result<FlowFacts, String> {
     let nodes = order
         .into_iter()
         .map(|id| {
-            let (label, shape, mut classes, _) = info.remove(&id).expect("order 与 info 同源");
+            let (label, shape, mut classes, line) = info.remove(&id).expect("order 与 info 同源");
             for c in class_of.remove(&id).unwrap_or_default() {
                 if !classes.contains(&c) {
                     classes.push(c);
                 }
             }
-            FlowNode { id: id.clone(), label, shape, classes, styled: styled.contains(&id) }
+            FlowNode { id: id.clone(), line, label, shape, classes, styled: styled.contains(&id) }
         })
         .collect();
     Ok(FlowFacts { nodes, class_defs })

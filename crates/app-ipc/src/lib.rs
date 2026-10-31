@@ -220,6 +220,9 @@ pub struct EditorPrefs {
     /// 默认静默落盘等于替用户按下 Ctrl+S。想要"随手改随手存"的，在设置里显式打开。
     pub autosave: bool,
     pub autosave_ms: u32,
+    /// 源码窗格里是否给"会被上色的行"铺一层淡色底（行首色块不受它影响）。
+    /// 默认关：整行染色会和错误行、选中行、搜索命中打架，想要的人自己开。
+    pub source_tint: bool,
     /// 渲染区域尺寸变化时自动适应视图（等同用户点了一次「适应视图」）。
     /// **默认开**：拖分隔条、开合侧栏 / AI 面板 / 底部面板、切视图模式、缩放窗口之后，
     /// 图不该只露一角或缩成一小团。不想要这个联动就在设置里关掉 ——
@@ -239,6 +242,7 @@ impl Default for EditorPrefs {
             per_doc_view: true,
             default_view: ViewMode::Split,
             autosave: false,
+            source_tint: false,
             autosave_ms: 5000,
             fit_on_resize: true,
             restrict_to_workspace: false,
@@ -781,6 +785,22 @@ pub struct PaletteProbe {
     /// 建议依据的稳定代号（data / risk / ext / ui / default），前端按它翻译
     #[serde(default)]
     pub why: Option<String>,
+}
+
+/// 源码窗格里"这一行上有哪些节点、各是什么角色"。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PaletteNode {
+    pub id: String,
+    /// 角色；`None` = 这个节点**不会**被上色（带手写颜色 / 自己的 class），源码里标成"保持原样"
+    #[serde(default)]
+    pub role: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PaletteLine {
+    /// 1 基
+    pub line: u32,
+    pub nodes: Vec<PaletteNode>,
 }
 
 /// "清不干净"时的扫描结果：还剩多少处颜色痕迹 + 结构签名（校验 AI 只删颜色、没动结构）。

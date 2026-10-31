@@ -14,6 +14,7 @@ window.DGM = window.DGM || {};
   "use strict";
 
   const state = DGM.state;
+  const ipc = DGM.ipc;
   const t = (k, v) => DGM.i18n.t(k, v);
   const { $, h, esc } = DGM.dom;
 
@@ -184,6 +185,8 @@ window.DGM = window.DGM || {};
     watchCaret();
     watchTab();
     watchErrMark();
+    watchSwatches();
+    scheduleSwatches();
     // 面板可能在创建时就已存在（search({top:true}) 预先建好、藏着），先翻一次并盯住重建
     localizeSearchPanel();
     watchSearchPanel();
@@ -227,6 +230,8 @@ window.DGM = window.DGM || {};
     if (langLbl) langLbl.textContent = fmt.name;
 
     currentId = d.id;
+    annKey = { id: "", body: "", scheme: "" }; // 换文档：重算标注
+    scheduleSwatches();
     if (hasVendor()) {
       ensure();
       if (inst) {
@@ -369,6 +374,159 @@ window.DGM = window.DGM || {};
     window.addEventListener("resize", scheduleErrDraw);
   }
 
+  /* ------------------------------------------------------------------ 配色标注层（行首色块 / 行底色）
+
+   *  配色是**渲染期**上色（正文里没有色值），所以源码窗口要另画一层提示：
+   *  每个"会被上色的节点"在它**首次出现的那一行**左侧点一个色块，颜色 = 它会被染成的颜色；
+   *  带手写颜色（会被跳过）的节点画虚线框。可选再铺一层行底色（默认关，见设置）。
+   *
+   *  为什么坐标靠 DOM 覆盖层：vendor 只对外暴露 {create, LANGUAGES}，CM6 的装饰拿不到
+   *  （错误波浪线同理）。位置用 view.coordsAtPos 算，滚动/输入/缩放时重画。
+   *  "行 → 角色"由后端算（`palette_annotate`）：角色是推断出来的，前端再算一遍就是第二套规则。
+   */
+  let swLayer = null;
+  let tintLayer = null;
+  let ann = [];          // [{line, nodes:[{id, role}]}]
+  let annKey = { id: "", body: "", scheme: "" };
+  let annDrawTimer = 0;
+  let annSeq = 0;
+
+  function ensureSwLayer() {
+    const box = host();
+    if (!box) return null;
+    if (!swLayer || !swLayer.isConnected) {
+      swLayer = h("div", "editor-swatch-layer");
+      box.appendChild(swLayer);
+    }
+    if (!tintLayer || !tintLayer.isConnected) {
+      tintLayer = h("div", "editor-tint-layer");
+      box.insertBefore(tintLayer, box.firstChild); // 放最前面，配合负 z-index 落在文字下面
+    }
+    return swLayer;
+  }
+
+  /** 重新取一次"行 → 角色"（正文 / 色系变了才走 IPC，其余情况只重画）。 */
+  async function refreshAnnotate() {
+    const d = state.activeDoc();
+    const scheme = d && state.schemeOf ? state.schemeOf(d) : "";
+    if (!d || !state.isTextDoc(d) || !scheme) {
+      ann = [];
+      annKey = { id: d ? d.id : "", body: d ? d.body : "", scheme };
+      drawSwatches();
+      return;
+    }
+    if (annKey.id === d.id && annKey.body === d.body && annKey.scheme === scheme) {
+      drawSwatches();
+      return;
+    }
+    const mine = ++annSeq;
+    let lines = [];
+    try {
+      lines = await ipc.invoke("palette_annotate", { req: { body: d.body, format: d.format } });
+    } catch (e) {
+      lines = []; // 解析不了 / mock 里没有实现：不画，也不打扰用户（预览那边会报真错）
+    }
+    if (mine !== annSeq) return; // 期间正文又变了
+    ann = Array.isArray(lines) ? lines : [];
+    annKey = { id: d.id, body: d.body, scheme };
+    drawSwatches();
+  }
+
+  function roleSwatch(role) {
+    const d = state.activeDoc();
+    const scheme = d && state.schemeOf ? state.schemeOf(d) : "";
+    const p = scheme && state.palette ? state.palette(scheme) : null;
+    const r = p && (p.roles || []).find((x) => x.role === role);
+    if (!r) return null;
+    return document.documentElement.dataset.theme === "dark" ? r.dark : r.light;
+  }
+
+  /** 按当前视口画标记。视口外的行 coordsAtPos 拿不到坐标，跳过等下次滚动。 */
+  function drawSwatches() {
+    if (!inst || !inst.view) return;
+    const layer = ensureSwLayer();
+    if (!layer) return;
+    layer.innerHTML = "";
+    if (tintLayer) tintLayer.innerHTML = "";
+    const d = state.activeDoc();
+    // 没选色系就没有"会被染成什么色"这回事
+    if (!d || !ann.length) return;
+    const scheme = state.schemeOf ? state.schemeOf(d) : "";
+    if (!scheme) return;
+    const tintOn = !!(state.settings && state.settings.editor && state.settings.editor.source_tint);
+    const v = inst.view;
+    const box = host();
+    const hostRect = box.getBoundingClientRect();
+    const doc = v.state.doc;
+    const lineH = v.defaultLineHeight || 21;
+    for (const row of ann) {
+      if (!row.nodes || !row.nodes.length) continue;
+      const ln = doc.line(Math.min(Math.max(1, row.line), doc.lines));
+      const a = v.coordsAtPos(ln.from);
+      if (!a) continue; // 不在已渲染范围
+      const top = a.top - hostRect.top;
+      const left = a.left - hostRect.left;
+      if (top + lineH < 0 || top > hostRect.height) continue;
+      const first = row.nodes.find((n) => n.role) || row.nodes[0];
+      const c = first.role ? roleSwatch(first.role) : null;
+      // 行底色（可选）：先铺，色块盖在上面
+      if (tintOn && c && tintLayer) {
+        const t = h("div", "editor-swatch-tint");
+        t.style.top = Math.round(top) + "px";
+        t.style.height = Math.round(lineH) + "px";
+        t.style.background = c.fill;
+        // 画在文字下面了，可以给足颜色；仍留一点透明让"当前行/选中行"还能看出来
+        t.style.opacity = document.documentElement.dataset.theme === "dark" ? "0.55" : "0.75";
+        tintLayer.appendChild(t);
+      }
+      const dot = h("div", "editor-swatch" + (c ? "" : " hand"));
+      dot.style.top = Math.round(top + (lineH - 8) / 2) + "px";
+      dot.style.left = Math.round(left - 11) + "px";
+      if (c) {
+        dot.style.background = c.fill;
+        dot.style.boxShadow = "inset 0 0 0 1px " + c.stroke;
+      }
+      dot.title =
+        row.nodes
+          .map((n) => (n.role ? `${n.id} · ${n.role}` : `${n.id} · 手写色，保持`))
+          .join("  ") + (c ? `\n${c.fill} / ${c.stroke}` : "");
+      layer.appendChild(dot);
+    }
+  }
+
+  function scheduleSwatches() {
+    clearTimeout(annDrawTimer);
+    annDrawTimer = setTimeout(() => {
+      // 异步取标注：失败不该变成未处理拒绝（预览那边会报真正的原因）
+      refreshAnnotate().catch(() => {});
+    }, 70);
+  }
+
+  /** 「行底色」开关：改的是全局设置（设置 → 编辑器 里同一个开关），不是单文档偏好。 */
+  function bindTintButton() {
+    const btn = $("#btn-tint");
+    if (!btn) return;
+    const sync = () => {
+      const on = !!(state.settings && state.settings.editor && state.settings.editor.source_tint);
+      btn.classList.toggle("on", on);
+      btn.title = t(on ? "src.tintOn" : "src.tintTip");
+    };
+    btn.addEventListener("click", () => {
+      const on = !!(state.settings && state.settings.editor && state.settings.editor.source_tint);
+      state.patchSettings({ editor: { source_tint: !on } });
+    });
+    DGM.bus.on("settings:changed", sync);
+    sync();
+  }
+
+  /** 覆盖层重画时机：与错误层同一套（滚动 / 键鼠 / 窗口缩放）。 */
+  function watchSwatches() {
+    if (!inst || !inst.view) return;
+    inst.view.scrollDOM.addEventListener("scroll", () => scheduleSwatches(), { passive: true });
+    ["keyup", "mouseup"].forEach((ev) => inst.view.dom.addEventListener(ev, () => scheduleSwatches()));
+    window.addEventListener("resize", () => scheduleSwatches());
+  }
+
   /* ------------------------------------------------------------------ 查找面板本地化 */
 
   /**
@@ -471,6 +629,8 @@ window.DGM = window.DGM || {};
     if (inst) inst.setValue(text || "");
     else if (fallback) fallback.value = text || "";
     clearError(); // 正文被整块替换：旧标记的坐标全部作废
+    annKey = { id: "", body: "", scheme: "" };
+    scheduleSwatches(); // 行号全变了，标注要重算
   }
 
   /** 整块替换正文：落盘 + 刷新编辑器与派生数据（AI 应用 / 格式化用）。 */
@@ -529,10 +689,15 @@ window.DGM = window.DGM || {};
   }
 
   /* 设置变化里字号/默认视图可能变 → 重新应用字号；文档切换交给 main/shell 调 loadActive。 */
+  bindTintButton();
+
   DGM.bus.on("settings:changed", () => {
     applyFontSize();
     scheduleErrDraw(); // 字号变了行高就变，错误标记要按新几何重画
+    scheduleSwatches(); // 行底色开关 / 色系 / 主题都可能变了
   });
+  // 换色系改的是文档级字段（doc:changed），标注的颜色要跟着换
+  DGM.bus.on("doc:changed", () => scheduleSwatches());
 
   DGM.editor = {
     loadActive,
@@ -540,6 +705,7 @@ window.DGM = window.DGM || {};
     gotoLine,
     jumpTo,
     markError,
+    refreshSwatches: () => scheduleSwatches(),
     clearError,
     openSearch,
     focus,

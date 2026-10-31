@@ -1234,6 +1234,76 @@ window.DGM = window.DGM || {};
           } catch (e) { /* 清理失败不影响断言 */ }
         }
 
+        // B 方案：源码窗格的行首色块（颜色 = 渲染期真的会染成的色）
+        {
+          const anBody =
+            "flowchart TD\n    A([开始]):::lvl-entry --> B{是否通过?}\n    B --> C[(用户库)]\n    style C fill:#f00\n";
+          const anPath = await invoke("export_write", {
+            path: wsDir + "/selftest-annot.mmd",
+            base64: encRaw(anBody),
+          });
+          const norm3 = (x) => String(x || "").replace(/\\/g, "/").toLowerCase();
+          // 后端直接验一次：行 → 角色（A/B/C，C 带手写色 ⇒ 无角色）
+          const ann = await invoke("palette_annotate", { req: { body: anBody, format: "mermaid" } });
+          ok(
+            "后端给出「行 → 角色」",
+            ann.length === 2 &&
+              ann[0].line === 2 &&
+              ann[0].nodes.length === 2 &&
+              ann[1].nodes[0].id === "C" &&
+              ann[1].nodes[0].role === null,
+            JSON.stringify(ann),
+          );
+
+          await DGM.state.openPaths([anPath]);
+          const ad = DGM.state.docs.find((x) => norm3(x.path) === norm3(anPath)) || {};
+          if (ad.id) {
+            await DGM.state.setScheme(ad.id, "pine");
+            DGM.editor.loadActive();
+            const waitSw = async (n) => {
+              for (let i = 0; i < 50; i++) {
+                DGM.editor.refreshSwatches();
+                await new Promise((r) => setTimeout(r, 100));
+                if (document.querySelectorAll(".editor-swatch").length >= n) return true;
+              }
+              return false;
+            };
+            const got = await waitSw(2);
+            const swatches = document.querySelectorAll(".editor-swatch").length;
+            ok("源码窗格按行标出色块", got, `${swatches} 个`);
+            ok(
+              "行底色默认关（没有底色层）",
+              document.querySelectorAll(".editor-swatch-tint").length === 0,
+              String(document.querySelectorAll(".editor-swatch-tint").length),
+            );
+            // 走 state 的封装：裸 invoke 不会更新前端那份 settings，标注层读的是它
+            await DGM.state.patchSettings({ editor: { source_tint: true } });
+            let tinted = 0;
+            for (let i = 0; i < 30 && !tinted; i++) {
+              DGM.editor.refreshSwatches();
+              await new Promise((r) => setTimeout(r, 100));
+              tinted = document.querySelectorAll(".editor-swatch-tint").length;
+            }
+            ok("打开行底色后出现淡色行底", tinted > 0, `${tinted} 行`);
+            const bodyNow = String((DGM.state.doc(ad.id) || {}).body);
+            ok(
+              "标注与行底色都不改正文",
+              bodyNow === anBody,
+              bodyNow === anBody ? "正文未变" : `正文变成：${bodyNow.slice(0, 60)}`,
+            );
+            await DGM.state.patchSettings({ editor: { source_tint: false } });
+            await invoke("doc_close", { id: ad.id });
+          } else {
+            ok("源码窗格按行标出色块", false, "没打开文件");
+            ok("行底色默认关（没有底色层）", false, "没打开文件");
+            ok("打开行底色后出现淡色行底", false, "没打开文件");
+            ok("标注与行底色都不改正文", false, "没打开文件");
+          }
+          try {
+            await invoke("workspace_delete", { path: anPath });
+          } catch (e) { /* 清理失败不影响断言 */ }
+        }
+
         // 恢复默认配色 + 连线开关（3.11.4）
         {
           const src = "flowchart TD\n    A([开始]) --> B[写库]\n";

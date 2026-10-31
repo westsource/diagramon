@@ -1938,6 +1938,17 @@ html.full .doc-page { height: auto; overflow: visible; }
 /* 行内错误标记（M3）：覆盖层不接管鼠标，只负责把波浪线画在出错行底下。
    层坐标 = view.coordsAtPos（视口坐标）- 宿主矩形，所以必须以 .code-host 为定位上下文。 */
 .editor-err-layer { position: absolute; inset: 0; overflow: hidden; pointer-events: none; z-index: 6; }
+/* 配色标注层：行首色块 + 可选的行底色。
+   与错误层同一套坐标（view.coordsAtPos − 宿主矩形），所以同样以 .code-host 为定位上下文。
+   指针一律穿透：它只是提示，不能挡住选择/点击。 */
+.editor-swatch-layer { position: absolute; inset: 0; overflow: hidden; pointer-events: none; z-index: 5; }
+/* 行底色单独一层、负 z-index：必须画在**文字下面**，否则等于给整段代码蒙一层色。
+   `.code-host` 有 isolation:isolate，负 z-index 的子元素会落在编辑器内容之下、宿主背景之上。 */
+.editor-tint-layer { position: absolute; inset: 0; overflow: hidden; pointer-events: none; z-index: -1; }
+.editor-swatch { position: absolute; width: 8px; height: 8px; border-radius: 2px; }
+.editor-swatch.hand { background: transparent !important; border: 1px dashed var(--faint); }
+.editor-swatch-tint { position: absolute; left: 0; right: 0; }
+
 .editor-err-squiggle {
   position: absolute;
   height: 4px;

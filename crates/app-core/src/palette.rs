@@ -28,8 +28,8 @@
 //!   * 色值落进文档后**不跟随主题** —— 换主题要重新点一次配色。
 
 use app_ipc::{
-    FormatId, PaletteApplyRes, PaletteInfo, PaletteMode, PaletteProbe, PaletteRole, PaletteScan,
-    RoleSwatch,
+    FormatId, PaletteApplyRes, PaletteInfo, PaletteLine, PaletteMode, PaletteNode, PaletteProbe,
+    PaletteRole, PaletteScan, RoleSwatch,
 };
 use std::collections::BTreeMap;
 
@@ -544,6 +544,102 @@ fn collect_signals(
     Some((counts, text))
 }
 
+/* ------------------------------------------------------------------ 源码标注 */
+
+/// 源码窗格的"行 → 角色"标注：这一行上有哪些节点、各会被染成什么色。
+///
+/// 为什么由后端算：角色是**推断**出来的（显式标记 > 形状 > 标签词 > 主链路），
+/// 前端再写一份就是第二套规则；而且"这个节点会不会被上色"还取决于它有没有手写颜色，
+/// 只有展开器自己知道。这里直接复用 `apply` 的判定（`plan` + 同样的入参），
+/// 所以标出来的颜色**必然**等于真渲染出来的颜色。
+///
+/// 返回按行号升序；同一行多个节点按出现顺序。
+pub fn annotate(body: &str, format: FormatId) -> Vec<PaletteLine> {
+    let (base, _) = match format {
+        FormatId::Mermaid => strip_block(body, "%% dgm-palette:begin", "%% dgm-palette:end"),
+        FormatId::Dot => strip_block(body, "// dgm-palette:begin", "// dgm-palette:end"),
+        FormatId::D2 => strip_block(body, "# dgm-palette:begin", "# dgm-palette:end"),
+        FormatId::Drawio | FormatId::Excalidraw => return Vec::new(),
+    };
+
+    // 节点：(id, 行号, 显式角色, 是否已有颜色, 标签, 形状)
+    let ours: Vec<String> = ROLES.iter().map(|r| role_class(r)).collect();
+    let mut nodes: Vec<(String, u32, Option<&'static str>, bool, Option<String>, Option<String>)> =
+        Vec::new();
+    match format {
+        FormatId::Mermaid => match convert::flow_facts(&base) {
+            Ok(facts) => {
+                for n in &facts.nodes {
+                    let explicit = n.classes.iter().find_map(|c| role_of_class(c));
+                    let foreign = n.classes.iter().any(|c| !ours.contains(c));
+                    nodes.push((
+                        n.id.clone(),
+                        n.line,
+                        explicit,
+                        n.styled || foreign,
+                        n.label.clone(),
+                        Some(n.shape.key().to_string()),
+                    ));
+                }
+            }
+            Err(_) => return Vec::new(), // 解析不了就没有标注（预览那边也会报错）
+        },
+        FormatId::Dot => {
+            for n in dot_nodes(&base) {
+                nodes.push((
+                    n.id.clone(),
+                    n.line,
+                    dot_role(&n),
+                    dot_is_colored(&n),
+                    n.attrs.get("label").cloned(),
+                    n.attrs.get("shape").cloned(),
+                ));
+            }
+        }
+        FormatId::D2 => {
+            for n in d2_nodes(&base).nodes {
+                let explicit = n
+                    .role
+                    .or_else(|| n.shape.as_deref().and_then(role_from_d2_shape));
+                nodes.push((n.id.clone(), n.line, explicit, n.has_fill, n.label.clone(), None));
+            }
+        }
+        FormatId::Drawio | FormatId::Excalidraw => return Vec::new(),
+    }
+
+    // 与 `apply` 用同一套判定：被跳过的（已有颜色）不在 `by_role` 里
+    let (by_role, _) = plan(
+        nodes
+            .iter()
+            .map(|(id, _, explicit, colored, label, shape)| {
+                (id.clone(), *explicit, *colored, label.clone(), shape.as_deref())
+            }),
+        PaletteMode::OnlyUncolored,
+    );
+    let mut role_of: std::collections::HashMap<&str, &str> = std::collections::HashMap::new();
+    for (role, ids) in &by_role {
+        for id in ids {
+            role_of.insert(id.as_str(), role);
+        }
+    }
+
+    // 按行分组（行号 0 = 解析器没记到行，跳过）
+    let mut lines: BTreeMap<u32, Vec<PaletteNode>> = BTreeMap::new();
+    for (id, line, ..) in &nodes {
+        if *line == 0 {
+            continue;
+        }
+        lines.entry(*line).or_default().push(PaletteNode {
+            id: id.clone(),
+            role: role_of.get(id.as_str()).map(|r| r.to_string()),
+        });
+    }
+    lines
+        .into_iter()
+        .map(|(line, nodes)| PaletteLine { line, nodes })
+        .collect()
+}
+
 /* ------------------------------------------------------------------ 清洗前的体检 */
 
 /// 我们那块**之外**还剩多少处颜色痕迹。
@@ -773,6 +869,8 @@ fn drop_style_statements(body: &str, ids: &[&String]) -> (String, usize) {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct DotNode {
     id: String,
+    /// 首次出现的行号（1 基），给源码窗格的"行 → 角色"标注用
+    line: u32,
     /// 合并后的属性（后出现的覆盖前面的）
     attrs: BTreeMap<String, String>,
 }
@@ -787,13 +885,20 @@ fn dot_nodes(body: &str) -> Vec<DotNode> {
     let mut out: Vec<DotNode> = Vec::new();
     let mut i = 0usize;
     let mut in_edge = false; // 当前语句是边（属性归边）
+    let mut line: u32 = 1; // 扫描到第几行（`\n` 自增）
     let mut skip_next_atom = false; // `digraph G` / `subgraph cluster_x`：下一个原子不是节点
     let mut skip_next_bracket = false; // `node [shape=…]` / `edge [...]`：默认属性
     let mut expect_value = false; // 刚读过 `key=`
 
     while i < chars.len() {
         let c = chars[i];
-        if c == '\n' || c == ';' || c == '{' || c == '}' {
+        if c == '\n' {
+            line += 1;
+            in_edge = false;
+            i += 1;
+            continue;
+        }
+        if c == ';' || c == '{' || c == '}' {
             in_edge = false;
             i += 1;
             continue;
@@ -835,7 +940,7 @@ fn dot_nodes(body: &str) -> Vec<DotNode> {
                 skip_next_atom = false;
                 continue;
             }
-            push_dot_node(&mut out, &text);
+            push_dot_node(&mut out, &text, line);
             continue;
         }
         let (atom, next) = read_bare(&chars, i);
@@ -874,17 +979,17 @@ fn dot_nodes(body: &str) -> Vec<DotNode> {
             skip_next_atom = false;
             continue;
         }
-        push_dot_node(&mut out, &atom);
+        push_dot_node(&mut out, &atom, line);
     }
     out
 }
 
-fn push_dot_node(out: &mut Vec<DotNode>, id: &str) {
+fn push_dot_node(out: &mut Vec<DotNode>, id: &str, line: u32) {
     if let Some(n) = out.iter_mut().find(|n| n.id == id) {
         let _ = n; // 已存在：属性后面再合并
         return;
     }
-    out.push(DotNode { id: id.to_string(), attrs: BTreeMap::new() });
+    out.push(DotNode { id: id.to_string(), line, attrs: BTreeMap::new() });
 }
 
 fn read_quoted(chars: &[char], start: usize) -> (String, usize) {
@@ -1174,6 +1279,8 @@ fn apply_dot(
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct D2Node {
     id: String,
+    /// 首次出现的行号（1 基）
+    line: u32,
     role: Option<&'static str>,
     shape: Option<String>,
     label: Option<String>,
@@ -1190,14 +1297,15 @@ struct D2Scan {
 fn d2_nodes(body: &str) -> D2Scan {
     let mut out: Vec<D2Node> = Vec::new();
     let mut edges: Vec<(String, String)> = Vec::new();
-    let touch = |out: &mut Vec<D2Node>, id: &str| -> usize {
+    // 首次见到就记下行号（同一节点后面再出现不改）
+    let touch = |out: &mut Vec<D2Node>, id: &str, line: u32| -> usize {
         if let Some(i) = out.iter().position(|n| n.id == id) {
             return i;
         }
-        out.push(D2Node { id: id.to_string(), ..Default::default() });
+        out.push(D2Node { id: id.to_string(), line, ..Default::default() });
         out.len() - 1
     };
-    for raw in body.lines() {
+    for (idx, raw) in body.lines().enumerate() {
         let line = raw.trim();
         if line.is_empty() || line.starts_with('#') || line.ends_with('{') || line == "}" {
             continue;
@@ -1208,7 +1316,7 @@ fn d2_nodes(body: &str) -> D2Scan {
             None => {
                 let path = split_d2_path(line);
                 for seg in &path {
-                    touch(&mut out, seg);
+                    touch(&mut out, seg, (idx + 1) as u32);
                 }
                 for w in path.windows(2) {
                     edges.push((w[0].clone(), w[1].clone()));
@@ -1220,7 +1328,7 @@ fn d2_nodes(body: &str) -> D2Scan {
         if let Some(inner) = lhs.strip_prefix('(').and_then(|r| r.split(')').next()) {
             let path = split_d2_path(inner);
             for seg in &path {
-                touch(&mut out, seg);
+                touch(&mut out, seg, (idx + 1) as u32);
             }
             for w in path.windows(2) {
                 edges.push((w[0].clone(), w[1].clone()));
@@ -1231,7 +1339,7 @@ fn d2_nodes(body: &str) -> D2Scan {
             // 边：两端都是节点，冒号右边是**边标签**，别当成节点标签
             let path = split_d2_path(lhs);
             for seg in &path {
-                touch(&mut out, seg);
+                touch(&mut out, seg, (idx + 1) as u32);
             }
             for w in path.windows(2) {
                 edges.push((w[0].clone(), w[1].clone()));
@@ -1240,7 +1348,7 @@ fn d2_nodes(body: &str) -> D2Scan {
         }
         // 属性行：`a.b.style.fill: "#fff"`
         if let Some((path, key)) = split_d2_attr(lhs) {
-            let i = touch(&mut out, &path);
+            let i = touch(&mut out, &path, (idx + 1) as u32);
             match key.as_str() {
                 "shape" => out[i].shape = Some(rhs.trim_matches('"').to_string()),
                 "label" => out[i].label = Some(rhs.trim_matches('"').to_string()),
@@ -1263,7 +1371,7 @@ fn d2_nodes(body: &str) -> D2Scan {
             continue;
         }
         // 纯声明：`a: 标签`
-        let i = touch(&mut out, lhs);
+        let i = touch(&mut out, lhs, (idx + 1) as u32);
         if !rhs.is_empty() && !rhs.starts_with('{') {
             out[i].label = Some(rhs.trim_matches('"').to_string());
         }
@@ -1804,6 +1912,44 @@ b -> c
         for body in [data, risky, ui, plain, mermaid_flow().as_str()] {
             assert_ne!(probe(body, FormatId::Mermaid).suggested.as_deref(), Some("tungsten"));
         }
+    }
+
+    #[test]
+    fn annotate_maps_lines_to_the_roles_apply_would_use() {
+        let body = concat!(
+            "flowchart TD\n",
+            "    A([开始]):::lvl-entry --> B{是否通过?}\n",
+            "    B --> C[(用户库)]\n",
+            "    C --> D[发送通知]\n",
+            "    style D fill:#f00\n",
+        );
+        let lines = annotate(body, FormatId::Mermaid);
+        let at = |n: u32| -> Vec<(String, Option<String>)> {
+            lines
+                .iter()
+                .find(|l| l.line == n)
+                .map(|l| l.nodes.iter().map(|x| (x.id.clone(), x.role.clone())).collect())
+                .unwrap_or_default()
+        };
+        // 每个节点只在**首次出现的那行**标一次（否则同一节点在每条边上都重复标色）
+        assert_eq!(at(2), vec![("A".into(), Some("entry".into())), ("B".into(), Some("decide".into()))]);
+        assert_eq!(at(3), vec![("C".into(), Some("data".into()))]);
+        // D 带手写颜色 → 不会上色，标注成 None（源码里画虚框"保持原样"）
+        assert_eq!(at(4), vec![("D".into(), None)]);
+        // `style` 行没有节点 → 不出现
+        assert!(lines.iter().all(|l| l.line != 5), "style 行不该有标注");
+    }
+
+    #[test]
+    fn annotate_covers_dot_and_d2_and_ignores_canvas() {
+        let dot = annotate("digraph G {\n  A [shape=diamond];\n  B [fillcolor=red];\n}", FormatId::Dot);
+        assert_eq!(dot[0].line, 2);
+        assert_eq!(dot[0].nodes[0].role.as_deref(), Some("decide"));
+        assert!(dot.iter().any(|l| l.nodes.iter().any(|n| n.id == "B" && n.role.is_none())));
+
+        let d2 = annotate("a: 开始\nb.shape: diamond\n", FormatId::D2);
+        assert!(d2.iter().any(|l| l.line == 1 && l.nodes[0].role.as_deref() == Some("entry")));
+        assert!(annotate("{}", FormatId::Drawio).is_empty());
     }
 
     #[test]

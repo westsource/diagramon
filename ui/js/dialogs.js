@@ -826,6 +826,7 @@ window.DGM = window.DGM || {};
       </div>
       <div class="field"><label>${esc(t("set.editor.debounce"))}</label><input type="number" min="0" max="2000" step="50" value="${e.debounce_ms || 350}" id="e-debounce"><span class="hint">${esc(t("set.editor.debounceHint"))}</span></div>
       ${switchRow(!!e.lint, t("set.editor.lint"), "set.editor.lintHint", "lint")}
+      ${switchRow(!!e.source_tint, t("set.editor.sourceTint"), "set.editor.sourceTintHint", "sourcetint")}
       ${switchRow(!!e.per_doc_view, t("set.editor.perDocView"), null, "perdoc")}
       ${switchRow(e.fit_on_resize !== false, t("set.editor.fitOnResize"), "set.editor.fitOnResizeHint", "fitresize")}
       <div class="field-row">
