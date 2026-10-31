@@ -516,6 +516,8 @@ window.DGM = window.DGM || {};
       dot: "var(--faint)",
       act: "clear",
     });
+    // 分隔：色系选择（含「无」）与下面的"动作"（重排 / 让 AI 挑）不是一类东西
+    items.push({ sep: true });
     items.push({ label: t("preview.paletteWrite"), icon: "save", act: "write" });
     items.push({ label: t("preview.paletteAi"), icon: "sparkles", act: "ai" });
     items.push({ sep: true });
