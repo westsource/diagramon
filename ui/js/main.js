@@ -1287,7 +1287,17 @@ window.DGM = window.DGM || {};
               await new Promise((r) => setTimeout(r, 100));
               tinted = document.querySelectorAll(".editor-swatch-tint").length;
             }
-            ok("打开行底色后出现淡色行底", tinted > 0, `${tinted} 行`);
+            // 光有元素不够：行底色画在**文字下面**，CM 自带的不透明底会把它整块盖住
+            //（3.12.1 就是这样"开关没生效"）。这里连"CM 那层是否让开"一起断言。
+            const cmBg = (() => {
+              const n = document.querySelector(".code-host .cm-editor");
+              return n ? getComputedStyle(n).backgroundColor : "missing";
+            })();
+            ok(
+              "打开行底色后出现淡色行底，且不被编辑器底色盖住",
+              tinted > 0 && cmBg === "rgba(0, 0, 0, 0)",
+              `${tinted} 行 · cm-editor 底色 ${cmBg}`,
+            );
             const bodyNow = String((DGM.state.doc(ad.id) || {}).body);
             ok(
               "标注与行底色都不改正文",

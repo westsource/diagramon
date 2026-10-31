@@ -1937,6 +1937,10 @@ html.full .doc-page { height: auto; overflow: visible; }
    层级全部收口 —— 顺带把"以后再冒出别的内部元素跑到整页最上层"这条路也堵上。
    （画布承载页那几个浮层在 iframe 里，天然隔离，不受此影响。） */
 .code-host { isolation: isolate; }
+/* CM 自带一层不透明底色（.cm-editor 的 background），会把"画在文字下面"的行底色整块盖住 ——
+   实测 computed background 是 rgb(247,248,248)，于是行底色开着也看不见。
+   容器自己（.code-scroll）已经是 --surface，这里把 CM 那层让开。 */
+.code-host .cm-editor { background: transparent !important; }
 /* 行内错误标记（M3）：覆盖层不接管鼠标，只负责把波浪线画在出错行底下。
    层坐标 = view.coordsAtPos（视口坐标）- 宿主矩形，所以必须以 .code-host 为定位上下文。 */
 .editor-err-layer { position: absolute; inset: 0; overflow: hidden; pointer-events: none; z-index: 6; }
