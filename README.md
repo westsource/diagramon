@@ -9,7 +9,7 @@ have open, writes back code you can diff, roll back and review, and gets the fai
 to repair when a render breaks. Rendering, validation and conversion all run on your machine, and content
 leaves it only when you use AI, only to the endpoint you chose.
 
-Version **3.12.0** · Official website <https://www.diagramon.com>
+Version **3.12.1** · Official website <https://www.diagramon.com>
 
 ## Problems it solves
 
@@ -100,6 +100,10 @@ static picture.
 - **Outline and current scope** — nodes and the `subgraph` / `cluster` / D2 container tree are derived from
   the body; clicking scrolls the source there. Canvas documents get a group/node outline that selects and
   centres the item. The status bar shows the enclosing container at the caret
+- **Colours are visible in the source too** — a node that will be coloured gets a swatch on the left of the
+  line where it first appears, in exactly the colour it will render with; nodes with hand-written colours
+  (skipped by design) get a dashed frame, and hovering shows the role and the value. The optional "row tint"
+  washes the whole line in a faint role colour (off by default; switchable from the source toolbar or Settings)
 - **Find & replace, undo/redo, context menu, command palette** (`Ctrl+Shift+P` / `F1`)
 - **Tab behaves like mainstream editors** — spaces to the next tab stop, block indent for a selection,
   `Shift+Tab` outdents, one key press is one undo step

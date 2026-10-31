@@ -1445,6 +1445,8 @@ table.spec td .kbd { font: var(--fs-xs) var(--font-mono); color: var(--ink-2); b
 
 .callout { display: flex; gap: 10px; padding: 12px 14px; background: var(--accent-soft); border: 1px solid var(--accent-line); border-radius: var(--radius); font-size: var(--fs-sm); color: var(--ink-2); line-height: 1.65; }
 .callout .ico { color: var(--accent); margin-top: 2px; }
+/* 相邻两块提示之间要留缝：设置页里「路径守卫」与「快捷键」两条说明曾经贴在一起 */
+.callout + .callout { margin-top: 10px; }
 .callout.warn { background: var(--warn-soft); border-color: color-mix(in srgb, var(--warn) 30%, transparent); }
 .callout.warn .ico { color: var(--warn); }
 .callout b { color: var(--ink); }
