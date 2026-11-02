@@ -2343,9 +2343,25 @@ body.no-mock .mock-badge { display: none; }
 .about-top .hero { width: 44px; height: 44px; display: grid; place-items: center; color: var(--accent); background: var(--accent-soft); border-radius: 12px; }
 .about-top b { font-size: var(--fs-md); }
 .about-top small { display: block; color: var(--muted); font-size: var(--fs-xs); }
-.about-table { width: 100%; border-collapse: collapse; font-size: var(--fs-xs); margin-bottom: 8px; }
-.about-table th { text-align: left; color: var(--muted); font-weight: 500; padding: 3px 12px 3px 0; width: 90px; vertical-align: top; }
-.about-table td { padding: 3px 0; color: var(--ink-2); }
+
+/* 「关于」头部的外链（2026-11-02）：不放文字标签，域名自解释；标签挪进 title / aria-label。
+ * 与「版本」同一行、**纵向居中** —— 链接的 margin 必须是 0：flex 的 align-items:center
+ * 居中算的是 margin box，底部多 12px 就会把链接整体顶高 6px（实测 330.5 vs 324.5）。 */
+.about-meta-row { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin-top: 2px; }
+.about-meta-row small { display: inline; }
+.about-links { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin: 0; }
+.about-link {
+  display: inline-flex; align-items: center; gap: 6px; min-width: 0; padding: 0;
+  border: 0; background: transparent; cursor: pointer;
+  color: var(--ink-2); font-size: var(--fs-xs);
+}
+.about-link .about-url {
+  font-family: var(--font-mono);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.about-link:hover { color: var(--accent); }
+.about-link:hover .about-url { text-decoration: underline; text-underline-offset: 2px; }
+.about-arrow { opacity: .55; font-size: 10px; }
 
 /* 设置对话框正文：**左右布局**（页签列在左、内容在右）—— 用户要求。
    此处必须重新声明 grid（会覆盖上面 1401 行的基础规则），并各自滚动。 */

@@ -96,13 +96,26 @@ window.DGM = window.DGM || {};
     chip: '<rect x="7" y="7" width="10" height="10" rx="2"/><path d="M10 7V4M14 7V4M10 20v-3M14 20v-3M7 10H4M7 14H4M20 10h-3M20 14h-3"/><rect x="10.5" y="10.5" width="3" height="3" rx=".5"/>',
   };
 
+  /* 品牌标记：**实心**路径，不能套 stroke（那条 GitHub 轮廓套上 1.7 的描边会糊成一团线框）。
+   * 单独一张表，生成 symbol 时给它们自己的 fill/stroke —— 其余图标保持线性风格。 */
+  const B = {
+    github:
+      '<path d="M12 2C6.48 2 2 6.58 2 12.25c0 4.53 2.87 8.37 6.84 9.73.5.1.68-.22.68-.49 0-.24-.01-.87-.01-1.71-2.78.62-3.37-1.37-3.37-1.37-.45-1.18-1.11-1.5-1.11-1.5-.91-.64.07-.63.07-.63 1 .07 1.53 1.06 1.53 1.06.89 1.56 2.34 1.11 2.91.85.09-.66.35-1.11.63-1.37-2.22-.26-4.56-1.14-4.56-5.06 0-1.12.39-2.03 1.03-2.75-.1-.26-.45-1.3.1-2.7 0 0 .84-.28 2.75 1.05A9.4 9.4 0 0 1 12 6.84c.85 0 1.71.12 2.51.35 1.91-1.33 2.75-1.05 2.75-1.05.55 1.4.2 2.44.1 2.7.64.72 1.03 1.63 1.03 2.75 0 3.93-2.35 4.79-4.58 5.05.36.32.68.94.68 1.9 0 1.37-.01 2.47-.01 2.81 0 .27.18.6.69.49A10.02 10.02 0 0 0 22 12.25C22 6.58 17.52 2 12 2z"/>',
+  };
+
   const NS = "http://www.w3.org/2000/svg";
   const svg = document.createElementNS(NS, "svg");
   svg.setAttribute("style", "position:absolute;width:0;height:0;overflow:hidden");
   svg.setAttribute("aria-hidden", "true");
-  svg.innerHTML = Object.entries(P)
-    .map(([k, d]) => `<symbol id="i-${k}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">${d}</symbol>`)
-    .join("");
+  svg.innerHTML = [
+    ...Object.entries(P).map(
+      ([k, d]) =>
+        `<symbol id="i-${k}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">${d}</symbol>`,
+    ),
+    ...Object.entries(B).map(
+      ([k, d]) => `<symbol id="i-${k}" viewBox="0 0 24 24" fill="currentColor" stroke="none">${d}</symbol>`,
+    ),
+  ].join("");
 
   function mountSprite() {
     if (!document.getElementById("dgm-icons")) {
@@ -115,7 +128,7 @@ window.DGM = window.DGM || {};
 
   /** 生成 <svg class="ico ..."><use href="#i-name"></use></svg> */
   function icon(name, cls) {
-    const known = Object.prototype.hasOwnProperty.call(P, name);
+    const known = Object.prototype.hasOwnProperty.call(P, name) || Object.prototype.hasOwnProperty.call(B, name);
     const n = known ? name : "info";
     return `<svg class="ico ${cls || ""}" aria-hidden="true"><use href="#i-${n}"></use></svg>`;
   }
@@ -129,5 +142,5 @@ window.DGM = window.DGM || {};
 
   DGM.icon = icon;
   DGM.iconNode = iconNode;
-  DGM.iconNames = Object.keys(P);
+  DGM.iconNames = [...Object.keys(P), ...Object.keys(B)];
 })();

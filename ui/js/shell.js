@@ -2046,6 +2046,8 @@ window.DGM = window.DGM || {};
     saveActive,
     openFile,
     openPath,
+    /** 用系统浏览器打开外部链接（帮助文档 / 关于窗口的官网与源码）。**用户点了才发请求。** */
+    openDocLink,
     /** 原生拖放分发（供自检/探针直接喂 payload；OS 级拖放没法脚本化）。 */
     handleFileDrop,
     closeActive,

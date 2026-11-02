@@ -664,6 +664,78 @@ window.DGM = window.DGM || {};
           DGM.preview.schedule();
         }
 
+        // ── 「关于」窗口：官网 / 源码入口挂在版本行，编辑器挂在「格式」标题行（2026-11-02）──
+        //  两个入口必须把**真 URL** 交给外链通道（真机上由 opener 开系统浏览器）。
+        //  自检里把通道换成桩再点：不能真的弹浏览器，也不能只看按钮长得像。
+        {
+          DGM.dialogs.about();
+          await new Promise((r) => setTimeout(r, 120));
+          const dlg = document.querySelector("#dialog");
+          const btn = (a) => dlg.querySelector(`[data-act='${a}']`);
+          const site = btn("about:site");
+          const src = btn("about:source");
+          ok("关于窗口有官网与源码两个入口", !!site && !!src, `${!!site}/${!!src}`);
+          ok(
+            "两个入口挂在版本那一行",
+            !!site && !!src && dlg.querySelector(".about-meta-row").contains(site) && dlg.querySelector(".about-meta-row").contains(src),
+            "meta-row",
+          );
+          ok(
+            "官网入口指向带 www 的正式域名",
+            !!site && site.title.includes("https://www.diagramon.com"),
+            site && site.title,
+          );
+          ok(
+            "源码入口指向 GitHub 仓库",
+            !!src && src.title.includes("https://github.com/westsource/diagramon"),
+            src && src.title,
+          );
+          // 去标签后靠 title / aria-label 说话：两者都得带标签与完整 URL
+          ok(
+            "无文字标签的链接仍有可读名称",
+            !!site && site.getAttribute("aria-label").includes("https://www.diagramon.com") && /官方主页/.test(site.getAttribute("aria-label")),
+            site && site.getAttribute("aria-label"),
+          );
+          const rows = [...dlg.querySelectorAll(".reg-table tbody tr")].map((tr) => [...tr.children].map((td) => td.textContent.trim()));
+          const last = rows[rows.length - 1] || [];
+          ok(
+            "编辑器是格式表的最后一行（名称 / ext / 说明）",
+            last[0] === "CodeMirror 6" && last[1] === "-" && last[2] === DGM.i18n.t("dlg.about.editor"),
+            JSON.stringify(last),
+          );
+          ok("格式表没有表头，只有数据行", !dlg.querySelector(".reg-table thead"), rows.length);
+          const lastCell = dlg.querySelector(".reg-table tbody tr:last-child td");
+          ok(
+            "编辑器也套在胶囊里",
+            !!lastCell && !!lastCell.querySelector(".chip") && lastCell.textContent.trim() === "CodeMirror 6",
+            lastCell && lastCell.innerHTML.slice(0, 90),
+          );
+          // 桩住外链通道：点一下，看它拿到的是哪个 URL（不真的开浏览器）
+          const realOpen = DGM.shell.openDocLink;
+          let opened = null;
+          DGM.shell.openDocLink = async (url, label) => { opened = { url, label }; };
+          try {
+            src.click();
+            await new Promise((r) => setTimeout(r, 60));
+            ok(
+              "点源码按钮把 URL 交给外链通道",
+              !!opened && opened.url === "https://github.com/westsource/diagramon",
+              opened && opened.url,
+            );
+            const before = location.href;
+            site.click();
+            await new Promise((r) => setTimeout(r, 60));
+            ok(
+              "点官网按钮不改变应用自身地址",
+              !!opened && opened.url === "https://www.diagramon.com" && location.href === before,
+              opened && opened.url,
+            );
+          } finally {
+            DGM.shell.openDocLink = realOpen;
+            DGM.dialogs.close();
+          }
+        }
+
         // ── 导出 PNG：必须有底色、有内容，超大图不越画布上限（2026-10-19 用户报"导出是空白"） ──
         //  两个成因各自钉一条：① 位图没铺底色（透明 PNG + 暗色主题 = 白色看图器里一片空白）；
         //  ② 越上限后 drawImage 静默不画（WebView2 实测：面积 2^28 以内能画，之外交回空图）。

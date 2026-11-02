@@ -1675,25 +1675,64 @@ window.DGM = window.DGM || {};
 
   /* ================================================================== 关于 */
 
+  /** 「关于」里的固定元信息：官网与源码仓库。
+   *
+   *  作者/许可不再显示（2026-11-02 用户要求收敛）；官网域名一律写带 www 的那条
+   *  （更新器、云服务默认地址用的是同一个）。点击才开系统浏览器（opener 通道）。
+   */
+  const ABOUT = {
+    site: "https://www.diagramon.com",
+    source: "https://github.com/westsource/diagramon",
+  };
+
+  /** 一颗外链：**不放文字标签**（域名自解释），标签挪进 `title` / `aria-label`
+   *  供悬停与读屏；图标 + 等宽 URL + ↗ 保证它看起来能点。 */
+  function aboutLink(act, iconHtml, label, url) {
+    const shown = url.replace(/^https?:\/\//, "");
+    return (
+      `<button class="about-link" data-act="about:${act}" title="${esc(label)}：${esc(url)}" aria-label="${esc(label)}（${esc(url)}）">` +
+      iconHtml +
+      `<span class="about-url">${esc(shown)}</span>` +
+      `<span class="about-arrow" aria-hidden="true">↗</span></button>`
+    );
+  }
+
   function about() {
     const info = state.appInfo || { version: "?", platform: "?" };
+    // 「编辑器」不再单独占一行备注，也不再有「格式」小节标题：它作为表格最后一行，
+    // 与各格式并排（名称列 = 胶囊，ext 列 = `-`，说明列标明它是编辑器）。
     const fmtRows = state.formatList
       .map((f) => `<tr><td><span class="chip ${f.id}">${esc(f.name)}</span></td><td>${esc((f.exts || []).join(" "))}</td><td>${esc(f.note || "")}</td></tr>`)
       .join("");
+    const editorRow = `<tr><td><span class="chip">CodeMirror 6</span></td><td>-</td><td>${esc(t("dlg.about.editor"))}</td></tr>`;
     const body = `
       <div class="about-top"><span class="hero">${icon("logo", "ico-lg")}</span>
-        <div><b>Diagramon</b><small>${esc(t("dlg.about.version"))} ${esc(info.version)} · ${esc(info.platform)}</small></div></div>
+        <div><b>Diagramon</b>
+          <div class="about-meta-row"><small>${esc(t("dlg.about.version"))} ${esc(info.version)} · ${esc(info.platform)}</small>
+            <div class="about-links">
+              ${aboutLink("site", icon("globe", "ico-sm"), t("dlg.about.home"), ABOUT.site)}
+              ${aboutLink("source", icon("github", "ico-sm"), t("dlg.about.source"), ABOUT.source)}
+            </div>
+          </div>
+        </div></div>
       <div class="callout">${icon("info")}<span>${t("dlg.about.desc")}</span></div>
       ${DGM.ipc.isMock ? `<div class="callout warn">${icon("alert")}<span>${t("dlg.about.mock")}</span></div>` : ""}
-      <table class="about-table">
-        <tr><th>${esc(t("dlg.about.editor"))}</th><td>CodeMirror 6</td></tr>
-        <tr><th>${esc(t("dlg.about.render"))}</th><td>Mermaid (page) · Graphviz WASM (page)</td></tr>
-        <tr><th>${esc(t("dlg.about.formats"))}</th><td>${state.formatList.map((f) => esc(f.name)).join(" · ")}</td></tr>
-      </table>
-      <h4 class="mt">${esc(t("dlg.about.formats"))}</h4>
-      <table class="reg-table"><thead><tr><th>Name</th><th>ext</th><th>note</th></tr></thead><tbody>${fmtRows}</tbody></table>`;
-    openDialog(head(t("dlg.about.title"), "info") + `<div class="dialog-body">${body}</div>` + foot("", `<button class="btn ghost" data-close>${esc(t("common.close"))}</button>`), true);
-    wire(() => {});
+      <table class="reg-table mt"><tbody>${fmtRows}${editorRow}</tbody></table>`;
+    openDialog(
+      head(t("dlg.about.title"), "info") +
+        `<div class="dialog-body">${body}</div>` +
+        foot("", `<button class="btn ghost" data-close>${esc(t("common.close"))}</button>`),
+      true,
+    );
+    // 外链：**用户点一下才开系统浏览器**（与「帮助 → 文档」「去官网注册」同一条通道）。
+    // 打不开就把地址回显在提示里，别让人对着一个没反应的按钮猜。
+    wire((act) => {
+      if (act !== "about:site" && act !== "about:source") return;
+      const url = act === "about:site" ? ABOUT.site : ABOUT.source;
+      const label = t(act === "about:site" ? "dlg.about.home" : "dlg.about.source");
+      if (DGM.shell && typeof DGM.shell.openDocLink === "function") DGM.shell.openDocLink(url, label);
+      else DGM.cloud.openExternal(url);
+    });
   }
 
   /* ================================================================== 历史 */
