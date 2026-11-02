@@ -495,7 +495,8 @@ pub fn debug_note(text: String) {
 /// （附原因），由前端把源码交给承载页 —— 不把「不是 Rust 的活」当成错误。
 #[tauri::command]
 pub fn convert_text(req: ConvertRequest) -> Result<ConvertOutcome, String> {
-    let plan = app_core::convert::plan(req.from, req.to)?;
+    // 带源码问一次：泳道图（`swimlane-beta`）不能转 drawio（见 `plan_for_source`）。
+    let plan = app_core::convert::plan_for_source(req.from, req.to, &req.source)?;
     if matches!(plan.engine, app_core::convert::Engine::Rust) {
         let c = app_core::convert::convert(req.from, req.to, &req.source)?;
         return Ok(ConvertOutcome {

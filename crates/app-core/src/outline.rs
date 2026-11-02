@@ -119,7 +119,14 @@ fn mermaid(body: &str) -> Vec<OutlineGroup> {
         }
     }
 
-    [group("子图 subgraph", clusters), group("节点", nodes), group("边", edges)]
+    // 泳道图里顶层 subgraph 是**泳道**（不是普通分组）：同一份数据，标题按图类型叫。
+    let cluster_title = if crate::format::mermaid_is_swimlane(body) {
+        "泳道 lane"
+    } else {
+        "子图 subgraph"
+    };
+
+    [group(cluster_title, clusters), group("节点", nodes), group("边", edges)]
         .into_iter()
         .flatten()
         .collect()
@@ -308,6 +315,16 @@ mod tests {
         let nodes = &g[1];
         assert_eq!(nodes.rows[0].name, "开始", "应取括号里的标签而不是 id");
         assert_eq!(nodes.rows[0].line, 2);
+    }
+
+    #[test]
+    fn mermaid_swimlane_outline_calls_top_level_subgraphs_lanes() {
+        let src = "swimlane-beta LR\n  subgraph Customer\n    Browse[Browse catalogue]\n  end\n  subgraph Warehouse\n    Pick[Pick items]\n  end\n  Browse --> Pick\n";
+        let g = outline(FormatId::Mermaid, src);
+        let titles: Vec<_> = g.iter().map(|x| x.title.as_str()).collect();
+        assert_eq!(titles, vec!["泳道 lane", "节点", "边"]);
+        assert_eq!(g[0].rows[0].name, "Customer");
+        assert_eq!(g[0].rows[0].line, 2);
     }
 
     #[test]

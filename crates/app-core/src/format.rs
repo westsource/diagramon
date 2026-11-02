@@ -23,6 +23,64 @@ pub const MERMAID_LAYOUTS: [&str; 2] = ["elk", "dagre"];
 /// （Mermaid 内建默认：流程图为 neo + redux-color 主题）。
 pub const MERMAID_LOOKS: [&str; 4] = ["auto", "classic", "neo", "handDrawn"];
 
+/// 首行关键词：泳道图的头部（Mermaid 12.2 里仍是 beta 图类型 `swimlane`）。
+pub const MERMAID_SWIMLANE_HEADER: &str = "swimlane-beta";
+
+/// 这份 Mermaid 源码是不是**泳道图**（`swimlane-beta` 头部）。
+///
+/// 泳道图与 flowchart 共用解析器，但**布局是它自己的**（`swimlane.layout = "swimlane"`）：
+/// 顶层 `subgraph` 就是一条泳道。前端若照旧把顶层 `layout: "elk"` 传进
+/// `mermaid.initialize`，会把泳道压回普通流程图（实测：2 条泳道 → 0 条）。
+///
+/// 判断要跳过 **front matter**（`---…---`）、`%%{init}%%` 指令（可跨行）与 `%%` 注释：
+/// 真实文档这三样都可能出现在第一行，直接取 `lines().next()` 会漏判。
+pub fn mermaid_is_swimlane(body: &str) -> bool {
+    let mut front_matter = false;
+    let mut seen_content = false;
+    let mut directive = false;
+
+    for raw in body.lines() {
+        let line = raw.trim_start_matches('\u{feff}').trim();
+        if directive {
+            if line.contains("}%%") {
+                directive = false;
+            }
+            continue;
+        }
+        if line.is_empty() {
+            continue;
+        }
+        if front_matter {
+            if line == "---" {
+                front_matter = false;
+            }
+            continue;
+        }
+        if !seen_content && line == "---" {
+            front_matter = true;
+            seen_content = true;
+            continue;
+        }
+        if line.starts_with("%%{") {
+            // 指令行也算"已经出现过内容"：front matter 只能在文件最开头。
+            seen_content = true;
+            if !line.contains("}%%") {
+                directive = true;
+            }
+            continue;
+        }
+        if line.starts_with("%%") {
+            seen_content = true;
+            continue;
+        }
+        return line
+            .split_whitespace()
+            .next()
+            .is_some_and(|kw| kw.eq_ignore_ascii_case(MERMAID_SWIMLANE_HEADER));
+    }
+    false
+}
+
 const MERMAID_BODY: &str = "flowchart TD\n    A([开始]) --> B[第一步]\n    B --> C{判断}\n    C -- 是 --> D([结束])\n    C -- 否 --> B\n";
 
 const DOT_BODY: &str = "digraph G {\n    rankdir=LR;\n    node [shape=box, style=\"rounded,filled\"];\n    A -> B -> C;\n}\n";
@@ -154,6 +212,32 @@ pub fn convert_targets(id: FormatId) -> Vec<FormatId> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 泳道检测要穿过 front matter / 多行指令 / 注释 —— 这三样都可能排在头部前面，
+    /// 只看第一行会把真实的泳道文档判成普通 flowchart（后果是泳道渲染不出来）。
+    #[test]
+    fn swimlane_detection_skips_front_matter_directives_and_comments() {
+        assert!(mermaid_is_swimlane("swimlane-beta LR\n  subgraph A\n    x[a]\n  end\n"));
+        assert!(mermaid_is_swimlane("swimlane-beta\n  subgraph A\n    x[a]\n  end\n"));
+        assert!(mermaid_is_swimlane(
+            "---\nconfig:\n  theme: default\n  look: classic\n---\nswimlane-beta LR\n  subgraph A\n    x[a]\n  end\n"
+        ));
+        assert!(mermaid_is_swimlane("%% 说明\n%%{init: {'theme': 'dark'}}%%\nswimlane-beta TB\n"));
+        assert!(mermaid_is_swimlane(
+            "%%{init: {\n  'theme': 'dark'\n}}%%\nswimlane-beta TB\n  subgraph A\n    x[a]\n  end\n"
+        ));
+        // 普通流程图、以及只是**标签里**出现这个词的流程图都不算
+        assert!(!mermaid_is_swimlane("flowchart TD\n  A[swimlane-beta] --> B\n"));
+        assert!(!mermaid_is_swimlane("graph LR\n  A --> B\n"));
+        assert!(!mermaid_is_swimlane(""));
+        assert!(!mermaid_is_swimlane("%% 只有注释\n"));
+    }
+
+    /// 默认正文不能被误判成泳道（否则新建 Mermaid 文档就没了布局控件）。
+    #[test]
+    fn default_mermaid_body_is_not_swimlane() {
+        assert!(!mermaid_is_swimlane(MERMAID_BODY));
+    }
 
     #[test]
     fn registry_covers_every_format_exactly_once() {

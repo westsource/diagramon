@@ -92,6 +92,11 @@ static picture.
 - **Five formats, many tabs** — `Mermaid` (`.mmd` / `.mermaid`), `Graphviz DOT` (`.dot` / `.gv`), `D2`
   (`.d2`), `drawio` (`.drawio`) and `Excalidraw` (`.excalidraw`) side by side; overflowing tabs scroll into
   view, respond to the wheel and fade at both ends, and `Ctrl+Tab` / `Ctrl+PgUp` cycle through them
+- **Swimlanes** — Mermaid 12's `swimlane-beta` header works as-is: each top-level `subgraph` is a lane and
+  nodes/edges keep flowchart syntax. Swimlane diagrams use the fixed `swimlane` layout (no top-bar layout
+  button that could not change anything) and convert to DOT / D2 / Excalidraw, where lanes become clusters /
+  containers. drawio's bundled importer does not recognise the header — the conversion dialog says so instead
+  of failing silently
 - **Engine-level syntax checking** — problems are parsed and reported by the graphics engines themselves,
   with the real line (and column, for Mermaid); clicking a problem jumps the caret to that spot and marks
   the line. D2 is really compiled by its bundled wasm; drawio / Excalidraw get structural validation. An

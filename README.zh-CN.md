@@ -76,6 +76,10 @@ token 花在哪个环节说不清；写着真实服务名和内网域名的架�
 - **五种格式、多标签**：`Mermaid`（`.mmd` / `.mermaid`）、`Graphviz DOT`（`.dot` / `.gv`）、`D2`（`.d2`）、
   `drawio`（`.drawio`）、`Excalidraw`（`.excalidraw`）并排编辑；标签溢出时滚入视野、滚轮横滚、两端渐隐，
   `Ctrl+Tab` / `Ctrl+PgUp` 循环切换
+- **泳道图**：Mermaid 12 的 `swimlane-beta` 头部直接可用 —— 顶层 `subgraph` 就是泳道，节点/连线仍是
+  flowchart 语法；泳道图固定用 `swimlane` 布局（顶栏不会给一个切不动的布局按钮），可转 DOT / D2 /
+  Excalidraw（泳道落成 cluster / 容器）；drawio 随包的导入器不认这个头部，转换对话框会明确说明，
+  不会静默失败
 - **引擎级语法校验**：问题由图形引擎自己解析后报出，给真实行号（Mermaid 还带列号）；点问题跳到源码
   对应位置，出错行画红线；D2 走随包 wasm 真编译，drawio / Excalidraw 做结构校验；引擎缺失或文档超大时
   明确标注**降级**，绝不把"没校验"当"通过"

@@ -162,6 +162,55 @@ window.DGM = window.DGM || {};
     isCanvasDoc(doc) {
       return state.docFmt(doc).surface === "canvas";
     },
+    /** 这份文档是不是 **Mermaid 泳道图**（`swimlane-beta` 头部）。
+     *
+     *  泳道图与 flowchart 共用解析器，但布局是它自己的（`swimlane.layout = "swimlane"`）：
+     *  顶层 `subgraph` 就是一条泳道。**顶层 `layout` 不能传** —— 传了（应用默认的 elk /
+     *  dagre）会把泳道压回普通流程图，画面上一条泳道都没有（实测）。
+     *
+     *  判断要跳过硬排在头部之前的东西：front matter（`---…---`）、`%%{init}%%` 指令
+     *  （可以跨行）与 `%%` 注释。与 Rust 侧 `app_core::format::mermaid_is_swimlane` 同口径。
+     */
+    mermaidIsSwimlane(body) {
+      const lines = String(body || "").split(/\r?\n/);
+      let frontMatter = false;
+      let seenContent = false;
+      let directive = false;
+      for (const raw of lines) {
+        const line = raw.replace(/^\uFEFF/, "").trim();
+        if (directive) {
+          if (line.includes("}%%")) directive = false;
+          continue;
+        }
+        if (!line) continue;
+        if (frontMatter) {
+          if (line === "---") frontMatter = false;
+          continue;
+        }
+        if (!seenContent && line === "---") {
+          frontMatter = true;
+          seenContent = true;
+          continue;
+        }
+        if (line.startsWith("%%{")) {
+          // 指令行也算"已经出现过内容"：front matter 只能在文件最开头。
+          seenContent = true;
+          if (!line.includes("}%%")) directive = true;
+          continue;
+        }
+        if (line.startsWith("%%")) {
+          seenContent = true;
+          continue;
+        }
+        const kw = line.split(/\s+/)[0] || "";
+        return kw.toLowerCase() === "swimlane-beta";
+      }
+      return false;
+    },
+    isSwimlaneDoc(doc) {
+      const d = doc || state.activeDoc();
+      return !!d && d.format === "mermaid" && state.mermaidIsSwimlane(d.body);
+    },
     /** 当前视图模式（画布型恒为 preview）。 */
     mode(doc) {
       const d = doc || state.activeDoc();

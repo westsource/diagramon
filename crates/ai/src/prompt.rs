@@ -19,7 +19,10 @@ fn format_rules(id: FormatId) -> &'static str {
     match id {
         FormatId::Mermaid => {
             "语法要点：用 flowchart TD/LR 开头；节点标签里不要出现裸的 < 或 >（会被当成 HTML），要写成 &lt; / &gt;；\n\
-             判定节点用 {…}，圆角用 (…)，子图用 subgraph … end。"
+             判定节点用 {…}，圆角用 (…)，子图用 subgraph … end。\n\
+             用户明确要求「泳道图 / 按角色、部门、系统分道」时，头部改用 `swimlane-beta LR`（或 TB）：\n\
+             顶层每个 subgraph 就是一条泳道，节点与连线语法与 flowchart 相同；\n\
+             不要在同一份源码里同时写 flowchart 头，也不要用别的图类型冒充泳道。"
         }
         FormatId::Dot => {
             "语法要点：digraph 用 ->，graph 用 --；属性写在 [ ] 里；子图写成 subgraph cluster_xxx { … }（cluster_ 前缀才会画边框）。"
@@ -528,6 +531,7 @@ pub fn extract_code(text: &str, format: FormatId) -> Option<String> {
         FormatId::Mermaid => {
             body.starts_with("flowchart")
                 || body.starts_with("graph")
+                || body.starts_with("swimlane-beta")
                 || body.starts_with("sequenceDiagram")
                 || body.starts_with("stateDiagram")
                 || body.starts_with("classDiagram")
@@ -656,6 +660,22 @@ mod tests {
     fn extract_falls_back_to_whole_text_when_it_already_is_code() {
         let code = extract_code("flowchart TD\n    A --> B\n", FormatId::Mermaid).unwrap();
         assert!(code.starts_with("flowchart TD"));
+    }
+
+    /// 泳道图的头部不是 flowchart，但同样是**代码**：不认它就会把模型返回的整段
+    /// 泳道源码判成"一段散文"，用户点了应用却什么都没发生。
+    #[test]
+    fn extract_accepts_swimlane_source_without_a_fence() {
+        let code = extract_code("swimlane-beta LR\n  subgraph A\n    x[a]\n  end\n", FormatId::Mermaid).unwrap();
+        assert!(code.starts_with("swimlane-beta"));
+    }
+
+    /// 提示词要教模型这条头部，否则"画一张泳道图"只会得到普通流程图。
+    #[test]
+    fn mermaid_rules_mention_swimlane_when_asked() {
+        let p = system_prompt(FormatId::Mermaid, AiIntent::Generate);
+        assert!(p.contains("swimlane-beta"), "{p}");
+        assert!(p.contains("泳道"), "{p}");
     }
 
     #[test]

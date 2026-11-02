@@ -1346,9 +1346,27 @@ digraph Pipeline {
         groups[title].rows.push(row);
       };
       if (d.format === "mermaid") {
+        // 与 Rust 侧 `outline::mermaid` 同口径：泳道图的顶层 subgraph 是**泳道**，
+        // 普通流程图才是「子图」。这里只做界面演示，不做第二套解析器 —— 但标题必须一致，
+        // 否则浏览器原型（ui_probe）看到的分组名和真机不一样。
+        const lines2 = d.body.split("\n");
+        let i2 = 0;
+        if ((lines2[0] || "").trim() === "---") {
+          i2 = 1;
+          while (i2 < lines2.length && lines2[i2].trim() !== "---") i2++;
+          i2++;
+        }
+        let swim = false;
+        for (; i2 < lines2.length; i2++) {
+          const t2 = lines2[i2].trim();
+          if (!t2 || t2.startsWith("%%")) continue;
+          swim = /^swimlane-beta\b/i.test(t2);
+          break;
+        }
+        const clusterTitle = swim ? "泳道 lane" : "子图 subgraph";
         lines.forEach((ln, i) => {
           const t = ln.trim();
-          if (t.startsWith("subgraph")) push("子图 subgraph", { name: t.replace("subgraph ", ""), kind: "cluster", line: i + 1 });
+          if (t.startsWith("subgraph")) push(clusterTitle, { name: t.replace("subgraph ", ""), kind: "cluster", line: i + 1 });
           else if (/-->|--x|-\.->|==>|&/.test(t) && !t.startsWith("%%")) push("边", { name: t.slice(0, 34), kind: "edge", line: i + 1 });
           else if (/\[[({]/.test(t) && !t.startsWith("%%") && !t.startsWith("class")) {
             const m = t.match(/\[([^\]]*)\]|\(\(([^)]*)\)\)|\(([^)]*)\)|\{([^}]*)\}/);
@@ -1400,7 +1418,7 @@ digraph Pipeline {
           if (m) push("场景元素", { name: m[1], kind: "element", line: i + 1 });
         });
       }
-      const order = ["子图 subgraph", "子图 cluster", "容器", "节点", "边", "图元 mxCell", "场景元素"];
+      const order = ["泳道 lane", "子图 subgraph", "子图 cluster", "容器", "节点", "边", "图元 mxCell", "场景元素"];
       return order.filter((k) => groups[k]).map((k) => groups[k]);
     },
 

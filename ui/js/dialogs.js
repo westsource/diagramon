@@ -443,7 +443,14 @@ window.DGM = window.DGM || {};
       DGM.toast({ icon: "info", title: t("dlg.convert.title"), sub: t("status.noDoc") });
       return;
     }
-    const dirs = DGM.directions().filter((c) => c.from === d.format);
+    const swimlane = state.isSwimlaneDoc(d);
+    const dirs = DGM.directions()
+      .filter((c) => c.from === d.format)
+      .map((c) =>
+        swimlane && c.to === "drawio"
+          ? { ...c, ok: false, tag: t("conv.tag.swimlane"), how: t("conv.swimlane.noDrawio") }
+          : c,
+      );
     if (!dirs.length) {
       openDialog(
         head(t("dlg.convert.title"), "swap") +
@@ -2614,6 +2621,12 @@ window.DGM = window.DGM || {};
   function layout() {
     const d = state.activeDoc();
     if (!d) return;
+    // 泳道图的布局是它自己的（`swimlane`），没有可切的引擎：命令面板与状态栏都已拦过，
+    // 这是第三道，避免出现一个点了没反应的菜单。
+    if (state.isSwimlaneDoc(d)) {
+      DGM.toast({ icon: "info", title: t("preview.layoutName"), sub: t("preview.swimlaneFixed") });
+      return;
+    }
     const layouts = state.docFmt(d).layouts || [];
     // 没有布局引擎的格式（Mermaid / 画布型）什么都不弹：命令的 avail 已经拦过一次，
     // 这里是第二道 —— 别给一个空列表的菜单。

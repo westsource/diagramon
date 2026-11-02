@@ -173,6 +173,12 @@ fn parse(src: &str) -> Result<(String, Vec<Stmt>), String> {
     let mut direction: Option<String> = None;
     let mut stmts = Vec::new();
     let mut saw_header = false;
+    // front matter（`---…---`）与 `%%{init}%%` 指令（可跨行）都不是图的一部分。
+    // 不跳过的话 front matter 的 `---` 会被当成头部报「只支持 flowchart」，
+    // 多行指令的尾巴会被当成一条语句。
+    let mut front_matter = false;
+    let mut seen_content = false;
+    let mut directive = false;
 
     for (idx, raw) in src.lines().enumerate() {
         // 首行的 BOM 要去掉：Windows 记事本存 UTF-8 默认带 BOM，而 `\u{feff}` 不是
@@ -181,26 +187,58 @@ fn parse(src: &str) -> Result<(String, Vec<Stmt>), String> {
         // 这里当初漏了；语料里带 BOM 的那批文件正好全被这条挡住。）
         let raw = raw.strip_prefix('\u{feff}').unwrap_or(raw);
         let line = raw.trim();
-        if line.is_empty() || line.starts_with("%%") {
+        if directive {
+            if line.contains("}%%") {
+                directive = false;
+            }
             continue;
         }
+        if line.is_empty() {
+            continue;
+        }
+        if front_matter {
+            if line == "---" {
+                front_matter = false;
+            }
+            continue;
+        }
+        if !seen_content && line == "---" {
+            front_matter = true;
+            seen_content = true;
+            continue;
+        }
+        if line.starts_with("%%{") {
+            seen_content = true;
+            if !line.contains("}%%") {
+                directive = true;
+            }
+            continue;
+        }
+        if line.starts_with("%%") {
+            seen_content = true;
+            continue;
+        }
+        seen_content = true;
 
-        // 头部：flowchart TD / graph LR / flowchart LR
+        // 头部：flowchart TD / graph LR / swimlane-beta LR（方向可省，默认 TB）
         if !saw_header {
             let mut it = line.split_whitespace();
-            match (it.next(), it.next()) {
-                (Some("flowchart") | Some("graph"), Some(dir)) => {
+            match it.next() {
+                Some("flowchart" | "graph" | "swimlane-beta") => {
                     saw_header = true;
-                    direction = Some(map_direction(dir)?);
+                    direction = match it.next() {
+                        Some(dir) => Some(map_direction(dir)?),
+                        None => None,
+                    };
                     continue;
                 }
-                (Some(other), _) => {
+                Some(other) => {
                     return Err(format!(
-                        "第 {} 行：只支持 Mermaid flowchart（当前是「{other}」）。序列图 / 状态图 / 类图等不在转换范围内",
+                        "第 {} 行：只支持 Mermaid flowchart / graph / swimlane-beta（当前是「{other}」）。序列图 / 状态图 / 类图等不在转换范围内",
                         idx + 1
                     ));
                 }
-                _ => {}
+                None => {}
             }
         }
 
@@ -2161,6 +2199,31 @@ pub fn plan(from: app_ipc::FormatId, to: app_ipc::FormatId) -> Result<Plan, Stri
     Ok(Plan { engine, reason: reason.to_string() })
 }
 
+/// 同 [`plan`]，但**知道源码内容**：泳道图（`swimlane-beta`）不能转 drawio。
+///
+/// drawio 随包的 Mermaid 导入器（`js/mermaid/drawio-mermaid.min.js`）里没有
+/// `swimlane-beta` 这个 token —— 泳道图交给它只会得到一个语法错误，所以这一格在这里
+/// 就拒掉，别让用户等一次引擎失败。Excalidraw 侧随包的 mermaid 认识这个头，照常交给
+/// 引擎；DOT / D2 是 Rust 侧，泳道按顶层 subgraph 落成 cluster / 容器。
+pub fn plan_for_source(
+    from: app_ipc::FormatId,
+    to: app_ipc::FormatId,
+    source: &str,
+) -> Result<Plan, String> {
+    let p = plan(from, to)?;
+    if from == app_ipc::FormatId::Mermaid
+        && matches!(p.engine, Engine::Drawio)
+        && crate::format::mermaid_is_swimlane(source)
+    {
+        return Err(
+            "泳道图不能转 drawio：drawio 随包的 Mermaid 导入器认不出 `swimlane-beta`。\
+             改选 DOT 或 D2（泳道会落成 cluster / 容器），或转 Excalidraw"
+                .into(),
+        );
+    }
+    Ok(p)
+}
+
 /// 执行一次**纯 Rust** 转换。
 ///
 /// 引擎型的三个方向在这里返回 `Err`（并点名是谁的活）——
@@ -2526,7 +2589,57 @@ mod tests {
         let e = mermaid_to_dot("sequenceDiagram\n    A->>B: hi\n").unwrap_err();
         assert!(e.contains("flowchart"), "{e}");
         assert!(mermaid_to_dot("").is_err());
-        assert!(mermaid_to_dot("flowchart\n").is_err(), "缺方向应报错");
+        // 方向可以省：mermaid 自己接受 `flowchart` / `graph` / `swimlane-beta` 不带方向
+        // （实测 parse 通过，默认 TB）。旧实现把这种合法源码当成"缺方向"报错。
+        let c = mermaid_to_dot("flowchart\n    A --> B\n").unwrap();
+        assert!(c.body.contains("rankdir=TB;"), "{}", c.body);
+    }
+
+    /// 泳道图（`swimlane-beta`）与 flowchart 共用语法：顶层 subgraph 是泳道，
+    /// 落到 DOT 就是 cluster，落到 D2 就是容器。头部不认它 = 泳道文档转不出去。
+    #[test]
+    fn swimlane_sources_convert_and_keep_lanes_as_containers() {
+        let src = "swimlane-beta LR\n  subgraph Customer\n    Browse[Browse catalogue]\n    Pay[Pay]\n  end\n  subgraph Warehouse\n    Pick[Pick items]\n  end\n  Browse --> Pay\n  Pay --> Pick\n";
+        let dot = mermaid_to_dot(src).unwrap();
+        assert!(dot.body.contains("rankdir=LR;"), "{}", dot.body);
+        assert!(dot.body.contains("label=\"Customer\";"), "泳道要落成 cluster：{}", dot.body);
+        assert!(dot.body.contains("label=\"Warehouse\";"), "{}", dot.body);
+        assert!(dot.body.contains("Browse -> Pay;"), "{}", dot.body);
+
+        let d2 = mermaid_to_d2(src).unwrap();
+        assert!(d2.body.contains("direction: right"), "{}", d2.body);
+        assert!(d2.body.contains("Customer: {"), "泳道要落成容器：{}", d2.body);
+    }
+
+    /// front matter（mermaid 的 `--- config: … ---`）与多行 `%%{init}%%` 不是图的一部分：
+    /// 跳过它们才能读到头部；顺带把旧实现里「`---` 被当成头部」的坑一起钉住。
+    #[test]
+    fn front_matter_and_multiline_directives_are_skipped() {
+        let src = "---\nconfig:\n  theme: default\n  look: classic\n---\nswimlane-beta LR\n  subgraph A\n    x[a]\n  end\n";
+        let dot = mermaid_to_dot(src).unwrap();
+        assert!(dot.body.contains("rankdir=LR;"), "{}", dot.body);
+        assert!(dot.body.contains("label=\"A\";"), "{}", dot.body);
+
+        let src2 = "%%{init: {\n  'theme': 'dark'\n}}%%\nflowchart TD\n  A --> B\n";
+        let dot2 = mermaid_to_dot(src2).unwrap();
+        assert!(dot2.body.contains("A -> B;"), "{}", dot2.body);
+        assert!(!dot2.body.contains("theme"), "指令不该进产物：{}", dot2.body);
+    }
+
+    /// drawio 随包的 Mermaid 导入器没有 `swimlane-beta` 这个 token（实测），
+    /// 所以这一格要在 plan 层拒掉；DOT / D2 / Excalidraw 照常放行。
+    #[test]
+    fn swimlane_cannot_convert_to_drawio_but_can_to_the_others() {
+        use app_ipc::FormatId::*;
+        let src = "swimlane-beta LR\n  subgraph A\n    x[a]\n  end\n";
+        let e = plan_for_source(Mermaid, Drawio, src).unwrap_err();
+        assert!(e.contains("drawio"), "{e}");
+        assert!(e.contains("swimlane-beta"), "{e}");
+        assert_eq!(plan_for_source(Mermaid, Dot, src).unwrap().engine, Engine::Rust);
+        assert_eq!(plan_for_source(Mermaid, D2, src).unwrap().engine, Engine::Rust);
+        assert_eq!(plan_for_source(Mermaid, Excalidraw, src).unwrap().engine, Engine::Excalidraw);
+        // 普通 flowchart 照旧
+        assert_eq!(plan_for_source(Mermaid, Drawio, "flowchart TD\n A-->B\n").unwrap().engine, Engine::Drawio);
     }
 
     #[test]

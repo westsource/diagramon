@@ -592,6 +592,78 @@ window.DGM = window.DGM || {};
         }
         ok("ELK 布局端到端渲染", elkOk, elkOk ? "elk 离线包加载+注册+渲染全通" : "20s 内没等到 elk 渲染");
 
+        // ── 泳道图（`swimlane-beta`）：真的画出泳道 + 不给布局控件（2026-11-02）──
+        //  两个坑各自钉一条：
+        //   ① 顶层 `layout: "elk"`（应用默认）会把泳道压回普通流程图 —— 画面上一条
+        //      `.cluster.swimlane` 都没有（节点还在，只是没了泳道框与泳道名）；
+        //   ② 顶栏不该给泳道图一个切不动的「布局」按钮（布局固定是 swimlane）。
+        {
+          const swim = [
+            "swimlane-beta LR",
+            "  subgraph Customer",
+            "    Browse[Browse catalogue]",
+            "    Pay[Pay]",
+            "  end",
+            "  subgraph Warehouse",
+            "    Pick[Pick items]",
+            "    Ship[Ship order]",
+            "  end",
+            "  Browse --> Pay",
+            "  Pay --> Pick",
+            "  Pick --> Ship",
+          ].join("\n");
+          if (st && st.setBodyNow) await st.setBodyNow(doc.id, swim);
+          else await invoke("doc_set_body", { id: doc.id, body: swim });
+          DGM.preview.schedule();
+          let lanes = 0;
+          let nodes = 0;
+          let labels = false;
+          for (let i = 0; i < 200; i++) {
+            const svg = document.querySelector("#canvas-stage svg");
+            lanes = svg ? svg.querySelectorAll("g.cluster.swimlane").length : 0;
+            // 节点选择器要带上 rough-node：这一场之前把外观切成了 handDrawn，手绘外观下
+            // 节点不是 `g.node`（实测：只数 g.node 会得到 0）。
+            nodes = svg ? svg.querySelectorAll("g.node, g.rough-node").length : 0;
+            labels = !!svg && /Customer/.test(svg.textContent || "") && /Warehouse/.test(svg.textContent || "");
+            if (lanes >= 2 && nodes === 4 && labels) break;
+            await new Promise((r) => setTimeout(r, 100));
+          }
+          ok(
+            "泳道图真的画出泳道（没有退化成流程图）",
+            lanes >= 2 && nodes === 4 && labels,
+            `泳道 ${lanes} / 节点 ${nodes} / 泳道名 ${labels ? "在" : "丢了"}`,
+          );
+          ok(
+            "泳道图不给布局控件（顶栏只剩外观 + 配色）",
+            document.querySelectorAll("#pv-opts .pv-opt").length === 2,
+            document.querySelectorAll("#pv-opts .pv-opt").length,
+          );
+          const swimIssues = await invoke("doc_issues", { id: doc.id });
+          ok("泳道图语法不被误报", swimIssues.length === 0, JSON.stringify(swimIssues));
+          const swimOutline = await invoke("doc_outline", { id: doc.id });
+          const laneGroup = swimOutline.find((g) => g.title === "泳道 lane");
+          ok(
+            "大纲把顶层 subgraph 叫「泳道」",
+            !!laneGroup && laneGroup.rows.length === 2,
+            swimOutline.map((g) => g.title).join("/"),
+          );
+          const swimDot = await invoke("convert_text", { req: { from: "mermaid", to: "dot", source: swim } });
+          ok(
+            "泳道图能转 DOT（泳道 → cluster）",
+            swimDot.engine === "rust" && /label="Customer"/.test(swimDot.body),
+            (swimDot.body || "").slice(0, 60),
+          );
+          const swimDrawioErr = await invoke("convert_text", { req: { from: "mermaid", to: "drawio", source: swim } }).then(
+            () => "",
+            (e) => (e && e.message) || String(e),
+          );
+          ok("泳道图转 drawio 被明确拒绝", swimDrawioErr.includes("swimlane-beta"), swimDrawioErr.slice(0, 80));
+
+          if (st && st.setBodyNow) await st.setBodyNow(doc.id, withGe);
+          else await invoke("doc_set_body", { id: doc.id, body: withGe });
+          DGM.preview.schedule();
+        }
+
         // ── 导出 PNG：必须有底色、有内容，超大图不越画布上限（2026-10-19 用户报"导出是空白"） ──
         //  两个成因各自钉一条：① 位图没铺底色（透明 PNG + 暗色主题 = 白色看图器里一片空白）；
         //  ② 越上限后 drawImage 静默不画（WebView2 实测：面积 2^28 以内能画，之外交回空图）。

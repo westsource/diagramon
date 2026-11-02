@@ -834,8 +834,9 @@ window.DGM = window.DGM || {};
     parts.push(`<span class="st-spacer"></span>`);
     parts.push(`<span class="st ${ui.status.kind === "err" ? "err" : ui.status.kind === "warn" ? "warn" : ui.status.kind === "ok" ? "accent" : ""}" id="status-msg">${esc(statusText)}</span>`);
     parts.push(`<span class="st-spacer"></span>`);
-    // 有布局引擎的格式才有这一格（DOT 六种、D2 三种；Mermaid / 画布型没有）
-    const layouts = d ? state.docFmt(d).layouts || [] : [];
+    // 有布局引擎的格式才有这一格（DOT 六种、D2 三种、Mermaid elk/dagre；
+    // 泳道图例外：它的布局是固定的 swimlane，没有可选项）
+    const layouts = d && !state.isSwimlaneDoc(d) ? state.docFmt(d).layouts || [] : [];
     if (layouts.length) {
       parts.push(`<button class="st" data-a="layout" title="${esc(t("status.layoutTip"))}">${icon("diagram", "ico-sm")}${esc(t("status.layout", { name: d.layout || layouts[0] }))}</button>`);
     }
@@ -876,6 +877,11 @@ window.DGM = window.DGM || {};
   function popLayouts(anchor) {
     const d = state.activeDoc();
     if (!d) return;
+    // 泳道图没有可切的布局（固定 swimlane）—— 状态栏那一格已经隐藏，这里是第二道。
+    if (state.isSwimlaneDoc(d)) {
+      DGM.toast({ icon: "info", title: t("preview.layoutName"), sub: t("preview.swimlaneFixed") });
+      return;
+    }
     const fmt = state.docFmt(d);
     const layouts = fmt.layouts || [];
     const current = d.layout || layouts[0];
@@ -908,8 +914,9 @@ window.DGM = window.DGM || {};
     const d = state.activeDoc();
     if (!d) return;
     const fmt = state.docFmt(d);
+    const swimlane = state.isSwimlaneDoc(d);
     const items = directions()
-      .filter((c) => c.from === fmt.id && c.ok)
+      .filter((c) => c.from === fmt.id && c.ok && !(swimlane && c.to === "drawio"))
       .map((c) => ({ label: t("palette.convert", { from: fmt.name, to: state.fmtById(c.to).name }), icon: "swap", act: "conv:" + c.to }));
     // 没有可用目标时直接进转换对话框，让对话框说明原因（不再挂一个空菜单）。
     if (!items.length) return DGM.dialogs.convertTo();
@@ -1643,7 +1650,11 @@ window.DGM = window.DGM || {};
 
     const convTargets = () => {
       const d = state.activeDoc();
-      return d ? state.docFmt(d).convert_to || [] : [];
+      if (!d) return [];
+      const all = state.docFmt(d).convert_to || [];
+      // 泳道图不能转 drawio：drawio 随包的 Mermaid 导入器不认 `swimlane-beta`
+      // （与 Rust 侧 `convert::plan_for_source` 同一条判定，那里是第二道闸）。
+      return state.isSwimlaneDoc(d) ? all.filter((t) => t !== "drawio") : all;
     };
     ["drawio", "excalidraw", "dot", "d2"].forEach((to) => {
       cmd({
@@ -1655,7 +1666,7 @@ window.DGM = window.DGM || {};
     });
     cmd({ id: "fmt.format", group: "format", icon: "wand", kbd: "Shift+Alt+F", run: () => formatSource() });
     // 布局菜单按**注册表**开放（DOT 六种、D2 三种），不在前端写第二份格式清单
-    cmd({ id: "fmt.layout", group: "format", icon: "diagram", run: (a) => DGM.dialogs.layout(), avail: () => (state.activeDoc() && (state.docFmt(state.activeDoc()).layouts || []).length ? true : { why: t("status.formatTip") }) });
+    cmd({ id: "fmt.layout", group: "format", icon: "diagram", run: (a) => DGM.dialogs.layout(), avail: () => (state.activeDoc() && !state.isSwimlaneDoc(state.activeDoc()) && (state.docFmt(state.activeDoc()).layouts || []).length ? true : { why: state.isSwimlaneDoc(state.activeDoc()) ? t("preview.swimlaneFixed") : t("status.formatTip") }) });
     cmd({ id: "exp.png", group: "format", icon: "download", run: () => DGM.preview.exportPng() });
     cmd({ id: "exp.svg", group: "format", icon: "download", run: () => DGM.preview.exportSvg() });
     cmd({ id: "exp.copy", group: "format", icon: "copy", kbd: "Ctrl+Shift+C", run: () => DGM.preview.copyImage() });
