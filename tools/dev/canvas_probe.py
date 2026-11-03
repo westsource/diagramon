@@ -80,6 +80,30 @@ MOUNTS = {
     "mermaid": _mount(("tools", "mermaid")),
 }
 
+ASSETS = ROOT / "assets"
+DRAWIO_HOST_SRC = ROOT / "tools" / "drawio-host" / "host.html"
+DRAWIO_HOST_PRODUCT = ASSETS / "drawio" / "host.html"
+
+
+def preflight() -> int:
+    """返回 0 = 可以开跑；1 = 产物与源不一致（真失败，拦验收）；2 = 环境缺件（不拦）。"""
+    if not (MOUNTS["drawio"] / "index.html").is_file():
+        log(f"drawio 资产不在位：{MOUNTS['drawio']}")
+        log("  先跑 tools/fetch-drawio.ps1 把资产拉到 tools/drawio，或设 DIAGRAMON_SOURCE_TREE")
+        return 2
+    if not DRAWIO_HOST_PRODUCT.is_file():
+        # 还没汇出：按源测，并如实说一声（不是错误 —— 开发期可能就想只改源先验一遍）
+        log(f"（assets/ 里还没有承载页产物，按源 {DRAWIO_HOST_SRC.name} 测）")
+        return 0
+    if DRAWIO_HOST_SRC.is_file() and DRAWIO_HOST_SRC.read_bytes() != DRAWIO_HOST_PRODUCT.read_bytes():
+        # 与 excalidraw_probe 同一条闸门（审计 2026-11-03 G-3/G-4）：改了承载页却没汇出，
+        # 测出来的就是一份**不存在的产品**。必须返回 1 而不是 2 —— check.mjs 把 2 当
+        # "环境缺件 ⇒ 跳过、不拦验收"，这个代码级错误就会被咽掉。
+        log(f"✗ 承载页不一致：{DRAWIO_HOST_PRODUCT} 与源 {DRAWIO_HOST_SRC} 不同")
+        log("  修法：node tools/fetch-assets.mjs（它从 tools/ 汇出 assets/；prepack 也有同样的闸门）")
+        return 1
+    return 0
+
 MIME = {
     ".html": "text/html; charset=utf-8",
     ".js": "text/javascript; charset=utf-8",
@@ -678,9 +702,12 @@ def make_handler():
                 return None  # 由 do_GET 直接回
             if first in MOUNTS:
                 if first == "drawio" and len(segs) > 1 and segs[1] == "host.html":
-                    # 承载页属于本仓库（源工作树里那份是停更的旧副本）。
-                    # 生产路径里它由取资产脚本复制进挂载点 —— 落点一致，只是这里不复制。
-                    return str(ROOT / "tools" / "drawio-host" / "host.html")
+                    # 优先测**产物**（assets/drawio/host.html）：那才是真的会跑在应用里的那份。
+                    # 产物不在位时退回源，别让探针因为"还没汇出"直接不可用。
+                    # 源与产物不一致由 preflight() 提前拦下（返回 1），不会在这里静默测旧货。
+                    if DRAWIO_HOST_PRODUCT.is_file():
+                        return str(DRAWIO_HOST_PRODUCT)
+                    return str(DRAWIO_HOST_SRC)
                 if first == "excalidraw" and (len(segs) == 1 or not segs[1] or segs[1] == "index.html"):
                     # 同理：Excalidraw 的承载页也归本仓库。
                     # 旧副本缺 `getScene`（转换取不回产物），照它测等于测了个假对象。
@@ -841,10 +868,9 @@ def main() -> int:
     if not chrome:
         log("没找到 Chrome / Edge 可执行文件")
         return 2
-    if not (MOUNTS["drawio"] / "index.html").is_file():
-        log(f"drawio 资产不在位：{MOUNTS['drawio']}")
-        log("  先跑 tools/fetch-drawio.ps1 把资产拉到 tools/drawio，或设 DIAGRAMON_SOURCE_TREE")
-        return 2
+    rc = preflight()
+    if rc != 0:
+        return rc
 
     SHOTS.mkdir(parents=True, exist_ok=True)
     profile = Path(tempfile.mkdtemp(prefix="dgm-canvas-probe-"))

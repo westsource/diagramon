@@ -24,6 +24,16 @@
     外壳 → drawio : frame.postMessage(str, '*')
   队列同时被消费与转发是刻意的：宿主只要能执行脚本（已验证可用）就能工作，
   不依赖 WebView 包装层是否暴露消息事件。
+
+  **代际令牌（`__hostEpoch` / `__hostEpochs`，审计 2026-11-03 M-27）**：
+  每次 push 进 `__hostQueue` 的同时，必须往 `__hostEpochs` 的**同一下标** push 一份
+  `window.__hostEpoch`。外壳靠它区分"这条事件属于当前文档还是上一份文档"——
+  少了它，切标签页瞬间旧文档的 autosave 会写进新文档的正文。
+  `__hostEpoch` 由外壳设置，而且**只在它确认换图完成之后**才翻（提前翻会把
+  "换图前产生、换图后才入队"的旧内容标成新代际，那正是要堵的窗口）。
+  页面自己只读不写；初值 0 表示"无版本信息"，外壳按旧行为处理。
+  ⚠️ 这里有两处 push（消息转发、快捷键转发），**两处都必须补 `__hostEpochs`**，
+  否则两条队列错位，之后每条事件的代际都是错的。
 -->
 <iframe id="dl" src="./index.html?embed=1&proto=json&spin=1&noExitBtn=1&libraries=1&ui=min&noSaveBtn=1&saveAndExit=0&nav=0"></iframe>
 <script>
@@ -49,6 +59,12 @@
   const frame = () => frameElement.contentWindow;
 
   window.__hostQueue = [];
+  // 代际令牌（审计 2026-11-03 M-27）：与 `__hostQueue` **同下标并排**。
+  // 外壳每切一份文档就把它的代际写进 `window.__hostEpoch`（且只在确认换图之后才写），
+  // 这里入队那一刻照原样记一份；外壳据此丢掉「上一份文档的迟到事件」。
+  // 两个数组必须同进同出（外壳 drain 时同时 splice），所以只在这里 push。
+  window.__hostEpochs = [];
+  window.__hostEpoch = 0;
   window.__hostState = 'awaiting-init';
 
   // C# → drawio
@@ -79,6 +95,8 @@
     }
 
     window.__hostQueue.push(evt.data);
+    // 与上一行同下标（见 __hostEpochs 的说明）
+    window.__hostEpochs.push(window.__hostEpoch || 0);
 
     // 若宿主换用消息事件通道，这里也顺带投递一次；通道不存在时静默忽略。
     try {
@@ -194,6 +212,9 @@
       event.preventDefault();
       event.stopPropagation();
       window.__hostQueue.push(JSON.stringify({ event: 'hotkey', combo: combo }));
+      // **必须与上一行同下标**（见 __hostEpochs 的说明）：漏一处，两条队列就从这里错位，
+      // 之后所有事件都会被判成错的代际。
+      window.__hostEpochs.push(window.__hostEpoch || 0);
     }, true);
   }
 

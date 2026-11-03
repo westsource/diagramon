@@ -52,6 +52,22 @@ CANVAS_STUB_HOST = """<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf
 (function () {
   var queue = [];
   window.__hostQueue = queue;
+  // 代际令牌（审计 2026-11-03 M-27）：与 __hostQueue 同下标并排，契约见
+  // tools/drawio-host/host.html 的注释块。桩按真实承载页那样**每次入队都记一份**，
+  // 这样外壳的代际过滤在桩上也能被真实地驱动。
+  window.__hostEpochs = [];
+  window.__hostEpoch = 0;
+  function push(obj) {
+    queue.push(JSON.stringify(obj));
+    if (!Array.isArray(window.__hostEpochs)) { window.__hostEpochs = []; }
+    window.__hostEpochs.push(window.__hostEpoch || 0);
+  }
+  // 驱动侧专用：按**指定代际**注入一条事件（用来复现「上一份文档的迟到 autosave」）。
+  window.__pushRaw = function (obj, epoch) {
+    queue.push(JSON.stringify(obj));
+    if (!Array.isArray(window.__hostEpochs)) { window.__hostEpochs = []; }
+    window.__hostEpochs.push(typeof epoch === "number" ? epoch : (window.__hostEpoch || 0));
+  };
   // 驱动侧（宿主窗口）可以直接改这个数组断言「最后一次收到谁」，不必依赖引擎。
   window.__lastLoad = "";
   // 记录收到过的动作序列（type → 载荷摘要），供「切标签不残留」断言核对。
@@ -62,7 +78,7 @@ CANVAS_STUB_HOST = """<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf
   setTimeout(function () {
     if (!window.__readySent) {
       window.__readySent = true;
-      window.__hostQueue.push(JSON.stringify({ event: "ready" }));
+      push({ event: "ready" });
     }
   }, 20);
   window.__apply = function (str) {
@@ -75,27 +91,33 @@ CANVAS_STUB_HOST = """<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf
       if (msg.descriptor) {
         // 模拟「Mermaid 源码经引擎导入器转成 mxfile」：把源码包进 xml 里带标记回来。
         setTimeout(function () {
-          window.__hostQueue.push(JSON.stringify({
+          push({
             event: "export", format: "xml",
             xml: '<mxfile><diagram>DBG:' + msg.descriptor.data + '</diagram></mxfile>',
-          }));
+          });
         }, 30);
+      } else {
+        // 真实 drawio 载入完成会回 {"event":"load"} —— 这是外壳翻代际的**确认点**
+        // （审计 M-27）。桩必须照发，否则外壳永远等不到 ack，只能走兜底超时。
+        setTimeout(function () { push({ event: "load" }); }, 10);
       }
     } else if (msg.action === "export") {
       setTimeout(function () {
-        window.__hostQueue.push(JSON.stringify({
+        push({
           event: "export", format: "xml",
           xml: '<mxfile><diagram>DBG:' + (window.__lastLoad || "") + '</diagram></mxfile>',
-        }));
+        });
       }, 20);
     } else if (msg.action === "setScene") {
       window.__lastLoad = msg.scene || "";
+      // 真实 Excalidraw 承载页载入完成会 report('loaded')（见 excalidraw-host/index.html）
+      setTimeout(function () { push({ event: "loaded" }); }, 10);
       setTimeout(function () {
-        window.__hostQueue.push(JSON.stringify({ event: "scene", elements: [], appState: {}, files: {} }));
+        push({ event: "scene", elements: [], appState: {}, files: {} });
       }, 20);
     } else if (msg.action === "getScene") {
       setTimeout(function () {
-        window.__hostQueue.push(JSON.stringify({ event: "scene", elements: [], appState: {}, files: {} }));
+        push({ event: "scene", elements: [], appState: {}, files: {} });
       }, 20);
     }
   };
@@ -1826,6 +1848,41 @@ def main() -> int:
             "    lastAction: dbgF && dbgF.contentWindow.__actions && dbgF.contentWindow.__actions.length"
             "      ? JSON.stringify(dbgF.contentWindow.__actions[dbgF.contentWindow.__actions.length - 1]) : ''"
             "  };"
+            # ---- C-L4 代际过滤：上一份文档的迟到事件不得写进新文档（审计 2026-11-03 M-27）----
+            #  真实场景：`__hostQueue` 里躺着 A 的 autosave，用户已切到 B，120ms 后才被 drain；
+            #  或 drawio 的 1.5s autosave 去抖在换图之后才到期。两者都会把 A 的正文写进 B。
+            #  这里用桩的 `__pushRaw` 按指定代际注入，确定性地复现。
+            "  const dE = await DGM.state.newDoc('drawio');"
+            "  DGM.state.setBody(dE.id, 'E_BODY');"
+            "  const dF = await DGM.state.newDoc('drawio');"
+            "  DGM.state.setBody(dF.id, 'F_BODY');"
+            "  cv.show(dE);"
+            "  await until(() => cv.epoch('drawio') >= 1 && stubOf('drawio').__hostEpoch === cv.epoch('drawio'));"
+            "  const epochE = cv.epoch('drawio');"
+            "  const staleBefore = cv.staleDropped();"
+            # ① 正控：**当前代际**的 autosave 必须落进 E
+            "  stubOf('drawio').__pushRaw({ event: 'autosave', xml: 'E_LIVE_EDIT' }, epochE);"
+            "  await until(() => DGM.state.doc(dE.id).body === 'E_LIVE_EDIT');"
+            "  out.lc4_currentApplied = DGM.state.doc(dE.id).body;"
+            # ② 切到 F（代际会在桩回 load 之后翻）
+            "  cv.show(dF);"
+            "  await until(() => cv.epoch('drawio') === epochE + 1 &&"
+            "                     stubOf('drawio').__hostEpoch === epochE + 1);"
+            "  out.lc4_epochBumped = cv.epoch('drawio') === epochE + 1;"
+            # ③ 旧代际的 autosave（模拟 A 的迟到事件）必须被丢弃、不得写进 F
+            "  stubOf('drawio').__pushRaw({ event: 'autosave', xml: 'STALE_FROM_E' }, epochE);"
+            "  await wait(400);"
+            "  out.lc4_staleBody = DGM.state.doc(dF.id).body;"
+            "  out.lc4_staleNotApplied = DGM.state.doc(dF.id).body !== 'STALE_FROM_E';"
+            "  out.lc4_staleDropped = cv.staleDropped() - staleBefore;"
+            # ④ F 自己那一代际的 autosave 仍然要生效（别把正常路径一起掐死）
+            "  stubOf('drawio').__pushRaw({ event: 'autosave', xml: 'F_LIVE_EDIT' }, cv.epoch('drawio'));"
+            "  await until(() => DGM.state.doc(dF.id).body === 'F_LIVE_EDIT');"
+            "  out.lc4_freshApplied = DGM.state.doc(dF.id).body;"
+            # ⑤ 没有代际信息（旧承载页 / 代际 0）的事件照旧放行 —— 前后兼容
+            "  stubOf('drawio').__pushRaw({ event: 'autosave', xml: 'LEGACY_NO_EPOCH' }, 0);"
+            "  await until(() => DGM.state.doc(dF.id).body === 'LEGACY_NO_EPOCH');"
+            "  out.lc4_legacyApplied = DGM.state.doc(dF.id).body;"
             # 复原：清掉画布实例，别影响后面的截图/断言
             "  for (const f of ['drawio','excalidraw']) cv.teardown(f);"
             "  return JSON.stringify(out);"
@@ -1861,6 +1918,23 @@ def main() -> int:
             fails.append("关闭标签后 isReady 仍为 true（就绪状态没随实例丢失）")
         if not str(cl.get("lc3_reopen", "")).find("C_MARKER_PROBE") >= 0:
             fails.append(f"重开同格式画布继承了旧 payload：{cl.get('lc3_reopen')!r}")
+
+        # C-L4 代际过滤（审计 2026-11-03 M-27）：上一份文档的迟到事件不得写进新文档。
+        # 反例很具体：切标签瞬间旧文档的 autosave 落进新文档正文（在那里被自动保存写坏）。
+        if cl.get("lc4_currentApplied") != "E_LIVE_EDIT":
+            fails.append(f"当前代际的 autosave 没生效（过滤把正常事件也掐了？）：{cl.get('lc4_currentApplied')!r}")
+        if cl.get("lc4_epochBumped") is not True:
+            fails.append("换文档后代际没有 +1 / 承载页没收到新代际（ack 没生效？）")
+        if cl.get("lc4_staleNotApplied") is not True:
+            fails.append(f"旧代际的 autosave 写进了新文档（跨文档污染）：{cl.get('lc4_staleBody')!r}")
+        if not (cl.get("lc4_staleDropped") or 0) >= 1:
+            fails.append(f"旧代际事件没有被计入丢弃数：{cl.get('lc4_staleDropped')!r}")
+        if cl.get("lc4_freshApplied") != "F_LIVE_EDIT":
+            fails.append(f"新文档自己那一代际的 autosave 没生效：{cl.get('lc4_freshApplied')!r}")
+        if cl.get("lc4_legacyApplied") != "LEGACY_NO_EPOCH":
+            fails.append(
+                f"没有代际信息的事件被误杀（旧承载页要能继续用）：{cl.get('lc4_legacyApplied')!r}"
+            )
 
         # ---- 追加截图：保存到云端窗口 / 登录窗口（留证用，不参与判定） ----
         # 截图走"先把视口撑到 1680×1000 再截"：`captureBeyondViewport` 在本机

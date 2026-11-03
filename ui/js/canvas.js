@@ -6,11 +6,17 @@
  * 不需要脚本注入，也不需要就绪探测。
  *
  * 承载页的契约写在 `tools/drawio-host/host.html` 的注释里（那是它的真源）：
- *   画布 → 本站 : window.__hostQueue.push(str)
+ *   画布 → 本站 : window.__hostQueue.push(str) + window.__hostEpochs.push(代际)
  *   本站 → 画布 : frame.contentWindow.__apply(str)
  * 外加三个可选钩子：`__hostZoom()`（当前缩放读数）/ `__hostFit()` / `__hostZoomBy(factor)`。
  * 三者的真源都在各自承载页里；`__hostFit` 返回**是否真的适配了**（false = 没内容可适配 /
  * 画布还没起来），别把它当"命令已发出"。
+ *
+ * **代际令牌**（`__hostEpoch` / `__hostEpochs`，审计 2026-11-03 M-27）解决"这条画布事件
+ * 属于哪份文档"：`show()` 换文档时 +1，但**只在承载页回 `load`/`loaded` 之后**才把新值
+ * 交给它（`confirmEpoch`）—— 提前给会把换图前产生、换图后才入队的旧内容标成新代际。
+ * `drain` 丢掉"带旧代际的内容事件"，但放行生命周期事件（否则那条 ack 自己会被丢掉，
+ * 代际永远翻不过来）。旧承载页没有 `__hostEpochs` ⇒ 代际 0 ⇒ 不按代际过滤，行为照旧。
  *
  * 职责边界：本模块只管「画布 ↔ 正文」的搬运与协议翻译；文件读写仍在 state/shell。
  */
@@ -66,12 +72,31 @@ window.DGM = window.DGM || {};
         lastApplied: "",
         pending: [],
         waiters: [],
+        /**
+         * 代际令牌（审计 2026-11-03 M-27）。每切一份文档 +1，随 `__hostEpoch` 交给承载页，
+         * 承载页入队时把当时的代际记在同下标的 `__hostEpochs` 里。回传事件代际不匹配
+         * 就是**上一份文档的迟到事件**，必须丢掉 —— 否则会写进新文档的正文。
+         *
+         * 两个真实窗口：① 120ms 轮询 tick 之前 `__hostQueue` 里已经躺着 A 的 autosave，
+         * 用户切到同格式的 B，drain 时 `loadedDoc` 已经是 B；② drawio 的 1.5s autosave
+         * 去抖在 `__apply(load B)` 之后、画布真正换文档之前到期。
+         */
+        epoch: 0,
         /** Excalidraw 的 `files` 段（图片等二进制附件），回写时必须原样带上 */
         files: {},
       };
     }
     return hosts[format];
   }
+
+  /** 被代际过滤丢掉的事件数（诊断与探针用；正常应为 0）。 */
+  let staleDropped = 0;
+  /** ack 超时兜底的次数（诊断用；正常应为 0，非 0 说明某个承载页没回 ack）。 */
+  let ackFallbacks = 0;
+  /** 等承载页 ack 的上限。取 3s：足够慢机器完成一次换图，又不会让同步停太久。 */
+  const EPOCH_ACK_TIMEOUT_MS = 3000;
+  /** 这些是**生命周期/界面信号**，不是文档内容 —— 陈旧也不丢（否则换文档后就收不到确认了）。 */
+  const LIFECYCLE_EVENTS = new Set(["init", "ready", "load", "loaded", "error"]);
 
   function ensureFrame(format) {
     const e = entry(format);
@@ -105,6 +130,10 @@ window.DGM = window.DGM || {};
       return;
     }
     try {
+      // 注意：**这里不改 `win.__hostEpoch`**（审计 2026-11-03 M-27）。
+      // 代际只在承载页**确认换文档之后**才翻（见 confirmEpoch）——
+      // 提前翻会把"换文档前产生、换文档后才入队"的旧内容标成新代际，
+      // 那正是要堵的那个窗口。
       win.__apply(payload);
     } catch (err) {
       // 跨源不该发生（同源），但真发生了要让用户知道而不是静默丢动作
@@ -124,6 +153,35 @@ window.DGM = window.DGM || {};
         report(t("canvas.sendFail"), err);
       }
     }
+  }
+
+  /** 承载页确认「这份文档已经载入」之后，才把代际交给它（见 send 处的说明）。 */
+  function confirmEpoch(format) {
+    const e = entry(format);
+    if (e.ackTimer) {
+      window.clearTimeout(e.ackTimer);
+      e.ackTimer = 0;
+    }
+    const win = winFor(format);
+    if (win) win.__hostEpoch = e.epoch;
+  }
+
+  /**
+   * 等承载页的 ack；等不到就自己翻。
+   *
+   * 为什么要这条兜底：代际**只能**在确认后才翻，否则旧内容会被标成新代际。但如果某个
+   * 承载页哪天不吭声（不改 `load`/`loaded` 事件名、或握手失败），代际就永远停在旧值，
+   * 之后所有画布改动都会被当成"上一份文档的迟到事件"丢掉 —— 那是比污染更糟的失效
+   * （画布永远存不进正文）。宁可偶尔漏一次防护，也不能把同步永久掐死。
+   */
+  function armEpochConfirm(format) {
+    const e = entry(format);
+    if (e.ackTimer) window.clearTimeout(e.ackTimer);
+    e.ackTimer = window.setTimeout(() => {
+      e.ackTimer = 0;
+      confirmEpoch(format);
+      ackFallbacks += 1;
+    }, EPOCH_ACK_TIMEOUT_MS);
   }
 
   /* ------------------------------------------------------------------ 等待者 */
@@ -157,12 +215,17 @@ window.DGM = window.DGM || {};
       case "init":
       case "ready":
         e.ready = true;
+        // 首次 init 也要把代际同步过去（此时 e.epoch 可能已经不是 0）
+        confirmEpoch(format);
         flushPending(format);
         break;
 
-      // 文档已载入：**不回写**，否则一打开就被标成「已修改」
+      // 文档已载入：**不回写**，否则一打开就被标成「已修改」。
+      // 同时这就是"换文档已完成"的**确认点**（审计 2026-11-03 M-27）：
+      // 只有到这里才把代际交给承载页，之后它入队的事件才算新文档的。
       case "load":
       case "loaded":
+        confirmEpoch(format);
         break;
 
       case "autosave":
@@ -243,19 +306,49 @@ window.DGM = window.DGM || {};
     const win = winFor(format);
     if (!win) return;
     let queue;
+    let epochs;
     try {
       queue = win.__hostQueue;
+      epochs = win.__hostEpochs;
     } catch (err) {
       return; // 未就绪
     }
     if (!queue || !queue.length) return;
     // 就地 splice（不要换数组引用：承载页持有同一个引用）
     const items = queue.splice(0, queue.length);
-    for (const raw of items) {
+    // 代际令牌与队列**同下标并排**（审计 2026-11-03 M-27）。承载页把入队那一刻的
+    // `__hostEpoch` 记在这里；旧承载页 / 探针桩没有这个数组时按 0 处理 = 不按代际过滤，
+    // 行为与以前完全一致（前后兼容，不必同时升级两侧）。
+    let tags = null;
+    try {
+      if (epochs && typeof epochs.splice === "function") {
+        tags = epochs.splice(0, items.length);
+      }
+    } catch (err) {
+      tags = null;
+    }
+    const e = entry(format);
+    for (let i = 0; i < items.length; i++) {
+      const raw = items[i];
+      const tag = tags ? Number(tags[i]) || 0 : 0;
+      let msg;
       try {
-        handleEvent(format, typeof raw === "string" ? JSON.parse(raw) : raw);
+        msg = typeof raw === "string" ? JSON.parse(raw) : raw;
       } catch (err) {
-        /* 非 JSON 载荷忽略 */
+        continue; // 非 JSON 载荷忽略
+      }
+      // 0 = 无版本信息（旧承载页 / 探针桩），照收；非 0 且 ≠ 当前代 = 上一份文档的迟到事件。
+      // 例外是生命周期事件：它们不是文档内容，而且**换文档后的那条 ack 本身**就带着旧代际
+      // —— 把 ack 也丢掉，代际就永远翻不过来（审计 2026-11-03 M-27）。
+      const stale = tag !== 0 && tag !== e.epoch;
+      if (stale && !(msg && LIFECYCLE_EVENTS.has(msg.event))) {
+        staleDropped += 1;
+        continue;
+      }
+      try {
+        handleEvent(format, msg);
+      } catch (err) {
+        /* 单个事件处理失败不该拖垮整批 */
       }
     }
   }
@@ -381,6 +474,17 @@ window.DGM = window.DGM || {};
     syncTheme(format);
 
     if (e.loadedDoc === doc.id) return true;
+
+    // 换文档之前，先把**旧文档**已经躺在队列里的事件结清（审计 2026-11-03 M-27）。
+    //
+    // 为什么是"结清"而不是"丢掉"：那些事件是用户上一份文档最后 1.5s 的画布改动，
+    // 丢掉就是丢用户的内容。此刻 `loadedDoc` 还是旧文档，drain 会把它们写回旧文档。
+    // 之后（迟到的、跨过换文档那一刻的）事件由代际令牌丢弃 —— 那才是会污染新文档的。
+    drain(format);
+
+    // 代际 +1：这之后承载页入队的事件都带新代际。具体交付时机见 confirmEpoch ——
+    // 不是现在，而是承载页回 `load`/`loaded` 的时候。
+    e.epoch += 1;
     e.loadedDoc = doc.id;
     e.lastApplied = doc.body || "";
     // **不要把 `e.ready` 置回 false**：承载页的 `init`/`ready` 每个 iframe 只发一次
@@ -389,6 +493,8 @@ window.DGM = window.DGM || {};
     // 再也没人 flush —— 表现就是「转第二个文件，画布还是第一个的图」。
     // 就绪状态只由 `init`/`ready` 事件置 true，`teardown` 删实例时随之丢失。
     e.pending.length = 0;
+    // 开始等 ack（承载页确认换图后会回 load/loaded；等不到有兜底，见 armEpochConfirm）
+    armEpochConfirm(format);
 
     // 转换：这次载入的不是正文，而是 Mermaid 源码（交给引擎自己的导入器）
     if (pendingConversion && pendingConversion.format === format) {
@@ -629,6 +735,11 @@ window.DGM = window.DGM || {};
     isReady: (format) => Boolean(hosts[format] && hosts[format].ready),
     loadedDoc: (format) => (hosts[format] ? hosts[format].loadedDoc : null),
     supports: (format) => Boolean(HOST_SRC[format]),
+    /** 被代际过滤丢掉的事件数（探针断言「没丢正常事件」用；正常使用下应为 0）。 */
+    staleDropped: () => staleDropped,
+    /** ack 兜底次数（非 0 = 某个承载页没回 load/loaded，代际没能按时翻）。 */
+    ackFallbacks: () => ackFallbacks,
+    epoch: (format) => (hosts[format] ? hosts[format].epoch : 0),
   };
 
   DGM.bus.on("settings:changed", syncThemeAll);

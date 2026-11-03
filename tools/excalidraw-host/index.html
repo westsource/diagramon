@@ -46,6 +46,13 @@
 // 一档）/ __hostFit（应用级「适应视图」—— 把内容整体放进视口）。
 // 内容真相始终是标签页里的 JSON 文本；本页只负责视图与事件。
 //
+// **代际令牌（`__hostEpoch` / `__hostEpochs`，审计 2026-11-03 M-27）**：`report()` 每次往
+// `__hostQueue` push 的同时，必须往 `__hostEpochs` 的**同一下标** push 一份
+// `window.__hostEpoch`。外壳靠它区分"这条事件属于当前文档还是上一份文档"——
+// 少了它，切标签页瞬间这份文档的 scene 会写进另一份文档的正文。
+// 外壳**只在确认换图完成（收到 `loaded`）之后**才翻 `__hostEpoch`；本页只读不写。
+// `report()` 是唯一的 push 点，两条队列天然锁步。
+//
 // **`files` 必须在场（2026-10-17 修）**：Excalidraw 的图片元素只存一个 `fileId`，真正的字节在
 // 画布的 files 里。所以两个方向都要带上它，否则图片元素指向一个不存在的文件（画布上什么都没有）。
 //
@@ -95,6 +102,9 @@
   };
   window.__hostState = out.state;
   window.__hostQueue = out.queue;
+  // 代际令牌（审计 2026-11-03 M-27）：与 `__hostQueue` 同下标并排，见 report()。
+  window.__hostEpochs = [];
+  window.__hostEpoch = 0;
   window.__hostError = null;
 
   // 缩放比例回报（宿主每 150ms 轮询，见 EmbeddedProtocol.ZoomProbeScript）：
@@ -227,6 +237,10 @@
     // 页面若持有旧引用，后续事件会静默丢失。
     if (!Array.isArray(window.__hostQueue)) { window.__hostQueue = []; }
     window.__hostQueue.push(JSON.stringify(Object.assign({ event: name }, payload || {})));
+    // 代际令牌**必须与上一行同下标**（审计 2026-11-03 M-27）：外壳据此丢掉上一份文档的
+    // 迟到事件。两条队列只在这一处 push，所以天然锁步；宿主没升级时它不读这个数组。
+    if (!Array.isArray(window.__hostEpochs)) { window.__hostEpochs = []; }
+    window.__hostEpochs.push(window.__hostEpoch || 0);
   }
 
   function fail(message) {

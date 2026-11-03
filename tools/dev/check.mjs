@@ -8,11 +8,12 @@
  *   node tools/dev/check.mjs --strict     有任何步骤被跳过就以退出码 3 收场（CI 用；
  *                                         本地缺 Python/资产时的跳过是常态，别开）
  *
- * 九步（任一步失败即退出）：
+ * 十步（任一步失败即退出）：
  *   1. 杀残留实例          2. 前端语法（node --check）   3. i18n 引用完整性
  *   4. Rust 编译闸门（cargo check --workspace --all-targets，覆盖 test cfg）
  *   5. UI 交互冒烟（ui_probe）                          6. 画布承载探针（excalidraw_probe）
- *   7. 构建 diagramon      8. Rust 纯逻辑单测            9. 真机自检
+ *   7. drawio 画布探针（canvas_probe）                  8. 构建 diagramon
+ *   9. Rust 纯逻辑单测                                  10. 真机自检
  *
  * 环境变量：
  *   DGM_PYTHON             ui_probe 用的解释器（默认自动找 `python` / `py -3` / `python3`，
@@ -406,6 +407,42 @@ async function main() {
       if (r.status !== 0) {
         log(C.yellow(`  （excalidraw_probe 起不来，退出码 ${r.status}，跳过 —— 上面的输出是现场）`));
         skipped.push("画布承载探针（起不来）");
+      }
+    }
+  }
+
+  step("drawio 画布探针（承载页协议 / 适应视图 / 缩放 / 浮动面板落位）");
+  {
+    // 审计 2026-11-03 G-4：这条探针**一直存在，却从来没被验收跑过** ——
+    // AGENTS.md 写着"canvas_probe 21 条断言…全绿才是要求"，而八步里没有它，
+    // 于是 drawio 承载页那套 __hostQueue / __apply / __hostFit / __hostZoomBy 的
+    // 唯一自动化覆盖是一条要手工敲的命令。改 host.html 后跑完整 check 全绿，
+    // 实际可能已经把适应视图/缩放/协议翻译改坏了。
+    //
+    // 它现在也测**产物**（assets/drawio/host.html）并在源↔产物不一致时返回 1
+    // （与 excalidraw_probe 同口径）；不一致是真失败，不能归进"跳过"。
+    const py = findPython();
+    const page = join(ROOT, "assets", "drawio", "host.html");
+    if (!py) {
+      log(C.yellow("  （跳过 canvas_probe：没找到带 websocket-client 的 Python）"));
+      skipped.push("drawio 画布探针（canvas_probe）");
+    } else if (!existsSync(page)) {
+      log(C.yellow("  （跳过 canvas_probe：assets/drawio 不在位）"));
+      log(C.yellow("    先跑 node tools/fetch-assets.mjs —— 这一步测的是**汇出后的产物**。"));
+      skipped.push("drawio 画布探针（drawio 资产不在位）");
+    } else {
+      const r = spawnSync(py[0], [...py.slice(1), "tools/dev/canvas_probe.py"], {
+        cwd: ROOT,
+        stdio: "inherit",
+        timeout: 300_000,
+      });
+      if (r.status === 1) {
+        log(C.red("drawio 画布探针失败（见上方输出）"));
+        process.exit(2);
+      }
+      if (r.status !== 0) {
+        log(C.yellow(`  （canvas_probe 起不来，退出码 ${r.status}，跳过 —— 上面的输出是现场）`));
+        skipped.push("drawio 画布探针（起不来）");
       }
     }
   }
