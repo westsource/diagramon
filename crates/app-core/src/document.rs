@@ -6,12 +6,73 @@ use app_ipc::{Doc, FormatId};
 
 use crate::format;
 
+/// 打开文档时的读取上限（审计 2026-11-03 H-5）。
+///
+/// 只挡"明显不该整份读进来"的文件（日志、镜像、误拖进来的视频）；正常图表文件
+/// 远小于这个数。护栏本身在 `guard.rs`，但那一道只在**渲染前**问，内存早就分配了。
+const MAX_DOC_BYTES: u64 = 8 * 1024 * 1024;
+
+/// 单文件读取：先看大小、再限量读，且**统一换行**。
+///
+/// 三件事一起收口：
+/// 1. **大小上限**（审计 2026-11-03 H-5）：`read_to_string` 按文件大小一次性分配，
+///    上限等于没有。先 `metadata().len()` 拒绝，再用 `take` 限读（防"大小在
+///    检查与读取之间变大"）。
+/// 2. **只收普通文件**：目录、命名管道、设备文件明确报错，而不是让它阻塞。
+/// 3. **`\r\n` → `\n`**（审计 2026-11-03 M-8）：`set_body` / `adopt_draft` / `reload`
+///    三条路都做了归一，唯独**打开文件**这条主路没做。后果很实在：CRLF 文件的
+///    `saved` 含 `\r\n`，而任何一次 `doc_set_body` 写回的 `body` 都是 `\n`
+///    ⇒ `is_dirty()` 永真，**CRLF 文档一旦被碰过就永久脏**（退出时永远弹"未保存"），
+///    保存时整份被静默重写成 LF（git 里全文 diff）。归一之后四条路一致。
+fn read_capped(path: &Path) -> std::io::Result<String> {
+    use std::io::Read;
+    let meta = std::fs::metadata(path)?;
+    if meta.is_dir() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "这是一个目录，不是文件",
+        ));
+    }
+    if !meta.is_file() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "这不是普通文件（管道 / 设备文件不收）",
+        ));
+    }
+    if meta.len() > MAX_DOC_BYTES {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!(
+                "文件太大（{} MiB，上限 {} MiB），不像是图表文件",
+                meta.len() / (1024 * 1024),
+                MAX_DOC_BYTES / (1024 * 1024)
+            ),
+        ));
+    }
+    let f = std::fs::File::open(path)?;
+    let mut buf = Vec::with_capacity(meta.len() as usize + 1);
+    f.take(MAX_DOC_BYTES + 1).read_to_end(&mut buf)?;
+    if buf.len() as u64 > MAX_DOC_BYTES {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "文件读取过程中变大了，已中止",
+        ));
+    }
+    let text = String::from_utf8(buf).map_err(|_| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "不是 UTF-8 文本文件（GBK 等编码请先转成 UTF-8）",
+        )
+    })?;
+    Ok(normalize_newlines(text))
+}
+
 /// 从路径推断格式与显示名。
 ///
 /// 未知扩展名**回退 Mermaid** 且不报错 —— 与旧客户端行为一致：
 /// 用户拿 .txt 里塞的 mermaid 来打开，也应该能看到图。
 pub fn from_path(id: String, path: &Path) -> std::io::Result<Doc> {
-    let body = std::fs::read_to_string(path)?;
+    let body = read_capped(path)?;
     let format = path
         .extension()
         .and_then(|e| e.to_str())

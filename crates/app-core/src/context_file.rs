@@ -23,17 +23,37 @@ pub const MAX_BYTES: usize = 256 * 1024;
 /// 二进制嗅探窗口：只看开头这一段有没有 NUL。
 const SNIFF_BYTES: usize = 8 * 1024;
 
+/// 最多读 `MAX_BYTES + 1` 字节（多 1 字节用来判"是否被截断"）。
+///
+/// 用 `File::take` 而不是 `std::fs::read`：后者按文件大小一次性分配，上限等于没有
+/// （审计 2026-11-03 M-40）。
+fn read_capped(path: &Path) -> std::io::Result<Vec<u8>> {
+    use std::io::Read;
+    let f = std::fs::File::open(path)?;
+    let mut out = Vec::with_capacity(SNIFF_BYTES);
+    f.take(MAX_BYTES as u64 + 1).read_to_end(&mut out)?;
+    Ok(out)
+}
+
 /// 读一个文件作为上下文。
 pub fn read(path: &Path) -> Result<AiContextFile, String> {
     let meta = std::fs::metadata(path).map_err(|e| format!("读不到这个文件：{e}"))?;
     if meta.is_dir() {
         return Err("这是一个目录，不是文件".into());
     }
-    let bytes = std::fs::read(path).map_err(|e| format!("读不到这个文件：{e}"))?;
+    // 只收普通文件（审计 2026-11-03 M-40）：命名管道 / 设备文件会让 `read` 永久阻塞，
+    // 而 `file_read_text` 是 **sync** 命令，会连带把主线程一起卡住。
+    if !meta.is_file() {
+        return Err("这不是普通文件（管道 / 设备文件不收）".into());
+    }
+    let bytes = read_capped(path).map_err(|e| format!("读不到这个文件：{e}"))?;
     if bytes.iter().take(SNIFF_BYTES).any(|b| *b == 0) {
         return Err("这不是文本文件（开头就有 NUL 字节）".into());
     }
 
+    // 多读 1 字节用来判断"是否被截断"（审计 2026-11-03 M-40）。
+    // 原来的 `std::fs::read` 是**先整份进内存再截断** —— 上限只作用于交给提示词的那一段，
+    // 注释举的"50 MB 的 CSV"确实会被完整读进 `Vec<u8>`。现在上限在读取过程中生效。
     let truncated = bytes.len() > MAX_BYTES;
     let slice = &bytes[..bytes.len().min(MAX_BYTES)];
     let text = match std::str::from_utf8(slice) {

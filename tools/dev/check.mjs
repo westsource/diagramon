@@ -5,6 +5,14 @@
  *   node tools/dev/check.mjs            全量：单测 + 真机自检
  *   node tools/dev/check.mjs --skip-test  只跑真机自检（省时间）
  *   node tools/dev/check.mjs --test-only  只跑单测（不跑真机自检）
+ *   node tools/dev/check.mjs --strict     有任何步骤被跳过就以退出码 3 收场（CI 用；
+ *                                         本地缺 Python/资产时的跳过是常态，别开）
+ *
+ * 九步（任一步失败即退出）：
+ *   1. 杀残留实例          2. 前端语法（node --check）   3. i18n 引用完整性
+ *   4. Rust 编译闸门（cargo check --workspace --all-targets，覆盖 test cfg）
+ *   5. UI 交互冒烟（ui_probe）                          6. 画布承载探针（excalidraw_probe）
+ *   7. 构建 diagramon      8. Rust 纯逻辑单测            9. 真机自检
  *
  * 环境变量：
  *   DGM_PYTHON             ui_probe 用的解释器（默认自动找 `python` / `py -3` / `python3`，
@@ -20,7 +28,11 @@
  *   3. WebView2 对后台窗口把 setTimeout 节流到约 1 次/秒 ⇒ 自检里不能用定时器轮询界面
  *      （这是前端那一侧要守的规矩，本脚本负责把结论如实报出来）。
  *
- * 退出码：0 = 全绿；1 = 有失败；2 = 基础设施问题（构建失败 / 报告没产出）。
+ * 退出码：0 = 全绿；1 = 有失败；2 = 基础设施问题（构建失败 / 编译闸门失败 / 报告没产出）；
+ *         3 = `--strict` 下有步骤被跳过（跳过的原因见输出末尾清单）。
+ *
+ * 有步骤被跳过时，末尾的成功行**不会**再打裸的「✓ 全绿」，而是如实列出没执行的步骤 ——
+ * 「跳过」混在「全绿」里看，等于报了个假绿（审计 2026-11-03 G-2）。
  */
 
 import { spawn, spawnSync } from "node:child_process";
@@ -40,6 +52,10 @@ const EXE = process.platform === "win32"
 const args = process.argv.slice(2);
 const skipTest = args.includes("--skip-test");
 const testOnly = args.includes("--test-only");
+// 为什么跳过默认**不**改退出码：本地缺 Python / 缺资产是常态，把跳过当失败会让开发者
+// 天天绕开整个脚本 —— 那比假绿还糟。--strict（CI 用）把跳过升格为退出码 3（区别于
+// 真失败的 1/2），同时无论开不开 strict，末尾成功行都如实列出未执行的步骤（审计 2026-11-03 G-2）。
+const strict = args.includes("--strict");
 
 const C = {  // 只在 TTY 上上色，避免日志里出现乱码
   on: process.stdout.isTTY,
@@ -77,6 +93,14 @@ const log = (s = "") => {
   process.stdout.write(`${s}\n`);
 };
 const step = (s) => log(`\n${C.bold("▸ " + s)}`);
+
+/** --strict 下，有步骤没跑完就以 3 收场（成功路径收尾时调用；失败路径该 1/2 还是 1/2）。 */
+function exitStrictIfSkipped() {
+  if (strict && skipped.length) {
+    log(C.red(`\n✗ --strict：${skipped.length} 步未完整执行（${skipped.join(" · ")}）—— 严格模式下这算失败`));
+    process.exit(3);
+  }
+}
 
 /** 跑一条命令并继承 stdio；返回退出码。 */
 function run(cmd, argv, opts = {}) {
@@ -305,6 +329,21 @@ async function main() {
     log(C.dim(`  ${ZH.size} 个键：静态引用 ${statics.length} 个全覆盖、键集对称、占位符一致；动态前缀 ${dynamic.length} 个（${dynamic.join(", ")}）`));
   }
 
+  // Rust 编译闸门（审计 2026-11-03 M-1/G-1）：唯一覆盖 src-tauri test cfg 的验收步骤。
+  // 为什么必须单独有这一步：Cargo.toml 给 [lib]/[[bin]] 设了 `test = false`（测试二进制会
+  // 链接 tauri/wry，WebView2 DLL 不在 deps 目录旁时以 STATUS_ENTRYPOINT_NOT_FOUND 暴死），
+  // 于是 `cargo test -p diagramon` 一个测试都不跑、下面的单测步骤也从不 `-p diagramon` ——
+  // src-tauri 里的 #[cfg(test)] 代码没有任何验收步骤会编译它。后果（真实事故）：07dde7d 给
+  // app_ipc::Issue 加了 column 字段，ai_tools.rs 测试里的两个 Issue 字面量没跟上，
+  // 烂了不知多久，验收照样全绿。`--all-targets` 会把 test cfg 一起编译，正是缺的那一环。
+  // 用 check 而不用 clippy：这一步管"能不能编译"，不管 lint —— 工作区现存 ~45 条 clippy
+  // 警告，拿 lint 拦验收等于这一步永远不绿，人们就会开始绕开整个脚本。
+  step("Rust 编译闸门（cargo check --workspace --all-targets，含 test cfg）");
+  if (run("cargo", ["check", "--workspace", "--all-targets", "--message-format", "short"]) !== 0) {
+    log(C.red("编译闸门失败 —— 上面的错误必须修掉（src-tauri 的 #[cfg(test)] 代码最容易被 crate 改动落下）"));
+    process.exit(2);
+  }
+
   step("UI 交互冒烟（浏览器原型：启动异常 / 菜单可点 / 分屏比例 / 标签挤压）");
   {
     const py = findPython();
@@ -397,7 +436,11 @@ async function main() {
     skipped.push("Rust 单测（--skip-test）");
   }
   if (testOnly) {
+    if (skipped.length) {
+      log(C.yellow(`  ⚠ ${skipped.length} 步未完整执行（不等于验过）：${skipped.join(" · ")}`));
+    }
     log(C.green(skipTest ? "\n✓ 完成（--test-only 与 --skip-test 同时给了，两边都跳过）" : "\n✓ 单测通过（--test-only：未跑真机自检）"));
+    exitStrictIfSkipped();
     process.exit(0);
   }
 
@@ -466,7 +509,15 @@ async function main() {
   }
   log("");
   const ok = report.pass === report.total;
-  log(`${C.bold(`${report.pass}/${report.total}`)} ${ok ? C.green("✓ 全绿") : C.red("✗ 有失败")}`);
+  // 「✓ 全绿」只在**没有任何跳过**时才允许打出来（审计 2026-11-03 G-2）：曾经 ui_probe /
+  // excalidraw_probe 双双被跳过（DGM_PYTHON 没设），最后一行仍是「✓ 单测通过」+ 退出码 0 ——
+  // 与本文件下面那段 2026-10-11 的假绿教训是同一个病，只是那次修漏了探针这两步。
+  const verdict = !ok
+    ? C.red("✗ 有失败")
+    : skipped.length
+      ? C.yellow(`✓ 完成（${skipped.length} 步未完整执行：${skipped.join(" · ")}）`)
+      : C.green("✓ 全绿");
+  log(`${C.bold(`${report.pass}/${report.total}`)} ${verdict}`);
   if (skipped.length) {
     log(C.yellow(`  ⚠ 有步骤被跳过（不等于验过）：${skipped.join(" · ")}`));
   }
@@ -474,6 +525,7 @@ async function main() {
     log(C.dim(`  失败项：${report.failed.join(" · ")}`));
     if (appOut) log(C.dim("  应用日志尾部：\n" + appOut.trim().split("\n").slice(-15).join("\n").replace(/^/gm, "    ")));
   }
+  if (ok) exitStrictIfSkipped();
   process.exit(ok ? 0 : 1);
 }
 

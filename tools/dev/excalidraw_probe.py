@@ -373,7 +373,7 @@ def make_handler():
 
 
 def preflight() -> int:
-    """返回 0 = 可以开跑；非 0 = 环境缺件（不拦验收，但要说明装什么）。"""
+    """返回 0 = 可以开跑；1 = 产物与源不一致（真失败，拦验收）；2 = 环境缺件（不拦验收，但要说明装什么）。"""
     page = ASSETS / "excalidraw" / "index.html"
     if not page.is_file():
         log(f"Excalidraw 产物不在位：{page}")
@@ -381,10 +381,14 @@ def preflight() -> int:
         return 2
     src = ROOT / "tools" / "excalidraw-host" / "index.html"
     if src.is_file() and src.read_bytes() != page.read_bytes():
-        # 这一条正是 B5 的回归闸门：改了承载页却没汇出，测出来的就是一份不存在的产品
-        log(f"承载页不一致：{page} 与源 {src} 不同")
-        log("  先跑 node tools/fetch-assets.mjs（prepack 也有同样的闸门）")
-        return 2
+        # 这一条正是 B5 的回归闸门：改了承载页却没汇出，测出来的就是一份不存在的产品。
+        # 必须返回 1 而不是 2（审计 2026-11-03 G-3）：check.mjs 把 2 当"环境缺件 ⇒ 跳过、
+        # 不拦验收"，于是这个**代码级**错误被归进"跳过"、整场照样能 exit 0 ——
+        # AGENTS.md 里"excalidraw_probe 会比对，不一致就拦"的承诺落了空。
+        # 2 只留给真环境缺件（上面"产物不在位"那条）；1 一到 check.mjs 就红字拦下。
+        log(f"✗ 承载页不一致：{page} 与源 {src} 不同（源改了却没汇出，测的会是一份不存在的产品）")
+        log("  修法：node tools/fetch-assets.mjs（它从 tools/ 汇出 assets/；prepack 也有同样的闸门）")
+        return 1
     return 0
 
 

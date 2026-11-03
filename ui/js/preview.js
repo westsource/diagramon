@@ -998,6 +998,51 @@ window.DGM = window.DGM || {};
     };
   }
 
+  /** 可内联的 data: 图片类型。**故意不含 `image/svg+xml`** —— 那又是一层可执行载体。 */
+  const SAFE_DATA_URL = /^data:image\/(png|jpe?g|gif|webp);base64,/i;
+
+  /**
+   * 一个 URL 属性值能不能留在挂载进外壳页的 SVG 里（审计 2026-11-03 H-1）。
+   *
+   * **必须是白名单，不能是黑名单**：原来写的是 `/^\s*javascript:/i`，只容忍**前导**空白，
+   * 而 WHATWG 解析 URL 时会先删掉**任意位置**的 TAB / LF / CR 再判 scheme ——
+   * `jav&#x9;ascript:…` 因此既躲过正则、又被浏览器解析成 `javascript:`。
+   * 实测（真 Chromium + 仓库自带的 graphviz 16.1.0）：DOT 里写
+   * `a [URL="jav<TAB>ascript:…"]` → graphviz 原样透传 → 旧消毒器放行 → 点一下即执行。
+   * 所以判据只有一个：**自己按同样规则解析出协议，再对照白名单**。
+   */
+  function svgUrlIsSafe(value) {
+    const raw = String(value == null ? "" : value);
+    // 与 WHATWG 同口径：先删掉控制字符与空格，再判协议
+    const s = raw.replace(/[\u0000-\u0020]/g, "");
+    if (!s) return true; // 空值无害
+    if (s.charAt(0) === "#") return true; // 文档内引用（marker / clipPath / 渐变 / use）
+    if (SAFE_DATA_URL.test(s)) return true;
+    let u;
+    try {
+      u = new URL(s, document.baseURI);
+    } catch {
+      return false; // 解析不出来的一律不留
+    }
+    if (u.protocol === "blob:") return true;
+    // 同源 http(s)：离线应用里它只会打回 dgm 协议自身（那边已有独立的路径守卫）
+    if ((u.protocol === "http:" || u.protocol === "https:") && u.origin === location.origin) return true;
+    return false; // javascript: / vbscript: / data:text/html / 跨源外链，一律拒
+  }
+
+  /**
+   * CSS 里的 `url()` 与 `@import` 同样能外带数据（挂进外壳页的 `<style>` 作用于**整个文档**，
+   * CSS 不隔离），所以只放行与上面同一套白名单（审计 2026-11-03 H-2）。
+   * mermaid / D2 合法产出的 `<style>` 不能一删了之 —— 那会连配色和线型一起丢掉。
+   */
+  function scrubCss(css) {
+    let out = String(css == null ? "" : css).replace(/@import[^;]*;?/gi, " ");
+    out = out.replace(/url\(\s*(['"]?)([^'")]*)\1\s*\)/gi, (whole, _q, inner) =>
+      svgUrlIsSafe(inner) ? whole : "none",
+    );
+    return out;
+  }
+
   /**
    * 渲染引擎的 SVG 产物进舞台前先消毒（审计 F-2a：第二道防线）。
    *
@@ -1006,24 +1051,43 @@ window.DGM = window.DGM || {};
    * 用 <template> 承接：模板内容是惰性的（脚本不执行、事件不触发），
    * 且 HTML 解析对 mermaid 标签里未闭合的 `<br>` 宽容（XML 解析会直接 parsererror，
    * 见 pngDataUrl 的注释），消毒完再把 <svg> 摘出来挂载。
+   *
+   * 三道处理（2026-11-03 审计把前两道都补全了）：
+   * 1. **拔元素**：可执行/可加载的，外加 **SMIL 动画元素** —— `<set>`/`<animate>` 改的是
+   *    href 的**动画值**，`getAttribute` 永远读不到，所以任何"扫描属性值"的消毒器都拦不住它
+   *    （实测三种形态点击全部执行）。图表渲染不需要 SMIL，整类移除。
+   * 2. **扫属性**：`on*` 全删；URL 属性走 `svgUrlIsSafe` 白名单。
+   *    注意扫描范围要**含 `<svg>` 根元素自身**（`querySelectorAll("*")` 不含它，
+   *    而 `<svg onload=…>` 是真会执行的）。
+   * 3. **洗 CSS**：`<style>` 的文本与行内 `style` 属性都过 `scrubCss`。
    */
   function sanitizeSvgNode(svgText) {
     const tpl = document.createElement("template");
     tpl.innerHTML = String(svgText);
     const root = tpl.content.querySelector("svg");
     if (!root) return null;
-    // 可执行/可加载的元素整棵拔掉（script 选择器覆盖任意深度，含 foreignObject 内）
-    root.querySelectorAll("script, iframe, object, embed, link, base").forEach((n) => n.remove());
-    // 事件属性（on*）与 javascript: 可执行 URL
-    tpl.content.querySelectorAll("*").forEach((n) => {
+    // 可执行/可加载的元素整棵拔掉（script 选择器覆盖任意深度，含 foreignObject 内）。
+    // foreignObject 本身要留：mermaid 的 htmlLabels 靠它，删了标签就没了。
+    root
+      .querySelectorAll(
+        "script, iframe, object, embed, link, base, animate, set, animateTransform, animateMotion",
+      )
+      .forEach((n) => n.remove());
+    const all = [root, ...root.querySelectorAll("*")];
+    for (const n of all) {
       for (const attr of Array.from(n.attributes || [])) {
         const name = attr.name.toLowerCase();
         if (name.startsWith("on")) {
           n.removeAttribute(attr.name);
-        } else if ((name === "href" || name === "xlink:href" || name === "src") && /^\s*javascript:/i.test(attr.value)) {
-          n.removeAttribute(attr.name);
+        } else if (name === "href" || name === "xlink:href" || name === "src") {
+          if (!svgUrlIsSafe(attr.value)) n.removeAttribute(attr.name);
+        } else if (name === "style") {
+          n.setAttribute(attr.name, scrubCss(attr.value));
         }
       }
+    }
+    root.querySelectorAll("style").forEach((s) => {
+      s.textContent = scrubCss(s.textContent);
     });
     return root;
   }

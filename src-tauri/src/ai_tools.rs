@@ -281,7 +281,7 @@ pub fn render_issues(issues: &[app_ipc::Issue]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use app_ipc::{FormatId, Issue, Severity};
+    use app_ipc::{Issue, Severity};
 
     #[test]
     fn read_without_range_starts_from_the_top_with_line_numbers() {
@@ -332,11 +332,18 @@ mod tests {
 
     #[test]
     fn issues_are_rendered_with_lines_and_severity() {
+        // 字面量必须带上 `Issue` 的**全部**字段（审计 2026-11-03 M-1）：07dde7d 给
+        // app_ipc::Issue 加了 `column: Option<u32>` 却没改这两处，而 [lib] 设了 test = false
+        // （`cargo test -p diagramon` 因此一个测试都不编译），错误直到 `--all-targets` 才现形。
+        // 改 Issue 的字段 ⇒ 这里必须跟着改；check.mjs 的编译闸门负责把漏改拦在验收里。
         let issues = vec![
-            Issue { severity: Severity::Error, line: 3, message: "括号没有闭合".into(), hint: "补一个 }".into() },
-            Issue { severity: Severity::Warning, line: 0, message: "用了 -> 但图是无向的".into(), hint: String::new() },
+            Issue { severity: Severity::Error, line: 3, column: Some(5), message: "括号没有闭合".into(), hint: "补一个 }".into() },
+            Issue { severity: Severity::Warning, line: 0, column: None, message: "用了 -> 但图是无向的".into(), hint: String::new() },
         ];
         let text = render_issues(&issues);
+        // column 不参与渲染（render_issues 只用 line，前端「问题」面板也只依赖 line）——
+        // 给了 Some(5) 却不许漏出 "5"，锁死这个语义，防将来有人顺手把列号拼进文案。
+        assert!(!text.contains('5'), "{text}");
         assert!(text.contains("第 3 行：括号没有闭合"));
         assert!(text.contains("补一个 }"));
         assert!(text.contains("Error") && text.contains("Warning"));

@@ -163,8 +163,9 @@ pub fn scan(root: &Path) -> WorkspaceInfo {
 /* ------------------------------------------------------------------ 搜索 */
 
 enum Matcher {
-    /// 字面量；`ci` = 大小写不敏感
-    Literal { needle: String, ci: bool },
+    /// 大小写敏感的字面量
+    Literal { needle: String },
+    /// 正则。**大小写不敏感的字面量也走这里**（见 `build` 的注释）。
     Regex(regex::Regex),
 }
 
@@ -177,26 +178,44 @@ impl Matcher {
                 .map(Self::Regex)
                 .map_err(|e| e.to_string())
         } else if case_sensitive {
-            Ok(Self::Literal { needle: query.to_string(), ci: false })
+            Ok(Self::Literal { needle: query.to_string() })
+        } else if query.is_empty() {
+            // 空查询不命中任何行（与旧的 `needle.is_empty() -> None` 同义）；
+            // 交给 regex 会匹配每行的位置 0，那不是我们想要的。
+            Ok(Self::Literal { needle: String::new() })
         } else {
-            Ok(Self::Literal { needle: query.to_lowercase(), ci: true })
+            // 大小写不敏感的字面量**必须走 regex**（审计 2026-11-03 H-9）。
+            //
+            // 原写法是 `line.to_lowercase().find(needle)`：拿到的下标属于
+            // 【小写化之后】的字符串，却拿去切【原串】。`to_lowercase` 会改变字节
+            // 长度（`İ` U+0130 是 2 字节，小写成 `i̇` 是 3 字节），偏移后可以落在
+            // 多字节字符中间 ⇒ `line[..idx]` 直接 panic。实测 `İİ目标` 搜 `目标`
+            // 必现 `byte index 6 is not a char boundary`。
+            //
+            // 后果不小：这条路径跑在 `spawn_blocking`（`search_run`）里，而 release
+            // 是 `panic = "abort"` ⇒ **整个进程终止**，未保存内容全丢；而
+            // `SearchRequest.case_sensitive` 默认 false，也就是**默认路径**，
+            // 被搜的文件内容又是不可信输入（用户打开的第三方工作区）。
+            //
+            // 换成 regex 后：`find` 返回的是**原串**的字节区间，天然对齐；
+            // 顺带省掉每行一次的 `to_lowercase()` 分配。
+            regex::RegexBuilder::new(&regex::escape(query))
+                .case_insensitive(true)
+                .build()
+                .map(Self::Regex)
+                .map_err(|e| e.to_string())
         }
     }
 
     /// 命中位置的 **0 起字符下标**（不是字节下标 —— 中文一行一个字，字节会错位）。
     fn find(&self, line: &str) -> Option<usize> {
         match self {
-            Self::Literal { needle, ci } => {
+            Self::Literal { needle } => {
                 if needle.is_empty() {
                     return None;
                 }
-                let idx = if *ci {
-                    line.to_lowercase().find(needle)?
-                } else {
-                    line.find(needle.as_str())?
-                };
-                // 小写化可能改变字节长度（极少数语言），取"到该字节为止的字符数"仍是对齐的
-                Some(line[..idx.min(line.len())].chars().count())
+                // 字面量分支只处理大小写敏感的情形：下标本来就属于原串
+                Some(line[..line.find(needle.as_str())?].chars().count())
             }
             Self::Regex(re) => re.find(line).map(|m| line[..m.start()].chars().count()),
         }
@@ -358,6 +377,28 @@ pub fn resolve_in_root(root: &Path, rel: &str) -> Result<PathBuf, String> {
     Ok(root.join(p))
 }
 
+/// 把 `canonicalize` 得到的 Windows **verbatim** 路径还原成普通形态。
+///
+/// `std::fs::canonicalize` 在 Windows 上返回 `\\?\C:\…`（UNC 是 `\\?\UNC\srv\share\…`）。
+/// 这个前缀**不能带进状态里**：前端给的路径是普通的 `C:/…`，而 `inside()` 是按组件
+/// 逐段比较的，多出 `\\?\` 前缀就会被判成"不在工作区内" —— 新建 / 改名 / 删除全部被拒。
+/// 2026-11-03 的真机自检当场抓到这一条（`workspace_new_file` 报「目标目录不在工作区内」），
+/// 而那是我给 `workspace_open` 加规范化时引入的回归。非 verbatim 路径原样返回；
+/// 非 Windows 上是空操作。
+///
+/// 代价：失去 `\\?\` 的长路径（>260 字符）豁免。工作区是用户在对话框里选的普通目录，
+/// 这个取舍划算 —— 守卫正确性比边角能力重要。
+pub fn strip_verbatim(p: &Path) -> PathBuf {
+    let s = p.to_string_lossy();
+    if let Some(rest) = s.strip_prefix(r"\\?\UNC\") {
+        return PathBuf::from(format!(r"\\{rest}"));
+    }
+    if let Some(rest) = s.strip_prefix(r"\\?\") {
+        return PathBuf::from(rest);
+    }
+    p.to_path_buf()
+}
+
 /// `target` 是否落在 `root` 之内。按组件规范化比较（不要求文件已存在），
 /// Windows 上大小写不敏感。
 pub fn inside(root: &Path, target: &Path) -> bool {
@@ -382,6 +423,13 @@ pub fn inside(root: &Path, target: &Path) -> bool {
         out
     }
     let r = norm(root);
+    // 空根一律判 false（审计 2026-11-03 H-7）。`norm` 会跳过 `Component::CurDir`，
+    // 于是 `root = "."` 规范化成 `[]`，而 `t.len() >= 0` 与空迭代器的 `.all()`
+    // 都恒真 ⇒ 任何路径都「在工作区内」。`workspace_open` 那边也补了拒绝，
+    // 这里是最后一道：守卫的根一旦退化，必须 fail-closed 而不是 fail-open。
+    if r.is_empty() {
+        return false;
+    }
     let t = norm(target);
     t.len() >= r.len() && r.iter().zip(t.iter()).all(|(a, b)| a == b)
 }
@@ -658,6 +706,74 @@ mod tests {
         assert!(!inside(root, Path::new("/ws/other/a.mmd")), "兄弟目录不算在内");
         assert!(!inside(root, Path::new("/ws/proj/../other/a.mmd")), "回溯出去不算在内");
         assert!(inside(root, root), "根自己算在内");
+    }
+
+    /// `canonicalize` 的 verbatim 形态不能带进状态（2026-11-03 自检抓到的回归）。
+    ///
+    /// `inside(root, dir)` 是按组件比较的：`\\?\E:\ws` 与前端给的 `E:/ws` 组件不同，
+    /// 于是「目标目录不在工作区内」—— 新建 / 改名 / 删除全被拒。
+    #[test]
+    fn strip_verbatim_restores_the_plain_windows_form() {
+        assert_eq!(
+            strip_verbatim(Path::new(r"\\?\E:\ws\proj")),
+            PathBuf::from(r"E:\ws\proj")
+        );
+        assert_eq!(
+            strip_verbatim(Path::new(r"\\?\UNC\srv\share\p")),
+            PathBuf::from(r"\\srv\share\p")
+        );
+        // 非 verbatim 原样返回
+        assert_eq!(strip_verbatim(Path::new(r"E:\ws")), PathBuf::from(r"E:\ws"));
+        // 剥掉之后 inside 才能命中（这条是自检失败的等价复现）
+        let root = strip_verbatim(Path::new(r"\\?\E:\ws\proj"));
+        assert!(inside(&root, Path::new("E:/ws/proj/a.mmd")));
+        assert!(inside(&root, Path::new(r"E:\ws\proj\a.mmd")));
+    }
+
+    /// 审计 H-7：根规范化成空时**必须 fail-closed**。
+    ///
+    /// `norm()` 跳过 `Component::CurDir`，于是 `root = "."` 得 `[]`，而
+    /// `t.len() >= 0` 与空迭代器的 `.all()` 都恒真 —— 任何路径都「在工作区内」。
+    /// 这个 `inside` 是 `workspace_delete` / `_rename` / `_new_file` / 搜索
+    /// 与 `check_writable` 的唯一守卫，fail-open 等于守卫不存在。
+    #[test]
+    fn inside_fails_closed_when_the_root_normalizes_to_nothing() {
+        assert!(!inside(Path::new("."), Path::new("C:/Windows/win.ini")));
+        assert!(!inside(Path::new(""), Path::new("C:/Windows/win.ini")));
+        assert!(!inside(Path::new("./"), Path::new("/etc/passwd")));
+    }
+
+    /// 审计 H-9：大小写不敏感搜索曾用「小写化后串的字节下标」去切原串。
+    ///
+    /// `to_lowercase()` 会改变字节长度（`İ` U+0130 是 2 字节 → `i̇` 3 字节），
+    /// 偏移后可落在多字节字符中间 ⇒ `line[..idx]` panic。这条路径跑在
+    /// `spawn_blocking` 里，而 release 是 `panic = "abort"` ⇒ 整个进程终止；
+    /// 且 `case_sensitive` 默认 false，是**默认路径**，被搜文件内容又不可信。
+    #[test]
+    fn case_insensitive_search_does_not_panic_on_expanding_lowercase() {
+        let m = Matcher::build("目标", false, false).unwrap();
+        // 修复前：`İİ目标` 必现 byte index is not a char boundary
+        for line in ["İİ目标", "İ目标", "ẞ目标", "aİ目标"] {
+            assert_eq!(m.find(line), Some(line.chars().count() - 2), "行 {line:?} 的列号要按字符算");
+        }
+        // 命中位置之前的扩张字符会让旧实现的列号系统性偏大
+        assert_eq!(m.find("İİİ目标"), Some(3), "真实字符下标是 3（旧实现给 4）");
+        assert_eq!(m.find("目标"), Some(0));
+        assert_eq!(m.find("无匹配"), None);
+        // 大小写不敏感本身仍然生效
+        let m2 = Matcher::build("abc", false, false).unwrap();
+        assert_eq!(m2.find("xxABCyy"), Some(2));
+        // 大小写敏感的路径不受影响
+        let m3 = Matcher::build("abc", false, true).unwrap();
+        assert_eq!(m3.find("xxABCyy"), None);
+        assert_eq!(m3.find("xxabcyy"), Some(2));
+    }
+
+    /// 空查询不命中任何行（旧行为，别被 regex 分支带成"每行位置 0"）。
+    #[test]
+    fn empty_query_matches_nothing() {
+        assert_eq!(Matcher::build("", false, false).unwrap().find("anything"), None);
+        assert_eq!(Matcher::build("", false, true).unwrap().find("anything"), None);
     }
 
     /// 把树摊平成列表，断言时好写。

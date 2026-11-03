@@ -3,6 +3,15 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- CSP（审计 2026-11-03 L-30）：这页与外壳一样被注入 `window.__TAURI__`（capture.js 直接 invoke），
+     但它走的是 `WebviewUrl::App`（Tauri 自己的资产协议、origin 是 tauri.localhost），
+     **拿不到 `dgm` 处理器下发的那道响应头**，所以自己带一份 meta。
+     与外壳那份（lib.rs `CSP_SHELL` / index.html）同口径，只窄不放：这页没有内联脚本
+     （文案走 data-i18n + textContent），所以 script-src 不需要 'wasm-unsafe-eval'；
+     style-src 仍要 'unsafe-inline' —— 上面的选区/遮罩样式就是内联 <style>；
+     img-src 要 data: —— 冻结帧是后端给的 dataURL（capture.js:151）。 -->
+<meta http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' data: blob: http://ipc.localhost https://ipc.localhost; font-src 'self' data:; frame-src 'self'; object-src 'none'; base-uri 'none'">
 <title>Diagramon 截屏</title>
 <style>
   /* 这页自成一体：不引 app.css（工作台的整套变量/布局对它没意义），

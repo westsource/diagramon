@@ -55,18 +55,26 @@ node tools/release.mjs --help
 
 ## 2. 验收：一条命令 `node tools/dev/check.mjs`
 
-八步（任一步失败即退出）：杀残留实例 → 前端语法 → **i18n 完整性**（`t()` 用到的键必须在 ZH/EN 都存在 + 键集完全对称 + 同一个键两侧占位符一致）→ **UI 交互冒烟 `ui_probe`** → **画布承载探针 `excalidraw_probe`** → 构建 → **Rust 单测** → **真机自检**。
+九步（任一步失败即退出）：杀残留实例 → 前端语法 → **i18n 完整性**（`t()` 用到的键必须在 ZH/EN 都存在 + 键集完全对称 + 同一个键两侧占位符一致）→ **Rust 编译闸门**（`cargo check --workspace --all-targets`）→ **UI 交互冒烟 `ui_probe`** → **画布承载探针 `excalidraw_probe`** → 构建 → **Rust 单测** → **真机自检**。
+
+- **为什么需要「Rust 编译闸门」这一步**（2026-11-03 审计 M-1 加的）：`src-tauri/Cargo.toml` 的 `[lib]`/`[[bin]]` 都是 `test = false`（原因写在那个文件里，是真实的），所以 `cargo test -p diagramon` 一个测试都不编译；而第 8 步的 `-p` 列表里也没有 `diagramon`。两层叠加的净结果是 `src-tauri/src/**` 里的 `#[cfg(test)]` 代码**从不参与编译**。实测代价：`07dde7d` 给 `app_ipc::Issue` 加了 `column` 字段后，`ai_tools.rs` 的两处字面量漏改，整个 test cfg 编译失败而无人发现，11 条回归测试（含 2026-10-21 那次自锁事故的守卫）失效了三个版本。`--all-targets` 会编译 test cfg，是唯一覆盖它的闸门。
 
 ```powershell
 $env:DGM_PYTHON="C:\Users\rong\.workbuddy\binaries\python\versions\3.13.12\python.exe"; node tools/dev/check.mjs
 ```
 
 - `--test-only` 只跑非自检部分；`--skip-test` 只跑真机自检。
+- `--strict`：有任何步骤被**跳过**就以退出码 3 收场（CI 用）。默认跳过不拦退出码（本地缺 Python 是常态，硬拦会逼人绕开脚本），但末尾那行会**如实列出未执行的步骤**，不会只打一个 `✓`。
 - **真机自检要在前台桌面跑**（WebView2 对后台窗口会节流、丢 IPC 响应，沙箱里拿不到报告）。报告落 `ui/.shots/selftest-report.json`，整场日志 `ui/.shots/check.log`。
 - **从受限会话（远程桌面、agent 沙箱、作业对象）拉起自检**：WebView2 浏览器子进程会**启动即崩**——症状是窗口纯白、`$LOCALAPPDATA/com.diagramon.app/EBWebView/Crashpad/reports/` 里**每次启动多一个 ~7MB 的 .dmp**、页面 boot 走完但心跳（`hb:` 打点）永远不出现。修法是给 WebView2 加 `--no-sandbox`（运行时开关，不进发布配置）：`DGM_BROWSER_EXTRA_ARGS="--no-sandbox" node tools/dev/check.mjs`。只在受限环境里用，普通桌面跑自检**不要**带它。
-- 判断"整场有没有走到第 7 步"**看报告时间戳**：脚本进循环前会先删报告，所以**时间戳还是旧的 = 前六步里有人 `exit(2)`**。
+- **两个 `--no-sandbox` 变量不是一回事**，受限会话里两个都要给：`DGM_BROWSER_EXTRA_ARGS` 只影响 **WebView2**（第 9 步真机自检）；三个浏览器探针（`ui_probe` / `canvas_probe` / `excalidraw_probe`）读的是 **`DGM_PROBE_NO_SANDBOX=1`**（那是它们自己拉起的 Chrome）。只给前一个的话，探针的渲染子进程照样启动即崩 → 返回 2 → 被归成"起不来，跳过"。完整写法：
+  ```powershell
+  $env:DGM_BROWSER_EXTRA_ARGS="--no-sandbox"; $env:DGM_PROBE_NO_SANDBOX="1"; node tools/dev/check.mjs
+  ```
+- 判断"整场有没有走到第 9 步"**看报告时间戳**：脚本进循环前会先删报告，所以**时间戳还是旧的 = 前八步里有人 `exit`**。
 - `DGM_PYTHON` 指向的解释器必须能 `import websocket`；本机唯一满足的是上面那条路径（机器上没有 `py` 启动器）。这个环境变量**曾经因为 `findPython()` 的 `shell:true` 从来没生效过**，别再把失败归因成"环境缺件"。
-- 单测当前 265 项、探针 25 条断言（`canvas_probe` 21 + `excalidraw_probe` 4）、自检 64 条 —— 数量会随开发变，**全绿才是要求**。
+- 单测当前 460 项（`app-core` 357 + `ai` 79 + `assets` 13 + `platform` 5 + `platform-windows` 5 + `app-ipc` 2）、真机自检 166 条断言 —— 数量会随开发变，**全绿才是要求**。
+- `canvas_probe` **仍然不在九步里**（2026-11-03 审计 G-4 指出来的），改 `tools/drawio-host/host.html` 之后要单独手工跑一次。
 
 改 `ui/**` 之后跑本地应用**必须先 `cargo build`**（或把改动 `cp` 到 `target/debug/ui/` 同路径），否则跑的是旧副本。
 

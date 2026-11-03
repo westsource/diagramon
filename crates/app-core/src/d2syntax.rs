@@ -46,6 +46,114 @@ pub(crate) fn strip_comment(line: &str) -> String {
     out
 }
 
+/* ---------------- 块字符串（`x: |md … |`） ---------------- */
+
+/// 一行在块字符串状态机里的身份。
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum BlockLine {
+    /// 普通结构行：照常解析。
+    Structure,
+    /// 这一行**开**了一个块字符串（`x: |md`）。本行的 `|md` 之后全是内容，
+    /// 但 `x:` 这部分仍然是结构（它声明了节点 `x`）—— 需要的话用 [`block_string_decl`] 取。
+    Open,
+    /// 整行都是块字符串的内容（**含收尾的那一行 `|`**）：不参与任何结构解析。
+    Content,
+}
+
+/// D2 块字符串的行级状态机：喂一行原文，告诉你这行是结构还是内容。
+///
+/// **为什么在这里而不在各调用方**：`formatter` 早就认块字符串（它要把块里的缩进原样搬走），
+/// 而 `palette` / `lint` / `outline` 各写各的行扫描，谁都不知道块字符串存在，于是同一份
+/// 合法的 `|md … |` 文档：配色把 markdown 正文逐行当节点**写回源码**（图直接编译不过），
+/// 校验报「花括号没有闭合」，大纲把散文和收尾的 `|` 列成节点
+/// （审计 2026-11-03 H-11 / L-32）。四处共用这一个状态机，加语法变体时才不会漂。
+#[derive(Debug, Default)]
+pub(crate) struct BlockStrings {
+    in_block: bool,
+}
+
+impl BlockStrings {
+    pub(crate) fn new() -> Self {
+        Self { in_block: false }
+    }
+
+    /// 当前是不是正处在一个块字符串里（还没见到收尾的 `|`）。
+    pub(crate) fn in_block(&self) -> bool {
+        self.in_block
+    }
+
+    /// 喂一行**原文**（不要先剥注释：`|` 可能出现在注释里，判定要按剥过注释的文本走，
+    /// 这件事由这里统一做）。
+    pub(crate) fn step(&mut self, raw: &str) -> BlockLine {
+        if self.in_block {
+            // 收尾就是"整行只有一个 `|`"（缩进无关）。与 formatter 的判定逐字一致。
+            if raw.trim() == "|" {
+                self.in_block = false;
+            }
+            return BlockLine::Content;
+        }
+        let head = strip_comment(raw);
+        if opens_block_string(head.trim()) {
+            self.in_block = true;
+            return BlockLine::Open;
+        }
+        BlockLine::Structure
+    }
+}
+
+/// 这一行是不是在开一个块字符串：`x: |md` / `x: |`（`|` 必须在**值**的位置）。
+///
+/// `head` 要是剥过注释、trim 过的文本。`a: 用 | 分隔` 不算 —— `|` 前面不是 `:`。
+pub(crate) fn opens_block_string(head: &str) -> bool {
+    let Some(pos) = last_unquoted(head, '|') else {
+        return false;
+    };
+    let tail = &head[pos + 1..];
+    // `|md` / `|latex` / `|code java` 之外还允许什么都不跟（`x: |`）
+    if !tail.chars().all(|c| c.is_ascii_alphanumeric()) {
+        return false;
+    }
+    head[..pos].trim_end().ends_with(':')
+}
+
+/// 开块那一行的**声明部分**：`x: |md` → `x:`（已剥注释）。
+///
+/// 块字符串的值从下一行才开始，所以这一行的 `|md` 不是标签。拿整行去做结构解析的话，
+/// `outline` 会列出一个名叫 `|md` 的节点、`palette` 会把标签当成 `"|md"`
+/// （审计 2026-11-03 L-32）。
+pub(crate) fn block_string_decl(raw: &str) -> String {
+    let head = strip_comment(raw);
+    match last_unquoted(&head, '|') {
+        Some(pos) => head[..pos].trim_end().to_string(),
+        None => head.trim_end().to_string(),
+    }
+}
+
+/// 最后一个不在引号里的 `target` 的字节偏移。
+fn last_unquoted(s: &str, target: char) -> Option<usize> {
+    let mut found = None;
+    let mut in_quote = false;
+    let mut escaped = false;
+    for (i, c) in s.char_indices() {
+        if in_quote {
+            if escaped {
+                escaped = false;
+            } else if c == '\\' {
+                escaped = true;
+            } else if c == '"' {
+                in_quote = false;
+            }
+            continue;
+        }
+        if c == '"' {
+            in_quote = true;
+        } else if c == target {
+            found = Some(i);
+        }
+    }
+    found
+}
+
 /// 这一行是不是"开了一个块"：`名: {`（或裸 `{`）。返回容器名；裸块返回 `"(匿名)"`。
 ///
 /// 一行内既开又关（`名: { a -> b }`）不算 —— 那种行不改变缩进层级。

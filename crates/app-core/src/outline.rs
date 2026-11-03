@@ -180,10 +180,24 @@ fn d2(body: &str) -> Vec<OutlineGroup> {
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     // >0 表示正在跳过保留字块（`classes: { … }` 这类不是图里的东西）；值是块内花括号净值
     let mut skipped: i32 = 0;
+    // 块字符串（`x: |md … |`）里的正文不是节点（审计 2026-11-03 L-32）：
+    // 不认它的话大纲里会出现名叫 `|md` / `|` 的条目，散文也会被列成节点。
+    let mut blocks = d2syntax::BlockStrings::new();
 
     for (idx, raw) in body.lines().enumerate() {
         let line = idx as u32 + 1;
-        let text = d2syntax::strip_comment(raw).trim().to_string();
+        if matches!(blocks.step(raw), d2syntax::BlockLine::Content) {
+            continue;
+        }
+        // 开块那一行只保留声明部分（`x: |md` → `x:`），否则会列出一个名叫 `|md` 的节点
+        let decl_buf;
+        let src: &str = if blocks.in_block() {
+            decl_buf = d2syntax::block_string_decl(raw);
+            decl_buf.as_str()
+        } else {
+            raw
+        };
+        let text = d2syntax::strip_comment(src).trim().to_string();
         if text.is_empty() {
             continue;
         }
@@ -332,6 +346,22 @@ mod tests {
         let g = outline(FormatId::Mermaid, "flowchart TD\n    A --> B\n");
         assert_eq!(g.len(), 1, "没有 subgraph 与节点声明时只应剩「边」一组");
         assert_eq!(g[0].title, "边");
+    }
+
+    /// 审计 L-32：块字符串里的正文与收尾 `|` 不能被列成节点。
+    #[test]
+    fn d2_outline_skips_block_string_content() {
+        let src = "x: |md\n  # 标题\n  正文里有个 { 花括号\n  还有 a -> b\n|\ny -> z\n";
+        let g = outline(FormatId::D2, src);
+        let names: Vec<String> = g
+            .iter()
+            .flat_map(|grp| grp.rows.iter())
+            .map(|r| r.name.clone())
+            .collect();
+        for bad in ["|md", "|", "还有 a", "正文里有个 { 花括号", "# 标题"] {
+            assert!(!names.iter().any(|n| n == bad), "正文被列成节点了：{bad} → {names:?}");
+        }
+        assert!(names.iter().any(|n| n == "y") && names.iter().any(|n| n == "z"), "{names:?}");
     }
 
     #[test]

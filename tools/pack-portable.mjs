@@ -36,10 +36,20 @@ const argOf = (name, fallback) => {
   return i >= 0 && argv[i + 1] ? argv[i + 1] : fallback;
 };
 
+const log = (s = "") => console.log(s);
+const fail = (s) => {
+  log(`✗ ${s}`);
+  process.exit(2);
+};
+const mb = (n) => (n / 1024 / 1024).toFixed(2) + " MB";
+
 // 版本真源 = 工作区 Cargo.toml 的 [workspace.package] version（与 release.mjs 同一口径）。
 // 曾从 tauri.conf.json 读 —— 那里的 version 字段已删（单一真源归 Cargo）。
 const cargoVer = readFileSync(join(ROOT, "Cargo.toml"), "utf8").match(/^\s*version\s*=\s*"([^"]+)"/m)?.[1];
 const version = argOf("--version", cargoVer);
+// log/fail/mb 必须定义在第一次调用之前（审计 2026-11-03 G-11）：`const fail` 原来声明在
+// 下面几行，版本号非法时这里抛的是 TDZ 的 ReferenceError（退出码 1），把本来清清楚楚的
+// "拿不到合法版本号 + 退出码 2" 变成一条没头没尾的栈 —— 发版中途 bump 版本号时真会踩到。
 if (!version || !/^\d+\.\d+\.\d+$/.test(version)) {
   fail(`拿不到合法版本号（Cargo.toml version = ${cargoVer}）`);
 }
@@ -47,13 +57,6 @@ const baseName = `Diagramon-${version}-win-x64`;
 const outDir = resolve(argOf("--out", join(RELEASE, "bundle", "portable")));
 const zipPath = join(outDir, `${baseName}.zip`);
 const staging = join(ROOT, "var", "portable", baseName);
-
-const log = (s = "") => console.log(s);
-const fail = (s) => {
-  log(`✗ ${s}`);
-  process.exit(2);
-};
-const mb = (n) => (n / 1024 / 1024).toFixed(2) + " MB";
 
 /** 目录大小 / 文件数。 */
 function dirStat(dir) {

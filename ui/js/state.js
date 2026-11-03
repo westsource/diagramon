@@ -413,16 +413,29 @@ window.DGM = window.DGM || {};
     setStatus(t("status.wsClosed"), "");
   }
 
-  /** 在文件管理器里显示（真机上由 opener 插件完成）。 */
+  /**
+   * 在文件管理器里显示（真机上由 opener 插件完成）。
+   *
+   * 这里原来调的是 `T.opener.open(...)`，并判 `typeof T.opener.open === "function"`
+   * —— 而注入的 `window.__TAURI__.opener` 只有 `openPath` / `openUrl` /
+   * `revealItemInDir`，**没有 `open`**，所以判据恒假、函数恒返回 `false`：
+   * 「在文件管理器中显示」这两个入口（`dialogs.js` 的历史菜单、`sidebar.js` 的右键菜单）
+   * 从来没生效过。而且能力位 `opener:default` 只授 `allow-open-url` +
+   * `allow-reveal-item-in-dir` + `allow-default-urls`，**没有 `allow-open-path`**，
+   * 改成 `openPath` 也会被拒。
+   *
+   * `revealItemInDir(path)` 才是既已授权、又正好是想要语义的那个（定位到文件本身，
+   * 而不是打开父目录）。审计 2026-11-03 M-41。
+   */
   async function revealPath(path) {
     const T = window.__TAURI__;
-    if (T && T.opener && typeof T.opener.open === "function") {
-      // 打开所在目录（opener 没有 reveal 语义，退而求其次：打开父目录）
-      const dir = String(path).replace(/\\/g, "/").replace(/\/[^/]*$/, "");
+    const op = T && T.opener;
+    if (op && typeof op.revealItemInDir === "function") {
       try {
-        await T.opener.open(dir || path);
+        await op.revealItemInDir(String(path));
         return true;
       } catch (e) {
+        console.warn("[opener] revealItemInDir 失败：", e);
         return false;
       }
     }
@@ -471,7 +484,20 @@ window.DGM = window.DGM || {};
   /** 外部改动后"用磁盘版本"。 */
   async function reloadDoc(id) {
     try {
+      // 先撤掉这一份还没落盘的去抖正文（审计 2026-11-03 M-28）。
+      //
+      // 不撤的话：外部改动 → 用户点「重新加载」→ 350ms 去抖窗口里那份**旧**的
+      // 内存正文随后被 `flushBody` 写回会话，要么盖掉刚从磁盘读进来的新内容，
+      // 要么让用户"重新加载之后又变回改了的样子"。撤掉是安全的：用户此刻
+      // 明确选择了磁盘版本。
+      pendingBody.delete(id);
       const doc = await ipc.invoke("doc_reload", { id });
+      // 期间又键入了就别覆盖：重新排一次去抖，让用户这次输入赢
+      if (pendingBody.has(id)) {
+        setStatus(t("fs.reloaded", { name: doc.name }), "ok");
+        emit("session:changed");
+        return;
+      }
       applyResult(doc);
       if (state.active === id) {
         if (DGM.editor && DGM.editor.loadActive) DGM.editor.loadActive();
@@ -651,13 +677,31 @@ window.DGM = window.DGM || {};
   async function renameWorkspaceEntry(path, name) {
     const next = await ipc.invoke("workspace_rename", { path, name });
     await refreshWorkspace();
-    // 会话里开着的那个文档要跟着改路径，否则它下次保存会写回旧名字
+    // 会话里开着的那个文档要跟着改路径，否则它下次保存会写回旧名字。
+    //
+    // 只改前端副本不够（审计 2026-11-03 M-24）：`doc_save` 用的是**后端**存的
+    // `Doc.path`，于是重命名后 Ctrl+S 会在磁盘上重新创建旧文件名（一次重命名
+    // 产出两个文件），而保存返回的 `Doc` 又会经 `applyResult` 把前端 path 改回去
+    // —— 重命名等于被静默回滚。必须走一次 `doc_save_as` 把后端路径也搬过去
+    // （那条命令本来就负责"换路径 + 迁移会话键"）。
     const open = state.docs.find((d) => d.path === path);
     if (open) {
-      open.path = next;
-      open.name = String(next).split("/").pop();
-      emit("session:changed");
+      try {
+        const saved = await ipc.invoke("doc_save_as", { id: open.id, path: next });
+        applyResult(saved);
+        if (state.active === open.id) refreshDerived(open.id);
+      } catch (e) {
+        // 同步失败要如实说：否则界面上是新名字、后端还是旧路径，下次保存会
+        // 在旧名字上复活一份。宁可把错误摆出来。
+        setStatus(String((e && e.message) || e), "err");
+        // 已经把文件改名成功了，至少让前端与磁盘一致
+        open.path = next;
+        open.name = String(next).split("/").pop();
+        emit("session:changed");
+        return next;
+      }
     }
+    emit("session:changed");
     return next;
   }
 
@@ -862,8 +906,8 @@ window.DGM = window.DGM || {};
       format: d.format,
       body: d.body,
     });
-    d.cloudId = saved.id;
-    d.cloudVersion = saved.version;
+    // 记在旁路表里（审计 2026-11-03 M-25）：挂在 doc 对象上会被 `applyResult` 抹掉
+    rememberCloudIdentity(d.id, saved.id, saved.version);
     if (name) d.name = name;
     emit("session:changed");
     await Promise.all([cloudDocs(), cloudFolders()]);
@@ -875,18 +919,18 @@ window.DGM = window.DGM || {};
     // 云文档没有磁盘路径：开成一个"无路径"的文档，cloudId 记着，保存时回写云端
     const doc = await ipc.invoke("doc_new", { format: body.format });
     if (doc) {
-      doc.cloudId = body.id;
-      doc.cloudVersion = body.version; // 乐观锁起点：下次保存带这个版本号
       doc.name = body.name || doc.name;
       doc.body = body.body;
       await ipc.invoke("doc_set_body", { id: doc.id, body: body.body });
       upsertDoc(doc);
+      // 乐观锁起点（审计 2026-11-03 M-25）：必须进旁路表，否则下一次
+      // Session 形响应就把版本号抹了，再保存会在云端多出一份文档。
+      rememberCloudIdentity(doc.id, body.id, body.version);
       state.active = doc.id;
       emit("session:changed");
       if (DGM.editor && DGM.editor.loadActive) DGM.editor.loadActive();
       if (DGM.preview && DGM.preview.schedule) DGM.preview.schedule();
       await refreshDerived(doc.id);
-      doc.cloudId = body.id;
     }
     return doc;
   }
@@ -948,6 +992,46 @@ window.DGM = window.DGM || {};
       if (!state.active && state.docs.length) state.active = state.docs[0].id;
     } else if (res.id) {
       upsertDoc(res);
+    }
+    // 云身份不在后端 `Doc` 上，而这里整组替换了 `state.docs` —— 挂在前端 doc 对象上的
+    // `cloudId` / `cloudVersion` 会因此蒸发（审计 2026-11-03 M-25）。之后「保存到云端」
+    // 会发 `id:"" version:0`（= 仅当不存在时创建）⇒ 409 冲突，或改名后在云端多出一份。
+    // 所以身份放在旁路 Map 里，`applyResult` 碰不到它。
+    if (res.docs) {
+      // 顺手清掉已关闭文档的身份，免得 Map 只增不减
+      const live = new Set(res.docs.map((d) => d.id));
+      for (const k of Array.from(cloudIdentity.keys())) {
+        if (!live.has(k)) cloudIdentity.delete(k);
+      }
+    }
+    for (const d of state.docs) {
+      const c = cloudIdentity.get(d.id);
+      if (c) {
+        d.cloudId = c.cloudId;
+        d.cloudVersion = c.cloudVersion;
+      }
+    }
+  }
+
+  /** 云文档身份旁路表：`docId -> { cloudId, cloudVersion }`。
+   *
+   *  为什么不挂在 doc 对象上：后端 `Doc` 没有这两个字段，任何 Session 形响应
+   *  （`doc_open_paths` / `doc_close` / `doc_activate`）都会整组替换 `state.docs`。
+   *  乐观锁靠这两个值，丢了就会重复创建云端文档。 */
+  const cloudIdentity = new Map();
+
+  /** 记下一份文档的云身份（同时写一份到 doc 对象上，方便读）。 */
+  function rememberCloudIdentity(docId, cloudId, cloudVersion) {
+    if (!docId) return;
+    if (!cloudId && !cloudVersion) {
+      cloudIdentity.delete(docId);
+    } else {
+      cloudIdentity.set(docId, { cloudId: cloudId || "", cloudVersion: cloudVersion || 0 });
+    }
+    const d = state.docs.find((x) => x.id === docId);
+    if (d) {
+      d.cloudId = cloudId || "";
+      d.cloudVersion = cloudVersion || 0;
     }
   }
 
@@ -1083,16 +1167,25 @@ window.DGM = window.DGM || {};
   async function flushBody() {
     const entries = Array.from(pendingBody.entries());
     pendingBody.clear();
+    const touched = [];
     for (const [id, body] of entries) {
       try {
         const doc = await ipc.invoke("doc_set_body", { id, body });
         if (doc) upsertDoc(doc);
+        touched.push(id);
       } catch (e) {
         console.warn("[DGM] doc_set_body 失败：", e && e.message);
       }
     }
     emit("session:changed");
-    await refreshDerived(state.active);
+    // 逐份刷新派生数据（审计 2026-11-03 L-22）。
+    //
+    // 原来只刷 `state.active`：编辑文档 A 后在 350ms 去抖窗口内切到标签 B，
+    // flush 落的是 A 的正文、刷的却是 B 的 issues/outline/scope ——
+    // A 的问题面板与状态栏（issueTotals 汇总**所有**文档）就停在旧值。
+    for (const id of touched) {
+      await refreshDerived(id);
+    }
   }
 
   /** AI 应用 / 回退等整块替换正文：立即落盘，不等去抖。 */

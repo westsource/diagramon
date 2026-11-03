@@ -590,25 +590,50 @@ impl Graph {
     /* ------------------------------ 输出 ------------------------------ */
 
     fn emit_node(&self, out: &mut String, id: &str, indent: usize) {
-        let pad = "    ".repeat(indent);
+        let pad = crate::convert::indent_pad(indent);
         let empty: Vec<(String, String)> = Vec::new();
         let attrs = self.nodes.get(id).map(|n| &n.attrs).unwrap_or(&empty);
+        let mut wrote = false;
         if let Some(l) = attr_label(attrs) {
             let _ = writeln!(out, "{pad}{}: {}", d2_id(id), d2_str(&l));
+            wrote = true;
         }
         if let Some(ShapeMap::Named(shape)) = attr_shape(attrs).as_deref().map(map_shape) {
             let _ = writeln!(out, "{pad}{}.shape: {shape}", d2_id(id));
+            wrote = true;
         }
         for (k, v) in attr_styles(attrs) {
             let _ = writeln!(out, "{pad}{}.style.{k}: {v}", d2_id(id));
+            wrote = true;
         }
         if is_dash(attrs) {
             let _ = writeln!(out, "{pad}{}.style.stroke-dash: 3", d2_id(id));
+            wrote = true;
+        }
+        if wrote {
+            return;
+        }
+        // 四项全空时也要**声明节点本体**，但只对**完全孤立**的节点（审计 2026-11-03 H-12）。
+        //
+        // 原来是四项都不命中就一行不写，于是 `digraph G { lonely }` 转出空串、
+        // `a; b -> c` 丢掉 `a` —— 图例节点、孤立状态节点、注释性节点全没了，
+        // 而 `notes` 一个字都不提，直接违反本模块「不静默丢」的契约。
+        // （Mermaid 侧早就有这套兜底，是 B3 事故修的；当时只修了一边，DOT 侧漏了。）
+        //
+        // 但边**自己就会声明两端**（D2 的 `a -> b` 造出 a 和 b），所以只见于边的节点
+        // 不需要再补裸声明 —— 补了是冗余噪音，还会让"最小输入只产出那一条边"的
+        // 输出形状变脏。判据就是"这条边的任一端是它"。
+        let in_edge = self
+            .edges
+            .iter()
+            .any(|e| e.from == id || e.to == id);
+        if !in_edge {
+            let _ = writeln!(out, "{pad}{}", self.path_of(id));
         }
     }
 
     fn emit_container(&self, out: &mut String, idx: usize, indent: usize) {
-        let pad = "    ".repeat(indent);
+        let pad = crate::convert::indent_pad(indent);
         let _ = writeln!(out, "{pad}{}: {{", d2_id(&self.container_name(idx)));
         if let Some(dir) = &self.cluster_dir[idx] {
             let _ = writeln!(out, "{pad}    direction: {dir}");
@@ -721,6 +746,12 @@ struct Parser {
     toks: Vec<(Tok, usize)>,
     pos: usize,
     g: Graph,
+    /// 当前 `parse_stmt_list` 的递归层数（审计 2026-11-03 H-8）。
+    ///
+    /// 不能只用 `g.stack.len()`：**匿名**子图（`{ a b }` / `{rank=same; …}`）不压栈，
+    /// 但同样会经 `parse_stmt_list → parse_statement → parse_subgraph` 递归下钻。
+    /// 所以按"进一次 `parse_stmt_list` 算一层"来数，两个形态一并覆盖。
+    depth: usize,
 }
 
 impl Parser {
@@ -820,7 +851,27 @@ impl Parser {
     }
 
     /// 语句序列，直到配对的 `}`（`open_line` 是那个 `{` 的行号，没闭合时据它报错）。
+    ///
+    /// 深度上限在这里卡（审计 2026-11-03 H-8）：`parse_stmt_list` ↔ `parse_subgraph`
+    /// 互相递归，不设限时 **16 KB** 的机器生成 `.dot`（约 900 层 subgraph）就把栈打穿。
+    /// `[profile.release] panic = "abort"` 下栈溢出是 `STATUS_STACK_OVERFLOW`，
+    /// 不可捕获、不可恢复 —— 整个进程没了，未保存内容全丢。宁可报一句
+    /// 「第 N 行：subgraph 嵌套超过 N 层」，也不能让用户拿一个崩溃。
     fn parse_stmt_list(&mut self, open_line: usize) -> Result<(), String> {
+        self.depth += 1;
+        if self.depth > crate::convert::MAX_NEST_DEPTH {
+            self.depth -= 1;
+            return Err(format!(
+                "第 {open_line} 行：subgraph 嵌套超过 {} 层",
+                crate::convert::MAX_NEST_DEPTH
+            ));
+        }
+        let r = self.parse_stmt_list_body(open_line);
+        self.depth -= 1;
+        r
+    }
+
+    fn parse_stmt_list_body(&mut self, open_line: usize) -> Result<(), String> {
         loop {
             match self.peek() {
                 None => return Err(format!("第 {open_line} 行：花括号没有闭合")),
@@ -1108,7 +1159,7 @@ impl Parser {
 /// 丢掉的每一样都在 `notes` 里写明。
 pub fn dot_to_d2(src: &str) -> Result<Conversion, String> {
     let toks = lex(src)?;
-    let p = Parser { toks, pos: 0, g: Graph::default() };
+    let p = Parser { toks, pos: 0, g: Graph::default(), depth: 0 };
     p.parse_graph().map(|g| g.emit())
 }
 
@@ -1164,6 +1215,61 @@ mod tests {
         assert_eq!(c.body, "a -- b\n");
         let c = conv("strict graph G { a -- b -- c }");
         assert!(c.body.contains("a -- b") && c.body.contains("b -- c"), "{}", c.body);
+    }
+
+    /// 审计 H-12：**孤立节点不能被静默丢掉**。
+    ///
+    /// 修复前四项属性全空就一行都不写，于是 `digraph { lonely }` 转出**空串**、
+    /// `a; b -> c` 丢掉 `a`。图例节点、孤立状态节点、注释性节点都属于这一类，
+    /// 而 `notes` 一个字都不提，直接违反本模块「不静默丢」的契约。
+    #[test]
+    fn isolated_nodes_are_declared_not_dropped() {
+        assert_eq!(conv("digraph G { lonely }").body, "lonely\n", "孤立节点要落地成裸声明");
+        let c = conv("digraph G { a; b -> c }");
+        assert!(c.body.lines().any(|l| l.trim() == "a"), "孤立节点 a 不能丢：{}", c.body);
+        assert!(c.body.contains("b -> c"), "{}", c.body);
+        // 默认形状（box/rect）不写 shape 行，所以那条也不算"写过"
+        let c = conv("digraph G { node [shape=box]; iso; x -> y }");
+        assert!(c.body.lines().any(|l| l.trim() == "iso"), "{}", c.body);
+    }
+
+    /// 但**只在边里出现**的节点不该再补裸声明：D2 的 `a -> b` 自己就造出了两端，
+    /// 补一行 `a` 是纯噪音，还会让"最小输入只产出那一条边"的形状变脏。
+    #[test]
+    fn nodes_covered_by_an_edge_get_no_redundant_declaration() {
+        assert_eq!(conv("digraph G { a -> b }").body, "a -> b\n");
+        assert_eq!(conv("graph G { a -- b }").body, "a -- b\n");
+    }
+
+    /// 审计 H-8：嵌套深度必须报错而不是栈溢出。
+    ///
+    /// 实测修复前 n≈900 层（源仅 16 KB）就 `thread 'main' has overflowed its stack`；
+    /// release 下 `panic = "abort"` ⇒ `STATUS_STACK_OVERFLOW`，不可捕获，整个进程没了。
+    #[test]
+    fn deep_subgraph_nesting_is_rejected_instead_of_overflowing() {
+        let n = 2000usize;
+        let mut src = String::from("digraph G { ");
+        for i in 0..n {
+            src.push_str(&format!("subgraph s{i} {{ "));
+        }
+        src.push_str("a -> b ");
+        for _ in 0..n {
+            src.push_str("} ");
+        }
+        src.push('}');
+        let e = err(&src);
+        assert!(e.contains("嵌套超过"), "应当报嵌套上限，实际：{e}");
+        // 合法深度仍然通过
+        let mut ok = String::from("digraph G { ");
+        for i in 0..8 {
+            ok.push_str(&format!("subgraph s{i} {{ "));
+        }
+        ok.push_str("a -> b ");
+        for _ in 0..8 {
+            ok.push_str("} ");
+        }
+        ok.push('}');
+        assert!(dot_to_d2(&ok).is_ok());
     }
 
     #[test]

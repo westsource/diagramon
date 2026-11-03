@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import json
+import os
 import socket
 import subprocess
 import sys
@@ -177,6 +178,13 @@ def main() -> int:
             "--disable-backgrounding-occluded-windows",
             "--disable-renderer-backgrounding",
             "--disable-features=CalculateNativeWinOcclusion",
+            # 受限会话（agent 沙箱 / 作业对象）里 Chrome 的渲染子进程会启动即崩，
+            # 探针随后连不上 CDP、返回 2，被 check.mjs 归成"跳过"—— 环境越受限，
+            # 越容易把"没测"看成"没事"（审计 2026-11-03 G-5）。
+            # 与 canvas_probe / excalidraw_probe 同一个开关：普通桌面不需要，
+            # 只在 DGM_PROBE_NO_SANDBOX=1 时加。
+            *(["--no-sandbox", "--disable-dev-shm-usage"]
+              if os.environ.get("DGM_PROBE_NO_SANDBOX") == "1" else []),
             "about:blank",
         ],
         stdout=subprocess.DEVNULL,

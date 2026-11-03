@@ -32,9 +32,33 @@ pub fn workspace_open(
     state: State<'_, Arc<AppState>>,
     path: String,
 ) -> R<WorkspaceInfo> {
-    let root = PathBuf::from(&path);
+    let picked = PathBuf::from(&path);
+    if !picked.is_dir() {
+        return Err(format!("不是一个目录：{path}"));
+    }
+    // 这个路径会变成**所有**工作区守卫的根（`workspace_new_file` / `_rename` /
+    // `_delete` / 搜索 / `check_writable` 全走 `workspace::inside(root, …)`），
+    // 所以必须在这里把退化形态挡掉（审计 2026-11-03 H-7）：
+    //
+    // * **相对路径**拒掉。`"."` 规范化成空组件序列，`inside` 那边虽然已经
+    //   fail-closed，但让根变成"说不清是哪个目录"毫无意义；
+    // * **盘符根 / UNC 共享根**拒掉。`workspace_open("C:\\")` 之后 `inside`
+    //   对整块盘都返回 true，等于把删除/改名/新建的边界开到最大；
+    // * 先 `canonicalize`，把 `..`、符号链接、`\\?\` 前缀这些形态一次性收口，
+    //   存进状态的是**规范化之后的真路径**。
+    if picked.is_relative() {
+        return Err(format!("工作区路径必须是绝对路径：{path}"));
+    }
+    let root = picked
+        .canonicalize()
+        .map(|p| app_core::workspace::strip_verbatim(&p))
+        .map_err(|e| format!("这个目录打不开（{path}）：{e}"))?;
     if !root.is_dir() {
         return Err(format!("不是一个目录：{path}"));
+    }
+    // 至少两段：盘符/UNC 前缀 + 一个真实目录名。只剩前缀 = 文件系统根。
+    if root.components().count() < 2 {
+        return Err(format!("不能把文件系统根当成工作区：{path}"));
     }
     let info = app_core::workspace::scan(&root);
 

@@ -3,15 +3,19 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<!-- CSP（审计 F-2b）：这是挂 __TAURI__ 与渲染产物的那个文档，值得有一道内容安全策略。
+<!-- CSP（审计 F-2b，2026-11-03 H-6 收口）：这是挂 __TAURI__ 与渲染产物的那个文档，值得有一道内容安全策略。
      script-src 不含 'unsafe-inline' —— 内联脚本已全部外置（js/graphviz-loader.js）；
      'wasm-unsafe-eval' 给 graphviz / D2 的 wasm；connect-src 里的 ipc.localhost 是
-     Tauri 2 在 Windows 上的 invoke 通道，data: 给"复制图片"时对 dataURL 的 fetch。
+     Tauri 2 在 Windows 上的 invoke 通道，data:/blob: 给"复制图片"与栅格化时的 fetch。
      样式要 'unsafe-inline'：界面模板里大量 style="…" 属性（fmtDot / 缩放列等）。
-     注意：drawio / Excalidraw 承载页是各自独立的文档，本 meta 管不到它们 ——
-     它们与外壳同源、同样摸得到 __TAURI__，那是"承载域分离"的架构项（见审计报告）。 -->
+
+     ⚠️ **这一条与 `src-tauri/src/lib.rs` 的 `CSP_SHELL` 常量逐字一致**，改一处必须改两处。
+     真正生效的是 `dgm` 协议响应头那一份（`csp_for`）—— 只有响应头能覆盖到 drawio / Excalidraw
+     承载页与上游 drawio 自己的 `index.html`；这里的 meta 留作兜底（万一挂载点判断出错，
+     外壳页至少还有一道）。承载页的策略是 `CSP_CANVAS`，比这份宽（第三方引擎要 inline/eval），
+     但 `connect-src`/`default-src` 同样只留同源 —— CSP 在那一档的价值是**切断外带通道**。 -->
 <meta http-equiv="Content-Security-Policy"
-      content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' data: http://ipc.localhost https://ipc.localhost; font-src 'self' data:; frame-src 'self'; object-src 'none'; base-uri 'none'">
+      content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' data: blob: http://ipc.localhost https://ipc.localhost; font-src 'self' data:; frame-src 'self' blob:; object-src 'none'; base-uri 'none'">
 <title>Diagramon</title>
 <link rel="stylesheet" href="./app.css">
 </head>

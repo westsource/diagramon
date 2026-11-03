@@ -1479,8 +1479,18 @@ window.DGM = window.DGM || {};
       pendingAsks.delete(ev.request_id);
       ask.resolve({ text: String(ev.text || (m && m.text) || ""), ledgerId: ev.ledger_id || "" });
     }
-    state.ui.aiBusy = false;
-    state.ui.aiRequestId = null;
+    // **只清自己那一轮的全局状态**（审计 2026-11-03 M-26）。
+    //
+    // `ai_cancel` 只是置一个 AtomicBool，流任务照常收尾并发 `ai://done`
+    // （finish=interrupted）。于是：取消旧请求 → 立刻发新请求（busy=true、id=新）
+    // → 旧的 done 姗姗来迟 → 原来这里**无条件**把 busy 清掉、id 置 null。
+    // 后果三重：停止按钮变回发送、可以再发第三路并发（**重复计费**）、
+    // `cancel()` 因 id 为 null 找不到正在跑的流（那一路再也取消不了）。
+    const isCurrent = !state.ui.aiRequestId || ev.request_id === state.ui.aiRequestId;
+    if (isCurrent) {
+      state.ui.aiBusy = false;
+      state.ui.aiRequestId = null;
+    }
     if (!m) {
       render();
       return;
@@ -1577,8 +1587,12 @@ window.DGM = window.DGM || {};
       ask.reject(new Error((ev && ev.message) || "ai failed"));
     }
     const m = findMsg(ev && ev.request_id);
-    state.ui.aiBusy = false;
-    state.ui.aiRequestId = null;
+    // 同 onDone：迟到的旧请求失败事件不能把新一轮的 busy 打没（审计 2026-11-03 M-26）
+    const isCurrent = !state.ui.aiRequestId || (ev && ev.request_id) === state.ui.aiRequestId;
+    if (isCurrent) {
+      state.ui.aiBusy = false;
+      state.ui.aiRequestId = null;
+    }
     if (m) {
       m.streaming = false;
       m.err = true;

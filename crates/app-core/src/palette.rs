@@ -868,6 +868,94 @@ fn plan<'a>(
     (by_slot, skipped, group_count)
 }
 
+/// 找到 DOT 里**深度归零**的那个收尾 `}` 的字节偏移（`rfind('}')` 的正确替代）。
+///
+/// `rfind('}')` 会把色块插进尾部注释里的 `}`（审计 2026-11-03 M-15）：
+/// `digraph { … }` 之后跟一句 `# 备注：{v1} 生成` 时，块落到了图**外面**、
+/// 那条注释还被拦腰截断 ⇒ graphviz 直接语法错。
+/// 这里跳过双引号字符串（含 `\"`）、`<…>` HTML 标签（Graphviz 的 label 语法，
+/// 内部可以有 `{` / `}`）、`//` 与 `/* */` 注释、行首的 `#` 预处理行，
+/// 只认真正的花括号。取值靠后的那个深度 0 的 `}`（正常 DOT 只有一个）。
+fn dot_closing_brace(src: &str) -> Option<usize> {
+    let b = src.as_bytes();
+    let mut i = 0usize;
+    let mut depth = 0usize;
+    let mut found: Option<usize> = None;
+    let mut in_string = false;
+    let mut html = 0usize;
+    let mut line_start = true;
+    while i < b.len() {
+        let c = b[i];
+        if in_string {
+            if c == b'\\' {
+                i += 2;
+                continue;
+            }
+            if c == b'"' {
+                in_string = false;
+            }
+            i += 1;
+            continue;
+        }
+        if html > 0 {
+            if c == b'<' {
+                html += 1;
+            } else if c == b'>' {
+                html -= 1;
+            }
+            line_start = false;
+            i += 1;
+            continue;
+        }
+        if c == b'\n' {
+            line_start = true;
+            i += 1;
+            continue;
+        }
+        if c == b' ' || c == b'\t' || c == b'\r' {
+            i += 1;
+            continue;
+        }
+        let was_line_start = line_start;
+        line_start = false;
+        match c {
+            b'"' => in_string = true,
+            b'<' => html = 1,
+            b'/' if i + 1 < b.len() && b[i + 1] == b'/' => {
+                while i < b.len() && b[i] != b'\n' {
+                    i += 1;
+                }
+                continue;
+            }
+            b'/' if i + 1 < b.len() && b[i + 1] == b'*' => {
+                i += 2;
+                while i + 1 < b.len() && !(b[i] == b'*' && b[i + 1] == b'/') {
+                    i += 1;
+                }
+                i = (i + 2).min(b.len());
+                continue;
+            }
+            // `#` 只在**行首**才是预处理指令；出现在行中间时别当注释
+            b'#' if was_line_start => {
+                while i < b.len() && b[i] != b'\n' {
+                    i += 1;
+                }
+                continue;
+            }
+            b'{' => depth += 1,
+            b'}' => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    found = Some(i);
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    found
+}
+
 fn strip_block<'a>(body: &'a str, begin: &str, end: &str) -> (String, bool) {
     if !body.contains(begin) {
         return (body.to_string(), false);
@@ -890,6 +978,16 @@ fn strip_block<'a>(body: &'a str, begin: &str, end: &str) -> (String, bool) {
         }
         out.push_str(line);
         out.push('\n');
+    }
+    // **块没闭合就当没有块**（审计 2026-11-03 M-14）。
+    //
+    // 原来 EOF 时 `inside` 仍为 true 也不管，照样返回 `removed = true` —— 于是
+    // 「begin 之后没有配对 end」的文档会被**吞掉标记之后的全部内容**并落盘。
+    // 触发很现实：把两份图合并（其中一份带着色块）、手工删掉文件末尾的 `end` 行、
+    // 或 AI 清洗把 `end` 那行改掉，再点「清除配色」/「重新配色」就丢内容。
+    // 宁可不清（原样返回、`removed=false`），也不能吃用户的正文。
+    if inside {
+        return (body.to_string(), false);
     }
     // 去掉块被删掉后尾部多出来的空行（只留一个换行收尾）
     while out.ends_with("\n\n") {
@@ -1069,6 +1167,13 @@ fn dot_nodes(body: &str) -> Vec<DotNode> {
             in_edge = false;
             // 匿名子图（`subgraph { … }`）没有名字：不能把里面第一个节点当成组名
             expect_subgraph = false;
+            // `digraph` 之后紧跟 `{` 说明**图名不存在**（`digraph { … }` 是标准写法），
+            // 那个"吃掉下一个原子"的标志必须在这里清掉（审计 2026-11-03 M-16）：
+            // 不清的话它会被第一个真节点吃掉，`digraph { a -> b }` 里的 `a` 永不上色；
+            // `strict digraph {` 更糟（标志被设两次、只消费一次）。
+            // `skip_next_bracket` 同理：`graph { … }` 之后紧跟的 `[` 属于第一个节点。
+            skip_next_atom = false;
+            skip_next_bracket = false;
             if let Some(g) = pending_group.take() {
                 groups.push(g);
             }
@@ -1457,8 +1562,12 @@ fn apply_dot(
     if applied == 0 {
         return Ok(PaletteApplyRes { body: body.to_string(), changed: false, applied: 0, skipped, styles_removed });
     }
-    // 追加在 digraph 的收尾大括号之前（追加在文件末尾会被 Graphviz 当成语法错误）
-    match out.rfind('}') {
+    // 追加在 digraph 的收尾大括号之前（追加在文件末尾会被 Graphviz 当成语法错误）。
+    //
+    // 不能用 `rfind('}')`（审计 2026-11-03 M-15）：尾部注释里的 `}` 会把色块插到
+    // **图外**并拦腰截断那条注释 —— `digraph { … }` 之后跟一句 `# 备注：{v1} 生成`
+    // 就会产出语法错。改成花括号配平：跳过字符串 / HTML / 各种注释，取深度归零的那个 `}`。
+    match dot_closing_brace(&out) {
         Some(pos) => out.insert_str(pos, &block),
         None => {
             if !out.ends_with('\n') {
@@ -1479,6 +1588,12 @@ struct D2Node {
     line: u32,
     /// 所属容器（D2 的 `组名: { … }`，取最内层）
     group: Option<String>,
+    /// **在文档里的引用名**：容器里的节点是点号路径（`容器.节点`，每段过 `d2_id`）。
+    ///
+    /// 样式必须写在 path 上（审计 2026-11-03 H-10）：写在裸 id 上，D2 会在**顶层**
+    /// 造出一个同名新节点 —— 真节点一个都没上色，图上还凭空多出一整套重复节点。
+    /// 这条不变量 `convert.rs` / `convert_dot.rs` 早就写进注释了，配色这边漏了。
+    path: String,
     /// `class: xxx`（D2 的类引用）。用户自己的类里带填充色 ⇒ 这个节点算"已有颜色"
     class: Option<String>,
     role: Option<&'static str>,
@@ -1494,8 +1609,65 @@ struct D2Scan {
     edges: Vec<(String, String)>,
 }
 
+/// 登记一个节点，返回它在 `out` 里的下标。
+///
+/// 用 `idx_of` 做 O(1) 查重（审计 2026-11-03 M-22）：原来是 `out.iter().position(...)`，
+/// 而 `palette_annotate` 在正文每次变化后 70 ms 就被调一次（`ui/js/editor.js`）——
+/// 6000 节点的 DOT/D2 每次按键要跑 1.67 s 的纯线性扫描。
+fn d2_touch(
+    out: &mut Vec<D2Node>,
+    idx_of: &mut std::collections::HashMap<String, usize>,
+    id: &str,
+    line: u32,
+    groups: &[String],
+) -> usize {
+    // 裸名（不含外层引号）：文档里 `"my node": 甲` 的左侧带引号，而引用名由 `d2_id`
+    // 统一决定 —— 不剥就会得到双重引号 `""my node""`。查重也按裸名走。
+    let id = id.trim_matches('"');
+    if let Some(&i) = idx_of.get(id) {
+        return i;
+    }
+    // 引用名 = 容器路径 + 自己，每段都过 `d2_id`（带空格/点号/保留字的 id 必须加引号）
+    let mut segs: Vec<String> = groups.iter().map(|g| crate::d2syntax::d2_id(g)).collect();
+    segs.push(crate::d2syntax::d2_id(id));
+    out.push(D2Node {
+        id: id.to_string(),
+        line,
+        group: groups.last().cloned(),
+        path: segs.join("."),
+        ..Default::default()
+    });
+    let i = out.len() - 1;
+    idx_of.insert(id.to_string(), i);
+    i
+}
+
+/// 一条引用路径（`a -> b -> c` 或 `(a -> b)` 里的那串）落地成节点 + 边。
+///
+/// 边记的是**节点的 path**，不是裸 id —— `apply_d2` 直接把 `(pathA -> pathB)` 写进样式块。
+fn d2_record_path(
+    out: &mut Vec<D2Node>,
+    idx_of: &mut std::collections::HashMap<String, usize>,
+    edges: &mut Vec<(String, String)>,
+    path: &[String],
+    line: u32,
+    groups: &[String],
+) {
+    for seg in path {
+        d2_touch(out, idx_of, seg, line, groups);
+    }
+    let resolved: Vec<String> = path
+        .iter()
+        .map(|s| out[idx_of[s.trim_matches('"')]].path.clone())
+        .collect();
+    for w in resolved.windows(2) {
+        edges.push((w[0].clone(), w[1].clone()));
+    }
+}
+
 fn d2_nodes(body: &str) -> D2Scan {
     let mut out: Vec<D2Node> = Vec::new();
+    let mut idx_of: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
     let mut edges: Vec<(String, String)> = Vec::new();
     // 首次见到就记下行号（同一节点后面再出现不改）
     let mut groups: Vec<String> = Vec::new();
@@ -1505,20 +1677,25 @@ fn d2_nodes(body: &str) -> D2Scan {
     let mut def_depth: usize = 0; // >0 = 当前在定义块里（值 = 进入时的 groups.len()）
     // `classes: { gov: { style: { fill: … } } }` 里真的设了颜色的类名
     let mut colored_classes: std::collections::HashSet<String> = std::collections::HashSet::new();
-    let touch = |out: &mut Vec<D2Node>, id: &str, line: u32, group: Option<&str>| -> usize {
-        if let Some(i) = out.iter().position(|n| n.id == id) {
-            return i;
-        }
-        out.push(D2Node {
-            id: id.to_string(),
-            line,
-            group: group.map(str::to_string),
-            ..Default::default()
-        });
-        out.len() - 1
-    };
+    // 块字符串（`x: |md … |`）的行级状态（审计 2026-11-03 H-11）。
+    //
+    // 不认它的话，markdown 正文会被逐行当成节点写回源码：`正文里有个 { 花括号.style.fill: …`
+    // 这种行是**非法 D2**，整份文档直接编译不过。状态机放在 `d2syntax`，与
+    // `formatter` / `lint` / `outline` 共用一份，免得再加语法变体时又漂。
+    let mut blocks = crate::d2syntax::BlockStrings::new();
     for (idx, raw) in body.lines().enumerate() {
-        let line = raw.trim();
+        // 块字符串：内容行整行跳过；开块那一行只留声明部分（`x: |md` → `x:`）
+        let step = blocks.step(raw);
+        if matches!(step, crate::d2syntax::BlockLine::Content) {
+            continue;
+        }
+        let decl_buf;
+        let line: &str = if matches!(step, crate::d2syntax::BlockLine::Open) {
+            decl_buf = crate::d2syntax::block_string_decl(raw);
+            decl_buf.trim()
+        } else {
+            raw.trim()
+        };
         if line.is_empty() || line.starts_with('#') {
             continue;
         }
@@ -1557,24 +1734,14 @@ fn d2_nodes(body: &str) -> D2Scan {
             Some((l, r)) => (l.trim(), r.trim()),
             None => {
                 let path = split_d2_path(line);
-                for seg in &path {
-                    touch(&mut out, seg, (idx + 1) as u32, groups.last().map(|s| s.as_str()));
-                }
-                for w in path.windows(2) {
-                    edges.push((w[0].clone(), w[1].clone()));
-                }
+                d2_record_path(&mut out, &mut idx_of, &mut edges, &path, (idx + 1) as u32, &groups);
                 continue;
             }
         };
         // 逐条边的样式：`(a -> b).style.stroke: …`（用户手写或我们生成的形态）
         if let Some(inner) = lhs.strip_prefix('(').and_then(|r| r.split(')').next()) {
             let path = split_d2_path(inner);
-            for seg in &path {
-                touch(&mut out, seg, (idx + 1) as u32, groups.last().map(|s| s.as_str()));
-            }
-            for w in path.windows(2) {
-                edges.push((w[0].clone(), w[1].clone()));
-            }
+            d2_record_path(&mut out, &mut idx_of, &mut edges, &path, (idx + 1) as u32, &groups);
             continue;
         }
         const D2_PROPS: [&str; 20] = [
@@ -1588,17 +1755,12 @@ fn d2_nodes(body: &str) -> D2Scan {
         if lhs.contains("->") || lhs.contains("--") {
             // 边：两端都是节点，冒号右边是**边标签**，别当成节点标签
             let path = split_d2_path(lhs);
-            for seg in &path {
-                touch(&mut out, seg, (idx + 1) as u32, groups.last().map(|s| s.as_str()));
-            }
-            for w in path.windows(2) {
-                edges.push((w[0].clone(), w[1].clone()));
-            }
+            d2_record_path(&mut out, &mut idx_of, &mut edges, &path, (idx + 1) as u32, &groups);
             continue;
         }
         // 属性行：`a.b.style.fill: "#fff"`
         if let Some((path, key)) = split_d2_attr(lhs) {
-            let i = touch(&mut out, &path, (idx + 1) as u32, groups.last().map(|s| s.as_str()));
+            let i = d2_touch(&mut out, &mut idx_of, &path, (idx + 1) as u32, &groups);
             match key.as_str() {
                 "shape" => out[i].shape = Some(rhs.trim_matches('"').to_string()),
                 "label" => out[i].label = Some(rhs.trim_matches('"').to_string()),
@@ -1621,7 +1783,7 @@ fn d2_nodes(body: &str) -> D2Scan {
             continue;
         }
         // 纯声明：`a: 标签` / `a: "标签" {class: gov}`
-        let i = touch(&mut out, lhs, (idx + 1) as u32, groups.last().map(|s| s.as_str()));
+        let i = d2_touch(&mut out, &mut idx_of, lhs, (idx + 1) as u32, &groups);
         let (label_part, attrs) = split_d2_inline_attrs(rhs);
         if !label_part.is_empty() {
             out[i].label = Some(label_part.trim_matches('"').to_string());
@@ -1726,6 +1888,16 @@ fn apply_d2(
     });
     let (by_slot, skipped, group_count) = plan(items, mode, &[]);
 
+    // 引用名查表（审计 2026-11-03 H-10）：样式必须写在 `path` 上。
+    // 写在裸 id 上，D2 会在**顶层**造一个同名新节点 —— 容器里的真节点一个都没上色，
+    // 图上还凭空多出一整套重复节点与重复边；含空格/点号/`#`/`;` 的 id 还会直接把语法写坏
+    // （`节点#1.style.fill:` 里 `#` 起注释、`(a; b -> c)` 括号内含分号）。
+    // `convert.rs` / `convert_dot.rs` 早就把这条写进注释了，配色这边漏了。
+    let path_of: std::collections::HashMap<&str, &str> = nodes
+        .iter()
+        .map(|n| (n.id.as_str(), n.path.as_str()))
+        .collect();
+
     let mut out = base;
     let mut block = String::from("# dgm-palette:begin id=");
     block.push_str(seed.id);
@@ -1738,10 +1910,13 @@ fn apply_d2(
     for (slot, ids) in &by_slot {
         let (fill, stroke, text) = slot_swatch(seed, slot, dark, groups);
         for id in ids {
+            let Some(path) = path_of.get(id.as_str()) else {
+                continue;
+            };
             applied += 1;
-            block.push_str(&format!("{id}.style.fill: \"{fill}\"\n"));
-            block.push_str(&format!("{id}.style.stroke: \"{stroke}\"\n"));
-            block.push_str(&format!("{id}.style.font-color: \"{text}\"\n"));
+            block.push_str(&format!("{path}.style.fill: \"{fill}\"\n"));
+            block.push_str(&format!("{path}.style.stroke: \"{stroke}\"\n"));
+            block.push_str(&format!("{path}.style.font-color: \"{text}\"\n"));
         }
     }
     // 连线：D2 没有"全局边样式"，只能逐条写（`(a -> b).style.stroke`）。
@@ -2142,15 +2317,118 @@ mod tests {
             "}\n",
         );
         let res = paint(body, FormatId::D2, "pine", false, PaletteMode::All).unwrap();
+        // 样式必须写在**容器路径**上（审计 2026-11-03 H-10）。
+        // 这条测试原来查的是 `a.style.fill:`（顶层裸名）—— 那正好把 bug 当成了正确行为：
+        // 写在顶层会让 D2 造出一个同名新节点，容器里的真节点一个都没上色。
         let fill_of = |id: &str| -> String {
             res.body
                 .lines()
-                .find(|l| l.starts_with(&format!("{id}.style.fill:")))
+                .find(|l| l.contains(&format!(".{id}.style.fill:")))
                 .map(|l| l.split('"').nth(1).unwrap_or("").to_string())
                 .unwrap_or_default()
         };
         assert_eq!(fill_of("a"), fill_of("b"), "同一容器同色：\n{}", res.body);
         assert_ne!(fill_of("a"), fill_of("c"), "不同容器不同色：\n{}", res.body);
+        // 任何样式行都不能是顶层裸名
+        for id in ["a", "b", "c"] {
+            assert!(
+                !res.body.lines().any(|l| l.starts_with(&format!("{id}.style."))),
+                "样式不能写在顶层裸名上（会造出重复节点）：{id}\n{}",
+                res.body
+            );
+        }
+    }
+
+    /// 审计 H-10：含空格 / `#` / `;` 的 id 必须加引号，否则写回的正文直接语法错。
+    #[test]
+    fn d2_ids_that_need_quoting_are_quoted() {
+        let body = "组: {\n  \"my node\": 甲\n  \"节点#1\": 乙\n}\n";
+        let res = paint(body, FormatId::D2, "pine", false, PaletteMode::All).unwrap();
+        assert!(res.body.contains("\"my node\".style.fill:"), "①\n{}", res.body);
+        assert!(res.body.contains("\"节点#1\".style.fill:"), "②\n{}", res.body);
+        // 未加引号的 `节点#1.style.fill:` 会被 `#` 当注释吃掉，必须不存在
+        assert!(!res.body.contains("节点#1.style.fill:"), "③\n{}", res.body);
+    }
+
+    /// 审计 H-11：块字符串（`x: |md … |`）里的正文不能被当成节点写回源码。
+    ///
+    /// 修复前会产出 `正文里有个 { 花括号.style.fill: …` 这类**非法 D2**，整份文档编译不过。
+    #[test]
+    fn d2_block_string_content_is_never_treated_as_nodes() {
+        let body = concat!(
+            "x: |md\n",
+            "  # 标题\n",
+            "  正文里有个 { 花括号\n",
+            "  还有 a -> b\n",
+            "|\n",
+            "y -> z\n",
+        );
+        let res = paint(body, FormatId::D2, "pine", false, PaletteMode::All).unwrap();
+        // 关键：**样式行**里不能出现块字符串的正文（正文本身要原样保留）
+        for l in res.body.lines().filter(|l| l.contains(".style.")) {
+            for bad in ["正文里有个", "花括号", "还有 a", "标题"] {
+                assert!(!l.contains(bad), "块字符串正文被当成节点了：{bad} → {l}");
+            }
+        }
+        // 块外的真节点照常上色
+        assert!(
+            res.body.lines().any(|l| l.contains("y.style.fill:")),
+            "块外的真节点要上色：\n{}",
+            res.body
+        );
+        // 块本身原样保留
+        assert!(res.body.contains("正文里有个 { 花括号"), "正文被改动了：{}", res.body);
+    }
+
+    /// 审计 M-16：无名 `digraph { … }` / `strict digraph { … }` 的第一个节点不能被吃掉。
+    ///
+    /// `digraph` 会置 `skip_next_atom`（用来吃掉图名），而 `{` 分支原来不清它 ——
+    /// 图名不存在时这个标志就吃掉了第一个真节点。实测 `applied` 应为 2 实得 1。
+    #[test]
+    fn unnamed_digraph_keeps_its_first_node() {
+        for src in [
+            "digraph G {\n  a -> b\n}",
+            "digraph {\n  a -> b\n}",
+            "strict digraph {\n  a -> b\n}",
+            "graph {\n  a -- b\n}",
+        ] {
+            let res = paint(src, FormatId::Dot, "pine", false, PaletteMode::All).unwrap();
+            assert_eq!(res.applied, 2, "首节点必须上色：{src}\n→\n{}", res.body);
+        }
+    }
+
+    /// 审计 M-15：尾部注释里的 `}` 不能把色块挤到图外。
+    #[test]
+    fn trailing_comment_brace_does_not_push_the_block_outside_the_graph() {
+        let body = "digraph G {\n  a -> b\n}\n# 备注：{v1} 生成\n";
+        let res = paint(body, FormatId::Dot, "pine", false, PaletteMode::All).unwrap();
+        let begin = res.body.find("dgm-palette:begin").expect("要写色块");
+        let first_close = res.body.find("\n}\n").expect("图有一个收尾大括号");
+        assert!(begin < first_close, "色块必须在图内：\n{}", res.body);
+        assert!(res.body.contains("# 备注：{v1} 生成"), "尾部注释要原样保留：\n{}", res.body);
+    }
+
+    #[test]
+    fn unterminated_palette_block_never_eats_the_document() {
+        let body = concat!(
+            "flowchart TD\n",
+            "  A --> B\n",
+            "%% dgm-palette:begin id=pine（x）\n",
+            "  C --> D\n",
+            "  E --> F\n",
+        );
+        let res = apply(body, FormatId::Mermaid, "pine", false, true, PaletteMode::All).unwrap();
+        // 重点是**正文不能被吃掉**；`changed` 可以是 true（新加了一个配色块）。
+        assert!(
+            res.body.contains("C --> D") && res.body.contains("E --> F"),
+            "正文被吃掉了：\n{}",
+            res.body
+        );
+        assert!(res.body.contains("flowchart TD") && res.body.contains("A --> B"), "{}", res.body);
+        // 正常闭合的块照旧能清掉
+        let ok = "flowchart TD\n  A --> B\n%% dgm-palette:begin id=pine（x）\n  A.style.fill: \"#fff\"\n%% dgm-palette:end\n";
+        let cleared = paint(ok, FormatId::Mermaid, "pine", false, PaletteMode::All).unwrap();
+        assert!(cleared.changed, "闭合的块要能被处理");
     }
 
     #[test]

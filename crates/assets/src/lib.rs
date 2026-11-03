@@ -10,7 +10,7 @@
 //! `/graphviz/`、`/mermaid/`、`/d2/`、`/mermaid-elk/`；其余路径落到前端产物目录
 //! （`/` → `index.html`），从而外壳与资产同源。
 
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 /// 一个资产挂载点。落在这些前缀下的请求会去挂载目录取，而不是前端产物目录。
 pub const MOUNTS: [&str; 6] = ["drawio", "excalidraw", "graphviz", "mermaid", "d2", "mermaid-elk"];
@@ -114,13 +114,19 @@ fn dir_with_subdirs(dir: Option<PathBuf>) -> Option<PathBuf> {
 
 /// URL 路径 → 磁盘文件。返回 `None` 表示 404。
 ///
-/// 路径已做百分号解码。三道防线（2026-10-17 审计 F-1）：
+/// 路径已做百分号解码。四道防线（1~3 见 2026-10-17 审计 F-1，4 见 2026-11-03 审计 H-3）：
 /// 1. **反斜杠一律拒绝** —— `%5C` 解码成 `\` 后，Windows 把它当分隔符，
 ///    按 `/` 切分的 `..` 检查会被穿透（`/drawio/..%5Csecret` 可落到挂载根外）；
 ///    URL 路径里本来就不该出现反斜杠（UNC 的 `\\` 顺带挡掉）。
 /// 2. 按 `/` 切分的 `..` 段一律拒绝。
 /// 3. **绝对路径拒绝** —— `Path::join` 遇到 `C:/x` 会整体替换基目录
 ///    （`/drawio/C:/Windows/win.ini` 直达任意盘），`is_absolute` 兜住。
+/// 4. **前缀/根组件拒绝 + 结果侧收口** —— 第 3 条挡不住 Windows 的**盘符相对路径**
+///    `C:foo`：它 `is_absolute()` 与 `has_root()` **都是 false**（盘符后没有分隔符），
+///    但 `Path::join` 遇到 `Component::Prefix` 同样整体替换基目录，而按 `/` 切出来的
+///    段是 `C:..`，也不等于 `..` ⇒ 三道词法防线全漏（实测 `/C:%2e%2e/SECRET.txt`
+///    读出了根外文件）。所以按**首个组件**判 prefix/根，再对 join 结果做
+///    `canonicalize` 包含性校验（顺带堵 junction / symlink）。
 pub fn resolve(roots: &AssetRoots, url_path: &str) -> Option<PathBuf> {
     let decoded = percent_encoding::percent_decode_str(url_path.trim_start_matches('/'))
         .decode_utf8()
@@ -147,13 +153,30 @@ pub fn resolve(roots: &AssetRoots, url_path: &str) -> Option<PathBuf> {
 
     let rel = if rel.is_empty() { "index.html" } else { &rel };
     let rel_path = Path::new(rel);
-    // `is_absolute` 挡 `C:/x`；`has_root` 再挡 Windows 上 `/x` 这种"无盘符但有根"的
-    // 形态（join 同样会整体替换基目录，落到当前盘的根）。
+    // 首个组件是盘符/UNC 前缀或根 → 一律拒。`is_absolute` 挡 `C:/x`；`has_root` 再挡
+    // Windows 上 `/x` 这种"无盘符但有根"的形态（join 同样会整体替换基目录，落到当前盘的根）；
+    // 两者都挡不住 `C:foo`（盘符相对路径）—— 它既非绝对也无根，但 join 遇到 prefix 组件
+    // 就整体替换基目录（审计 2026-11-03 H-3）。按组件判，与 workspace::resolve_in_root 对齐。
+    if matches!(
+        rel_path.components().next(),
+        Some(Component::Prefix(_)) | Some(Component::RootDir)
+    ) {
+        return None;
+    }
     if rel_path.is_absolute() || rel_path.has_root() {
         return None;
     }
     let candidate = dir.join(rel_path);
-    candidate.is_file().then_some(candidate)
+    if !candidate.is_file() {
+        return None;
+    }
+    // 结果侧收口：规范化后必须仍在挂载根之内。词法检查挡不住 junction / symlink
+    // 指出去的目录，也挡不住将来某条新形态的相对路径 —— 这一道是兜底。
+    // 只在命中真文件后做一次（每次请求就这两个 syscall，不按路径段数放大）。
+    // 目录规范化不出来（挂载根被删/不可读）就当 404，不放行。
+    let base = std::fs::canonicalize(&dir).ok()?;
+    let real = std::fs::canonicalize(&candidate).ok()?;
+    real.starts_with(&base).then_some(candidate)
 }
 
 /// 由扩展名推断 MIME（`text/html` 等）；未知回退 `application/octet-stream`。
@@ -264,6 +287,57 @@ mod tests {
         assert!(resolve(&r, "/drawio/C:/Windows/win.ini").is_none());
         assert!(resolve(&r, "/C:/Windows/win.ini").is_none());
         assert!(resolve(&r, "/drawio//etc/passwd").is_none());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// 审计 H-3 回归：Windows **盘符相对路径**（`C:foo`）`is_absolute()` 与 `has_root()`
+    /// 都是 false，但 `Path::join` 遇到 prefix 组件会整体替换基目录；段是 `C:..` 也不等于
+    /// `..` ⇒ F-1 的三道词法防线全漏（实测 `/C:%2e%2e/SECRET.txt` 读出了根外文件）。
+    #[test]
+    fn rejects_drive_relative_prefix_in_relative_part() {
+        let (root, r) = fixture("drv");
+        // 根外放一份真文件：守卫一旦漏掉，它就会被当成资产取出去
+        std::fs::write(root.join("SECRET.txt"), b"top secret").unwrap();
+        assert!(resolve(&r, "/C:x").is_none());
+        assert!(resolve(&r, "/C:%2e%2e/x").is_none());
+        assert!(resolve(&r, "/C:../x").is_none());
+        assert!(resolve(&r, "/drawio/C:../x").is_none());
+        assert!(resolve(&r, "/drawio/C:%2e%2e/x").is_none());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// 审计 H-3 回归（实证形态）：盘符相对路径指向一个**确实存在**的根外文件。
+    ///
+    /// 用测试进程自己的 CWD 造出这一形态（`<盘符>:Cargo.toml` 按该盘的当前目录解析）——
+    /// 修复前 `join` 会整体替换基目录并命中真文件，`resolve` 返回 `Some`。
+    /// 前两条断言把"机制前提"钉住，免得后面那条只是"恰好没这个文件"。
+    #[cfg(windows)]
+    #[test]
+    fn rejects_drive_relative_path_to_a_real_file_outside_the_roots() {
+        let (root, r) = fixture("drvreal");
+        let cwd = std::env::current_dir().expect("测试进程总有 CWD");
+        let Some(Component::Prefix(pfx)) = cwd.components().next() else {
+            panic!("CWD 不带盘符前缀，这条测试的前提不成立：{cwd:?}");
+        };
+        let prefix = pfx.as_os_str().to_string_lossy().into_owned();
+        let name = std::fs::read_dir(&cwd)
+            .expect("CWD 可读")
+            .flatten()
+            .find_map(|e| {
+                e.file_type()
+                    .ok()
+                    .filter(|t| t.is_file())
+                    .map(|_| e.file_name().to_string_lossy().into_owned())
+            })
+            .expect("CWD 下至少有一个普通文件");
+        let rel = format!("{prefix}{name}");
+        assert!(Path::new(&rel).is_file(), "前提：{rel} 得真能读到根外文件");
+        assert!(
+            !r.ui.join(Path::new(&rel)).starts_with(&r.ui),
+            "前提：join 被 prefix 整体替换"
+        );
+        assert!(resolve(&r, &format!("/{rel}")).is_none(), "前端产物目录这条路要堵死");
+        assert!(resolve(&r, &format!("/drawio/{rel}")).is_none(), "挂载点这条路也要堵死");
         let _ = std::fs::remove_dir_all(root);
     }
 

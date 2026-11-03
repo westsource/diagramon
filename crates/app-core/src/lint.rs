@@ -205,9 +205,39 @@ fn d2(body: &str) -> Vec<Issue> {
 
     let mut out = Vec::new();
     let mut stack: Vec<u32> = Vec::new();
+    // 块字符串（`x: |md … |`）里的花括号是正文，不是语法（审计 2026-11-03 L-32）。
+    // 不认它的话一份**合法**文档会报「花括号没有闭合」—— 而 lint 的设计约束正是
+    // "假报警会让问题面板变成噪音"。
+    let mut blocks = d2syntax::BlockStrings::new();
 
     for (idx, raw) in body.lines().enumerate() {
         let line = idx as u32 + 1;
+        if !matches!(blocks.step(raw), d2syntax::BlockLine::Structure) {
+            // 内容行整行跳过；开块那一行只解析声明部分（`x: |md` → `x:`）
+            if blocks.in_block() {
+                continue;
+            }
+            let decl = d2syntax::block_string_decl(raw);
+            let text = d2syntax::strip_comment(&decl).trim().to_string();
+            if text.is_empty() {
+                continue;
+            }
+            if text.matches('"').count() % 2 == 1 {
+                out.push(err(line, "字符串引号没有闭合", "这一行的 \" 少了配对的一个（标签里的引号要写成 \\\"）"));
+            }
+            for c in text.chars() {
+                match c {
+                    '{' => stack.push(line),
+                    '}' => {
+                        if stack.pop().is_none() {
+                            out.push(err(line, "多余的 }", "没有与之配对的 {"));
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            continue;
+        }
         // 注释与引号内的 `#` 都要先拿掉，否则 `style.fill: "#f00"` 会被当成注释起点
         let text = d2syntax::strip_comment(raw).trim().to_string();
         if text.is_empty() {
@@ -434,6 +464,20 @@ mod tests {
 
         let extra = issues(FormatId::D2, "a -> b\n}\n");
         assert!(has_error(&extra, "多余的 }"), "{extra:?}");
+    }
+
+    /// 审计 L-32：块字符串（`x: |md … |`）里的花括号是**正文**，不是语法。
+    ///
+    /// 修复前一份合法文档会报「花括号没有闭合」（第 3 行）—— 正是 lint 自己
+    /// 反复声明要避免的那种假报警。
+    #[test]
+    fn d2_block_string_content_is_not_parsed_as_syntax() {
+        let src = "x: |md\n  # 标题\n  正文里有个 { 花括号\n  还有 a -> b\n|\ny -> z\n";
+        let v = issues(FormatId::D2, src);
+        assert!(v.is_empty(), "合法文档不能报错：{v:?}");
+        // 块外的真错误照旧要报
+        let bad = issues(FormatId::D2, "x: |md\n  正文 { 不平衡\n|\n容器: {\n  a -> b\n");
+        assert!(has_error(&bad, "花括号没有闭合"), "{bad:?}");
     }
 
     /// 两个**必须不报**的形态：引号里的颜色值不是注释；标签里的圆括号是自由文本。

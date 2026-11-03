@@ -31,6 +31,31 @@ pub struct Conversion {
     pub notes: Vec<String>,
 }
 
+/* ---------------------------------------------------------------- 递归与缩进上限 */
+
+/// 容器（subgraph / cluster）嵌套层数上限：**解析与输出共用这一个常量**
+/// （审计 2026-11-03 H-8 / M-23）。
+///
+/// 为什么必须有：`parse_stmt_list` ↔ `parse_subgraph`（DOT 侧）与 `emit_cluster` /
+/// `emit_container`（两侧）都是递归下钻的，深度不设限时 **16 KB** 的机器生成 `.dot`
+/// （约 900 层 subgraph）就能把栈打穿。`[profile.release] panic = "abort"` 下栈溢出是
+/// `STATUS_STACK_OVERFLOW`，不可捕获不可恢复 ⇒ 整个 Tauri 进程终止，未保存内容全丢；
+/// 而 `convert_text` 是同步命令、跑在栈更小的 IPC 线程上，真实阈值只会更低。
+/// 256 层远超人手写的图，卡在解析层还能报出「第 N 行」。
+pub(crate) const MAX_NEST_DEPTH: usize = 256;
+
+/// 输出缩进的层数上限（审计 2026-11-03 M-23）。
+///
+/// 缩进是**每行都写一遍**的：层数不设上限时产物大小随深度二次方增长
+/// （2000 层嵌套、源 37 KB ⇒ 产物 24 MB，650× 放大）。解析侧已经拦下超过
+/// [`MAX_NEST_DEPTH`] 的嵌套，这里再封一层顶：合法深度（≤256）下产物宽度也不再随深度膨胀。
+pub(crate) const MAX_INDENT: usize = 32;
+
+/// 按层数取缩进，层数封顶见 [`MAX_INDENT`]。
+pub(crate) fn indent_pad(indent: usize) -> String {
+    "    ".repeat(indent.min(MAX_INDENT))
+}
+
 /* ------------------------------------------------------------------ 中间表示 */
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -104,22 +129,26 @@ enum Shape {
 }
 
 impl Shape {
-    /// DOT 里等价的 `shape` / `style`。
+    /// DOT 里等价的 `shape` 属性，以及形状自带的 `style` 记号（圆角那种）。
+    ///
+    /// 两者**分开返回**：`style` 记号要和样式串推出来的记号（`fill` → `filled`、
+    /// `stroke-dasharray` → `dashed`）合成一个 `style="…"` 属性 —— graphviz 只认
+    /// 最后一个同名属性，写成两个就会把圆角静默吃掉（审计 2026-11-03 M-19）。
     ///
     /// 没有直接对应的形状退化为最接近的一个，并由 `notes` 说明 —— 不假装形状还在。
-    fn dot_attrs(self) -> &'static str {
+    fn dot_attrs(self) -> (&'static str, Option<&'static str>) {
         match self {
-            Shape::Box => "shape=box",
-            Shape::Rounded => "shape=box, style=\"rounded\"",
+            Shape::Box => ("shape=box", None),
+            Shape::Rounded => ("shape=box", Some("rounded")),
             // 体育场形 DOT 没有；退化成圆角框
-            Shape::Stadium => "shape=box, style=\"rounded\"",
-            Shape::Subroutine => "shape=box3d",
-            Shape::Cylinder => "shape=cylinder",
-            Shape::Hexagon => "shape=hexagon",
-            Shape::Circle => "shape=circle",
-            Shape::Diamond => "shape=diamond",
+            Shape::Stadium => ("shape=box", Some("rounded")),
+            Shape::Subroutine => ("shape=box3d", None),
+            Shape::Cylinder => ("shape=cylinder", None),
+            Shape::Hexagon => ("shape=hexagon", None),
+            Shape::Circle => ("shape=circle", None),
+            Shape::Diamond => ("shape=diamond", None),
             // 非对称形 DOT 没有；退化成普通框
-            Shape::Asymmetric => "shape=box",
+            Shape::Asymmetric => ("shape=box", None),
         }
     }
 
@@ -173,6 +202,8 @@ fn parse(src: &str) -> Result<(String, Vec<Stmt>), String> {
     let mut direction: Option<String> = None;
     let mut stmts = Vec::new();
     let mut saw_header = false;
+    // 当前打开着的 subgraph 层数（上限见 `MAX_NEST_DEPTH`）
+    let mut depth = 0usize;
     // front matter（`---…---`）与 `%%{init}%%` 指令（可跨行）都不是图的一部分。
     // 不跳过的话 front matter 的 `---` 会被当成头部报「只支持 flowchart」，
     // 多行指令的尾巴会被当成一条语句。
@@ -245,7 +276,26 @@ fn parse(src: &str) -> Result<(String, Vec<Stmt>), String> {
         // 一条语句可能以 `;` 结尾，甚至一行里放多条
         for piece in split_statements(line) {
             // `A & B --> C` 会展开成多条链（笛卡尔积），所以这里收的是**一批**语句。
-            stmts.extend(parse_stmt(&piece, idx + 1)?);
+            for st in parse_stmt(&piece, idx + 1)? {
+                // 嵌套层数在这里就卡住（审计 2026-11-03 M-23）：两个 emitter 都按
+                // subgraph 树递归下钻，深度不设限时约两万层就能把栈打穿，而
+                // release 下 `panic = "abort"` ⇒ 栈溢出直接终止整个进程。
+                // 卡在解析层还多一个好处：能报出「第 N 行」，而不是让用户拿一个崩溃。
+                match st {
+                    Stmt::SubgraphOpen { .. } => {
+                        depth += 1;
+                        if depth > MAX_NEST_DEPTH {
+                            return Err(format!(
+                                "第 {} 行：subgraph 嵌套超过 {MAX_NEST_DEPTH} 层",
+                                idx + 1
+                            ));
+                        }
+                    }
+                    Stmt::SubgraphClose => depth = depth.saturating_sub(1),
+                    _ => {}
+                }
+                stmts.push(st);
+            }
         }
     }
 
@@ -926,8 +976,19 @@ fn style_to_dot(style: &str) -> (Vec<String>, Vec<String>) {
             "stroke" => attrs.push(format!("color=\"{}\"", esc_attr(v))),
             "color" => attrs.push(format!("fontcolor=\"{}\"", esc_attr(v))),
             "stroke-width" => {
+                // 必须解析成数字再写（审计 2026-11-03 M-18）。原来是把 `v` 原样插进
+                // `penwidth={n}`：`stroke-width:bold` 让 graphviz 报语法错（用户看到的
+                // 却是「Graphviz 报语法错」，与真实原因无关），而
+                // `stroke-width:2", label="hacked` 会失衡引号、**注入任意 DOT 属性**
+                // （`URL=` 就会落进渲染出的 SVG 成为可点链接）。D2 侧一直是解析+夹取的，
+                // 两边口径现在一致。
                 let n = v.trim_end_matches("px").trim();
-                attrs.push(format!("penwidth={n}"));
+                match n.parse::<f32>() {
+                    Ok(num) if num.is_finite() => {
+                        attrs.push(format!("penwidth={}", num.clamp(0.0, 15.0)))
+                    }
+                    _ => dropped.push("stroke-width".to_string()),
+                }
             }
             "stroke-dasharray" => dashed = true,
             "fill-opacity" | "stroke-opacity" | "opacity" => dropped.push(k.to_string()),
@@ -1441,6 +1502,36 @@ fn cluster_ref(c: &Cluster) -> &str {
     c.id.as_deref().filter(|s| !s.is_empty()).unwrap_or(&c.name)
 }
 
+/// 把 `attrs` 里所有 `style="…"` 合成**恰好一个** `style="…"`（审计 2026-11-03 M-19）。
+///
+/// graphviz 对重复属性取**最后一个**，所以形状自带的 `style="rounded"` 一旦被后面
+/// 样式串推出来的 `style="filled"` 顶掉，圆角就静默消失 —— 而 `fill` 正是自动配色
+/// 一定会写的键，也就是「先配色再转 DOT」这条主路径上圆角节点必然丢圆角。
+/// 记号去重、保持首次出现顺序（形状的 `rounded` 排在前面）。
+fn merge_style_attrs(attrs: Vec<String>) -> Vec<String> {
+    let mut tokens: Vec<String> = Vec::new();
+    let mut out: Vec<String> = Vec::with_capacity(attrs.len());
+    for a in attrs {
+        if let Some(v) = a
+            .strip_prefix("style=\"")
+            .and_then(|rest| rest.strip_suffix('"'))
+        {
+            for t in v.split(',') {
+                let t = t.trim();
+                if !t.is_empty() && !tokens.iter().any(|x| x == t) {
+                    tokens.push(t.to_string());
+                }
+            }
+            continue;
+        }
+        out.push(a);
+    }
+    if !tokens.is_empty() {
+        out.push(format!("style=\"{}\"", tokens.join(",")));
+    }
+    out
+}
+
 fn emit_node(
     out: &mut String,
     id: &str,
@@ -1448,7 +1539,7 @@ fn emit_node(
     node_styles: &HashMap<String, Vec<String>>,
     indent: usize,
 ) {
-    let pad = "    ".repeat(indent);
+    let pad = indent_pad(indent);
     let (label, shape) = label_of
         .get(id)
         .cloned()
@@ -1457,10 +1548,16 @@ fn emit_node(
     if let Some(l) = &label {
         attrs.push(format!("label=\"{}\"", to_dot_label(l)));
     }
-    attrs.push(shape.dot_attrs().to_string());
+    let (shape_attr, shape_style) = shape.dot_attrs();
+    attrs.push(shape_attr.to_string());
+    if let Some(s) = shape_style {
+        attrs.push(format!("style=\"{s}\""));
+    }
     if let Some(extra) = node_styles.get(id) {
         attrs.extend(extra.iter().cloned());
     }
+    // 形状的 style 与样式串推出来的 style 在这里收成一个属性（见 merge_style_attrs）
+    let attrs = merge_style_attrs(attrs);
     let _ = writeln!(out, "{pad}{} [{}];", dot_id(id), attrs.join(", "));
 }
 
@@ -1475,7 +1572,7 @@ fn emit_cluster(
     node_styles: &HashMap<String, Vec<String>>,
     indent: usize,
 ) {
-    let pad = "    ".repeat(indent);
+    let pad = indent_pad(indent);
     let c = &clusters[idx];
     let _ = writeln!(out, "{pad}subgraph cluster_{idx} {{");
     let _ = writeln!(out, "{pad}    label=\"{}\";", to_dot_label(&c.name));
@@ -1502,7 +1599,7 @@ fn emit_edge(
     cluster_of: &HashMap<String, Option<usize>>,
     clusters: &[Cluster],
 ) {
-    let pad = "    ".repeat(indent);
+    let pad = indent_pad(indent);
     let mut attrs: Vec<String> = Vec::new();
     if let Some(label) = &link.label {
         attrs.push(format!("label=\"{}\"", to_dot_label(label)));
@@ -1679,6 +1776,12 @@ pub fn mermaid_to_d2(src: &str) -> Result<Conversion, String> {
 
     /* ---------- 第一遍：classDef ---------- */
     let mut class_styles: HashMap<String, Vec<(String, String)>> = HashMap::new();
+    // classDef 的**首见顺序**（审计 2026-11-03 M-17）。
+    //
+    // 输出必须确定：HashMap 的迭代序随 `RandomState` 每次实例化都变，同一份源
+    // 转两次会得到不同字节 —— 落盘后脏标记常亮、diff 全是噪音、按字节比对的回归
+    // 测试随机红。同函数的 `dropped_keys` 一直 `sort()`，说明这个约束本来就知道。
+    let mut class_order: Vec<String> = Vec::new();
     let mut dropped_keys: Vec<String> = Vec::new();
     // `stroke-width` 被 D2 上限截断过的原值（进 notes）
     let mut clamped_widths: Vec<String> = Vec::new();
@@ -1687,7 +1790,9 @@ pub fn mermaid_to_d2(src: &str) -> Result<Conversion, String> {
         match st {
             Stmt::ClassDef { name, style } => {
                 let (kv, dropped, clamped) = style_to_d2(style);
-                class_styles.insert(name.clone(), kv);
+                if class_styles.insert(name.clone(), kv).is_none() {
+                    class_order.push(name.clone());
+                }
                 dropped_keys.extend(dropped);
                 clamped_widths.extend(clamped);
             }
@@ -1839,8 +1944,15 @@ pub fn mermaid_to_d2(src: &str) -> Result<Conversion, String> {
 
     if !class_styles.is_empty() {
         let _ = writeln!(out, "classes: {{");
-        for (name, kv) in &class_styles {
-            let _ = writeln!(out, "    {}: {{ style: {{ {} }} }}", d2_id(name), d2_style_inline(kv));
+        // 按首见顺序而不是 HashMap 迭代序（审计 2026-11-03 M-17）
+        for name in &class_order {
+            let Some(kv) = class_styles.get(name) else { continue };
+            let _ = writeln!(
+                out,
+                "    {}: {{ style: {{ {} }} }}",
+                d2_id(name),
+                d2_style_inline(kv)
+            );
         }
         let _ = writeln!(out, "}}");
     }
@@ -1963,7 +2075,7 @@ fn attach_d2_edge(
 }
 
 fn emit_d2_edge(out: &mut String, from: &str, to: &str, link: &Link, indent: usize) {
-    let pad = "    ".repeat(indent);
+    let pad = indent_pad(indent);
     let arrow = match (link.source, link.target) {
         (End::None, End::Point) => "->",
         (End::Point, End::Point) => "<->",
@@ -2030,7 +2142,7 @@ impl D2Emit {
     }
 
     fn emit_node(&self, out: &mut String, id: &str, indent: usize) {
-        let pad = "    ".repeat(indent);
+        let pad = indent_pad(indent);
         let (label, shape) = self.label_of.get(id).cloned().unwrap_or((None, Shape::Box));
         let mut wrote = false;
         if let Some(l) = &label {
@@ -2059,7 +2171,7 @@ impl D2Emit {
     }
 
     fn emit_container(&self, out: &mut String, idx: usize, order: &[String], indent: usize) {
-        let pad = "    ".repeat(indent);
+        let pad = indent_pad(indent);
         let c = &self.containers[idx];
         let r = cluster_ref(c);
         if c.name == r {
@@ -2574,6 +2686,78 @@ mod tests {
             "subgraph 的语义变化必须写进 notes：{:?}",
             c.notes
         );
+    }
+
+    /// 审计 M-17：`classes:` 块必须按**源码首见顺序**输出，两次转换字节一致。
+    ///
+    /// 修复前按 `HashMap` 迭代序，而 `RandomState` 每个实例换种子 ——
+    /// 同一份源每次转换出来的字节都不同：落盘后脏标记常亮、diff 全是噪音、
+    /// 按字节比对的回归测试随机红。
+    #[test]
+    fn mermaid_to_d2_class_block_is_deterministic_and_in_source_order() {
+        let src = "flowchart TD\n  A --> B\n  classDef c1 fill:#111\n  classDef c2 fill:#222\n  classDef c3 fill:#333\n  classDef c4 fill:#444\n  class A c1\n  class B c2\n";
+        let a = mermaid_to_d2(src).unwrap().body;
+        let b = mermaid_to_d2(src).unwrap().body;
+        let c = mermaid_to_d2(src).unwrap().body;
+        assert_eq!(a, b, "两次转换必须字节一致");
+        assert_eq!(b, c);
+        let i1 = a.find("c1:").expect("c1 要在 classes 块里");
+        let i2 = a.find("c2:").expect("c2 要在 classes 块里");
+        let i3 = a.find("c3:").expect("c3 要在 classes 块里");
+        let i4 = a.find("c4:").expect("c4 要在 classes 块里");
+        assert!(i1 < i2 && i2 < i3 && i3 < i4, "顺序要跟源码一致：\n{a}");
+    }
+
+    /// 审计 M-18：`stroke-width` 必须解析成数字再写进 DOT。
+    ///
+    /// 修复前是原样插入 `penwidth={n}` —— `bold` 让 graphviz 报语法错（用户看到的却是
+    /// 「Graphviz 报语法错」，与真实原因无关），`2", label="hacked` 会失衡引号、
+    /// **注入任意 DOT 属性**（`URL=` 落进渲染出的 SVG 就是可点链接）。
+    #[test]
+    fn stroke_width_is_validated_and_cannot_inject_dot_attributes() {
+        let c = mermaid_to_dot("flowchart TD\n  A --> B\n  style A stroke-width:bold\n").unwrap();
+        assert!(!c.body.contains("penwidth=bold"), "非数字不能原样写进去：{}", c.body);
+        assert!(
+            c.notes.iter().any(|n| n.contains("stroke-width")),
+            "丢掉的键要进 notes：{:?}",
+            c.notes
+        );
+
+        let c = mermaid_to_dot("flowchart TD\n  A --> B\n  style A stroke-width:2\", label=\"hacked\n").unwrap();
+        assert!(!c.body.contains("hacked"), "不能注入属性：{}", c.body);
+        assert!(!c.body.contains("label=\"hacked"), "不能注入属性：{}", c.body);
+
+        // 合法值照旧，并夹在 0..15（与 D2 侧同口径）
+        let c = mermaid_to_dot("flowchart TD\n  A --> B\n  style A stroke-width:3px\n").unwrap();
+        assert!(c.body.contains("penwidth=3"), "{}", c.body);
+        let c = mermaid_to_dot("flowchart TD\n  A --> B\n  style A stroke-width:99\n").unwrap();
+        assert!(c.body.contains("penwidth=15"), "上限要夹住：{}", c.body);
+    }
+
+    /// 审计 M-19：`style=` 只能出现一次，且圆角与填充同时保留。
+    ///
+    /// 修复前 shape 的 `style="rounded"` 与样式串推出来的 `style="filled"` 各写一份，
+    /// graphviz 取最后一个 ⇒ 圆角被静默吃掉。而 `fill` 正是自动配色一定会写的键，
+    /// 也就是「先配色再转 DOT」这条主路径上圆角节点必然丢圆角。
+    #[test]
+    fn rounded_corner_survives_when_a_fill_style_is_also_present() {
+        let c = mermaid_to_dot(
+            "flowchart TD\n  A([开始]) --> B\n  style A fill:#f00\n",
+        )
+        .unwrap();
+        let line = c
+            .body
+            .lines()
+            .find(|l| l.trim_start().starts_with("A ["))
+            .expect("A 要有一行属性");
+        assert_eq!(line.matches("style=").count(), 1, "只能有一个 style=：{line}");
+        assert!(line.contains("rounded"), "圆角不能被吃掉：{line}");
+        assert!(line.contains("filled"), "填充也要在：{line}");
+        assert!(line.contains("fillcolor="), "填充色也要在：{line}");
+        // 纯方框节点不该凭空长出 style
+        let c2 = mermaid_to_dot("flowchart TD\n  A[A] --> B\n").unwrap();
+        let l2 = c2.body.lines().find(|l| l.trim_start().starts_with("A [")).unwrap();
+        assert!(!l2.contains("style="), "方框不该有 style：{l2}");
     }
 
     #[test]

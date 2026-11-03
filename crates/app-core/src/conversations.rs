@@ -65,6 +65,27 @@ fn normalize(path: &str) -> String {
     unified.trim_end_matches('/').to_lowercase()
 }
 
+/// 会话键的合法形态（审计 2026-11-03 H-4）。
+///
+/// 键只有两处来源，都是内部生成的：`doc_key()` 是 16 位小写 hex，
+/// `draft_key()` 是 `draft-` + 白名单字符。
+///
+/// 但**外部入口的 `key` 直接来自前端**（`conversation_read` / `conversation_delete`），
+/// 以前原样拼进路径：`dir.join(format!("{key}.json"))` 遇到绝对路径会整体替换基目录，
+/// 于是 `conversation_delete("C:/…/Diagramon/settings")` 能删掉应用设置；更隐蔽的是
+/// `load()` 在解析失败时会把文件**改名为 `.bak`** —— 对任意非 `Conversation` 形状的
+/// `.json` 调一次 `conversation_read` 就把它静默改名（VS Code 的 settings.json、
+/// 项目的 package.json / tsconfig.json / tauri.conf.json 都是这个形状）。
+/// `draft_key()` 的白名单注释本来就写着"顺带防路径穿越"，只是外部入口没走它。
+pub fn valid_key(key: &str) -> bool {
+    let b = key.as_bytes();
+    if b.len() == 16 && b.iter().all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(c)) {
+        return true;
+    }
+    matches!(key.strip_prefix("draft-"), Some(rest) if !rest.is_empty()
+        && rest.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'-' || c == b'_'))
+}
+
 pub fn file_for(dir: &Path, key: &str) -> PathBuf {
     dir.join(format!("{key}.json"))
 }
@@ -122,7 +143,13 @@ fn atomic_write(file: &Path, text: &str, create: bool) -> Result<(), String> {
 }
 
 /// 读一份会话。文件不存在 → 空会话；文件坏了 → 留 `.bak` 再回空会话。
+///
+/// 键不合法直接当"没有"（审计 2026-11-03 H-4）—— 绝不能用它去拼路径读盘，
+/// 更不能用下面的 `.bak` 改名去动别的文件。
 pub fn load(dir: &Path, key: &str) -> Conversation {
+    if !valid_key(key) {
+        return Conversation::default();
+    }
     let path = file_for(dir, key);
     let Ok(text) = std::fs::read_to_string(&path) else {
         return Conversation::default();
@@ -130,7 +157,10 @@ pub fn load(dir: &Path, key: &str) -> Conversation {
     match serde_json::from_str::<Conversation>(&text) {
         Ok(c) => c,
         Err(_) => {
-            let _ = std::fs::rename(&path, path.with_extension("json.bak"));
+            // 只改自己目录里的文件：`path` 由已校验的键拼成，parent 必然是 `dir`
+            if path.parent() == Some(dir) {
+                let _ = std::fs::rename(&path, path.with_extension("json.bak"));
+            }
             Conversation::default()
         }
     }
@@ -147,6 +177,11 @@ pub fn save(dir: &Path, conv: &Conversation) -> Result<(), String> {
 pub fn save_doc(dir: &Path, conv: &Conversation, name: &str, format: &str) -> Result<(), String> {
     if conv.doc_key.is_empty() {
         return Err("会话缺少文档身份，拒绝落盘".into());
+    }
+    // 键必须是内部生成的那两种形态之一（审计 2026-11-03 H-4）：写盘路径同样是
+    // `dir.join(...)`，非法键会把文件写到目录外。
+    if !valid_key(&conv.doc_key) {
+        return Err(format!("会话键不合法，拒绝落盘：{}", conv.doc_key));
     }
     std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     let text = serde_json::to_string_pretty(conv).map_err(|e| e.to_string())?;
@@ -219,6 +254,9 @@ fn read_meta(dir: &Path, key: &str) -> Option<ConvMeta> {
 /// **严格**读一份实体：必须能解析成 `Conversation`、且 `doc_key` 就是文件名。
 /// 读不动/形状不对（外来文件）→ `None`。**不重命名、不写盘**（列表是只读操作）。
 fn read_entity(dir: &Path, key: &str) -> Option<Conversation> {
+    if !valid_key(key) {
+        return None;
+    }
     let text = std::fs::read_to_string(file_for(dir, key)).ok()?;
     let conv: Conversation = serde_json::from_str(&text).ok()?;
     (conv.doc_key == key).then_some(conv)
@@ -235,7 +273,13 @@ fn backfill_meta(dir: &Path, key: &str, conv: &Conversation) -> ConvMeta {
 }
 
 /// 删掉一份会话（含 meta）；不存在也算成功（幂等）。
+///
+/// 键不合法**必须报错而不是静默成功**（审计 2026-11-03 H-4）：这条命令的作用是
+/// 删文件，静默放行会让调用方以为删掉了；报错则把"你拿到一个非法键"如实说出来。
 pub fn clear(dir: &Path, key: &str) -> Result<(), String> {
+    if !valid_key(key) {
+        return Err(format!("会话键不合法，拒绝删除：{key}"));
+    }
     for f in [file_for(dir, key), meta_file_for(dir, key)] {
         match std::fs::remove_file(&f) {
             Ok(()) => {}
@@ -810,5 +854,90 @@ mod tests {
         assert_eq!(last_generated_code(&turns, "mermaid"), None);
         // 未闭合的围栏（流式被截断）也丢掉
         assert_eq!(last_generated_code(&[turn("assistant", "```mermaid\ngraph TD", 1)], "mermaid"), None);
+    }
+
+    /// 审计 H-4：前端传来的 `key` 不校验时会拼成任意路径。
+    ///
+    /// `dir.join(format!("{key}.json"))` 遇到绝对路径会**整体替换**基目录，
+    /// 于是 `conversation_delete("C:/…/Diagramon/settings")` 能删掉应用设置；
+    /// 而 `load()` 的 `.bak` 改名会把任意非 `Conversation` 形状的 `.json`
+    /// （VS Code settings.json、package.json、tauri.conf.json…）静默改名。
+    #[test]
+    fn rejects_keys_that_would_escape_the_conversations_dir() {
+        for bad in [
+            "../../settings",
+            "C:/Users/x/AppData/Roaming/Diagramon/settings",
+            "\\\\evil\\share\\p",
+            "a.json",
+            "",
+            "ABCDEF0123456789",    // 大写 hex 不是 doc_key 的形态
+            "draft-",
+            "draft-a/b",
+        ] {
+            assert!(!valid_key(bad), "应当判为非法键：{bad:?}");
+        }
+        for good in ["0123456789abcdef", "draft-untitled-7", "draft-a_b-1"] {
+            assert!(valid_key(good), "应当判为合法键：{good:?}");
+        }
+    }
+
+    /// 审计 H-4（后果）：非法键既不能删到目录外，也不能把外面的文件改名成 `.bak`。
+    #[test]
+    fn invalid_key_cannot_delete_or_rename_outside_the_dir() {
+        let dir = temp_dir("h4-outside");
+        let outside = dir.parent().expect("临时目录有父目录").join(format!(
+            "dgm-h4-settings-{}-{}.json",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::write(&outside, "{\"theme\":\"light\"}").unwrap();
+
+        // 用不带扩展名的绝对路径当键：拼出来正好是 `outside` 那个文件
+        let stem = outside.with_extension("");
+        let key = stem.to_string_lossy().replace('\\', "/");
+        assert!(std::fs::read_to_string(&outside).is_ok(), "前提：目标文件存在");
+
+        // ① 删除必须被拒且文件还在
+        assert!(clear(&dir, &key).is_err(), "非法键删除必须报错");
+        assert!(outside.exists(), "非法键不能删掉目录外的文件");
+
+        // ② 读取必须返回空会话，且**不改名**
+        assert!(load(&dir, &key).turns.is_empty());
+        assert!(outside.exists(), "非法键不能把目录外的文件改名成 .bak");
+        assert!(!outside.with_extension("json.bak").exists());
+
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_file(&outside);
+    }
+
+    /// 合法键照旧可用（别把正常路径一起拦了）。
+    #[test]
+    fn valid_keys_still_round_trip() {
+        let dir = temp_dir("h4-ok");
+        let key = doc_key("E:/x/ok.mmd");
+        let conv = Conversation { doc_key: key.clone(), path: "E:/x/ok.mmd".into(), turns: vec![turn("user", "hi", 1)], updated_at: 1 };
+        save(&dir, &conv).unwrap();
+        assert_eq!(load(&dir, &key).turns.len(), 1);
+        clear(&dir, &key).unwrap();
+        assert!(!file_for(&dir, &key).exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 审计 H-4：写盘入口同样要挡非法键（`dir.join` 会被绝对路径整体替换）。
+    #[test]
+    fn save_rejects_an_invalid_doc_key() {
+        let dir = temp_dir("h4-save");
+        let conv = Conversation {
+            doc_key: "../escaped".into(),
+            path: "E:/x/e.mmd".into(),
+            turns: vec![turn("user", "hi", 1)],
+            updated_at: 1,
+        };
+        assert!(save(&dir, &conv).is_err());
+        assert!(!dir.parent().unwrap().join("escaped.json").exists());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

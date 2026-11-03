@@ -69,12 +69,57 @@ pub fn settings_get(state: State<'_, Arc<AppState>>) -> Settings {
 /// 局部更新：前端只发它改动的字段，其余原样保留（见 app-core::settings::apply_patch）。
 #[tauri::command]
 pub fn settings_patch(state: State<'_, Arc<AppState>>, patch: serde_json::Value) -> R<Settings> {
-    let mut s = state.settings().clone();
+    let before = state.settings().clone();
+    let mut s = before.clone();
     app_core::settings::apply_patch(&mut s, patch)?;
     state.persist_settings(&s)?;
     *state.settings() = s.clone();
+    invalidate_keys_on_base_url_change(state.inner(), &before, &s);
     state.hydrate_models(&mut s);
     Ok(s)
+}
+
+/// 上游地址一改，那把密钥立刻作废（审计 2026-11-03 M-4）。
+///
+/// `settings_patch` 是一次深合并，任何 `Settings` 字段都能被一次调用改写 ——
+/// 包括 `ai.providers[].base_url` 与 `cloud.base_url`。`commands.rs` 里那句
+/// "已保存的供应商**只信 settings 里的地址**"防的是"密钥被改地址后发到别的主机"，
+/// 但防线设在"读 settings"上，而 settings 本身可写 ⇒ 守卫被绕开：
+/// 把 `base_url` 改到攻击者主机，用户下次对话时 `resolve_target` 从 DPAPI 取出
+/// **真密钥**发过去，云端则是 `Authorization: Bearer <access token>`。
+///
+/// 正确做法不是禁止改地址（用户本来就能在设置里改，BYOK 的地址是用户自己填的），
+/// 而是**地址变了就要求重填密钥**：密钥与地址是一对，换地址等于换信任对象。
+fn invalidate_keys_on_base_url_change(
+    state: &AppState,
+    before: &app_ipc::Settings,
+    after: &app_ipc::Settings,
+) {
+    let old: std::collections::HashMap<&str, &str> = before
+        .ai
+        .providers
+        .iter()
+        .map(|p| (p.id.as_str(), p.base_url.as_str()))
+        .collect();
+    for p in &after.ai.providers {
+        if let Some(prev) = old.get(p.id.as_str()) {
+            if *prev != p.base_url {
+                let _ = state.creds.delete(&crate::state::provider_credential_key(&p.id));
+                eprintln!(
+                    "diagramon|provider-url-changed|{}|{} -> {}|密钥已作废",
+                    p.id, prev, p.base_url
+                );
+            }
+        }
+    }
+    // 云网关同理：地址换了，access / refresh 令牌都不该继续带着走。
+    if before.cloud.base_url != after.cloud.base_url
+        || before.cloud.api_base != after.cloud.api_base
+    {
+        let _ = state.creds.delete(crate::state::CLOUD_ACCESS_KEY);
+        let _ = state.creds.delete(crate::state::CLOUD_REFRESH_KEY);
+        eprintln!("diagramon|cloud-url-changed|云会话已作废");
+    }
 }
 
 /// 显式退出（菜单「退出」/ Ctrl+Q / 托盘「退出」）：整个应用结束。
@@ -121,7 +166,20 @@ pub(crate) fn after_open_file(state: &AppState, id: &str) {
 
 #[tauri::command]
 pub fn doc_open_paths(state: State<'_, Arc<AppState>>, paths: Vec<String>) -> SessionPayload {
-    let (opened, failed) = state.session().open_paths(&paths);
+    // 只认注册过的图表扩展名（审计 2026-11-03 H-5）。
+    //
+    // CLI/单实例入口一直走 `diagram_files()` 过滤（那是 F-5 的修复），**IPC 入口却一条
+    // 都没过滤** —— 同一条不变式漏在了另一条路上。而这个命令返回的 `Doc.body` 是**全文**
+    // （`SessionPayload.docs[]`），于是 `doc_open_paths(["C:/Users/<u>/.ssh/id_rsa"])`
+    // 一次调用就能把任意 UTF-8 文本文件读回前端，再借承载页（无 CSP）外传。
+    // 拒掉的路径如实进 `failed`，由下面的日志与前端提示说出来 —— 不静默丢。
+    let (accepted, rejected): (Vec<String>, Vec<String>) = paths
+        .into_iter()
+        .partition(|p| app_core::workspace::is_open_ext(&ext_of(p)));
+    let (opened, mut failed) = state.session().open_paths(&accepted);
+    for p in rejected {
+        failed.push((p, "不是注册的图表扩展名".to_string()));
+    }
     for id in &opened {
         after_open_file(state.inner(), id);
     }
@@ -135,6 +193,14 @@ pub fn doc_open_paths(state: State<'_, Arc<AppState>>, paths: Vec<String>) -> Se
         eprintln!("diagramon|open-failed|{detail}");
     }
     state.session().payload()
+}
+
+/// 取扩展名（小写、不带点）。没有扩展名时返回空串。
+fn ext_of(path: &str) -> String {
+    Path::new(path)
+        .extension()
+        .map(|e| e.to_string_lossy().to_ascii_lowercase())
+        .unwrap_or_default()
 }
 
 #[tauri::command]
@@ -387,6 +453,21 @@ pub fn doc_save_as(state: State<'_, Arc<AppState>>, id: String, path: String) ->
 fn save_to(state: &AppState, id: &str, path: &Path) -> R<Doc> {
     // fs scope：开了"限制在工作区内"时，这里是唯一的守门点
     state.check_writable(path)?;
+    // 另存为也只能写图表文件（审计 2026-11-03 M-3）。
+    //
+    // F-3 的扩展名白名单只加在了 `export_write` 上，`save_to` 一条都没有：而
+    // `doc_new` → `doc_set_body`（任意字节）→ `doc_save_as(…/Startup/x.bat)` 就是
+    // **任意内容任意路径写**（登录项持久化）。原注释说"另存为走系统对话框是用户本人的
+    // 授权"—— 但命令层分不出"对话框给的路径"和"脚本编的路径"，而 F-2/F-3 的整个前提
+    // 正是"webview 侧被注入脚本"。这条命令本来就只该写图表文件。
+    if !app_core::workspace::is_open_ext(&ext_of(&path.to_string_lossy())) {
+        return Err(format!(
+            "另存为只支持图表文件（{}），不能写：{}",
+            app_core::workspace::OPEN_EXTS.join(" / "),
+            path.display()
+        ));
+    }
+    refuse_config_dirs(state, path)?;
     // 旧会话身份要在 commit_saved **之前**抓：commit 之后 `path` 已经变了。
     // 未保存文档 → draft 键；已有路径的文档（另存为）→ 旧路径的文档键。
     let (old_key, old_path) = {
@@ -435,9 +516,40 @@ fn save_to(state: &AppState, id: &str, path: &Path) -> R<Doc> {
 
 /// 导出允许的扩展名（小写）。**白名单而非黑名单**：这条命令的路径来自前端，
 /// 万一 webview 侧被注入脚本（审计 F-2 的前提），不能让它借这里往磁盘投
-/// 可执行物（.exe/.bat/.ps1/.hta/…）。图片是用户导出；`.json` 是真机自检的
-/// 报告落盘；`.mmd` 是自检造工作区用的演示文件（见 `ui/js/main.js`）。
-const EXPORT_EXTS: &[&str] = &["png", "jpg", "jpeg", "svg", "webp", "json", "mmd", "md"];
+/// 可执行物（.exe/.bat/.ps1/.hta/…）。
+///
+/// 真正对用户的有三样：`png` / `svg`（`ui/js/preview.js` 的导出）与 `md`
+/// （`ui/js/dialogs.js` 的「导出 Markdown」，路径来自保存对话框）。
+const EXPORT_EXTS_USER: &[&str] = &["png", "jpg", "jpeg", "svg", "webp", "md"];
+
+/// **仅真机自检**使用的扩展名（审计 2026-11-03 M-2）。
+///
+/// `.json` 是真机自检的报告落盘、`.mmd` 是自检造工作区用的演示文件
+/// （见 `ui/js/main.js`）。它们曾经和用户那三样混在同一个白名单里 ——
+/// 而 `paths.settings_file()` 就是 `config_dir/settings.json`，于是任意同源脚本
+/// 可以用一条 `export_write` **整份覆盖应用设置**：把 `ai.providers[].base_url`
+/// 改到攻击者主机，下次对话时 `resolve_target` 从 DPAPI 取出真密钥发过去。
+/// 现在只有 `DIAGRAMON_SELFTEST=1` 时才放行这两种。
+const EXPORT_EXTS_SELFTEST: &[&str] = &["json", "mmd"];
+
+/// 拒绝写进应用自己的配置/数据目录（审计 2026-11-03 M-2）。
+///
+/// 白名单只能按扩展名挡，挡不住"写对目录"：`settings.json` / `conversations/*.json` /
+/// `memory/*.json` / `render_opts.json` 全是 `.json`。合法导出没有任何理由落在这里。
+fn refuse_config_dirs(state: &AppState, path: &Path) -> R<()> {
+    let parent = path.parent().unwrap_or(path);
+    let real_parent = std::fs::canonicalize(parent).unwrap_or_else(|_| parent.to_path_buf());
+    for dir in [&state.paths.config_dir, &state.paths.data_dir] {
+        let real_dir = std::fs::canonicalize(dir).unwrap_or_else(|_| dir.clone());
+        if real_parent == real_dir || real_parent.starts_with(&real_dir) {
+            return Err(format!(
+                "不能写进应用自己的配置目录：{}",
+                path.display()
+            ));
+        }
+    }
+    Ok(())
+}
 
 /// 导出：把前端渲染好的图片（base64）落到用户选的路径。
 #[tauri::command]
@@ -455,21 +567,18 @@ pub fn export_write(
         .decode(payload.trim())
         .map_err(|e| format!("图片数据不是合法 base64：{e}"))?;
     let p = PathBuf::from(&path);
-    // 扩展名白名单（审计 F-3）：另存为走系统对话框是用户本人的授权，不走这里；
-    // 这条命令是前端可直接调的，必须自带边界。
-    let ext_ok = p
-        .extension()
-        .map(|e| {
-            let e = e.to_string_lossy().to_ascii_lowercase();
-            EXPORT_EXTS.contains(&e.as_str())
-        })
-        .unwrap_or(false);
+    // 扩展名白名单（审计 F-3 + 2026-11-03 M-2）：用户那三样恒放行，
+    // 自检用的 `.json` / `.mmd` 只在自检开关打开时放行。
+    let ext = ext_of(&path);
+    let ext_ok = EXPORT_EXTS_USER.contains(&ext.as_str())
+        || (crate::selftest_on() && EXPORT_EXTS_SELFTEST.contains(&ext.as_str()));
     if !ext_ok {
         return Err(format!(
             "导出只支持 {} 格式，不能写：{path}",
-            EXPORT_EXTS.join(" / ")
+            EXPORT_EXTS_USER.join(" / ")
         ));
     }
+    refuse_config_dirs(state.inner(), &p)?;
     state.check_writable(&p)?;
     if let Some(dir) = p.parent() {
         std::fs::create_dir_all(dir).map_err(|e| format!("建目录失败：{e}"))?;

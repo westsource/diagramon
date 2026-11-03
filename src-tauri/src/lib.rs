@@ -72,6 +72,52 @@ fn window_url_label() -> &'static str {
     }
 }
 
+/// 外壳页（`ui/**`）的内容安全策略。
+///
+/// **为什么挂在协议响应头上、而不是 `tauri.conf.json` 的 `app.security.csp`**（审计 2026-11-03 H-6）：
+/// 那个配置只作用于 Tauri 自己的资产协议，**管不到自定义协议处理器的响应** ——
+/// 而外壳页与五个承载页全部由 `dgm` 提供。原先只有 `ui/index.html` 里一条 `<meta>`，
+/// 于是 drawio / Excalidraw 承载页、上游 drawio 的 `index.html`、`capture.html`
+/// **一条 CSP 都没有**，而它们处理的正是本应用最主要的不可信输入
+/// （第三方 `.drawio`/`.excalidraw`、渲染引擎产出的 SVG），又与外壳**同源**、
+/// 同样被注入 `window.__TAURI__`（wry 在 Windows 上把初始化脚本注进**所有帧**，
+/// 见 `wry-0.57.0/src/lib.rs:1029`）。响应头是唯一能覆盖到上游产物那一份的办法。
+///
+/// ⚠️ 与 `ui/index.html` 里的 `<meta>` **逐字一致**（那边保留一份做兜底：
+/// 万一这里的挂载点判断出错，外壳页至少还有一道）。改一处必须改两处。
+const CSP_SHELL: &str = "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; \
+worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; \
+connect-src 'self' data: blob: http://ipc.localhost https://ipc.localhost; \
+font-src 'self' data:; frame-src 'self' blob:; object-src 'none'; base-uri 'none'";
+
+/// 承载页（`/drawio/`、`/excalidraw/`、`/graphviz/`、`/mermaid/`、`/d2/`、`/mermaid-elk/`）的策略。
+///
+/// 与外壳页只差两处，都是被第三方引擎逼出来的：
+/// * `script-src` 多 `'unsafe-inline' 'unsafe-eval'` —— 我们自己写的两份承载页有内联脚本，
+///   上游 drawio 的构建产物同样有，而它**不是我们的文件、没法改成外链**；mxGraph 系还要 eval。
+///   这不是理想状态，但承载页本来就要跑第三方 JS，CSP 在这里的价值主要是
+///   **切断外带通道**（`connect-src`/`default-src` 只留同源），而不是禁脚本。
+/// * `object-src` 放宽到 `'self'`（外壳页是 `'none'`）：drawio 的导出/打印路径可能用到，
+///   收紧到 `'none'` 的收益不足以抵掉弄坏上游功能的风险。
+const CSP_CANVAS: &str = "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval'; \
+worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; \
+connect-src 'self' data: blob: http://ipc.localhost https://ipc.localhost; \
+font-src 'self' data:; frame-src 'self' blob:; object-src 'self'; base-uri 'none'";
+
+/// 按 URL 路径选 CSP：落在挂载点前缀下的走承载页那一档，其余（外壳与前端产物）走严格那一档。
+fn csp_for(url_path: &str) -> &'static str {
+    let first = url_path
+        .trim_start_matches('/')
+        .split(['/', '?', '#'])
+        .next()
+        .unwrap_or("");
+    if assets::MOUNTS.contains(&first) {
+        CSP_CANVAS
+    } else {
+        CSP_SHELL
+    }
+}
+
 pub fn run() {
     let paths = match AppPaths::resolve() {
         Ok(p) => p,
@@ -149,16 +195,25 @@ pub fn run() {
                         Ok(bytes) => Response::builder()
                             .status(200)
                             .header(header::CONTENT_TYPE, assets::mime_for(&file))
+                            // 每个同源响应都要带 CSP（审计 2026-11-03 H-6）：外壳页与承载页
+                            // 同源，而承载页跑的是渲染不可信图表的第三方引擎 —— 只有响应头
+                            // 能覆盖到上游产物那一份（见 csp_for 的注释）。
+                            .header(header::CONTENT_SECURITY_POLICY, csp_for(&path))
                             // 不缓存：开发期改了 ui/ 下的文件刷新即可见；
                             // 98MB 资产的重复读盘代价可接受，换来"不会看到旧版本"。
                             .header(header::CACHE_CONTROL, "no-store")
                             .body(bytes)
                             .expect("响应构造"),
                         Err(e) => {
+                            // 错误原文只进日志，不回给页面（审计 2026-11-03 L-1）：
+                            // io::Error 的 Display 会带 Windows 错误文案、有时含完整路径，
+                            // 而这个响应的读者包含承载页里的第三方内容。404 分支早就只回
+                            // "not found"，这里以前不一致。
                             eprintln!("diagramon|asset-readerr|{path}|{e}");
                             Response::builder()
                                 .status(500)
-                                .body(format!("read error: {e}").into_bytes())
+                                .header(header::CONTENT_TYPE, "text/plain")
+                                .body(b"read error".to_vec())
                                 .expect("响应构造")
                         }
                     },
@@ -479,7 +534,7 @@ fn show_main_window(app: &tauri::AppHandle) {
 }
 
 /// `DIAGRAMON_SELFTEST=1` 是否开着（自检要干净会话与临时草稿目录）。
-fn selftest_on() -> bool {
+pub(crate) fn selftest_on() -> bool {
     std::env::var(app_ipc::ENV_SELFTEST)
         .map(|v| !v.trim().is_empty() && v.trim() != "0")
         .unwrap_or(false)
