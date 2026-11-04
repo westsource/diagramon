@@ -152,8 +152,8 @@ window.DGM = window.DGM || {};
     },
     docFmt(doc) {
       // 没有文档时**固定按 Mermaid**（文本型）算：注册表的顺序是 UI 显示顺序
-      // （drawio 在前），拿 `formatList[0]` 当兜底会让"无文档"这种状态被当成
-      // 画布型 —— 视图菜单/另存默认后缀都会跟着走偏。
+      // （2026-11-04 起 Mermaid 排第一，但它仍是显式写死而不是取 `formatList[0]` ——
+      // 顺序是产品决定、还会再变，而"无文档时按文本型算"是**行为**，不该被一次排序改动带走）。
       return state.fmtById(doc ? doc.format : "mermaid");
     },
     isTextDoc(doc) {

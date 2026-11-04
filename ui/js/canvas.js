@@ -740,6 +740,15 @@ window.DGM = window.DGM || {};
     /** ack 兜底次数（非 0 = 某个承载页没回 load/loaded，代际没能按时翻）。 */
     ackFallbacks: () => ackFallbacks,
     epoch: (format) => (hosts[format] ? hosts[format].epoch : 0),
+    /**
+     * 立刻处理一次承载页队列，**不等那 120ms 的轮询**。
+     *
+     * 给验收用（`tools/dev/ui_probe.py` 的 C-L4）：headless 的计时器会被节流到 ~1s/次，
+     * 冷编译紧接其后时更糟 —— 断言"这条事件该不该落地"会变成"轮询有没有轮到"，
+     * 于是同一份代码在单跑时全绿、在门禁里偶发红。排空是纯同步的，直接调它就没有这个歧义。
+     * 也顺手是排障时的好用工具（"队列里现在到底堆着什么"）。
+     */
+    drainNow: (format) => drain(format),
   };
 
   DGM.bus.on("settings:changed", syncThemeAll);

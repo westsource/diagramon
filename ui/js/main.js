@@ -462,8 +462,11 @@ window.DGM = window.DGM || {};
         ok("启动后台预热了 ELK 离线包", elkNow === true, String(elkNow));
       }
       ok(
-        "注册表五种格式",
-        info && info.formats && info.formats.length === 5 && info.formats.map((f) => f.id).join(",") === "drawio,mermaid,excalidraw,dot,d2",
+        // 顺序即 UI 顺序（`crates/app-core/src/format.rs` 的 registry）：
+        // 2026-11-04 起 Mermaid 排第一（新建时最常选它）；新建对话框 / 转换下拉 /
+        // 转换能力一览都吃这个顺序，所以这里钉的是**产品决定**，不是实现细节。
+        "注册表五种格式（顺序即 UI 顺序，Mermaid 第一）",
+        info && info.formats && info.formats.length === 5 && info.formats.map((f) => f.id).join(",") === "mermaid,drawio,excalidraw,dot,d2",
         info && info.formats && info.formats.map((f) => f.id).join(","),
       );
       ok(

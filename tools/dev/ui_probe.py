@@ -1863,43 +1863,57 @@ def main() -> int:
             "  DGM.state.setBody(dE.id, 'E_BODY');"
             "  const dF = await DGM.state.newDoc('drawio');"
             "  DGM.state.setBody(dF.id, 'F_BODY');"
+            # 这一段**全部同步**：代际 bump、队列排空都是同步的，只有承载页回 ack 要等。
+            # 以前靠 `until()` 等 120ms 轮询，headless 的计时器被节流后断言就变成
+            # "轮询有没有轮到"——同一份代码单跑全绿、门禁里偶发红（实测三次）。
+            # 现在用 `cv.drainNow()` 直接排空，判定只剩代码逻辑。
             "  cv.show(dE);"
-            # 代际握手依赖 iframe 启动 + 桩回 load + 120ms 轮询三件事叠起来；
-            # headless 的计时器本来就被节流到 ~1s/次，机器一忙 3s 就不够（实测在
-            # 同时下载大文件时这里会超时，进而 epochE 读成 0、后面四条断言全部失义）。
-            # 所以：给足 15s，并**单独记一个握手结论** —— 超时要报成"握手没到手"，
-            # 而不是伪装成"过滤没生效"。
-            "  out.lc4_handshake = await until("
-            "    () => cv.epoch('drawio') >= 1 && stubOf('drawio').__hostEpoch === cv.epoch('drawio'),"
-            "    15000,"
-            "  );"
             "  const epochE = cv.epoch('drawio');"
+            "  out.lc4_showBumped = epochE >= 1;"
+            "  cv.drainNow('drawio');"
             "  const staleBefore = cv.staleDropped();"
-            # ① 正控：**当前代际**的 autosave 必须落进 E
+            # ① 正控：**当前代际**的 autosave 必须落进 E（同步排空后立刻读）
             "  stubOf('drawio').__pushRaw({ event: 'autosave', xml: 'E_LIVE_EDIT' }, epochE);"
-            "  await until(() => DGM.state.doc(dE.id).body === 'E_LIVE_EDIT', 8000);"
+            "  cv.drainNow('drawio');"
             "  out.lc4_currentApplied = DGM.state.doc(dE.id).body;"
-            # ② 切到 F（代际会在桩回 load 之后翻）
+            # ② 切到 F：代际 bump 是同步的，直接比（不等 ack）
             "  cv.show(dF);"
-            "  out.lc4_epochBumped = await until("
-            "    () => cv.epoch('drawio') === epochE + 1 &&"
-            "           stubOf('drawio').__hostEpoch === epochE + 1,"
-            "    15000,"
-            "  );"
-            # ③ 旧代际的 autosave（模拟 A 的迟到事件）必须被丢弃、不得写进 F
+            "  out.lc4_epochBumped = cv.epoch('drawio') === epochE + 1;"
+            "  cv.drainNow('drawio');"
+            # ③ 旧代际的 autosave（模拟上一份文档的迟到事件）必须被丢弃、不得写进 F
             "  stubOf('drawio').__pushRaw({ event: 'autosave', xml: 'STALE_FROM_E' }, epochE);"
-            "  await wait(600);"
+            "  cv.drainNow('drawio');"
             "  out.lc4_staleBody = DGM.state.doc(dF.id).body;"
             "  out.lc4_staleNotApplied = DGM.state.doc(dF.id).body !== 'STALE_FROM_E';"
             "  out.lc4_staleDropped = cv.staleDropped() - staleBefore;"
             # ④ F 自己那一代际的 autosave 仍然要生效（别把正常路径一起掐死）
             "  stubOf('drawio').__pushRaw({ event: 'autosave', xml: 'F_LIVE_EDIT' }, cv.epoch('drawio'));"
-            "  await until(() => DGM.state.doc(dF.id).body === 'F_LIVE_EDIT', 8000);"
+            "  cv.drainNow('drawio');"
             "  out.lc4_freshApplied = DGM.state.doc(dF.id).body;"
             # ⑤ 没有代际信息（旧承载页 / 代际 0）的事件照旧放行 —— 前后兼容
             "  stubOf('drawio').__pushRaw({ event: 'autosave', xml: 'LEGACY_NO_EPOCH' }, 0);"
-            "  await until(() => DGM.state.doc(dF.id).body === 'LEGACY_NO_EPOCH', 8000);"
+            "  cv.drainNow('drawio');"
             "  out.lc4_legacyApplied = DGM.state.doc(dF.id).body;"
+            # ⑥ 承载页最终要收到新代际（这条只能等 ack，但换文档后一定会有）
+            "  out.lc4_handshake = await until("
+            "    () => stubOf('drawio').__hostEpoch === cv.epoch('drawio'),"
+            "    15000,"
+            "  );"
+            # 诊断：失败时不要只看到"断言红了"，把内部状态一起带出来
+            # （epoch / 承载页收到没 / 两条队列长度 / 兜底次数）。
+            "  const w = stubOf('drawio');"
+            "  out.lc4_dbg = {"
+            "    epochE,"
+            "    epochNow: cv.epoch('drawio'),"
+            "    hostEpoch: w ? w.__hostEpoch : 'no-frame',"
+            "    hasEpochs: w ? Array.isArray(w.__hostEpochs) : null,"
+            "    qLen: w ? w.__hostQueue.length : -1,"
+            "    eLen: w && w.__hostEpochs ? w.__hostEpochs.length : -1,"
+            "    staleDropped: cv.staleDropped(),"
+            "    ackFallbacks: cv.ackFallbacks(),"
+            "    loadedDoc: cv.loadedDoc('drawio'),"
+            "    dE: dE.id, dF: dF.id,"
+            "  };"
             # 复原：清掉画布实例，别影响后面的截图/断言
             "  for (const f of ['drawio','excalidraw']) cv.teardown(f);"
             "  return JSON.stringify(out);"
@@ -1944,8 +1958,14 @@ def main() -> int:
         # 反例很具体：切标签瞬间旧文档的 autosave 落进新文档正文（在那里被自动保存写坏）。
         # 先判握手：它没成的话后面四条全部失义（epochE 会读成 0，过滤器按"无版本信息"放行），
         # 必须单独报出来，别伪装成"过滤没生效"。
+        # 每条失败都带上 `lc4_dbg`（epoch / 承载页是否收到 / 队列长度 / ack 兜底次数）——
+        # 这块在"冷编译紧接着 spawn Chrome"时偶发过（headless 计时器被饿住），
+        # 没有内部状态就只能猜。
+        _lc4_dbg = json.dumps(cl.get("lc4_dbg") or {}, ensure_ascii=False)
+        if cl.get("lc4_showBumped") is not True:
+            fails.append(f"show() 没有把代际 +1（同步判断，不涉及时序） {_lc4_dbg}")
         if cl.get("lc4_handshake") is not True:
-            fails.append("画布代际握手没完成（15s 内承载页没收到新代际 / epoch 没涨）")
+            fails.append(f"画布代际握手没完成（15s 内承载页没收到新代际 / epoch 没涨） {_lc4_dbg}")
         if cl.get("lc4_currentApplied") != "E_LIVE_EDIT":
             fails.append(f"当前代际的 autosave 没生效（过滤把正常事件也掐了？）：{cl.get('lc4_currentApplied')!r}")
         if cl.get("lc4_epochBumped") is not True:
@@ -1960,6 +1980,27 @@ def main() -> int:
             fails.append(
                 f"没有代际信息的事件被误杀（旧承载页要能继续用）：{cl.get('lc4_legacyApplied')!r}"
             )
+
+        # ---- 新建对话框：Mermaid 必须是第一张卡片（2026-11-04 产品要求）----
+        # 顺序的真源是 `crates/app-core/src/format.rs` 的 registry（前端不再排第二次），
+        # 这里钉的是**用户看到的结果**，不是实现细节。
+        new_cards = ev(
+            "(async () => {"
+            "  DGM.dialogs.newDoc();"
+            "  await new Promise(r => setTimeout(r, 150));"
+            "  const names = [...document.querySelectorAll('#dialog .new-card b')].map(b => b.textContent.trim());"
+            "  DGM.dialogs.close();"
+            "  return JSON.stringify(names);"
+            "})()"
+        )
+        try:
+            names = json.loads(new_cards or "[]")
+        except Exception:
+            names = []
+        if not names:
+            fails.append(f"新建对话框没有渲染出格式卡片：{new_cards!r}")
+        elif names[0] != "Mermaid":
+            fails.append(f"新建对话框的第一张卡片应当是 Mermaid（实际顺序：{names}）")
 
         # ---- 追加截图：保存到云端窗口 / 登录窗口（留证用，不参与判定） ----
         # 截图走"先把视口撑到 1680×1000 再截"：`captureBeyondViewport` 在本机

@@ -379,16 +379,11 @@ digraph Pipeline {
     excalidraw: '{\n  "type": "excalidraw",\n  "version": 2,\n  "source": "https://diagramon.app",\n  "elements": [],\n  "appState": { "viewBackgroundColor": "#ffffff" }\n}\n',
   };
 
-  // 顺序必须与 crates/app-core/src/format.rs 的 registry() 一致（drawio、Mermaid、
+  // 顺序必须与 crates/app-core/src/format.rs 的 registry() 一致（**Mermaid**、drawio、
   // Excalidraw、DOT、D2）：「新建」对话框、「转换为」下拉、能力一览都直接吃这个顺序。
+  // ⚠️ 这份 mock 是浏览器原型没有 Rust 时的替身，抄了一份清单；registry 改顺序时**这里也要改**
+  // （2026-11-04 Mermaid 提到第一位就是这么同步的，`ui_probe` 现在有一条断言钉住卡片顺序）。
   const FORMATS = [
-    {
-      id: "drawio", name: "drawio", short: "drawio", exts: [".drawio"],
-      surface: "canvas", split_view: false, ai: false,
-      convert_to: [], layouts: [],
-      note: "画布即编辑器；文件仍是可 diff 的 mxfile XML",
-      default_body: NEW_BODIES.drawio,
-    },
     {
       id: "mermaid", name: "Mermaid", short: "Mermaid", exts: [".mmd", ".mermaid"],
       surface: "text", split_view: true, ai: true,
@@ -396,6 +391,13 @@ digraph Pipeline {
       looks: ["auto", "classic", "neo", "handDrawn"],
       note: "文本图表，支持源码 / 分屏 / 预览三态",
       default_body: NEW_BODIES.mermaid,
+    },
+    {
+      id: "drawio", name: "drawio", short: "drawio", exts: [".drawio"],
+      surface: "canvas", split_view: false, ai: false,
+      convert_to: [], layouts: [],
+      note: "画布即编辑器；文件仍是可 diff 的 mxfile XML",
+      default_body: NEW_BODIES.drawio,
     },
     {
       id: "excalidraw", name: "Excalidraw", short: "Excalidraw", exts: [".excalidraw"],
