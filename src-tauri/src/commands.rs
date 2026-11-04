@@ -49,12 +49,19 @@ pub fn app_info(state: State<'_, Arc<AppState>>) -> AppInfo {
 }
 
 /// 开发开关：按环境变量如实声明（见 `crate::selftest_report` 与 `debug_browser_args`）。
+///
+/// `debug_port` 只对开发/验收构建如实（审计 2026-11-03 L-8）：发布版既不认那个环境变量，
+/// 也就没有端口可报 —— 否则等于主动把"无鉴权 CDP 端点在哪"告诉页面里的脚本。
 fn dev_flags(paths: &platform::AppPaths) -> DevFlags {
     DevFlags {
         selftest_report: crate::selftest_report(paths),
-        debug_port: std::env::var(app_ipc::ENV_DEBUG_PORT)
-            .ok()
-            .and_then(|v| v.trim().parse::<u16>().ok()),
+        debug_port: if crate::dev_build() {
+            std::env::var(app_ipc::ENV_DEBUG_PORT)
+                .ok()
+                .and_then(|v| v.trim().parse::<u16>().ok())
+        } else {
+            None
+        },
         mock: false,
     }
 }
@@ -244,8 +251,14 @@ pub fn doc_set_body(
     if hold.unwrap_or(false) {
         // 撤掉已经排定的自动保存：不然 5 秒后它会把这次"只想看看"的改动写进磁盘
         state.cancel_autosave(&id);
-    } else if state.settings().editor.autosave {
-        // autosave 计时归 Rust：正文一改就重新起表
+    } else {
+        // autosave 计时归 Rust：正文一改就重新起表。
+        //
+        // **不论开关都排**（审计 2026-11-03 L-14）：`editor.autosave` 只决定"要不要写回
+        // 原文件"，而草稿仓是**崩溃兜底**，必须恒开。原来关掉自动保存就完全不排表，于是
+        // 升级安装前的 `taskkill /F /T`（见 `nsis/installer.nsh`）把内存里的脏文档直接
+        // 抹掉，用户没有任何找回途径 —— 而那个开关的默认值就是关。
+        // "只写草稿、不碰原文件"这半句落实在 `autosave_one` 里。
         state.mark_autosave(&id);
     }
     Ok(dirty)

@@ -240,7 +240,11 @@ def main() -> int:
         if not ws_url:
             log("✗ CDP 端口一直没起来")
             return 2
-        cdp = CDP(ws_url, timeout=30)
+        # 60s 而不是 30s：check.mjs 的**第 4 步是 `cargo check --workspace --all-targets`**，
+        # 冷编译刚跑完就 spawn Chrome 时，渲染进程会被 CPU 抢得暂时不回应 —— 30s 会撞
+        # `CDP 等回包超时`，而整套断言其实一条都还没跑（2026-11-03 实测：单跑 128s 全绿，
+        # 紧接着冷编译跑就 60s 超时）。抬高上限即可，不是断言问题。
+        cdp = CDP(ws_url, timeout=60)
         cdp.send("Runtime.enable")
         cdp.send("Page.enable")
         cdp.send(
@@ -256,11 +260,14 @@ def main() -> int:
 
         cdp.send("Page.navigate", {"url": f"http://127.0.0.1:{ui_port}/index.html"})
 
-        def ev(expr: str):
+        def ev(expr: str, timeout: float = 20):
+            # `timeout` 可调：有的断言块内部自己要等几秒（例如画布代际握手要等 iframe
+            # 启动 + 桩回 load + 120ms 轮询），外面这层 20s 的默认值会把它们掐掉 ——
+            # 而且报出来是 `CDP 等回包超时`，看着像浏览器死了，实际是预算不够。
             r = cdp.call(
                 "Runtime.evaluate",
                 {"expression": expr, "returnByValue": True, "awaitPromise": True},
-                timeout=20,
+                timeout=timeout,
             )
             res = (r or {}).get("result", {})
             if res.get("subtype") == "error":
@@ -1857,36 +1864,50 @@ def main() -> int:
             "  const dF = await DGM.state.newDoc('drawio');"
             "  DGM.state.setBody(dF.id, 'F_BODY');"
             "  cv.show(dE);"
-            "  await until(() => cv.epoch('drawio') >= 1 && stubOf('drawio').__hostEpoch === cv.epoch('drawio'));"
+            # 代际握手依赖 iframe 启动 + 桩回 load + 120ms 轮询三件事叠起来；
+            # headless 的计时器本来就被节流到 ~1s/次，机器一忙 3s 就不够（实测在
+            # 同时下载大文件时这里会超时，进而 epochE 读成 0、后面四条断言全部失义）。
+            # 所以：给足 15s，并**单独记一个握手结论** —— 超时要报成"握手没到手"，
+            # 而不是伪装成"过滤没生效"。
+            "  out.lc4_handshake = await until("
+            "    () => cv.epoch('drawio') >= 1 && stubOf('drawio').__hostEpoch === cv.epoch('drawio'),"
+            "    15000,"
+            "  );"
             "  const epochE = cv.epoch('drawio');"
             "  const staleBefore = cv.staleDropped();"
             # ① 正控：**当前代际**的 autosave 必须落进 E
             "  stubOf('drawio').__pushRaw({ event: 'autosave', xml: 'E_LIVE_EDIT' }, epochE);"
-            "  await until(() => DGM.state.doc(dE.id).body === 'E_LIVE_EDIT');"
+            "  await until(() => DGM.state.doc(dE.id).body === 'E_LIVE_EDIT', 8000);"
             "  out.lc4_currentApplied = DGM.state.doc(dE.id).body;"
             # ② 切到 F（代际会在桩回 load 之后翻）
             "  cv.show(dF);"
-            "  await until(() => cv.epoch('drawio') === epochE + 1 &&"
-            "                     stubOf('drawio').__hostEpoch === epochE + 1);"
-            "  out.lc4_epochBumped = cv.epoch('drawio') === epochE + 1;"
+            "  out.lc4_epochBumped = await until("
+            "    () => cv.epoch('drawio') === epochE + 1 &&"
+            "           stubOf('drawio').__hostEpoch === epochE + 1,"
+            "    15000,"
+            "  );"
             # ③ 旧代际的 autosave（模拟 A 的迟到事件）必须被丢弃、不得写进 F
             "  stubOf('drawio').__pushRaw({ event: 'autosave', xml: 'STALE_FROM_E' }, epochE);"
-            "  await wait(400);"
+            "  await wait(600);"
             "  out.lc4_staleBody = DGM.state.doc(dF.id).body;"
             "  out.lc4_staleNotApplied = DGM.state.doc(dF.id).body !== 'STALE_FROM_E';"
             "  out.lc4_staleDropped = cv.staleDropped() - staleBefore;"
             # ④ F 自己那一代际的 autosave 仍然要生效（别把正常路径一起掐死）
             "  stubOf('drawio').__pushRaw({ event: 'autosave', xml: 'F_LIVE_EDIT' }, cv.epoch('drawio'));"
-            "  await until(() => DGM.state.doc(dF.id).body === 'F_LIVE_EDIT');"
+            "  await until(() => DGM.state.doc(dF.id).body === 'F_LIVE_EDIT', 8000);"
             "  out.lc4_freshApplied = DGM.state.doc(dF.id).body;"
             # ⑤ 没有代际信息（旧承载页 / 代际 0）的事件照旧放行 —— 前后兼容
             "  stubOf('drawio').__pushRaw({ event: 'autosave', xml: 'LEGACY_NO_EPOCH' }, 0);"
-            "  await until(() => DGM.state.doc(dF.id).body === 'LEGACY_NO_EPOCH');"
+            "  await until(() => DGM.state.doc(dF.id).body === 'LEGACY_NO_EPOCH', 8000);"
             "  out.lc4_legacyApplied = DGM.state.doc(dF.id).body;"
             # 复原：清掉画布实例，别影响后面的截图/断言
             "  for (const f of ['drawio','excalidraw']) cv.teardown(f);"
             "  return JSON.stringify(out);"
-            "})()"
+            "})()",
+            # 这个块内部自己要等：代际握手 up to 15s、换文档 ack up to 15s、
+            # 三个"事件是否落地"各 up to 8s ⇒ 默认 20s 必然不够（实测报成
+            # `CDP 等回包超时`，看着像浏览器挂了，其实是预算不够）。
+            120,
         )
         log(f"画布生命周期（C2）: {canvas_lc}")
         try:
@@ -1921,6 +1942,10 @@ def main() -> int:
 
         # C-L4 代际过滤（审计 2026-11-03 M-27）：上一份文档的迟到事件不得写进新文档。
         # 反例很具体：切标签瞬间旧文档的 autosave 落进新文档正文（在那里被自动保存写坏）。
+        # 先判握手：它没成的话后面四条全部失义（epochE 会读成 0，过滤器按"无版本信息"放行），
+        # 必须单独报出来，别伪装成"过滤没生效"。
+        if cl.get("lc4_handshake") is not True:
+            fails.append("画布代际握手没完成（15s 内承载页没收到新代际 / epoch 没涨）")
         if cl.get("lc4_currentApplied") != "E_LIVE_EDIT":
             fails.append(f"当前代际的 autosave 没生效（过滤把正常事件也掐了？）：{cl.get('lc4_currentApplied')!r}")
         if cl.get("lc4_epochBumped") is not True:

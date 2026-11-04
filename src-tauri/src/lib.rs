@@ -384,10 +384,9 @@ fn spawn_autosave(app: tauri::AppHandle) {
     std::thread::spawn(move || loop {
         std::thread::sleep(std::time::Duration::from_millis(1000));
         let st = app.state::<Arc<AppState>>().inner().clone();
-        if !st.settings().editor.autosave {
-            st.autosave().clear();
-            continue;
-        }
+        // 不再因为 `editor.autosave` 关着就整体跳过（审计 2026-11-03 L-14）：
+        // 那个开关现在由 `autosave_one` 解释为"不写回原文件"，而**草稿仓必须照写** ——
+        // 否则升级安装前的 `taskkill /F /T` 就把未保存内容抹掉了。
         let now = std::time::Instant::now();
         let due: Vec<String> = {
             let map = st.autosave();
@@ -402,7 +401,15 @@ fn spawn_autosave(app: tauri::AppHandle) {
     });
 }
 
-/// 落一份 autosave：有路径的写回原文件，没有的进草稿仓。
+/// 落一份 autosave：`editor.autosave` **开着**才写回原文件；任何情况下脏文档都进草稿仓。
+///
+/// 开关只该决定"要不要自动覆盖磁盘上的文件"（那是个有风险的写操作）；**草稿仓是崩溃
+/// 兜底**，不该被它关掉（审计 2026-11-03 L-14：升级安装前的 `taskkill /F /T` 会把内存里
+/// 的脏文档直接抹掉，而 `editor.autosave` 默认就是关）。
+///
+/// 副作用（如实记在这里）：关掉自动保存时，一份**有路径**的文档被草稿化之后，正常退出
+/// 也可能在下一次启动被恢复成一个新标签页 —— 内容不丢，但会多一个未命名标签。相比
+/// "升级一次就丢一次未保存内容"，这个取舍是划算的；用户手动保存会清掉对应草稿。
 fn autosave_one(app: &tauri::AppHandle, st: &AppState, id: &str) -> Result<(), String> {
     let (path, name, format, body, dirty) = {
         let s = st.session();
@@ -412,8 +419,9 @@ fn autosave_one(app: &tauri::AppHandle, st: &AppState, id: &str) -> Result<(), S
     if !dirty {
         return Ok(()); // 期间用户自己存了/改回去了
     }
-    match path {
-        Some(p) => {
+    let autosave_on = st.settings().editor.autosave;
+    match (path, autosave_on) {
+        (Some(p), true) => {
             let p = PathBuf::from(p);
             // 受限模式下不许写出去 —— 直接不写，留给用户手动保存（别把草稿也弄丢）
             st.check_writable(&p)?;
@@ -424,7 +432,8 @@ fn autosave_one(app: &tauri::AppHandle, st: &AppState, id: &str) -> Result<(), S
                 .ok_or_else(|| "文档不存在".to_string())?;
             let _ = app.emit(events::DOC_AUTOSAVED, doc);
         }
-        None => {
+        // 自动保存关着（或有路径但没开自动保存）：**只进草稿仓**，绝不碰原文件
+        _ => {
             let draft = app_core::recovery::Draft {
                 id: id.to_string(),
                 name,
@@ -564,6 +573,26 @@ pub(crate) fn selftest_report(paths: &AppPaths) -> Option<String> {
     }))
 }
 
+/// 是不是**开发/验收**构建（审计 2026-11-03 L-8）。
+///
+/// 三个调试开关原来在 release 里同样生效：
+/// * `DIAGRAMON_DEBUG_PORT` 打开的是**无鉴权**的 CDP 端点 —— 拿到它就等于拿到
+///   webview 里的任意 JS 执行权（进而全部 IPC 命令）；
+/// * `DGM_BROWSER_EXTRA_ARGS` 的典型值是 `--no-sandbox`；
+/// * `app_info.dev.debug_port` 还会把这个端口主动告诉页面。
+///
+/// 它们只该活在开发与验收里。`DGM_BROWSER_EXTRA_ARGS` 额外放行"自检开着"的情况：
+/// 验收流水线跑的是 debug 构建，但受限会话里有人用 release 构建自查时也得能起来 ——
+/// 而那个变量本身要用户自己设进程环境变量，前提已经接近"已有本机代码执行"。
+#[cfg(debug_assertions)]
+pub(crate) const fn dev_build() -> bool {
+    true
+}
+#[cfg(not(debug_assertions))]
+pub(crate) const fn dev_build() -> bool {
+    false
+}
+
 /// 自检 / CDP 调试时给 WebView2 加**反节流**开关。
 ///
 /// 为什么必须有：WebView2 对"被遮挡的后台窗口"不只是把 `setTimeout` 节流到 ~1 次/秒，
@@ -577,10 +606,15 @@ fn debug_browser_args() -> Option<String> {
     let selftest = std::env::var(app_ipc::ENV_SELFTEST)
         .map(|v| !v.trim().is_empty() && v.trim() != "0")
         .unwrap_or(false);
-    let port = std::env::var(app_ipc::ENV_DEBUG_PORT)
-        .ok()
-        .map(|v| v.trim().to_string())
-        .filter(|v| !v.is_empty());
+    // 无鉴权 CDP 端点只给开发构建（审计 L-8）
+    let port = if dev_build() {
+        std::env::var(app_ipc::ENV_DEBUG_PORT)
+            .ok()
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty())
+    } else {
+        None
+    };
     if !selftest && port.is_none() {
         return None;
     }
@@ -602,11 +636,14 @@ fn debug_browser_args() -> Option<String> {
     // WebView2 的浏览器子进程会**启动即崩**（Crashpad 每 launch 一个 ~7MB dmp、窗口纯白），
     // 自动化验收从这类环境拉起应用时需要它。**仅环境变量显式给出时生效**，
     // 绝不写进任何默认/发布路径 —— 沙箱只允许被验收环境自己关掉。
-    if let Ok(extra) = std::env::var("DGM_BROWSER_EXTRA_ARGS") {
-        let extra = extra.trim();
-        if !extra.is_empty() {
-            args.push(' ');
-            args.push_str(extra);
+    // 发布构建只在自检开着时认它（审计 L-8），平时一律忽略。
+    if dev_build() || selftest {
+        if let Ok(extra) = std::env::var("DGM_BROWSER_EXTRA_ARGS") {
+            let extra = extra.trim();
+            if !extra.is_empty() {
+                args.push(' ');
+                args.push_str(extra);
+            }
         }
     }
     Some(args)

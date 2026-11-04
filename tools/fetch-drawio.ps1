@@ -1,7 +1,84 @@
 ﻿param(
     [switch]$Verify,
-    [switch]$Force
+    [switch]$Force,
+    # 允许在归档全部拿不到时退回 git 浅克隆（**不做归档哈希校验**，默认关闭）。
+    # 见 $PinnedArchiveHashes 的注释：这条路径绕不过去地无法校验来源。
+    [switch]$AllowUnpinnedGit,
+    # 直接用本机已有的归档（跳过下载）。**仍然过哈希校验** —— 它只是换一条取字节的路，
+    # 不是绕过校验的路。给"网络拿不到 codeload、但能用别的方式拿到官方归档"的场合用。
+    [string]$From
 )
+
+# ========== 归档哈希 pin（审计 2026-11-03 M-35）==========
+#
+# 下载源里有第三方代理镜像（ghproxy.net / gh-proxy.com / gitclone.com），它们是**任意中转**。
+# 只钉版本号的话，"同一版本号换内容"我们看不出来 —— 而这份 JS 会被复制进 assets/、跑在
+# dgm:// **同源** iframe 里，摸得到外壳页的 window.__TAURI__（全部 IPC 命令）。等于把安装包
+# 交给镜像的控制者。所以钉住**归档本身的 sha256**，做法与 tools/fetch-d2.mjs 的 TARBALL_SHA 一致。
+#
+# 镜像与官方源用同一条校验：镜像只是转发同一个 GitHub 归档，字节应当一致。
+# 哈希不符 = 致命（exit 1），**不换下一个源** —— 换源解决不了投毒。
+#
+# 升级 tag 时手工登记一次：
+#   1) 从 codeload 官方各下一次 tar.gz 与 zip
+#        https://codeload.github.com/jgraph/drawio/tar.gz/refs/tags/<tag>
+#        https://codeload.github.com/jgraph/drawio/zipball/refs/tags/<tag>
+#   2) 算 sha256（Get-FileHash -Algorithm SHA256），填进下面
+#   3) 更新 tools/drawio.version
+# 若 GitHub 事后重新生成归档导致哈希变化，这里会失败（fail-closed），按同样办法重登即可。
+$PinnedArchiveHashes = @{
+    'v31.4.6' = @{
+        # codeload 的 zip 归档。**已交叉验证**：解出后 `favicon.ico`、
+        # `js/PostConfig.js`、`styles/grapheditor.css` 三个文件与 `tools/drawio/.manifest.json`
+        # 里记录的 sha256 逐字节一致 ⇒ 这份归档就是产出当前资产的那个上游修订。
+        # （`js/app.min.js` 对不上是**预期**的：取资产脚本会后处理它，清单记的是后处理之后的哈希。）
+        'zip'    = '14995ac02103b84bad12f95b6f1d56cda9bc9ae3aade87bbeaa5210a6af035ad'
+        # 暂时只钉 zip：本机网络拿不下 tar.gz（codeload 不支持断点续传，三次都在 ~35 MB 被断）。
+        # 补登记 tar.gz 后可以把它加回 `$ArchiveAttempts`（两者都必须有哈希才会被要求）。
+    }
+}
+
+function Get-PinnedArchiveHash {
+    param([string]$Version, [string]$Suffix)
+    if (-not $PinnedArchiveHashes.ContainsKey($Version)) { return $null }
+    $entry = $PinnedArchiveHashes[$Version]
+    if (-not $entry.ContainsKey($Suffix)) { return $null }
+    return $entry[$Suffix]
+}
+
+# 下载前就把"这个版本有没有登记"问清楚：没登记直接拒绝，
+# 免得走到下面的 git 兜底（那条路同样无法校验来源）。
+# `$Suffixes` 由**实际会尝试的下载源**推出来 —— 增删一种格式时校验要求自动跟着变，
+# 不会出现"加了源却忘了登记哈希"或"登记了但没人用"。
+function Assert-VersionIsPinned {
+    param([string]$Version, [string[]]$Suffixes)
+    $missing = @()
+    foreach ($suffix in $Suffixes) {
+        $h = Get-PinnedArchiveHash -Version $Version -Suffix $suffix
+        if (-not $h -or $h -like '*_PLACEHOLDER') { $missing += $suffix }
+    }
+    if ($missing.Count -gt 0) {
+        Write-Host "错误: 版本 $Version 没有登记归档哈希（缺 $($missing -join ' / ')）—— 拒绝下载。" -ForegroundColor Red
+        Write-Host "  在 tools/fetch-drawio.ps1 的 `$PinnedArchiveHashes 里补一条。" -ForegroundColor Yellow
+        Write-Host "  为什么必须登记：下载源含第三方镜像，不钉哈希就等于信任任何一个中转。" -ForegroundColor Yellow
+        exit 1
+    }
+}
+
+function Test-ArchiveHash {
+    param([string]$Path, [string]$Expected)
+    $actual = (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLower()
+    if ($actual -ne $Expected.ToLower()) {
+        Write-Host "✗ 归档哈希不符 —— 可能是镜像投毒，或上游重新生成了归档" -ForegroundColor Red
+        Write-Host "    期望 $Expected" -ForegroundColor Yellow
+        Write-Host "    实际 $actual" -ForegroundColor Yellow
+        Write-Host "  已中止，未解包、未写入 tools/drawio。" -ForegroundColor Red
+        return $false
+    }
+    Write-Host "  ✓ 归档 sha256 匹配（$($actual.Substring(0, 16))…）" -ForegroundColor Green
+    return $true
+}
+
 
 # ========== 编码处理（与 tools/fetch-graphviz.ps1 / publish1-build.ps1 一致） ==========
 $null = chcp 65001
@@ -1190,53 +1267,89 @@ $TempDir = Join-Path $env:TEMP ("diagramon-drawio-" + [guid]::NewGuid().ToString
 New-Item -ItemType Directory -Path $TempDir -Force | Out-Null
 
 try {
-    # 下载来源按顺序尝试：codeload 官方两条优先（无中间人、体积最小），
-    # 之后是国内镜像（GitHub 直连受限时用），最后才是 git 浅克隆。
-    # 每个来源限时 300 秒（约 65MB 的文件在 1MB/s 下需 65 秒，300 秒足够；
-    # 卡住不动的连接会被超时打断并自动换下一个来源）。
+    # 下载来源按顺序尝试：codeload 官方优先（无中间人），之后是国内镜像
+    # （GitHub 直连受限时用），最后才是 git 浅克隆（需 -AllowUnpinnedGit）。
+    # 每个来源限时 300 秒（卡住不动的连接会被超时打断并自动换下一个来源）。
+    #
+    # 目前只列 **zip** 一种格式：它已登记哈希（见 `$PinnedArchiveHashes`），而 tar.gz
+    # 在这台机器上三次都在 ~35 MB 被 codeload 掐断、拿不到可信哈希。镜像同样走 zip，
+    # 于是三种来源校验的是同一个哈希。补登记 tar.gz 后可以再加回一条 tar.gz 源。
     $ArchiveAttempts = @(
         [pscustomobject]@{
-            Name = 'codeload (tar.gz)'
-            Url  = "https://codeload.github.com/$Repository/tar.gz/refs/tags/$PinnedVersion"
-            File = "drawio.tar.gz"
-            Flag = '-xzf'
-        },
-        [pscustomobject]@{
             Name = 'codeload (zip)'
-            Url  = "https://codeload.github.com/$Repository/zipball/refs/tags/$PinnedVersion"
+            # ⚠️ codeload 的 zip 形式是 `zip/refs/tags/<tag>`，**不是** `zipball/...`
+            # （后者在 codeload 上直接 404，返回 14 字节正文）。这条兜底以前一直是坏的
+            # —— 审计 2026-11-03 M-35 顺手修掉。github.com 上的 `zipball/<tag>` 才是
+            # 会 302 到 codeload 的那个形式，别把两者混用。
+            Url  = "https://codeload.github.com/$Repository/zip/refs/tags/$PinnedVersion"
             File = "drawio.zip"
             Flag = '-xf'
         },
         [pscustomobject]@{
             Name = 'ghproxy.net 镜像'
-            Url  = "https://ghproxy.net/https://github.com/$Repository/archive/refs/tags/$PinnedVersion.tar.gz"
-            File = "drawio-ghproxy.tar.gz"
-            Flag = '-xzf'
+            Url  = "https://ghproxy.net/https://codeload.github.com/$Repository/zip/refs/tags/$PinnedVersion"
+            File = "drawio-ghproxy.zip"
+            Flag = '-xf'
         },
         [pscustomobject]@{
             Name = 'gh-proxy.com 镜像'
-            Url  = "https://gh-proxy.com/https://github.com/$Repository/archive/refs/tags/$PinnedVersion.tar.gz"
-            File = "drawio-ghproxy2.tar.gz"
-            Flag = '-xzf'
+            Url  = "https://gh-proxy.com/https://codeload.github.com/$Repository/zip/refs/tags/$PinnedVersion"
+            File = "drawio-ghproxy2.zip"
+            Flag = '-xf'
         }
     )
 
     $ArchivePath = $null
     $ArchiveFlag = $null
+    # 从实际会尝试的源推出"必须有哈希"的格式清单（见 Assert-VersionIsPinned）
+    $AttemptSuffixes = @($ArchiveAttempts | ForEach-Object {
+        if ($_.File -like '*.zip') { 'zip' } else { 'tar.gz' }
+    } | Select-Object -Unique)
+    Assert-VersionIsPinned -Version $PinnedVersion -Suffixes $AttemptSuffixes
+
+    # 本机已有归档：跳过下载，但**照旧验哈希**
+    if ($From) {
+        if (-not (Test-Path -LiteralPath $From)) {
+            Write-Host "错误: -From 指向的文件不存在: $From" -ForegroundColor Red
+            exit 1
+        }
+        $Suffix = if ($From -like '*.zip') { 'zip' } else { 'tar.gz' }
+        $Want = Get-PinnedArchiveHash -Version $PinnedVersion -Suffix $Suffix
+        if (-not $Want) {
+            Write-Host "错误: $PinnedVersion 的 $Suffix 没有登记哈希，不能用 -From 引入。" -ForegroundColor Red
+            exit 1
+        }
+        if (-not (Test-ArchiveHash -Path $From -Expected $Want)) { exit 1 }
+        $ArchivePath = (Resolve-Path -LiteralPath $From).Path
+        $ArchiveFlag = if ($Suffix -eq 'zip') { '-xf' } else { '-xzf' }
+        Write-Host "  用本机归档: $ArchivePath" -ForegroundColor Gray
+    }
+
+    if (-not $ArchivePath) {
     foreach ($Attempt in $ArchiveAttempts) {
         Write-Host "正在下载 $PinnedVersion 源码包 [$($Attempt.Name)]: $($Attempt.Url)" -ForegroundColor Cyan
         $Out = Join-Path $TempDir $Attempt.File
+        # 只有**网络**失败才换下一个源；哈希不符是致命错误，不换源（见上面的说明）
         try {
             Invoke-WebRequest -Uri $Attempt.Url -OutFile $Out -UseBasicParsing -TimeoutSec 300 -ErrorAction Stop
-            $ArchivePath = $Out
-            $ArchiveFlag = $Attempt.Flag
-            break
         }
         catch {
             Write-Host "  该来源失败，尝试下一个来源: $($_.Exception.Message)" -ForegroundColor Yellow
             if (Test-Path $Out) { Remove-Item -LiteralPath $Out -Force -ErrorAction SilentlyContinue }
+            continue
         }
+
+        $Suffix = if ($Attempt.File -like '*.zip') { 'zip' } else { 'tar.gz' }
+        $Want = Get-PinnedArchiveHash -Version $PinnedVersion -Suffix $Suffix
+        if (-not (Test-ArchiveHash -Path $Out -Expected $Want)) {
+            Remove-Item -LiteralPath $Out -Force -ErrorAction SilentlyContinue
+            exit 1
+        }
+        $ArchivePath = $Out
+        $ArchiveFlag = $Attempt.Flag
+        break
     }
+    }   # if (-not $ArchivePath) —— 即 -From 给了就不下载
 
     # ---------- 解包 / 或退回 git 浅克隆 ----------
     $SourceRoot = $null
@@ -1261,7 +1374,20 @@ try {
         $SourceRoot = $TopDirs[0].FullName
     }
     else {
-        # 所有直链都不通时，用 git 浅克隆（只取该 tag 的那一次提交）。
+        # 所有直链都不通时，可选走 git 浅克隆（只取该 tag 的那一次提交）。
+        #
+        # ⚠️ 这条路**无法校验来源**：git 只保证对象哈希自洽，tag 没有签名，镜像完全可以
+        # 拿同一 tag 指向另一棵树。所以默认**拒绝**，必须显式 `-AllowUnpinnedGit`
+        # （审计 2026-11-03 M-35：不能让"不钉哈希"成为一条静默可走的旁路）。
+        if (-not $AllowUnpinnedGit) {
+            Write-Host ""
+            Write-Host "错误: 归档全部拿不到，而 git 兜底默认关闭 —— 它会绕过归档哈希校验。" -ForegroundColor Red
+            Write-Host "  1) 先检查网络 / 设置 HTTP_PROXY、HTTPS_PROXY 后重试；" -ForegroundColor Yellow
+            Write-Host "  2) 或先把官方归档下载到本机、确认 sha256 与表里一致后，再重试直链下载；" -ForegroundColor Yellow
+            Write-Host "  3) 明确接受不校验来源，才加 -AllowUnpinnedGit。" -ForegroundColor Yellow
+            exit 1
+        }
+        Write-Host "⚠️ -AllowUnpinnedGit：将用 git 浅克隆，**不校验归档哈希**。" -ForegroundColor Yellow
         $GitExe = Get-Command git.exe -ErrorAction SilentlyContinue
         if ($null -ne $GitExe) {
             $CloneUrls = @("https://gitclone.com/github.com/$Repository", "https://github.com/$Repository")

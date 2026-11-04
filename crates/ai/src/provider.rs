@@ -17,6 +17,49 @@ const IDLE_AUTO_OLLAMA_S: u64 = 300;
 /// 自动档：其余（openai 兼容 / 自定义）——沿用既有的 90s。
 const IDLE_AUTO_DEFAULT_S: u64 = 90;
 
+/// 一帧（一行）SSE / NDJSON 的上限（审计 2026-11-03 M-6）。
+///
+/// 帧解析以 `\n` 为界，原来对单行长度**没有上限**：上游持续吐不含换行的字节时，
+/// 缓冲会在总超时窗口内无界增长。真实模型的一帧（含思考原文）远小于 1 MiB。
+const MAX_SSE_LINE_BYTES: usize = 1024 * 1024;
+
+/// 错误响应体最多读这么多（只要前几百字符进错误消息）。
+///
+/// 三处 `resp.text().await` 原来都是"上游给多大读多大"，而调用方随后只取前 300/600
+/// 个字符 —— 被劫持 / 错配的端点回一份大文件就白白吃满内存。
+const MAX_ERROR_BODY_BYTES: usize = 64 * 1024;
+
+/// `/models` 响应体上限。模型列表 + 各家塞的元数据可以很大，但 8 MiB 之后就不是列表了。
+const MAX_MODELS_BODY_BYTES: usize = 8 * 1024 * 1024;
+
+/// 读响应体，**最多 `max` 字节**（审计 2026-11-03 M-6）。
+///
+/// 返回 `(文本, 是否被截断)`。需要完整解析的调用方（`/models`）在 `true` 时应当
+/// 明确报错，而不是拿半截 JSON 去 `serde_json::from_str`（那会报一个看不出原因的语法错）。
+async fn read_text_capped(
+    mut resp: reqwest::Response,
+    max: usize,
+) -> Result<(String, bool), ChatError> {
+    let mut out: Vec<u8> = Vec::with_capacity(1024);
+    let mut hit_cap = false;
+    loop {
+        match resp.chunk().await {
+            Ok(Some(c)) => {
+                let room = max.saturating_sub(out.len());
+                if c.len() > room {
+                    out.extend_from_slice(&c[..room]);
+                    hit_cap = true;
+                    break;
+                }
+                out.extend_from_slice(&c);
+            }
+            Ok(None) => break,
+            Err(e) => return Err(ChatError::Network(e.to_string())),
+        }
+    }
+    Ok((String::from_utf8_lossy(&out).into_owned(), hit_cap))
+}
+
 /// 空闲多久算死（客户端侧）：`configured` 是用户在 AI 设置里给这个模型填的秒数（None = 自动）。
 ///
 /// 为什么必须有它：BYOK 直连的用户自己的上游**不发 SSE 心跳**，而常见的合法静默就会超过
@@ -281,9 +324,17 @@ pub async fn list_models(
     }
     let resp = req.send().await.map_err(|e| ChatError::Network(e.to_string()))?;
     let status = resp.status();
-    let text = resp.text().await.map_err(|e| ChatError::Network(e.to_string()))?;
+    // 限量读（审计 M-6）：模型列表可以有几十上百个条目，但 8 MiB 之后就不是列表了。
+    // 真撞上时必须**明确报错**，不能拿半截 JSON 去解析（那只会报一个看不出原因的语法错）。
+    let (text, capped) = read_text_capped(resp, MAX_MODELS_BODY_BYTES).await?;
     if !status.is_success() {
         return Err(ChatError::Http { status: status.as_u16(), body: truncate(&text, 300) });
+    }
+    if capped {
+        return Err(ChatError::Protocol(format!(
+            "模型列表响应超过 {} MiB，已中止（这不是一份模型列表，检查上游地址是否指错了）",
+            MAX_MODELS_BODY_BYTES / (1024 * 1024)
+        )));
     }
     let v: Value =
         serde_json::from_str(&text).map_err(|e| ChatError::Protocol(format!("模型列表不是 JSON：{e}")))?;
@@ -450,7 +501,10 @@ where
     let resp = req.send().await.map_err(|e| ChatError::Network(e.to_string()))?;
     let status = resp.status();
     if !status.is_success() {
-        let body = resp.text().await.unwrap_or_default();
+        // 只需要前几百字符进错误消息，不必整份读（审计 M-6）
+        let (body, _) = read_text_capped(resp, MAX_ERROR_BODY_BYTES)
+            .await
+            .unwrap_or_else(|_| (String::new(), false));
         return Err(ChatError::Http { status: status.as_u16(), body: truncate(&body, 600) });
     }
     // 服务端在流开始前就确定了账本行 id，并放在响应头里；自动修正要用它做 Retry-Of。
@@ -464,6 +518,8 @@ where
     let ollama = r.is_ollama();
     let mut resp = resp;
     let mut buf: Vec<u8> = Vec::new();
+    // `buf[..scanned]` 已经确认不含 `\n`（审计 M-6：避免每个 chunk 从 0 重扫）
+    let mut scanned: usize = 0;
     let mut full = String::new();
     let mut reasoning = String::new();
     let mut usage = Usage::default();
@@ -497,8 +553,17 @@ where
         };
         buf.extend_from_slice(&chunk);
 
-        while let Some(pos) = buf.iter().position(|b| *b == b'\n') {
+        // 从**上次扫到的位置**接着找（审计 2026-11-03 M-6）。原写法每个 chunk 都从 0
+        // 重新 `position`，一条迟迟不来换行的长行会退化成 O(n²)（每来一块就全量重扫）。
+        // `scanned` 记"前面这段已经确认没有 `\n`"；一旦切走一行就归零。
+        loop {
+            let Some(rel) = buf[scanned..].iter().position(|b| *b == b'\n') else {
+                scanned = buf.len();
+                break;
+            };
+            let pos = scanned + rel;
             let line_bytes: Vec<u8> = buf.drain(..=pos).collect();
+            scanned = 0;
             let line = String::from_utf8_lossy(&line_bytes);
             let line = line.trim();
             if line.is_empty() || line.starts_with(':') {
@@ -529,6 +594,14 @@ where
                 on_delta(chunk);
             }
             merge_usage(&mut usage, &v, ollama);
+        }
+        // 循环退出后 `buf` 里只剩"还没收到换行的那一行"（完整行都在上面被 drain 掉了），
+        // 所以这里才是判单行上限的正确位置。没有这道闸，一条不含换行的上游流能让
+        // `buf` 在 30 分钟总超时内无界增长 —— 一条被劫持 / 错配的 BYOK 上游就够打爆内存。
+        if buf.len() > MAX_SSE_LINE_BYTES {
+            return Err(ChatError::Protocol(format!(
+                "上游返回的单帧超过 {MAX_SSE_LINE_BYTES} 字节且没有换行，已中止"
+            )));
         }
     }
 
@@ -685,7 +758,10 @@ pub async fn chat_once(
     let resp = req.send().await.map_err(|e| ChatError::Network(e.to_string()))?;
     let status = resp.status();
     if !status.is_success() {
-        let body = resp.text().await.unwrap_or_default();
+        // 只需要前几百字符进错误消息，不必整份读（审计 M-6）
+        let (body, _) = read_text_capped(resp, MAX_ERROR_BODY_BYTES)
+            .await
+            .unwrap_or_else(|_| (String::new(), false));
         return Err(ChatError::Http { status: status.as_u16(), body: truncate(&body, 600) });
     }
     let payload: Value = resp.json().await.map_err(|e| ChatError::Protocol(e.to_string()))?;
@@ -1219,5 +1295,105 @@ mod tests {
         let req = seen.lock().unwrap().to_ascii_lowercase();
         assert!(req.contains("x-diagramon-scene: convert.retry"), "{req}");
         assert!(req.contains("x-diagramon-retry-of: req-1"), "{req}");
+    }
+
+    // ---------------- 响应体上限（审计 2026-11-03 M-6） ----------------
+    //
+    // 原来三处 `resp.text()` 与 SSE 行缓冲都**没有上限**：一条被劫持 / 错配的 BYOK
+    // 上游（base_url 是用户手填的，也可能是被 DNS 劫持的域名）持续吐字节就能打爆内存；
+    // 而且每个 chunk 都从 0 重扫缓冲，一条不含换行的长行还会退化成 O(n²)。
+
+    /// 自有响应体、可指定状态码的极小 HTTP/1.1 服务端。
+    ///
+    /// 为什么不复用 `sse_server` / `capture_server`：那两个收 `&'static str`，
+    /// 而这里的用例要**现场造** 2 MiB / 9 MiB 的响应 —— 为凑 `'static` 去 `Box::leak`
+    /// 会把这几 MB 占住整个进程。传 `Vec<u8>` 就没有这个取舍。
+    fn body_server(body: Vec<u8>, status: u16) -> String {
+        use std::io::Write;
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut s) = stream else { continue };
+                let mut buf = [0u8; 8192];
+                let _ = std::io::Read::read(&mut s, &mut buf); // 读完请求头就走
+                let reason = if status == 200 { "OK" } else { "Internal Server Error" };
+                let head = format!(
+                    "HTTP/1.1 {status} {reason}\r\nContent-Type: text/event-stream\r\n\
+                     Content-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                );
+                let _ = s.write_all(head.as_bytes());
+                let _ = s.write_all(&body);
+                let _ = s.flush();
+                drop(s);
+            }
+        });
+        format!("http://{addr}")
+    }
+
+    /// 一整条不含换行的超大"帧"必须被拒绝，而不是让缓冲无界增长。
+    #[test]
+    fn a_stream_without_newlines_is_capped_instead_of_growing_forever() {
+        // 2 MiB 里一个 `\n` 都没有（上限是 1 MiB）
+        let base = body_server(vec![b'x'; 2 * 1024 * 1024], 200);
+        let err = run_stream(format!("{base}/v1")).unwrap_err();
+        assert!(
+            matches!(&err, ChatError::Protocol(m) if m.contains("单帧超过")),
+            "应当报单帧上限：{err:?}"
+        );
+    }
+
+    /// 正常的多帧流不受影响（别为了加闸把正常路径掐死）。
+    #[test]
+    fn a_normal_multi_frame_stream_still_parses() {
+        let url = sse_server(
+            "data: {\"choices\":[{\"delta\":{\"content\":\"甲\"},\"finish_reason\":null}]}\n\n\
+             data: {\"choices\":[{\"delta\":{\"content\":\"乙\"},\"finish_reason\":null}]}\n\n\
+             data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n\
+             data: [DONE]\n\n",
+            0,
+        );
+        let (text, u) = run_stream(url).unwrap();
+        assert_eq!(text, "甲乙");
+        assert_eq!(u.finish, Finish::Stop);
+    }
+
+    /// `/models` 的响应体也必须限量：撞上限要**明确报错**，不能拿半截 JSON 去解析。
+    #[test]
+    fn an_oversized_models_response_is_refused_with_a_clear_message() {
+        let base = body_server(vec![b'x'; 9 * 1024 * 1024], 200);
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let err = rt
+            .block_on(list_models(&reqwest::Client::new(), "openai", &base, Some("sk-x"), false, None))
+            .unwrap_err();
+        assert!(
+            matches!(&err, ChatError::Protocol(m) if m.contains("模型列表响应超过")),
+            "应当报响应体上限：{err:?}"
+        );
+    }
+
+    /// 错误响应体只读前 64 KiB（调用方随后只取前 600 字符）——
+    /// 断言它仍然能如实带出服务端报文开头，而不是因为限量读而丢失。
+    #[test]
+    fn a_large_error_body_is_still_reported_and_truncated() {
+        let mut body = String::from("{\"error\":\"前缀要紧\"");
+        body.push_str(&"y".repeat(200 * 1024));
+        body.push_str("\"}");
+        let base = body_server(body.into_bytes(), 500);
+        let r = Resolved { base_url: format!("{base}/v1"), ..openai() };
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let err = rt
+            .block_on(stream_chat(&reqwest::Client::new(), &r, vec![], &AtomicBool::new(false), |_| {}))
+            .unwrap_err();
+        match &err {
+            ChatError::Http { status, body } => {
+                assert_eq!(*status, 500);
+                assert!(body.contains("前缀要紧"), "服务端报文丢了：{body}");
+                // `truncate(&body, 600)`：不该把 200 KB 全塞进错误里
+                assert!(body.chars().count() <= 620, "错误体没有截断：{} 字符", body.chars().count());
+            }
+            other => panic!("应当是 Http 错误：{other:?}"),
+        }
     }
 }

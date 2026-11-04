@@ -172,12 +172,20 @@ pub async fn run(
                 .and_then(|f| f.get("name"))
                 .and_then(|v| v.as_str())
                 .unwrap_or_default();
-            let raw_args = function
-                .and_then(|f| f.get("arguments"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("{}");
+            // `arguments` 的形态**两家上游不一样**（审计 2026-11-03 M-7）：
+            // OpenAI 兼容上游给的是 JSON **字符串**（`"{\"body\":\"...\"}"`），
+            // 而 Ollama `/api/chat` 给的是 JSON **对象**（`{"body":"..."}`）。
+            // 原来只 `.as_str()`，对象过不了 ⇒ 一律退化成 `{}`，于是 Ollama 的每个
+            // 带参调用都变成"没有参数"（`validate` 永远回"缺少 body"），模型在 5 步
+            // 上限里反复纠错、每步都真实计费 —— 工具循环对 Ollama 实质不可用。
+            // 统一收敛成"JSON 文本"再交给 `execute`（它也接受对象，见那边的注释）。
+            let raw_args = match function.and_then(|f| f.get("arguments")) {
+                Some(Value::String(s)) => s.clone(),
+                Some(v @ Value::Object(_)) => v.to_string(),
+                _ => "{}".to_string(),
+            };
 
-            let result = execute(tools, name, raw_args);
+            let result = execute(tools, name, &raw_args);
             messages.push(json!({
                 "role": "tool",
                 "tool_call_id": id,
@@ -361,7 +369,7 @@ mod tests {
         assert_eq!(out.messages.len(), 2); // user + assistant
     }
 
-    /// 完整的工具往返：assistant(tool_calls) → tool(结果) → assistant(正文)。
+    /// 完整往返：assistant(tool_calls) → tool(结果) → assistant(正文)。
     ///
     /// 这个顺序与 `id` 的逐字保留是循环能不能收敛的全部关键：id 变了或 tool_calls
     /// 丢了，模型下一轮就看不到自己调过什么。
@@ -613,5 +621,77 @@ mod tests {
         let err = rt.block_on(completer.complete(vec![user("hi")], vec![])).unwrap_err();
         assert!(matches!(err, ChatError::Http { status: 400, .. }), "{err:?}");
         assert_eq!(*hits.lock().unwrap(), 1, "解析不出上限就不该重发");
+    }
+
+    /// 审计 M-7：`arguments` 是 **JSON 对象**时也必须解析出来。
+    ///
+    /// OpenAI 兼容上游给的是 JSON **字符串**，而 Ollama `/api/chat` 给的是 JSON **对象**。
+    /// 原来只 `.as_str()`：对象过不了 ⇒ 一律退化成 `{}`，于是 Ollama 的每个带参调用
+    /// 都变成"没有参数"（`validate` 永远回"缺少 body"），模型在 5 步上限里反复纠错、
+    /// 每步都真实计费 —— 工具循环对 Ollama 实质不可用。
+    #[test]
+    fn tool_arguments_may_arrive_as_a_json_object() {
+        /// 把收到的参数原样回成结果：这样不用额外通道就能断言"工具真的收到了参数"。
+        struct EchoArgs;
+        impl Tool for EchoArgs {
+            fn name(&self) -> &str {
+                "validate"
+            }
+            fn schema(&self) -> Value {
+                json!({"type": "function", "function": {"name": "validate"}})
+            }
+            fn call(&self, args: &Value) -> Result<String, String> {
+                Ok(args.to_string())
+            }
+        }
+
+        let completer = Scripted::new(vec![
+            Completion {
+                text: String::new(),
+                tool_calls: vec![json!({
+                    "id": "c1",
+                    "type": "function",
+                    // ⚠️ 对象，不是字符串
+                    "function": {"name": "validate", "arguments": {"body": "flowchart TD"}}
+                })],
+            },
+            Completion { text: "完成".into(), tool_calls: vec![] },
+        ]);
+        let tools: Vec<Box<dyn Tool>> = vec![Box::new(EchoArgs)];
+        let rt = tokio::runtime::Builder::new_current_thread().build().unwrap();
+        let out = rt
+            .block_on(run(&completer, vec![user("校验")], &tools, DEFAULT_MAX_STEPS, &AtomicBool::new(false)))
+            .unwrap();
+
+        let tool_msg = out
+            .messages
+            .iter()
+            .find(|m| m["role"] == "tool")
+            .expect("要有一轮工具结果");
+        let content = tool_msg["content"].as_str().unwrap_or("");
+        assert!(content.contains("flowchart TD"), "对象形态的参数被丢了：{content}");
+        assert!(!content.contains("缺少"), "不该报缺参数：{content}");
+    }
+
+    /// 字符串形态（OpenAI 兼容）继续照旧 —— 别为了修对象形态把主路径弄坏。
+    #[test]
+    fn tool_arguments_still_work_as_a_json_string() {
+        let tool = Echo::ok("read_document", "ok");
+        let completer = Scripted::new(vec![
+            Completion {
+                text: String::new(),
+                tool_calls: vec![call("c1", "read_document", "{\"range\":\"1-5\"}")],
+            },
+            Completion { text: "完成".into(), tool_calls: vec![] },
+        ]);
+        let tools: Vec<Box<dyn Tool>> = vec![Box::new(tool)];
+        let rt = tokio::runtime::Builder::new_current_thread().build().unwrap();
+        let out = rt
+            .block_on(run(&completer, vec![user("读")], &tools, DEFAULT_MAX_STEPS, &AtomicBool::new(false)))
+            .unwrap();
+        assert_eq!(out.stop, StopReason::Final);
+        assert_eq!(out.tool_calls(), 1);
+        let tool_msg = out.messages.iter().find(|m| m["role"] == "tool").unwrap();
+        assert_eq!(tool_msg["content"], "ok");
     }
 }

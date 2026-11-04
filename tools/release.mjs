@@ -33,7 +33,19 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const SELF = process.execPath;              // 子进程一律用当前这个 node，别赌 PATH
 const KEYS_DEFAULT = resolve(ROOT, "..", "keys");
 const TAURI_CLI = resolve(ROOT, "..", ".tooling", "node_modules", "@tauri-apps", "cli", "tauri.js");
-const SEVEN_ZIP = "C:\\Program Files\\7-Zip\\7z.exe";
+// 7-Zip 的解析与 `pack-portable.mjs` 同一套（审计 2026-11-03 G-7）：
+// 原来这里写死 `C:\Program Files\7-Zip\7z.exe`，别的安装位置一律找不到 ——
+// 而找不到时只 `warn` 然后继续发版，等于把红线 1 的兜底抽查静默关掉。
+// 四个来源：SEVENZIP 环境变量 → 两个 Program Files → PATH 上的 `7z`。
+const SEVEN_ZIP = [
+  process.env.SEVENZIP,
+  "C:\\Program Files\\7-Zip\\7z.exe",
+  "C:\\Program Files (x86)\\7-Zip\\7z.exe",
+  "7z",
+].find((p) => p && (p === "7z" ? true : existsSync(p)));
+
+/** 本场真正跑过的步骤（审计 G-7：`--from=build` 会跳过 prepack，红线 1 不能因此失守）。 */
+const ran = new Set();
 
 const CFG = {
   repo: "westsource/diagramon",             // 两端仓库路径相同
@@ -474,6 +486,19 @@ async function prepack() {
 
 async function build() {
   step("build · 打包 NSIS 安装包（约 25 分钟首次）");
+  // 红线 1 不因续跑姿势而破（审计 2026-11-03 G-7）：`--from=build` / `--only=build` 会跳过
+  // prepack 步，而下面那次 7z 抽查只是**兜底**（历史上 7z 不在位时它会降级成 warn）。
+  // 所以这里补跑一次清理 —— prepack 是幂等的（只删开发产物），代价秒级。
+  if (!ran.has("prepack")) {
+    warn("本次没跑 prepack 步（--from / --only 跳过了它）⇒ 在 build 前补跑一次（红线 1）");
+    must(await runLive(SELF, ["tools/prepack.mjs"], { label: "node tools/prepack.mjs（build 前补跑）" }), "prepack");
+    must(
+      await runLive(SELF, ["tools/prepack.mjs", "--check"], { label: "node tools/prepack.mjs --check（build 前补跑）" }),
+      "prepack --check",
+    );
+    if (opts.dryRun) return;
+    ran.add("prepack");
+  }
   const pw = readFileSync(join(opts.keys, "password.txt"), "utf8").trim();
   const env = {
     TAURI_SIGNING_PRIVATE_KEY: join(opts.keys, "diagramon.key"),
@@ -483,10 +508,14 @@ async function build() {
   must(await runLive(SELF, [TAURI_CLI, "build", "--bundles", "nsis"], { env, label: "tauri build --bundles nsis" }), "打包");
   if (opts.dryRun) return;
   for (const f of [setupExe(), sigFile()]) if (!existsSync(f)) die(`打包后缺件：${basename(f)}`);
-  // 抽查载荷：安装包必须带 ui/ 与 assets/，否则装出来白屏
-  if (!existsSync(SEVEN_ZIP)) {
-    warn(`找不到 7z（${SEVEN_ZIP}），跳过载荷抽查 —— 建议手工确认安装包里有 ui/index.html 与 assets/drawio/`);
-  } else {
+  // 抽查载荷：安装包必须带 ui/ 与 assets/，否则装出来白屏。
+  // **7z 是发版机的硬依赖，找不到就直接失败**（审计 G-7）：原来只 warn 然后继续，
+  // 于是"带着开发产物的安装包"可以一路发出去 —— 那正是红线 1 记载的那次事故。
+  if (!SEVEN_ZIP) {
+    die("找不到 7-Zip —— 载荷抽查是红线 1 的兜底，不能跳过。装一个，或设 SEVENZIP=<7z.exe 的路径>");
+  }
+  {
+    log(`  载荷抽查用 ${SEVEN_ZIP}`);
     const listing = capture(SEVEN_ZIP, ["l", setupExe()]).out;
     const need = [["ui\\index.html", /ui\\index\.html/], ["assets\\drawio", /assets\\drawio\\/]];
     for (const [name, re] of need) if (!re.test(listing)) die(`安装包载荷里没有 ${name} —— bundle.resources 映射坏了，装出来会白屏`);
@@ -610,6 +639,28 @@ async function push() {
   // Gitee master 常常不是快进：先取当前 tip 当 lease
   const ls = gitOpt(["ls-remote", CFG.giteeRemote, "refs/heads/master"]);
   const oldMaster = ls.out.trim() ? ls.out.trim().split(/\s+/)[0] : null;
+  // 推之前**断言 gitee-master 确实是由当前分支重建的**（审计 2026-11-03 G-8）。
+  //
+  // 这条不变式只由 `branches` 步保证，而它可以被 `--from=push` / `--only=push` 跳过。
+  // 跳过时本地残留的 `gitee-master` 会被当成本次内容 force-with-lease 推上去 ——
+  // lease 只防"远端被别人动过"，防不了"我推的是旧货"：Gitee 首页于是停在上一版
+  // README / 代码，而日志照样打 "✓ 已推两端"（正是红线 4 要防的两分支不一致）。
+  if (!opts.dryRun) {
+    const parent = gitOpt(["rev-parse", "gitee-master^"]).out.trim();
+    if (!parent) {
+      die("本地没有 gitee-master 分支 —— 先跑 branches 这一步（或用 --only=branches）");
+    }
+    if (parent !== mainSha) {
+      die(
+        `gitee-master 不是由当前 ${opts.branch}（${mainSha.slice(0, 7)}）重建的：它的父提交是 `
+          + `${parent.slice(0, 7)}。先跑 branches（红线 4），别把旧 README 推上去`,
+      );
+    }
+    const ahead = gitOpt(["rev-list", "--count", `${mainSha}..gitee-master`]).out.trim();
+    if (ahead !== "1") {
+      die(`gitee-master 应当恰好比 ${opts.branch} 多 1 个提交，实际 ${ahead} 个 —— 先重跑 branches`);
+    }
+  }
   if (oldMaster) await gitPush(CFG.giteeRemote, ["gitee-master:master"], { force: true, lease: `master:${oldMaster}` });
   else await gitPush(CFG.giteeRemote, ["gitee-master:master"]);
   await gitPush(CFG.giteeRemote, [`${opts.branch}:main`]);
@@ -859,7 +910,10 @@ async function main() {
   if (start > 0 && !opts.only) warn(`从 ${STEPS[start]} 开始 —— 假定前面这几步已跑过：${STEPS.slice(0, start).join(", ")}`);
   const todo = opts.only ? [opts.only] : STEPS.slice(start);
   const t0 = Date.now();
-  for (const s of todo) await IMPL[s]();
+  for (const s of todo) {
+    await IMPL[s]();
+    ran.add(s);
+  }
   log("");
   log(`✔ 全部步骤完成（${todo.join(" → ")}），耗时 ${((Date.now() - t0) / 60000).toFixed(1)} 分钟`);
   log(`日志：${LOG_FILE}`);

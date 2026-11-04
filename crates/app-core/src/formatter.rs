@@ -86,6 +86,15 @@ fn finish(lines: Vec<Line>) -> String {
 
 const MERMAID_INDENT: usize = 4;
 
+/// 缩进层数上限（审计 2026-11-03 M-20）。与 `convert::MAX_INDENT` **同一个数**。
+///
+/// 缩进是**每行都写一遍**的，层数不设上限时产物大小随深度二次方增长：
+/// 实测 20000 行未闭合 `subgraph`（源 309 KB）→ 产物 **800 MB**、3.5 s。
+/// 深度来自 `flow_step` / `brace_delta`，两者都不设限 —— 但那本身无害
+/// （数到 10000 只是个数字），真正放大的是"把层数写进每一行"。
+/// 所以在这里封顶，而不是去改那两个算深度的函数。
+const MAX_INDENT_LEVEL: usize = crate::convert::MAX_INDENT;
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Diagram {
     /// `flowchart` / `graph`：只有 `subgraph`…`end` 改变层级。
@@ -144,7 +153,7 @@ fn mermaid(body: &str) -> String {
         } else {
             lines.push(Line::text(&format!(
                 "{}{}",
-                " ".repeat(line_depth * MERMAID_INDENT),
+                " ".repeat(line_depth.min(MAX_INDENT_LEVEL) * MERMAID_INDENT),
                 text
             )));
         }
@@ -339,7 +348,7 @@ fn d2(body: &str) -> String {
             let text = line.trim();
             lines.push(Line::text(&format!(
                 "{}{}",
-                " ".repeat(depth * D2_INDENT),
+                " ".repeat(depth.min(MAX_INDENT_LEVEL) * D2_INDENT),
                 text
             )));
             scan_quotes(&structure, &mut in_string);
@@ -355,7 +364,7 @@ fn d2(body: &str) -> String {
         } else {
             lines.push(Line::text(&format!(
                 "{}{}",
-                " ".repeat(line_depth * D2_INDENT),
+                " ".repeat(line_depth.min(MAX_INDENT_LEVEL) * D2_INDENT),
                 text
             )));
         }
@@ -628,7 +637,7 @@ impl DotOut {
     }
 
     fn pad(&self) -> String {
-        " ".repeat(self.indent * 4)
+        " ".repeat(self.indent.min(MAX_INDENT_LEVEL) * 4)
     }
 
     fn flush(&mut self) {
@@ -1038,5 +1047,63 @@ mod tests {
             assert_eq!(out.body, body);
             assert!(!out.changed);
         }
+    }
+
+    /// 审计 M-20：缩进必须封顶。
+    ///
+    /// 缩进是**每行都写一遍**的，层数不设上限时产物大小随深度二次方增长。
+    /// 实测（修复前）：20000 行未闭合 `subgraph`（源 309 KB）→ 产物 800 MB、3.5 s，
+    /// UI 直接冻结到 OOM。深度本身算多大都无所谓，真正放大的是"写进每一行"。
+    #[test]
+    fn deep_indentation_is_capped_instead_of_growing_quadratically() {
+        let n = 4000usize;
+        let mut src = String::from("flowchart TD\n");
+        for _ in 0..n {
+            src.push_str("subgraph S\n");
+        }
+        src.push_str("A --> B\n"); // 故意不写 end
+
+        let out = fmt(FormatId::Mermaid, &src);
+        let max_indent = out
+            .lines()
+            .map(|l| l.len() - l.trim_start().len())
+            .max()
+            .unwrap_or(0);
+        assert!(
+            max_indent <= MAX_INDENT_LEVEL * MERMAID_INDENT,
+            "缩进没有封顶：最深层 {max_indent} 个空格"
+        );
+        // 修复前这一份会产出上百 MB；封顶后每行最多 128 个空格
+        assert!(out.len() < 4 * 1024 * 1024, "产物仍然过大：{} 字节", out.len());
+    }
+
+    /// D2 侧同理（它用 2 空格缩进，是另一条路径）。
+    #[test]
+    fn deep_d2_indentation_is_capped_too() {
+        let n = 4000usize;
+        let mut src = String::new();
+        for _ in 0..n {
+            src.push_str("c: {\n");
+        }
+        src.push_str("a -> b\n");
+        let out = fmt(FormatId::D2, &src);
+        let max_indent = out
+            .lines()
+            .map(|l| l.len() - l.trim_start().len())
+            .max()
+            .unwrap_or(0);
+        assert!(
+            max_indent <= MAX_INDENT_LEVEL * D2_INDENT,
+            "缩进没有封顶：最深层 {max_indent} 个空格"
+        );
+        assert!(out.len() < 4 * 1024 * 1024, "产物仍然过大：{} 字节", out.len());
+    }
+
+    /// 正常深度不受影响：缩进仍然逐层递增（别为了封顶把格式化做废）。
+    #[test]
+    fn normal_depth_still_indents_per_level() {
+        let out = fmt(FormatId::Mermaid, "flowchart TD\nsubgraph A\nsubgraph B\nX --> Y\nend\nend\n");
+        assert!(out.contains("\n    subgraph B"), "{out}");
+        assert!(out.contains("\n        X --> Y"), "{out}");
     }
 }
