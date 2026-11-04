@@ -718,6 +718,47 @@ window.DGM = window.DGM || {};
 
   /* ------------------------------------------------------------------ 渲染入口 */
 
+  /**
+   * 渲染入口（2026-11-04 用户报「改完源码有时不渲染，切一下视图模式才出来」）。
+   *
+   * 两个必须同时具备的性质：
+   * 1. **同一时刻只允许一个渲染在跑**。mermaid / graphviz / D2 都不是并发安全的：
+   *    `mermaid.render()` 用全局配置与共享的 DOM 暂存节点，两次调用叠在一起会互相踩；
+   *    而 debounce 只有 60ms，一次 ELK 布局常常上百毫秒 —— 连续敲字本来就会叠出并发
+   *    渲染，叠了之后那一次可能**什么都不出**。串行化必须放在这个**唯一入口**上，
+   *    只挡 `schedule` 不够：`DGM.preview.render()` 那些显式调用同样会进来。
+   * 2. **跑的过程中又被叫了，就跑完再补一次**。`renderToken` 只保证"不挂过期的图"，
+   *    不负责重来 —— 被顶掉的那次改动否则永远不会再渲染，表现正是"停在空白，
+   *    切一次视图模式（那会再排一次）才出来"。补的那次读的是最新正文，不会挂旧图。
+   */
+  let rendering = false; // 引擎正在跑
+  let renderPending = false; // 跑完之后还要再来一次
+  let renderBusy = null; // 正在跑的那一轮（忙时被叫的人 await 它，语义仍是"等我画完"）
+
+  function renderActive() {
+    if (rendering) {
+      renderPending = true;
+      return renderBusy; // 补跑的那一次也在这一轮里，await 它即"画到最新"
+    }
+    rendering = true;
+    renderBusy = (async () => {
+      try {
+        do {
+          renderPending = false;
+          await renderOnce();
+        } while (renderPending);
+      } catch (e) {
+        // `renderOnce` 内部已经把引擎错误画成 errorBox 了；这里的兜底只防「它自己抛」
+        // 把整条渲染链弄死 —— 那之后所有编辑都不再渲染，正是"必须切模式"那种卡死。
+        console.error("[DGM] 渲染失败：", e);
+      } finally {
+        rendering = false;
+        renderBusy = null;
+      }
+    })();
+    return renderBusy;
+  }
+
   function schedule() {
     clearTimeout(renderTimer);
     renderTimer = setTimeout(renderActive, 60);
@@ -742,7 +783,7 @@ window.DGM = window.DGM || {};
   /** 用户点过"仍要渲染"之后，本次会话对这个文档放行 */
   let forceRender = false;
 
-  async function renderActive() {
+  async function renderOnce() {
     nodes();
     const d = state.activeDoc();
     if (!d) {

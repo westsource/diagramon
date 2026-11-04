@@ -798,6 +798,38 @@ window.DGM = window.DGM || {};
           ok("小图仍是自适应倍率（没被无谓地压）", small.capped === false && small.scale === 5, `scale=${small.scale}`);
         }
 
+        // ── 连续编辑：渲染必须落到**最后一次**正文上（2026-11-04 用户报的）──
+        //  「改完源码有时不渲染，切一下视图模式才出来」。成因是渲染调度会与正在跑的引擎
+        //  渲染叠在一起（debounce 只有 60ms，一次 ELK 布局常上百毫秒）：叠了那次可能
+        //  什么都不出，而被顶掉的改动再也不会重渲染。`renderToken` 只保证"不挂过期的图"，
+        //  不负责重来。现在入口 `renderActive` 串行化 + 跑完补一次，这条就是它的回归。
+        if (doc && DGM.state.isTextDoc && DGM.state.isTextDoc(doc)) {
+          const prevBody = doc.body;
+          // 每次都是"大图 + 一个独特标签"：渲染足够慢，才会真的与下一次编辑交错
+          const big = (k) =>
+            "flowchart TD\n" +
+            Array.from({ length: 80 }, (_, i) => `  B${k}_${i} --> B${k}_${i + 1}`).join("\n") +
+            `\n  Z0 --> BURST_${k}\n`;
+          // 间隔 70ms：刚好让上一次渲染**已经开始**，制造"渲染中又改"的交错
+          for (let i = 1; i <= 6; i++) {
+            DGM.state.setBody(doc.id, big(i));
+            await new Promise((r) => setTimeout(r, 70));
+          }
+          // 后台窗口定时器被节流：最多等 12s，等到挂上的图里出现最后一个标签
+          let last = false;
+          for (let i = 0; i < 120; i++) {
+            const svg = document.querySelector("#canvas-stage svg");
+            if (svg && svg.textContent.includes("BURST_6")) {
+              last = true;
+              break;
+            }
+            await new Promise((r) => setTimeout(r, 100));
+          }
+          const seen = (document.querySelector("#canvas-stage") || {}).textContent || "";
+          ok("连续编辑后渲染的是最后一次正文", last, last ? "BURST_6" : seen.slice(0, 80));
+          DGM.state.setBody(doc.id, prevBody);
+        }
+
         if (st && st.setLayout) await st.setLayout(doc.id, "elk");
         if (st && st.setLook) await st.setLook(doc.id, "auto");
 
