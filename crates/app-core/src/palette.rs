@@ -57,14 +57,6 @@ struct Seed {
     id: &'static str,
     zh: &'static str,
     en: &'static str,
-    /// 鲜明档的 id / 名字。写成常量而不是运行时拼串：`name_zh` 要回 `&'static str`，
-    /// 而且菜单与 `app_info` 每次 `app_info` 都会走一遍，没必要分配。
-    ///
-    /// `None` = 这个色系**没有鲜明档**。钨灰（中性色系）就是：灰阶没有更鲜艳这回事，
-    /// 实测它的鲜明档与柔和档只差 ΔE 3.7（人眼看不出），挂进菜单只是个哑项。
-    id_vivid: Option<&'static str>,
-    zh_vivid: Option<&'static str>,
-    en_vivid: Option<&'static str>,
     hue: f32,
     sat: f32,
 }
@@ -82,101 +74,30 @@ struct Seed {
 /// 想再加色系？先量"同角色跨色系最小 ΔE >= 15"，别只看主色。
 ///
 /// `tungsten`（钨灰）是特例：饱和度接近 0，角色靠**明度阶梯**分开（打印/线框风）。
-///
-/// **色调（[`Tone`]）不占色相空间**：每个色系都自带 `-vivid` 一档，明度梯度换成
-/// "按目标相对亮度反解"，于是同一档在不同色相上一样亮。加色系仍然只需要加一行。
 const SEEDS: [Seed; 6] = [
-    Seed { id: "indigo", zh: "黛蓝", en: "Indigo", id_vivid: Some("indigo-vivid"), zh_vivid: Some("黛蓝 · 鲜明"), en_vivid: Some("Indigo Vivid"), hue: 210.0, sat: 0.40 },
-    Seed { id: "pine", zh: "松绿", en: "Pine", id_vivid: Some("pine-vivid"), zh_vivid: Some("松绿 · 鲜明"), en_vivid: Some("Pine Vivid"), hue: 168.0, sat: 0.42 },
-    Seed { id: "lotus", zh: "藕紫", en: "Lotus", id_vivid: Some("lotus-vivid"), zh_vivid: Some("藕紫 · 鲜明"), en_vivid: Some("Lotus Vivid"), hue: 258.0, sat: 0.34 },
-    Seed { id: "olive", zh: "橄榄", en: "Olive", id_vivid: Some("olive-vivid"), zh_vivid: Some("橄榄 · 鲜明"), en_vivid: Some("Olive Vivid"), hue: 95.0, sat: 0.40 },
-    Seed { id: "ochre", zh: "赭石", en: "Ochre", id_vivid: Some("ochre-vivid"), zh_vivid: Some("赭石 · 鲜明"), en_vivid: Some("Ochre Vivid"), hue: 42.0, sat: 0.48 },
-    Seed { id: "tungsten", zh: "钨灰", en: "Tungsten", id_vivid: None, zh_vivid: None, en_vivid: None, hue: 218.0, sat: 0.05 },
+    Seed { id: "indigo", zh: "黛蓝", en: "Indigo", hue: 210.0, sat: 0.40 },
+    Seed { id: "pine", zh: "松绿", en: "Pine", hue: 168.0, sat: 0.42 },
+    Seed { id: "lotus", zh: "藕紫", en: "Lotus", hue: 258.0, sat: 0.34 },
+    Seed { id: "olive", zh: "橄榄", en: "Olive", hue: 95.0, sat: 0.40 },
+    Seed { id: "ochre", zh: "赭石", en: "Ochre", hue: 42.0, sat: 0.48 },
+    Seed { id: "tungsten", zh: "钨灰", en: "Tungsten", hue: 218.0, sat: 0.05 },
 ];
 
 /// 告警角色的固定色相（与 UI 的 `--err` 同族，跨主题/跨色系都这么红）。
 const RISK_HUE: f32 = 6.0;
 
-/// 色调：同一色相/角色，两套明度梯度。
-///
-/// * [`Tone::Soft`] 是既有实现（填充 L88 / 描边 L50 / 文字 L22），对比留给描边；
-/// * [`Tone::Vivid`] 把填充明度**按目标相对亮度反解**（见 [`TARGET_Y`](TARGET_LIGHT_Y)），
-///   文字色自适应 —— 于是"同一档、不同色相"一样亮，文字对比也一样稳。
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Tone {
-    Soft,
-    Vivid,
-}
-
-/// 解析后的色系 = 种子 + 色调。所有取色函数吃这个，而不是裸 `&Seed`。
-#[derive(Clone, Copy)]
-struct Scheme {
-    seed: &'static Seed,
-    tone: Tone,
-}
-
-impl Scheme {
-    fn id(&self) -> &'static str {
-        match self.tone {
-            Tone::Soft => self.seed.id,
-            // 只有 `parse` 放行的色系才会是 Vivid，所以这里一定拿到 Some
-            Tone::Vivid => self.seed.id_vivid.unwrap_or(self.seed.id),
-        }
-    }
-    fn name_zh(&self) -> &'static str {
-        match self.tone {
-            Tone::Soft => self.seed.zh,
-            Tone::Vivid => self.seed.zh_vivid.unwrap_or(self.seed.zh),
-        }
-    }
-    fn name_en(&self) -> &'static str {
-        match self.tone {
-            Tone::Soft => self.seed.en,
-            Tone::Vivid => self.seed.en_vivid.unwrap_or(self.seed.en),
-        }
-    }
-    fn vivid(&self) -> bool {
-        self.tone == Tone::Vivid
-    }
-}
-
-/// 后缀即色调：`indigo` 与 `indigo-vivid` 是同一个种子。
-const VIVID_SUFFIX: &str = "-vivid";
-
-/// 按 id 找种子（含鲜明后缀）。只给测试用 —— 生产路径一律走 []。
-#[cfg(test)]
 fn find(id: &str) -> Option<&'static Seed> {
-    SEEDS.iter().find(|s| s.id == id || s.id_vivid == Some(id))
-}
-
-/// 解析色系 id（含色调）。`None` = 不认识的 id。
-fn parse(id: &str) -> Option<Scheme> {
-    let (base, tone) = match id.strip_suffix(VIVID_SUFFIX) {
-        Some(b) => (b, Tone::Vivid),
-        None => (id, Tone::Soft),
-    };
-    // 只有**精确**等于某个种子 id 才算数：`indigo-vivid-vivid` / `vivid` 都不认
-    let seed = SEEDS.iter().find(|s| s.id == base)?;
-    // 中性色系没有鲜明档（见 `Seed::id_vivid`）
-    if tone == Tone::Vivid && seed.id_vivid.is_none() {
-        return None;
-    }
-    Some(Scheme { seed, tone })
+    SEEDS.iter().find(|s| s.id == id)
 }
 
 /// 这个 id 是不是合法色系（对外只暴露布尔，`Seed` 不外泄）。
 pub fn is_known(id: &str) -> bool {
-    parse(id).is_some()
+    find(id).is_some()
 }
 
-/// 全部色系 id（设置校验、菜单顺序都吃这一份）：先是柔和色系，再是鲜明档
-/// （钨灰没有鲜明档，所以两段不等长 —— 前端按 `infos()` 里"有没有后缀"切段即可）。
+/// 全部色系 id（设置校验、菜单顺序都吃这一份）。
 pub fn ids() -> Vec<&'static str> {
-    SEEDS
-        .iter()
-        .map(|s| s.id)
-        .chain(SEEDS.iter().filter_map(|s| s.id_vivid))
-        .collect()
+    SEEDS.iter().map(|s| s.id).collect()
 }
 
 /// 文档里的角色类名：`lvl-<role>`。
@@ -191,26 +112,18 @@ pub fn role_of_class(class: &str) -> Option<&'static str> {
 }
 
 /// 给 `app_info` 的完整清单（亮/暗两套色值都给，前端画色块用）。
-///
-/// 顺序：先 6 个柔和色系，再 6 个鲜明档 —— 前端菜单直接按这个顺序切两段，
-/// 不需要在前端再判断"哪个是鲜明"。
 pub fn infos() -> Vec<PaletteInfo> {
-    let soft = SEEDS.iter().map(|s| Scheme { seed: s, tone: Tone::Soft });
-    let vivid = SEEDS
+    SEEDS
         .iter()
-        .filter(|s| s.id_vivid.is_some())
-        .map(|s| Scheme { seed: s, tone: Tone::Vivid })
-        .collect::<Vec<_>>();
-    soft.chain(vivid)
-        .map(|sc| PaletteInfo {
-            id: sc.id().to_string(),
-            name_zh: sc.name_zh().to_string(),
-            name_en: sc.name_en().to_string(),
+        .map(|s| PaletteInfo {
+            id: s.id.to_string(),
+            name_zh: s.zh.to_string(),
+            name_en: s.en.to_string(),
             roles: ROLES
                 .iter()
                 .map(|r| {
-                    let (lf, ls, lt) = swatch(sc, r, false);
-                    let (df, ds, dt) = swatch(sc, r, true);
+                    let (lf, ls, lt) = swatch(s, r, false);
+                    let (df, ds, dt) = swatch(s, r, true);
                     PaletteRole {
                         role: (*r).to_string(),
                         light: RoleSwatch { fill: lf, stroke: ls, text: lt },
@@ -218,20 +131,20 @@ pub fn infos() -> Vec<PaletteInfo> {
                     }
                 })
                 .collect(),
-            edge_light: edge_swatch(sc, false),
-            edge_dark: edge_swatch(sc, true),
+            edge_light: edge_swatch(s, false),
+            edge_dark: edge_swatch(s, true),
         })
         .collect()
 }
 
-/// 色系的中文名（提示词、状态栏、菜单共用）。`indigo-vivid` → `黛蓝 · 鲜明`。
+/// 色系的中文名（提示词、状态栏、菜单共用）。
 pub fn name_zh(id: &str) -> Option<&'static str> {
-    parse(id).map(|s| s.name_zh())
+    find(id).map(|s| s.zh)
 }
 
 /// 色系的英文名（英文界面）。
 pub fn name_en(id: &str) -> Option<&'static str> {
-    parse(id).map(|s| s.name_en())
+    find(id).map(|s| s.en)
 }
 
 /// 提示词里的配色约定：**模型只写角色，不写色值**。
@@ -314,59 +227,23 @@ const NEUTRAL_SAT: f32 = 0.12;
 const GRAY_STROKE_LIGHT: [f32; 7] = [0.44, 0.32, 0.22, 0.58, 0.70, 0.50, 0.82];
 const GRAY_STROKE_DARK: [f32; 7] = [0.62, 0.54, 0.46, 0.71, 0.80, 0.50, 0.88];
 
-fn role_sat(seed_sat: f32, role: &str, vivid: bool) -> f32 {
+fn role_sat(seed_sat: f32, role: &str) -> f32 {
     match role {
-        // 鲜明档的告警色不靠饱和度加分（它有单独的破格取值），这里只留描边用
-        "risk" => {
-            if vivid {
-                seed_sat.max(0.72)
-            } else {
-                seed_sat.max(0.58)
-            }
-        }
+        "risk" => seed_sat.max(0.58),
         // 说明类压到近中性：它不该抢主链路的注意力
-        "note" => {
-            if vivid {
-                0.18
-            } else {
-                0.06
-            }
-        }
-        _ => {
-            if vivid {
-                // 0.34–0.48 → 0.69–0.80：够鲜艳，又不至于在屏幕上"发光"
-                (seed_sat * 0.8 + 0.42).min(0.92)
-            } else {
-                seed_sat
-            }
-        }
+        "note" => 0.06,
+        _ => seed_sat,
     }
 }
-
-/// 鲜明档的填充**目标相对亮度**（WCAG 的 Y，不是 HSL 的 L）。
-///
-/// 为什么不钉死 L：同样的 L=0.33，黄色比蓝色亮一倍 —— 七个角色会有的刺眼、有的发闷，
-/// 文字对比还会在一半角色上跌破 4.5。按 Y 反解之后：
-///   * 亮色 Y=0.33 ⇒ 对白底 2.75:1（柔和档只有 1.23–1.40），文字 6.8–6.9:1；
-///   * 暗色 Y=0.085 ⇒ 对深底 1.8–2.2:1，白字 7.8:1。
-const TARGET_LIGHT_Y: f32 = 0.33;
-const TARGET_DARK_Y: f32 = 0.085;
-
-/// 鲜明档的告警色：**不参与**统一亮度，它本来就该比别的节点重一档。
-///
-/// 跟着统一亮度会变成鲑鱼粉 `#f1776a`，不像"会出事"；破格加深到 `#c32513`（白字 5.84:1）。
-const RISK_VIVID_LIGHT: (f32, f32) = (0.82, 0.42); // (sat, L)
-const RISK_VIVID_DARK: (f32, f32) = (0.78, 0.30);
 
 /// 连线的颜色：同一个色系的种子色相，但**压低饱和、暗一档**。
 ///
 /// 线的职责是"结构"，不该跟角色抢注意力 —— 所以只用主色相的一点点倾向，
 /// 而不是按源节点的角色染色（那需要按边序号写 `linkStyle`，文档一改就错位）。
-/// 色调不影响线：鲜明档提亮的是节点，线再提就跟节点抢了。
-fn edge_swatch(sc: Scheme, dark: bool) -> String {
+fn edge_swatch(seed: &Seed, dark: bool) -> String {
     // 中性色系（钨灰）也给一条近乎无彩的线，保持"线框风"一致
-    let s = (sc.seed.sat * 0.45).min(0.30);
-    hsl_hex(sc.seed.hue, s, if dark { 0.66 } else { 0.40 })
+    let s = (seed.sat * 0.45).min(0.30);
+    hsl_hex(seed.hue, s, if dark { 0.66 } else { 0.40 })
 }
 
 /// 分组色相：按"首次出现顺序"编号的组依次旋转色轮。
@@ -390,32 +267,16 @@ fn group_hue(seed_hue: f32, idx: usize, groups: usize) -> f32 {
 /// 槽位取色：`main/entry/…` 走角色槽位；`g0/g1/…` 走分组色轮。
 ///
 /// 分组的填充比语义角色**再浅一档**：它表达"这是同一块"，不该和"这是异常/判断"抢注意力。
-fn slot_swatch(sc: Scheme, slot: &str, dark: bool, groups: usize) -> (String, String, String) {
+fn slot_swatch(seed: &Seed, slot: &str, dark: bool, groups: usize) -> (String, String, String) {
     let Some(idx) = slot.strip_prefix('g').and_then(|d| d.parse::<usize>().ok()) else {
-        return swatch(sc, slot, dark);
+        return swatch(seed, slot, dark);
     };
-    let h = group_hue(sc.seed.hue, idx, groups);
-    let s = sc.seed.sat;
-    if !sc.vivid() {
-        return if dark {
-            (hsl_hex(h, s * 0.52, 0.26), hsl_hex(h, s, 0.58), hsl_hex(h, s * 0.45, 0.90))
-        } else {
-            (hsl_hex(h, s * 0.52, 0.89), hsl_hex(h, s, 0.46), hsl_hex(h, s * 0.90, 0.22))
-        };
-    }
-    // 鲜明档：组内节点也要看得出"上了色"，但必须比角色淡一档（Y 0.62 / 0.06）
+    let h = group_hue(seed.hue, idx, groups);
+    let s = seed.sat;
     if dark {
-        (
-            hsl_hex(h, s * 0.60, l_for_luminance(h, s * 0.60, 0.06)),
-            hsl_hex(h, s * 0.90, 0.62),
-            hsl_hex(h, s * 0.30, 0.92),
-        )
+        (hsl_hex(h, s * 0.52, 0.26), hsl_hex(h, s, 0.58), hsl_hex(h, s * 0.45, 0.90))
     } else {
-        (
-            hsl_hex(h, s * 0.62, l_for_luminance(h, s * 0.62, 0.62)),
-            hsl_hex(h, s * 0.90, 0.42),
-            hsl_hex(h, s * 0.80, 0.14),
-        )
+        (hsl_hex(h, s * 0.52, 0.89), hsl_hex(h, s, 0.46), hsl_hex(h, s * 0.90, 0.22))
     }
 }
 
@@ -423,31 +284,13 @@ fn slot_swatch(sc: Scheme, slot: &str, dark: bool, groups: usize) -> (String, St
 ///
 /// 框和节点用同一个填充色的话，节点会"溶"进背景里（实测 事件数据流：中间的
 /// 数智中枢框 #dddfe9，里面的节点也是 #dddfe9，一眼看过去像几个白框）。
-///
-/// 鲜明档的框**只提饱和度、不提亮度**（亮色留在 Y=0.75 一带）：层级是
-/// "角色 > 分组 > 画布"，框跟着变重的话，9 个 subgraph 会糊成一张色块拼贴。
-fn frame_swatch(sc: Scheme, idx: usize, groups: usize, dark: bool) -> (String, String, String) {
-    let h = group_hue(sc.seed.hue, idx, groups);
-    let s = sc.seed.sat;
-    if !sc.vivid() {
-        return if dark {
-            (hsl_hex(h, s * 0.40, 0.17), hsl_hex(h, s * 0.75, 0.45), hsl_hex(h, s * 0.40, 0.92))
-        } else {
-            (hsl_hex(h, s * 0.35, 0.955), hsl_hex(h, s * 0.75, 0.72), hsl_hex(h, s * 0.60, 0.28))
-        };
-    }
+fn frame_swatch(seed: &Seed, idx: usize, groups: usize, dark: bool) -> (String, String, String) {
+    let h = group_hue(seed.hue, idx, groups);
+    let s = seed.sat;
     if dark {
-        (
-            hsl_hex(h, s * 0.50, l_for_luminance(h, s * 0.50, 0.045)),
-            hsl_hex(h, s * 0.80, 0.50),
-            hsl_hex(h, s * 0.30, 0.86),
-        )
+        (hsl_hex(h, s * 0.40, 0.17), hsl_hex(h, s * 0.75, 0.45), hsl_hex(h, s * 0.40, 0.92))
     } else {
-        (
-            hsl_hex(h, s * 0.55, l_for_luminance(h, s * 0.55, 0.75)),
-            hsl_hex(h, s * 0.80, 0.62),
-            hsl_hex(h, s * 0.50, 0.30),
-        )
+        (hsl_hex(h, s * 0.35, 0.955), hsl_hex(h, s * 0.75, 0.72), hsl_hex(h, s * 0.60, 0.28))
     }
 }
 
@@ -455,16 +298,11 @@ fn frame_swatch(sc: Scheme, idx: usize, groups: usize, dark: bool) -> (String, S
 ///
 /// 明度梯度是全局的：亮色 94/50/22、暗色 22/60/90。于是"文字压在填充上"的对比度
 /// 在每个色系、每个角色上都成立 —— 这是"自动"的另一半：不是挑好看的，是挑可读的。
-///
-/// 鲜明档换了一套规则：填充明度**按目标相对亮度反解**（[`l_for_luminance`]），
-/// 文字色按对比度自适应（深底白字 / 浅底近黑）。见 [`Tone`]。
-fn swatch(sc: Scheme, role: &str, dark: bool) -> (String, String, String) {
-    let seed = sc.seed;
+fn swatch(seed: &Seed, role: &str, dark: bool) -> (String, String, String) {
     let hues = ladder(seed);
     let idx = ROLES.iter().position(|r| *r == role).unwrap_or(0);
     if seed.sat < NEUTRAL_SAT && role != "risk" {
-        // 中性色系：填充恒为极浅/极深的一档，角色差异全在描边上（线框风）。
-        // 它**没有鲜明档**（见 `Seed::id_vivid`），所以这里不需要分支。
+        // 中性色系：填充恒为极浅/极深的一档，角色差异全在描边上（线框风）
         let l = if dark { GRAY_STROKE_DARK[idx] } else { GRAY_STROKE_LIGHT[idx] };
         let fill_l = if dark { 0.22 } else { 0.95 };
         return (
@@ -475,35 +313,19 @@ fn swatch(sc: Scheme, role: &str, dark: bool) -> (String, String, String) {
     }
     // 告警永远是那一抹红：中性色系里它是**唯一**有色相的角色
     let h = if role == "risk" { RISK_HUE } else { hues[idx] };
-    if !sc.vivid() {
-        let s = role_sat(seed.sat, role, false);
-        return if dark {
-            (hsl_hex(h, s * 0.55, 0.22), hsl_hex(h, s, 0.60), hsl_hex(h, s * 0.50, 0.90))
-        } else {
-            // 亮色填充曾经是 L94 / S×0.55：七个角色两两 ΔE 只有 1.2（人眼 ~2 以下看不出），
-            // 节点身体几乎同色、全靠 1.6px 描边撑着。L88 / S×0.95 之后 ΔE 3.6–5.9，
-            // 文字对比度仍有 7:1（可读性没牺牲）。
-            (hsl_hex(h, s * 0.95, 0.88), hsl_hex(h, s, 0.50), hsl_hex(h, s * 0.95, 0.22))
-        };
+    let s = role_sat(seed.sat, role);
+    if dark {
+        (hsl_hex(h, s * 0.55, 0.22), hsl_hex(h, s, 0.60), hsl_hex(h, s * 0.50, 0.90))
+    } else {
+        // 亮色填充曾经是 L94 / S×0.55：七个角色两两 ΔE 只有 1.2（人眼 ~2 以下看不出），
+        // 节点身体几乎同色、全靠 1.6px 描边撑着。L88 / S×0.95 之后 ΔE 3.6–5.9，
+        // 文字对比度仍有 7:1（可读性没牺牲）。
+        (hsl_hex(h, s * 0.95, 0.88), hsl_hex(h, s, 0.50), hsl_hex(h, s * 0.95, 0.22))
     }
-    // ── 鲜明档 ──
-    if role == "risk" {
-        // 破格：不跟统一亮度，告警本就该比别的节点重一档
-        let (s, l) = if dark { RISK_VIVID_DARK } else { RISK_VIVID_LIGHT };
-        let text = if dark { hsl_hex(h, 0.30, 0.97) } else { "#ffffff".to_string() };
-        return (hsl_hex(h, s, l), hsl_hex(h, 0.95, if dark { 0.62 } else { 0.30 }), text);
-    }
-    let s = role_sat(seed.sat, role, true);
-    let l = l_for_luminance(h, s, if dark { TARGET_DARK_Y } else { TARGET_LIGHT_Y });
-    (
-        hsl_hex(h, s, l),
-        hsl_hex(h, s.min(0.95), if dark { 0.72 } else { 0.34 }),
-        adaptive_text(h, s, l),
-    )
 }
 
-/// HSL → `(r, g, b)`（0–255）。不引第三方库：这里只需要"可预测"，不需要色彩管理。
-fn hsl_rgb(h: f32, s: f32, l: f32) -> (u8, u8, u8) {
+/// HSL → `#rrggbb`。不引第三方库：这里只需要"可预测"，不需要色彩管理。
+fn hsl_hex(h: f32, s: f32, l: f32) -> String {
     let h = hue_norm(h) / 360.0;
     let s = s.clamp(0.0, 1.0);
     let l = l.clamp(0.0, 1.0);
@@ -518,78 +340,8 @@ fn hsl_rgb(h: f32, s: f32, l: f32) -> (u8, u8, u8) {
         4 => (x, 0.0, c),
         _ => (c, 0.0, x),
     };
-    let q = |v: f32| (((v + m) * 255.0).round() as i32).clamp(0, 255) as u8;
-    (q(r), q(g), q(b))
-}
-
-/// HSL → `#rrggbb`。
-fn hsl_hex(h: f32, s: f32, l: f32) -> String {
-    let (r, g, b) = hsl_rgb(h, s, l);
-    format!("#{r:02x}{g:02x}{b:02x}")
-}
-
-/// sRGB 通道 → 线性值（WCAG 2.x 的定义）。
-fn channel_lin(c: u8) -> f32 {
-    let v = c as f32 / 255.0;
-    if v <= 0.04045 {
-        v / 12.92
-    } else {
-        ((v + 0.055) / 1.055).powf(2.4)
-    }
-}
-
-fn rgb_lin((r, g, b): (u8, u8, u8)) -> f32 {
-    0.2126 * channel_lin(r) + 0.7152 * channel_lin(g) + 0.0722 * channel_lin(b)
-}
-
-/// 相对亮度（0 = 黑，1 = 白）。
-fn rel_y(h: f32, s: f32, l: f32) -> f32 {
-    rgb_lin(hsl_rgb(h, s, l))
-}
-
-/// 两个相对亮度之间的 WCAG 对比度（1–21）。
-fn contrast_y(a: f32, b: f32) -> f32 {
-    let (hi, lo) = if a >= b { (a, b) } else { (b, a) };
-    (hi + 0.05) / (lo + 0.05)
-}
-
-/// `#rrggbb` → 相对亮度。验收与测试用（对外不暴露颜色模型）。
-fn rel_y_hex(hex: &str) -> f32 {
-    let p = |i: usize| u8::from_str_radix(&hex[i..i + 2], 16).unwrap_or(0);
-    rgb_lin((p(1), p(3), p(5)))
-}
-
-/// 二分出一个 L，使 `hsl(h, s, L)` 的相对亮度 = `target`。
-///
-/// 这是鲜明档与柔和档的唯一分水岭：钉死 L 的话，同样的 L=0.33 黄色比蓝色亮一倍，
-/// 七个角色会有的刺眼、有的发闷；按 Y 反解之后"同档不同色相"一样亮，
-/// 文字对比也就一样稳。24 次二分足够精确到 1/255（回报的 hex 会自己取整）。
-fn l_for_luminance(h: f32, s: f32, target: f32) -> f32 {
-    let (mut lo, mut hi) = (0.0f32, 1.0f32);
-    for _ in 0..24 {
-        let mid = (lo + hi) / 2.0;
-        if rel_y(h, s, mid) > target {
-            hi = mid;
-        } else {
-            lo = mid;
-        }
-    }
-    (lo + hi) / 2.0
-}
-
-/// 填充色上的文字：白 or 近黑，取对比度更高的那个（鲜明档用）。
-///
-/// 不用"同色相的深色"：填充饱和度一高，带色相的文字就发灰 —— 实测同一族取值
-/// 的最低对比从 6.9 掉到 5.5，而中性墨色最稳。
-fn adaptive_text(h: f32, s: f32, l: f32) -> String {
-    const INK: &str = "#12100e";
-    const WHITE: &str = "#ffffff";
-    let fill = rel_y(h, s, l);
-    if contrast_y(fill, rel_y_hex(WHITE)) >= contrast_y(fill, rel_y_hex(INK)) {
-        WHITE.to_string()
-    } else {
-        INK.to_string()
-    }
+    let q = |v: f32| format!("{:02x}", (((v + m) * 255.0).round() as i32).clamp(0, 255));
+    format!("#{}{}{}", q(r), q(g), q(b))
 }
 
 /* ------------------------------------------------------------------ 角色推断 */
@@ -675,12 +427,12 @@ pub fn apply(
     edges: bool,
     mode: PaletteMode,
 ) -> Result<PaletteApplyRes, String> {
-    let sc = parse(palette_id)
+    let seed = find(palette_id)
         .ok_or_else(|| format!("没有这个色系：「{palette_id}」（可选：{}）", ids().join(" / ")))?;
     match format {
-        FormatId::Mermaid => apply_mermaid(body, sc, dark, edges, mode),
-        FormatId::Dot => apply_dot(body, sc, dark, edges, mode),
-        FormatId::D2 => apply_d2(body, sc, dark, edges, mode),
+        FormatId::Mermaid => apply_mermaid(body, seed, dark, edges, mode),
+        FormatId::Dot => apply_dot(body, seed, dark, edges, mode),
+        FormatId::D2 => apply_d2(body, seed, dark, edges, mode),
         FormatId::Drawio | FormatId::Excalidraw => Err(
             "画布型格式没有稳定的节点角色，自动配色只在 Mermaid / DOT / D2 上生效"
                 .to_string(),
@@ -960,12 +712,12 @@ pub fn annotate(body: &str, format: FormatId, dark: bool) -> Vec<PaletteLine> {
     let auto = block_palette(&base, format)
         .or_else(|| suggest(&base, format).map(|(id, _)| id.to_string()))
         .unwrap_or_else(|| "pine".to_string());
-    let sc = parse(&auto).unwrap_or_else(|| parse("pine").expect("pine 一定存在"));
+    let seed = find(&auto).unwrap_or_else(|| find("pine").expect("pine 一定存在"));
     let mut slot_of: std::collections::HashMap<&str, &str> = std::collections::HashMap::new();
     let mut colors: std::collections::HashMap<&str, (String, String, String)> =
         std::collections::HashMap::new();
     for (slot, ids) in &by_slot {
-        let c = slot_swatch(sc, slot, dark, groups);
+        let c = slot_swatch(seed, slot, dark, groups);
         for id in ids {
             slot_of.insert(id.as_str(), slot);
             colors.insert(id.as_str(), c.clone());
@@ -1249,7 +1001,7 @@ fn strip_block<'a>(body: &'a str, begin: &str, end: &str) -> (String, bool) {
 
 fn apply_mermaid(
     body: &str,
-    sc: Scheme,
+    seed: &Seed,
     dark: bool,
     edges: bool,
     mode: PaletteMode,
@@ -1292,15 +1044,15 @@ fn apply_mermaid(
     }
 
     let mut block = String::from("%% dgm-palette:begin id=");
-    block.push_str(sc.id());
+    block.push_str(seed.id);
     block.push_str("（Diagramon 自动配色 · ");
-    block.push_str(sc.name_zh());
+    block.push_str(seed.zh);
     block.push_str(if dark { " · 暗色" } else { " · 亮色" });
     block.push_str("）\n");
     let groups = group_count.max(1);
     let mut applied = 0usize;
     for (slot, ids) in &by_slot {
-        let (fill, stroke, text) = slot_swatch(sc, slot, dark, groups);
+        let (fill, stroke, text) = slot_swatch(seed, slot, dark, groups);
         block.push_str(&format!(
             "classDef {} fill:{fill},stroke:{stroke},color:{text}\n",
             role_class(slot)
@@ -1325,14 +1077,14 @@ fn apply_mermaid(
     for (id, name) in &facts.subgraphs {
         let Some(id) = id else { continue };
         let Some(i) = group_idx.get(name.as_str()) else { continue };
-        let (fill, stroke, text) = frame_swatch(sc, *i, groups, dark);
+        let (fill, stroke, text) = frame_swatch(seed, *i, groups, dark);
         block.push_str(&format!("style {id} fill:{fill},stroke:{stroke},color:{text}\n"));
     }
     // 连线统一跟随色系。**用 init 指令而不是 `linkStyle default`**：后者只改 `stroke`，
     // 箭头（marker）仍是主题的 #333，肉眼能看到"线是灰绿、箭头是深灰"的错位；
     // `themeVariables.lineColor` 把线和箭头一起换掉（mermaid 12 实测两种位置都生效）。
     if edges {
-        let line = edge_swatch(sc, dark);
+        let line = edge_swatch(seed, dark);
         block.push_str(&format!(
             "%%{{init: {{'themeVariables': {{'lineColor': '{line}'}}}}}}%%\n"
         ));
@@ -1740,7 +1492,7 @@ fn dot_is_colored(node: &DotNode) -> bool {
 
 fn apply_dot(
     body: &str,
-    sc: Scheme,
+    seed: &Seed,
     dark: bool,
     edges: bool,
     mode: PaletteMode,
@@ -1770,16 +1522,16 @@ fn apply_dot(
     let styles_removed = 0usize;
 
     let mut block = String::from("  // dgm-palette:begin id=");
-    block.push_str(sc.id());
+    block.push_str(seed.id);
     block.push_str("（Diagramon 自动配色 · ");
-    block.push_str(sc.name_zh());
+    block.push_str(seed.zh);
     block.push_str(if dark { " · 暗色" } else { " · 亮色" });
     block.push_str("）\n");
     let mut applied = 0usize;
     let by_id: BTreeMap<&str, &DotNode> = nodes.iter().map(|n| (n.id.as_str(), n)).collect();
     let groups = group_count.max(1);
     for (slot, ids) in &by_slot {
-        let (fill, stroke, text) = slot_swatch(sc, slot, dark, groups);
+        let (fill, stroke, text) = slot_swatch(seed, slot, dark, groups);
         for id in ids {
             applied += 1;
             // 节点自己的 style 要保住（`rounded` / `dashed`…），只补一个 filled
@@ -1804,7 +1556,7 @@ fn apply_dot(
         }
     }
     if edges {
-        block.push_str(&format!("  edge [color=\"{}\"];\n", edge_swatch(sc, dark)));
+        block.push_str(&format!("  edge [color=\"{}\"];\n", edge_swatch(seed, dark)));
     }
     block.push_str("  // dgm-palette:end\n");
     if applied == 0 {
@@ -2109,7 +1861,7 @@ fn split_d2_attr(lhs: &str) -> Option<(String, String)> {
 
 fn apply_d2(
     body: &str,
-    sc: Scheme,
+    seed: &Seed,
     dark: bool,
     edges: bool,
     mode: PaletteMode,
@@ -2148,15 +1900,15 @@ fn apply_d2(
 
     let mut out = base;
     let mut block = String::from("# dgm-palette:begin id=");
-    block.push_str(sc.id());
+    block.push_str(seed.id);
     block.push_str("（Diagramon 自动配色 · ");
-    block.push_str(sc.name_zh());
+    block.push_str(seed.zh);
     block.push_str(if dark { " · 暗色" } else { " · 亮色" });
     block.push_str("）\n");
     let mut applied = 0usize;
     let groups = group_count.max(1);
     for (slot, ids) in &by_slot {
-        let (fill, stroke, text) = slot_swatch(sc, slot, dark, groups);
+        let (fill, stroke, text) = slot_swatch(seed, slot, dark, groups);
         for id in ids {
             let Some(path) = path_of.get(id.as_str()) else {
                 continue;
@@ -2170,7 +1922,7 @@ fn apply_d2(
     // 连线：D2 没有"全局边样式"，只能逐条写（`(a -> b).style.stroke`）。
     // 端点是扫描时按文档顺序记下的，重跑同序，所以幂等。
     if edges {
-        let line = edge_swatch(sc, dark);
+        let line = edge_swatch(seed, dark);
         for (from, to) in &scan.edges {
             block.push_str(&format!("({from} -> {to}).style.stroke: \"{line}\"\n"));
         }
@@ -2189,11 +1941,6 @@ fn apply_d2(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// 测试里取色系：`soft("pine")` / `vivid("pine")`。id 拼错直接炸，别静默退化成默认。
-    fn soft(id: &str) -> Scheme {
-        parse(id).unwrap_or_else(|| panic!("色系 {id} 必须存在"))
-    }
 
     /// 绝大多数用例只关心节点配色：默认"连线跟随"。
     fn paint(
@@ -2231,22 +1978,14 @@ mod tests {
 
     #[test]
     fn every_palette_has_six_distinct_roles_in_both_themes() {
-        // 两个色调都要成立：鲜明档换了明度算法，最容易在这里翻车（同色相的七个角色撞色）
-        let schemes: Vec<Scheme> = SEEDS
-            .iter()
-            .flat_map(|s| {
-                [Scheme { seed: s, tone: Tone::Soft }, Scheme { seed: s, tone: Tone::Vivid }]
-            })
-            .collect();
-        for sc in &schemes {
-            let seed = sc.seed;
+        for seed in &SEEDS {
             for dark in [false, true] {
                 let mut fills = Vec::new();
                 for role in ROLES {
-                    let (fill, stroke, text) = swatch(*sc, role, dark);
-                    assert!(fill.starts_with('#') && fill.len() == 7, "{}/{} fill={fill}", sc.id(), role);
-                    assert_ne!(fill, stroke, "{}/{} 填充与描边同色", sc.id(), role);
-                    assert_ne!(fill, text, "{}/{} 填充与文字同色", sc.id(), role);
+                    let (fill, stroke, text) = swatch(seed, role, dark);
+                    assert!(fill.starts_with('#') && fill.len() == 7, "{}/{} fill={fill}", seed.id, role);
+                    assert_ne!(fill, stroke, "{}/{} 填充与描边同色", seed.id, role);
+                    assert_ne!(fill, text, "{}/{} 填充与文字同色", seed.id, role);
                     fills.push(fill);
                 }
                 let mut uniq = fills.clone();
@@ -2293,18 +2032,15 @@ mod tests {
     fn neutral_palette_separates_roles_by_lightness() {
         let seed = find("tungsten").expect("钨灰必须存在");
         assert!(seed.sat < NEUTRAL_SAT);
-        // 钨灰没有鲜明档（灰阶没有"更鲜艳"），所以只验柔和这一套
-        for sc in [soft("tungsten")] {
-            for dark in [false, true] {
-                let strokes: Vec<String> =
-                    ROLES.iter().map(|r| swatch(sc, r, dark).1).collect();
-                let mut uniq = strokes.clone();
-                uniq.sort();
-                uniq.dedup();
-                assert_eq!(uniq.len(), ROLES.len(), "{} 的描边必须两两不同：{strokes:?}", sc.id());
-                // 告警仍是彩色 —— 线框风里唯一"会喊"的那个角色
-                assert_ne!(strokes[5], swatch(sc, "main", dark).1, "{}", sc.id());
-            }
+        for dark in [false, true] {
+            let strokes: Vec<String> =
+                ROLES.iter().map(|r| swatch(seed, r, dark).1).collect();
+            let mut uniq = strokes.clone();
+            uniq.sort();
+            uniq.dedup();
+            assert_eq!(uniq.len(), ROLES.len(), "钨灰的描边必须两两不同：{strokes:?}");
+            // 告警仍是彩色 —— 线框风里唯一"会喊"的那个角色
+            assert_ne!(strokes[5], swatch(seed, "main", dark).1);
         }
     }
 
@@ -2314,110 +2050,6 @@ mod tests {
         assert_eq!(GRAY_STROKE_LIGHT.len(), ROLES.len());
         assert_eq!(GRAY_STROKE_DARK.len(), ROLES.len());
         assert_eq!(ladder(find("pine").unwrap()).len(), ROLES.len());
-    }
-
-    /* ---------------------------------------------------- 鲜明档的三道门禁 */
-
-    /// CIE76 色差。只用于测试（验收用数字，不靠肉眼）。
-    fn lab(hex: &str) -> [f32; 3] {
-        let p = |i: usize| channel_lin(u8::from_str_radix(&hex[i..i + 2], 16).unwrap_or(0));
-        let (r, g, b) = (p(1), p(3), p(5));
-        let x = (0.4124 * r + 0.3576 * g + 0.1805 * b) / 0.95047;
-        let y = 0.2126 * r + 0.7152 * g + 0.0722 * b;
-        let z = (0.0193 * r + 0.1192 * g + 0.9505 * b) / 1.08883;
-        let f = |t: f32| if t > 0.008856 { t.cbrt() } else { 7.787 * t + 16.0 / 116.0 };
-        [116.0 * f(y) - 16.0, 500.0 * (f(x) - f(y)), 200.0 * (f(y) - f(z))]
-    }
-
-    fn delta_e(a: &str, b: &str) -> f32 {
-        let (a, b) = (lab(a), lab(b));
-        ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2) + (a[2] - b[2]).powi(2)).sqrt()
-    }
-
-    fn contrast(a: &str, b: &str) -> f32 {
-        contrast_y(rel_y_hex(a), rel_y_hex(b))
-    }
-
-    /// 鲜明档的头号承诺：**文字压在填充上仍然可读**。
-    ///
-    /// 柔和档是靠"浅填充 + 深文字"硬保证的；鲜明档把填充压到 Y=0.33，就必须靠
-    /// 自适应文字。这条一旦红了，说明某个色相上文字开始糊。
-    #[test]
-    fn vivid_keeps_text_readable_on_every_role() {
-        for seed in &SEEDS {
-            let sc = Scheme { seed, tone: Tone::Vivid };
-            for dark in [false, true] {
-                for role in ROLES {
-                    let (fill, _stroke, text) = swatch(sc, role, dark);
-                    let c = contrast(&fill, &text);
-                    assert!(
-                        c >= 5.5,
-                        "{}/{}（dark={dark}）文字对比只有 {c:.2}:1（填充 {fill} / 文字 {text}）",
-                        sc.id(),
-                        role
-                    );
-                }
-            }
-        }
-    }
-
-    /// 鲜明档的第二个承诺：**节点从画布上"浮"起来**。柔和档只有 1.2–1.4，看着像融进纸面。
-    #[test]
-    fn vivid_pulls_roles_off_the_canvas() {
-        for seed in &SEEDS {
-            if seed.sat < NEUTRAL_SAT {
-                continue; // 钨灰是线框风：可见度来自描边，填充本来就贴底
-            }
-            let sc = Scheme { seed, tone: Tone::Vivid };
-            for role in ROLES {
-                let (fill, _, _) = swatch(sc, role, false);
-                let c = contrast(&fill, "#ffffff");
-                assert!(c >= 2.0, "{}/{} 对白底只有 {c:.2}（填充 {fill}）", sc.id(), role);
-                let (dfill, _, _) = swatch(sc, role, true);
-                let dc = contrast(&dfill, "#1a1d1f");
-                assert!(dc >= 1.7, "{}/{} 对深底只有 {dc:.2}（填充 {dfill}）", sc.id(), role);
-            }
-        }
-    }
-
-    /// 鲜明档必须**看得出换了档**：同一个角色的填充与柔和档相差 ΔE >= 15
-    /// （同色系内部 ΔE 的"人眼可辨"门槛是 15，低于它就是"点了没反应"）。
-    ///
-    /// 钨灰是线框风：填充本来就贴底，鲜明档改的是**描边台阶**，所以要量描边。
-    #[test]
-    fn vivid_is_visibly_different_from_soft() {
-        for seed in SEEDS.iter().filter(|s| s.id_vivid.is_some()) {
-            for role in ROLES {
-                let (s, _, _) = swatch(Scheme { seed, tone: Tone::Soft }, role, false);
-                let (v, _, _) = swatch(Scheme { seed, tone: Tone::Vivid }, role, false);
-                let d = delta_e(&s, &v);
-                assert!(d >= 15.0, "{}/{} 柔和 {s} 与鲜明 {v} 只差 ΔE {d:.1}", seed.id, role);
-            }
-        }
-    }
-
-    /// 层级：**角色 > 分组框**。框跟着变重的话，9 个 subgraph 会糊成一张色块拼贴。
-    #[test]
-    fn vivid_frames_stay_quieter_than_roles() {
-        for seed in &SEEDS {
-            if seed.sat < NEUTRAL_SAT {
-                continue; // 钨灰的角色与框同填充，差异在描边，不适用这条
-            }
-            let sc = Scheme { seed, tone: Tone::Vivid };
-            for dark in [false, true] {
-                let (frame, _, _) = frame_swatch(sc, 0, 3, dark);
-                for role in ROLES {
-                    let (fill, _, _) = swatch(sc, role, dark);
-                    let d = delta_e(&fill, &frame);
-                    assert!(
-                        d >= 6.0,
-                        "{}/{}（dark={dark}）与组框只差 ΔE {d:.1}（{fill} vs {frame}）",
-                        sc.id(),
-                        role
-                    );
-                }
-            }
-        }
     }
 
     #[test]
@@ -2440,57 +2072,22 @@ mod tests {
         assert_eq!(role_of_class("lvl-decide"), Some("decide"));
         assert_eq!(role_of_class("decide"), None, "没有前缀的不是我们的类");
         assert_eq!(role_of_class("lvl-nope"), None);
-        let vivid_count = SEEDS.iter().filter(|s| s.id_vivid.is_some()).count();
-        assert_eq!(ids().len(), SEEDS.len() + vivid_count, "柔和全集 + 有鲜明档的那几个");
+        assert_eq!(ids().len(), SEEDS.len());
         assert!(find("graphite").is_none(), "石墨是 UI 强调色，不是图表色系");
         assert!(find("coral").is_none(), "珊瑚落在告警红带里，已换成橄榄");
         assert!(find("pine").is_some());
-        // 后缀必须精确：多一个 -vivid、只剩后缀，都不认
-        for id in ids() {
-            assert!(is_known(id), "{id} 应该在清单里");
-            assert!(name_zh(id).is_some() && name_en(id).is_some(), "{id} 缺名字");
-        }
-        for bad in ["", "vivid", "-vivid", "indigo-vivid-vivid", "indigo ", "Indigo"] {
-            assert!(!is_known(bad), "{bad:?} 不该被当成色系");
-        }
-    }
-
-    /// `ids()` 的顺序是前端的菜单契约：**前一半柔和、后一半鲜明**，前端按它切两段。
-    #[test]
-    fn vivid_ids_trail_the_soft_ones_and_carry_the_suffix() {
-        let all = ids();
-        let (soft_ids, vivid_ids) = all.split_at(SEEDS.len());
-        for (seed, s) in SEEDS.iter().zip(soft_ids.iter()) {
-            assert_eq!(*s, seed.id);
-        }
-        let with_vivid: Vec<&Seed> = SEEDS.iter().filter(|s| s.id_vivid.is_some()).collect();
-        for (seed, v) in with_vivid.iter().zip(vivid_ids.iter()) {
-            assert_eq!(Some(*v), seed.id_vivid);
-            assert_eq!(*v, format!("{}-vivid", seed.id).as_str(), "id_vivid 必须等于 id + -vivid");
-            assert!(name_zh(v).unwrap().contains("鲜明") || name_zh(v).unwrap().contains("高对比"));
-        }
-        assert!(parse("indigo").unwrap().tone == Tone::Soft);
-        assert!(parse("indigo-vivid").unwrap().tone == Tone::Vivid);
-        assert!(std::ptr::eq(parse("indigo").unwrap().seed, parse("indigo-vivid").unwrap().seed));
     }
 
     #[test]
     fn infos_cover_every_palette_and_role() {
         let all = infos();
-        assert_eq!(all.len(), ids().len(), "infos 与 ids 必须一一对应");
+        assert_eq!(all.len(), SEEDS.len());
         for p in &all {
             assert_eq!(p.roles.len(), ROLES.len());
             assert!(!p.name_zh.is_empty() && !p.name_en.is_empty());
             assert!(p.roles.iter().all(|r| r.light.fill.starts_with('#') && r.dark.fill.starts_with('#')));
             assert!(p.edge_light.starts_with('#') && p.edge_dark.starts_with('#'));
             assert_ne!(p.edge_light, p.roles[0].light.stroke, "线色不该与节点描边同色");
-        }
-        // 同一色系的两个色调，主链路填充必须不同（否则菜单里点鲜明等于没点）
-        for seed in &SEEDS {
-            let soft_main = &all.iter().find(|p| p.id == seed.id).unwrap().roles[0];
-            let Some(vid) = seed.id_vivid else { continue }; // 钨灰没有鲜明档
-            let vivid_main = &all.iter().find(|p| p.id == vid).unwrap().roles[0];
-            assert_ne!(soft_main.light.fill, vivid_main.light.fill, "{}", seed.id);
         }
     }
 
@@ -2875,8 +2472,8 @@ mod tests {
         };
         assert_eq!(classes(&pine.body), classes(&lotus.body), "换色系不该改角色分配");
         assert_ne!(pine.body, lotus.body);
-        let (pine_main, _, _) = swatch(soft("pine"), "main", false);
-        let (lotus_main, _, _) = swatch(soft("lotus"), "main", false);
+        let (pine_main, _, _) = swatch(find("pine").unwrap(), "main", false);
+        let (lotus_main, _, _) = swatch(find("lotus").unwrap(), "main", false);
         assert_ne!(pine_main, lotus_main);
         assert!(!lotus.body.contains(&pine_main), "旧色值应被替换干净");
         assert!(lotus.body.contains(&lotus_main), "新色值必须已经落进去");
@@ -3011,7 +2608,7 @@ b -> c
             .and_then(|r| r.split('\'').next())
             .unwrap_or("")
             .to_string();
-        let (_, main_stroke, _) = swatch(soft("pine"), "main", false);
+        let (_, main_stroke, _) = swatch(find("pine").unwrap(), "main", false);
         assert_ne!(edge_hex, main_stroke, "线色不该与节点描边同色");
         let sat = |hex: &str| {
             let rgb: Vec<f32> = (1..).step_by(2).take(3)
@@ -3042,7 +2639,7 @@ b -> c
             let second = paint(&first.body, fmt, "lotus", false, PaletteMode::OnlyUncolored).unwrap();
             assert!(second.changed, "{fmt:?} 换色系后应当变色（不是跳过全部节点）");
             assert_eq!(second.skipped, 0, "{fmt:?} 不该把上一轮自己的输出当成用户颜色");
-            let (fill, _, _) = swatch(soft("lotus"), "main", false);
+            let (fill, _, _) = swatch(find("lotus").unwrap(), "main", false);
             assert!(second.body.contains(&fill), "{fmt:?} 没写进新色值：{}", second.body);
         }
     }

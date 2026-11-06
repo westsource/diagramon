@@ -506,24 +506,12 @@ window.DGM = window.DGM || {};
     return b;
   }
 
-  /** 鲜明档的 id 约定：`<色系>-vivid`（后端 `ids()` 里也是这个后缀）。 */
-  function isVividId(id) {
-    return String(id || "").endsWith("-vivid");
-  }
-
   function openPaletteMenu(d, anchor) {
     const cur = state.schemeOf(d);
-    const all = state.palettes || [];
-    const rowOf = (p) => ({
+    const items = (state.palettes || []).map((p) => ({
       label: paletteName(p.id), check: true, on: p.id === cur, dot: paletteDot(p.id), v: p.id,
-    });
-    const items = [{ label2: t("preview.paletteMenu") }];
-    // 分两段：柔和是"浅底深字"，鲜明是"高对比"。后端按同一顺序下发
-    // （柔和全集 + 有鲜明档的那几个），这里只按后缀切，不另外判断"哪个该有鲜明档"。
-    items.push({ label2: t("preview.paletteSoft") });
-    items.push(...all.filter((p) => !isVividId(p.id)).map(rowOf));
-    const vividRows = all.filter((p) => isVividId(p.id)).map(rowOf);
-    if (vividRows.length) items.push({ label2: t("preview.paletteVivid") }, ...vividRows);
+    }));
+    items.unshift({ label2: t("preview.paletteMenu") });
     // 「无」与色系并列：选中它就是**清掉已上色的那段**并把这份文档的色系置为关闭。
     // 不再单独挂一个「关闭」——两个入口做同一件事只会让人猜它们有什么区别。
     items.push({

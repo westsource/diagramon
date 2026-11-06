@@ -369,12 +369,6 @@ digraph Pipeline {
     { id: "olive", zh: "橄榄", en: "Olive" },
     { id: "ochre", zh: "赭石", en: "Ochre" },
     { id: "tungsten", zh: "钨灰", en: "Tungsten" },
-    // 鲜明档：id 后缀 `-vivid` 就是前端菜单分组用的契约（钨灰没有鲜明档 —— 灰阶没有"更鲜艳"）
-    { id: "indigo-vivid", zh: "黛蓝 · 鲜明", en: "Indigo Vivid" },
-    { id: "pine-vivid", zh: "松绿 · 鲜明", en: "Pine Vivid" },
-    { id: "lotus-vivid", zh: "藕紫 · 鲜明", en: "Lotus Vivid" },
-    { id: "olive-vivid", zh: "橄榄 · 鲜明", en: "Olive Vivid" },
-    { id: "ochre-vivid", zh: "赭石 · 鲜明", en: "Ochre Vivid" },
   ];
 
   const NEW_BODIES = {
