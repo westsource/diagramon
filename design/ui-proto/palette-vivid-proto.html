@@ -1,0 +1,597 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>原型 · 配色「鲜明」档（高对比）</title>
+<link rel="stylesheet" href="proto.css">
+<style>
+  /* —— 本页专属样式（设计系统全部走 proto.css） —— */
+  body { margin: 0; padding: 28px 32px 70px; background: var(--bg); color: var(--ink); font: var(--fs-md) var(--font-ui); }
+  h1 { font-size: 18px; margin: 0 0 4px; }
+  h2 { font-size: 15px; margin: 30px 0 8px; }
+  .lede { color: var(--ink-2); margin: 0 0 16px; max-width: 1040px; line-height: 1.7; }
+  .lede b { color: var(--accent); }
+  .lede code, .notes code, td code, .ask code { font: var(--fs-xs) var(--font-mono); background: var(--surface-3); border-radius: 3px; padding: 1px 5px; }
+
+  .bar { display: flex; align-items: center; gap: 8px; margin: 0 0 12px; flex-wrap: wrap; }
+  .bar .k { color: var(--muted); font-size: var(--fs-sm); min-width: 44px; }
+  .seg { display: inline-flex; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); overflow: hidden; }
+  .seg button { height: 26px; padding: 0 11px; font: var(--fs-xs) var(--font-ui); color: var(--ink-2);
+                background: var(--surface); border: 0; border-right: 1px solid var(--border); cursor: pointer; }
+  .seg button:last-child { border-right: 0; }
+  .seg button:hover { background: var(--surface-3); }
+  .seg button.on { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+  .seg.dim button.on { background: var(--surface-3); color: var(--ink); }
+
+  .window { max-width: 1040px; border: 1px solid var(--border-strong); border-radius: var(--radius); background: var(--surface); overflow: hidden; }
+  .pane-head { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-bottom: 1px solid var(--border); background: var(--surface-inset); flex-wrap: wrap; }
+  .pane-head .lbl { font-size: var(--fs-sm); color: var(--muted); }
+  .pane-sub { font-size: var(--fs-xs); color: var(--faint); }
+  .sp { flex: 1; }
+  .stage { height: 400px; background: var(--surface-inset); display: flex; align-items: center; justify-content: center; }
+  .stage svg { width: 100%; height: 100%; }
+
+  .readout { display: flex; gap: 18px; padding: 8px 12px; border-top: 1px solid var(--border); background: var(--surface); flex-wrap: wrap; }
+  .ro { font-size: var(--fs-xs); color: var(--muted); display: flex; align-items: center; gap: 6px; }
+  .ro b { font-family: var(--font-mono); color: var(--ink); font-weight: 600; }
+  .pill { padding: 1px 6px; border-radius: 999px; font-family: var(--font-mono); font-size: var(--fs-xs); }
+  .pill.ok { background: var(--accent-soft); color: var(--accent); }
+  .pill.warn { background: rgba(200,140,20,.16); color: #96650a; }
+  .pill.bad { background: rgba(200,50,40,.14); color: #a3322a; }
+  [data-theme="dark"] .pill.warn { color: #e0b055; }
+  [data-theme="dark"] .pill.bad { color: #ef8a80; }
+
+  .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; max-width: 1040px; }
+  .card { border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); overflow: hidden; }
+  .card .hd { padding: 7px 12px; font-size: var(--fs-xs); color: var(--muted); background: var(--surface-inset); border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 6px; }
+  .card pre { margin: 0; padding: 12px 14px; font: var(--fs-xs)/1.65 var(--font-mono); color: var(--ink); overflow: auto; max-height: 300px; }
+
+  table.matrix { border-collapse: separate; border-spacing: 0; font-size: var(--fs-xs); max-width: 1040px; }
+  table.matrix th, table.matrix td { padding: 5px 6px; border-bottom: 1px solid var(--border); text-align: left; vertical-align: top; }
+  table.matrix th { color: var(--muted); font-weight: 600; }
+  table.matrix td.seed { white-space: nowrap; }
+  .sw { display: inline-block; width: 46px; height: 20px; border-radius: 4px; font: var(--fs-xs) var(--font-mono);
+        line-height: 20px; text-align: center; border: 1px solid; }
+  .cr { display: block; color: var(--faint); font-family: var(--font-mono); font-size: 10px; }
+
+  .notes { max-width: 1040px; color: var(--ink-2); font-size: var(--fs-sm); line-height: 1.75; }
+  .notes h3 { font-size: var(--fs-md); color: var(--ink); margin: 18px 0 4px; }
+  .notes table { border-collapse: collapse; font-size: var(--fs-xs); margin: 6px 0 10px; }
+  .notes th, .notes td { border: 1px solid var(--border); padding: 4px 9px; text-align: left; vertical-align: top; }
+  .notes th { background: var(--surface-inset); color: var(--muted); font-weight: 600; }
+  .ask { max-width: 1040px; padding: 12px 16px; border: 1px solid var(--border-strong); border-radius: var(--radius); background: var(--accent-soft); color: var(--ink); font-size: var(--fs-sm); line-height: 1.7; }
+  .ask ol { margin: 6px 0 0 18px; padding: 0; }
+  .ask li { margin: 4px 0; }
+  .pending { max-width: 1040px; padding: 12px 16px; border: 1px dashed var(--border-strong); border-radius: var(--radius); color: var(--ink-2); font-size: var(--fs-sm); line-height: 1.7; }
+</style>
+</head>
+<body>
+  <h1>配色 · 「鲜明」档原型（高对比）</h1>
+  <p class="lede">
+    现在 6 个色系不鲜艳，<b>不是色相的问题</b>：亮色填充一律是 <code>hsl(h, s×0.95, 88%)</code>，
+    对白底的对比只有 <b>1.23–1.40:1</b> —— 节点几乎溶进纸面。所以这一稿不动色相梯子，
+    只加一条<b>色调（tone）轴</b>：同一个色系的鲜明版，填充改用「目标相对亮度反解明度」，
+    文字色自适应（深底白字 / 浅底近黑）。柔和档的色值与线上实现<b>逐字节一致</b>（作为对照基线）。
+  </p>
+  <p class="lede">
+    页面上的每个色块都是算出来的：改上面的开关，图、矩阵、对比度读数、可复制的
+    <code>classDef</code> 一起变。当前状态写进 URL，可直接发给别人看同一屏。
+  </p>
+
+  <div class="bar">
+    <span class="k">色系</span>
+    <span class="seg" id="seg-seed"></span>
+    <span class="sp"></span>
+    <span class="k">主题</span>
+    <span class="seg" id="seg-theme">
+      <button data-v="light">亮色</button><button data-v="dark">暗色</button>
+    </span>
+  </div>
+  <div class="bar">
+    <span class="k">强度</span>
+    <span class="seg" id="seg-tone">
+      <button data-v="soft">柔和（现状）</button>
+      <button data-v="v1">鲜明 V1 · 纸张友好</button>
+      <button data-v="v2">鲜明 V2 · 屏幕演示</button>
+    </span>
+  </div>
+  <div class="bar">
+    <span class="k">告警红</span>
+    <span class="seg dim" id="seg-risk">
+      <button data-v="uniform">跟随统一亮度</button><button data-v="bold">破格加深</button>
+    </span>
+    <span class="k" style="margin-left:14px">组框</span>
+    <span class="seg dim" id="seg-group">
+      <button data-v="quiet">保持浅（推荐）</button><button data-v="loud">跟着鲜明</button>
+    </span>
+    <span class="k" style="margin-left:14px">文字</span>
+    <span class="seg dim" id="seg-text">
+      <button data-v="adapt">自适应</button><button data-v="tint">同色相深色</button>
+    </span>
+    <span class="pane-sub" id="tone-hint">（这三项只在鲜明档生效；柔和档就是线上现状）</span>
+  </div>
+
+  <div class="window" id="win">
+    <div class="pane-head">
+      <span class="lbl">预览</span>
+      <span class="pane-sub" id="sub">Mermaid · 布局 elk</span>
+      <span class="sp"></span>
+      <span class="pane-sub" id="cur"></span>
+    </div>
+    <div class="stage" id="stage"></div>
+    <div class="readout" id="readout"></div>
+  </div>
+
+  <h2>生成的 classDef（复制即用）</h2>
+  <div class="cols">
+    <div class="card">
+      <div class="hd">Mermaid · 追加到文档末尾的那一段</div>
+      <pre id="code"></pre>
+    </div>
+    <div class="card">
+      <div class="hd">这张图用到的角色</div>
+      <pre id="legend"></pre>
+    </div>
+  </div>
+
+  <h2>当前档位的全部色值（6 色系 × 7 角色）</h2>
+  <p class="pane-sub" style="max-width:1040px;margin:0 0 8px">
+    色块里写的是填充色的 hex；下行是「文字压在填充上」的对比度（WCAG，≥4.5 达标、≥7 是 AAA）。
+    柔和档的数值应与 <code>palette-proto.html</code> 里的表完全一致。
+    钨灰是线框风：7 个角色的填充本来就是同一档灰，差异全在描边上 —— 看色块的<b>边框色</b>。
+  </p>
+  <div id="matrix-wrap" style="overflow-x:auto"></div>
+
+  <h2>要拍板的三件事</h2>
+  <div class="ask">
+    <ol>
+      <li><b>强度</b>：V1（填充亮度 Y≈0.46，文字 9.2:1，打印好，但看着只是"中彩"）还是
+        V2（Y≈0.33，文字 6.8:1，对白底 2.75:1，屏幕上"跳出来"）。两档都做会让菜单到 18 项。</li>
+      <li><b>告警红</b>：跟着统一亮度会变成鲑鱼粉 <code>#f1776a</code>，不像告警；
+        破格加深用 <code>#c32513</code>（白字 5.84:1），比其它节点重一档。</li>
+      <li><b>组框</b>：保持浅（Y≈0.75，只提饱和度）让层级是「角色 &gt; 分组 &gt; 画布」；
+        跟着鲜明则整张图变成色块拼贴，9 个 subgraph 就糊成一片。</li>
+    </ol>
+  </div>
+
+  <h2>代价与已知边界</h2>
+  <div class="notes">
+    <table>
+      <tr><th>项</th><th>实测</th><th>说明</th></tr>
+      <tr><td>跨色系同角色 ΔE</td><td>entry 14 / data 12 / note 13</td>
+          <td><code>SEEDS</code> 注释里定的门槛是 15 ⇒ 鲜明档里「青 vs 松绿」的判断色会有点像。缓解：只给色相最远的 4 个色系出鲜明版，或接受。</td></tr>
+      <tr><td>黄绿语义</td><td>赭石/橄榄的 decide・data 落在 <code>#29b414</code> 这类亮绿</td>
+          <td>饱和度提上来后的必然。这些角色语义是"判断/数据"，观感却像"成功/警示"。靠图例与标签区分。</td></tr>
+      <tr><td>菜单长度</td><td>7 项 → 13 项（含两个分组标题）</td>
+          <td>用 <code>label2</code> 分「柔和色系 / 鲜明色系」，弹层已经支持滚动。</td></tr>
+      <tr><td>色盲</td><td>—</td>
+          <td>鲜明档明度跨度更大，红绿色盲反而更好分角色；但 risk 红与橄榄绿仍需靠标签。</td></tr>
+      <tr><td>画布型格式</td><td>不适用</td>
+          <td>drawio / Excalidraw 没有稳定的节点角色，配色本来就不支持 —— 这条边界不变。</td></tr>
+    </table>
+  </div>
+
+  <h2>落地口径（拍板后）</h2>
+  <div class="pending">
+    <code>crates/app-core/src/palette.rs</code>：加 <code>Tone</code> 枚举 + <code>parse_scheme_id</code>、
+    给 <code>swatch / slot_swatch / frame_swatch / edge_swatch</code> 加一个 <code>tone</code> 参数、
+    新增 <code>l_for_luminance()</code>（约 15 行二分）+ 两个目标亮度常数；<code>ids() / infos() / name_zh()</code> 认 <code>-vivid</code> 后缀。
+    <br>
+    <code>crates/app-ipc</code> <b>不改</b>：色系仍是 <code>Option&lt;String&gt;</code>，<code>is_known</code> / <code>render_opts</code> / <code>session</code> 三处校验自动跟上。
+    <br>
+    <code>ui/js/preview.js</code> 菜单分两段（<code>label2</code> 是现成机制）；<code>ui/js/i18n.js</code> 补两个分组标题与色系名。
+    <br>
+    门禁：对比度 ≥5.5、鲜明↔柔和同角色 ΔE ≥15、组框亮度必须比角色亮 ≥0.3 三条单测 + 真机自检一条。
+    改动进 <code>crates/**</code> 与 <code>ui/**</code> ⇒ 重打包发版（3.14.0）。
+  </div>
+
+<script>
+/* ============================================================================
+   色值算法：crates/app-core/src/palette.rs 的逐行移植（柔和档必须逐字节一致）。
+   鲜明档是本稿新增：填充明度不再钉死，而是**按目标相对亮度反解**，于是
+   "同一档、不同色相"的节点在屏幕上一样亮，文字对比也就一样稳。
+   ========================================================================== */
+const ROLES = ["main", "entry", "decide", "data", "ext", "risk", "note"];
+const ROLE_ZH = { main: "主链路", entry: "入口", decide: "判断", data: "数据", ext: "外部", risk: "异常", note: "说明" };
+const RISK_HUE = 6, HUE_STEP = 35, NEUTRAL_SAT = 0.12, MIN_SEP_HUE = 32;
+const GRAY_STROKE_LIGHT = [0.44, 0.32, 0.22, 0.58, 0.70, 0.50, 0.82];
+const GRAY_STROKE_DARK = [0.62, 0.54, 0.46, 0.71, 0.80, 0.50, 0.88];
+/* 鲜明档的中性色系：描边台阶拉宽（相邻至少差 0.08，最深/最浅都还压在填充上看得见） */
+const GRAY_STROKE_VIVID_LIGHT = [0.38, 0.24, 0.10, 0.52, 0.68, 0.30, 0.80];
+const GRAY_STROKE_VIVID_DARK = [0.50, 0.42, 0.34, 0.64, 0.76, 0.58, 0.88];
+
+const SEEDS = [
+  { id: "indigo", zh: "黛蓝", en: "Indigo", hue: 210, sat: 0.40 },
+  { id: "pine", zh: "松绿", en: "Pine", hue: 168, sat: 0.42 },
+  { id: "lotus", zh: "藕紫", en: "Lotus", hue: 258, sat: 0.34 },
+  { id: "olive", zh: "橄榄", en: "Olive", hue: 95, sat: 0.40 },
+  { id: "ochre", zh: "赭石", en: "Ochre", hue: 42, sat: 0.48 },
+  { id: "tungsten", zh: "钨灰", en: "Tungsten", hue: 218, sat: 0.05 },
+];
+
+/* 强度档：目标**相对亮度**（不是 HSL 的 L）。V1 与 V2 只差这两个数。 */
+const TONE = {
+  soft: null,
+  v1: { lightY: 0.46, darkY: 0.105 },
+  v2: { lightY: 0.33, darkY: 0.085 },
+};
+const RISK_BOLD = { light: { l: 0.42, s: 0.82 }, dark: { l: 0.30, s: 0.78 } };
+
+const ui = { seed: "indigo", tone: "v2", dark: false, risk: "bold", group: "quiet", text: "adapt" };
+
+/* ---------------------------------------------------------------- 颜色数学 */
+const norm = (h) => ((h % 360) + 360) % 360;
+const hdist = (a, b) => { const d = Math.abs(norm(a) - norm(b)); return d > 180 ? 360 - d : d; };
+
+function ladder(seed) {
+  if (seed.sat < NEUTRAL_SAT) return new Array(7).fill(seed.hue);
+  const along = (k) => seed.hue + k * HUE_STEP;
+  const fwd = [along(0), along(1), along(2), along(3)];
+  const mir = [along(0), along(-1), along(-2), along(-3)];
+  const clearance = (l) => Math.min(...l.map((h) => hdist(h, RISK_HUE)));
+  const base = clearance(fwd) >= MIN_SEP_HUE ? fwd : mir;
+  const used = [...base, RISK_HUE];
+  const ext = [along(-45 / HUE_STEP), along(4), along(5), along(6)]
+    .find((h) => used.every((u) => hdist(h, u) >= MIN_SEP_HUE)) ?? along(4);
+  return [base[0], base[1], base[2], base[3], ext, RISK_HUE, seed.hue];
+}
+
+function hsl2rgb(h, s, l) {
+  h = norm(h) / 360;
+  s = Math.min(1, Math.max(0, s));
+  l = Math.min(1, Math.max(0, l));
+  const c = (1 - Math.abs(2 * l - 1)) * s;
+  const x = c * (1 - Math.abs(((h * 6) % 2) - 1));
+  const m = l - c / 2;
+  const f = Math.min(5, Math.floor(h * 6));
+  const t = [[c, x, 0], [x, c, 0], [0, c, x], [0, x, c], [x, 0, c], [c, 0, x]][f];
+  return t.map((v) => Math.min(255, Math.max(0, Math.round((v + m) * 255))));
+}
+
+const hex = (h, s, l) => "#" + hsl2rgb(h, s, l).map((v) => v.toString(16).padStart(2, "0")).join("");
+
+const lin = (v) => { v /= 255; return v <= 0.04045 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); };
+const rgbOf = (hx) => [1, 3, 5].map((i) => parseInt(hx.slice(i, i + 2), 16));
+const relY = (hx) => { const [r, g, b] = rgbOf(hx); return 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b); };
+const cr = (a, b) => {
+  const A = relY(a), B = relY(b), hi = Math.max(A, B), lo = Math.min(A, B);
+  return (hi + 0.05) / (lo + 0.05);
+};
+
+/** 二分出一个 L，使 hsl(h,s,L) 的相对亮度 = target。这是鲜明档与柔和档的唯一分水岭。 */
+function lFor(h, s, target) {
+  let lo = 0, hi = 1;
+  for (let i = 0; i < 32; i++) {
+    const mid = (lo + hi) / 2;
+    if (relY(hex(h, s, mid)) > target) hi = mid; else lo = mid;
+  }
+  return (lo + hi) / 2;
+}
+
+const INK_LIGHT = "#12100e", INK_DARK = "#ffffff";
+function adaptText(fill) { return cr(fill, INK_DARK) >= cr(fill, INK_LIGHT) ? INK_DARK : INK_LIGHT; }
+
+/* ---------------------------------------------------------------- 色板 */
+function roleSat(seed, role, vivid) {
+  if (role === "risk") return vivid ? Math.max(seed.sat * 0.8 + 0.45, 0.72) : Math.max(seed.sat, 0.58);
+  if (role === "note") return vivid ? 0.18 : 0.06;
+  return vivid ? Math.min(0.92, seed.sat * 0.8 + 0.42) : seed.sat;
+}
+
+function swatch(seed, role, tone) {
+  const dark = ui.dark;
+  const hues = ladder(seed);
+  const idx = Math.max(0, ROLES.indexOf(role));
+  const vivid = tone !== "soft";
+
+  // 中性色系：色相不参与区分，角色全在描边台阶上（鲜明档把台阶拉大、填充更实）
+  if (seed.sat < NEUTRAL_SAT && role !== "risk") {
+    if (!vivid) {
+      const l = (dark ? GRAY_STROKE_DARK : GRAY_STROKE_LIGHT)[idx];
+      const fillL = dark ? 0.22 : 0.95;
+      const fill = hex(seed.hue, 0.04, fillL), st = hex(seed.hue, 0.06, l), tx = hex(seed.hue, 0.02, dark ? 0.90 : 0.20);
+      return { fill, stroke: st, text: tx, contrast: cr(fill, tx) };
+    }
+    // 鲜明档：填充仍是"统一一档"（亮 .86 / 暗 .30），差别全在描边 —— 线框风的对比来自线，不是面
+    const step = (dark ? GRAY_STROKE_VIVID_DARK : GRAY_STROKE_VIVID_LIGHT)[idx];
+    const fill = hex(seed.hue, 0.05, dark ? 0.30 : 0.86);
+    const st = hex(seed.hue, 0.10, step), tx = hex(seed.hue, 0.03, dark ? 0.97 : 0.10);
+    return { fill, stroke: st, text: tx, contrast: cr(fill, tx) };
+  }
+
+  const h = role === "risk" ? RISK_HUE : hues[idx];
+
+  if (!vivid) {
+    const s = roleSat(seed, role, false);
+    if (dark) {
+      const f = hex(h, s * 0.55, 0.22), st = hex(h, s, 0.60), tx = hex(h, s * 0.50, 0.90);
+      return { fill: f, stroke: st, text: tx, contrast: cr(f, tx) };
+    }
+    const f = hex(h, s * 0.95, 0.88), st = hex(h, s, 0.50), tx = hex(h, s * 0.95, 0.22);
+    return { fill: f, stroke: st, text: tx, contrast: cr(f, tx) };
+  }
+
+  const s = roleSat(seed, role, true);
+  // 告警破格：不参与"统一亮度"，本来就该比别的节点重一档
+  if (role === "risk" && ui.risk === "bold") {
+    const p = RISK_BOLD[dark ? "dark" : "light"];
+    const f = hex(h, p.s, p.l);
+    const tx = dark ? "#ffe9e5" : INK_DARK;
+    return { fill: f, stroke: hex(h, 0.95, dark ? 0.62 : 0.30), text: tx, contrast: cr(f, tx) };
+  }
+  const target = TONE[tone][dark ? "darkY" : "lightY"];
+  const f = hex(h, s, lFor(h, s, target));
+  const tx = ui.text === "adapt" ? adaptText(f) : hex(h, s * 0.9, dark ? 0.94 : 0.10);
+  const st = dark ? hex(h, Math.min(0.95, s * 1.1), 0.72) : hex(h, Math.min(0.95, s), 0.34);
+  return { fill: f, stroke: st, text: tx, contrast: cr(f, tx) };
+}
+
+/* 分组框 / 分组节点（g0）：框永远比角色浅，组内节点介于两者之间 */
+function groupSwatch(seed, kind) {
+  const dark = ui.dark;
+  const vivid = ui.tone !== "soft";
+  const h = seed.hue;
+  const s = seed.sat;
+  if (kind === "frame") {
+    if (!vivid) return dark ? [hex(h, s * 0.40, 0.17), hex(h, s * 0.75, 0.45), hex(h, s * 0.40, 0.92)]
+                            : [hex(h, s * 0.35, 0.955), hex(h, s * 0.75, 0.72), hex(h, s * 0.60, 0.28)];
+    if (ui.group === "loud") return dark ? [hex(h, s * 0.8, 0.30), hex(h, s, 0.62), hex(h, 0.1, 0.95)]
+                                         : [hex(h, s * 0.85, 0.62), hex(h, s, 0.38), hex(h, 0.1, 0.10)];
+    return dark ? [hex(h, s * 0.5, lFor(h, s * 0.5, 0.045)), hex(h, s * 0.8, 0.50), hex(h, s * 0.3, 0.86)]
+                : [hex(h, s * 0.55, lFor(h, s * 0.55, 0.75)), hex(h, s * 0.8, 0.62), hex(h, s * 0.5, 0.30)];
+  }
+  // 组内节点
+  if (!vivid) return dark ? [hex(h, s * 0.52, 0.26), hex(h, s, 0.58), hex(h, s * 0.45, 0.90)]
+                          : [hex(h, s * 0.52, 0.89), hex(h, s, 0.46), hex(h, s * 0.90, 0.22)];
+  return dark ? [hex(h, s * 0.6, lFor(h, s * 0.6, 0.06)), hex(h, s * 0.9, 0.62), hex(h, s * 0.3, 0.92)]
+              : [hex(h, s * 0.62, lFor(h, s * 0.62, 0.62)), hex(h, s * 0.9, 0.42), hex(h, s * 0.8, 0.14)];
+}
+
+function edgeColor(seed) {
+  if (!seed) return ui.dark ? "#6b7574" : "#9aa5ae";
+  const s = Math.min(seed.sat * 0.45, 0.30);
+  return hex(seed.hue, s, ui.dark ? 0.66 : 0.40);
+}
+
+/* ---------------------------------------------------------------- 示例图 */
+const NODES = [
+  { id: "A", role: "entry",  kind: "stadium",  x: 20,  y: 268, w: 104, h: 44, label: "开始" },
+  { id: "C", role: "decide", kind: "diamond",  x: 146, y: 246, w: 140, h: 86, label: "是否通过?" },
+  { id: "E", role: "ext",    kind: "box",      x: 330, y: 62,  w: 136, h: 44, label: "外部网关" },
+  { id: "F", role: "risk",   kind: "box",      x: 512, y: 62,  w: 148, h: 44, label: "支付失败" },
+  { id: "D", role: "data",   kind: "cylinder", x: 330, y: 258, w: 136, h: 58, label: "用户库" },
+  { id: "H", role: "main",   kind: "box",      x: 512, y: 264, w: 148, h: 44, label: "写日志" },
+  { id: "N", role: "note",   kind: "box",      x: 512, y: 162, w: 148, h: 40, label: "重试 3 次" },
+];
+/* 分组框里两个"只有分组、没有角色"的普通节点 —— 真实架构图里它们才是多数 */
+const GNODES = [
+  { id: "G1", kind: "box", x: 44,  y: 86, w: 128, h: 44, label: "请求接入" },
+  { id: "G2", kind: "box", x: 190, y: 86, w: 128, h: 44, label: "鉴权" },
+];
+const FRAME = { x: 20, y: 30, w: 320, h: 130, label: "接入层" };
+
+const EDGES = [
+  { from: "A", to: "C", fs: "right", ts: "left", label: "" },
+  { from: "C", to: "E", fs: "right", ts: "left", label: "否" },
+  { from: "C", to: "D", fs: "bottom", ts: "top", label: "是" },
+  { from: "E", to: "F", fs: "right", ts: "left", label: "超时" },
+  { from: "D", to: "H", fs: "right", ts: "left", label: "" },
+  { from: "F", to: "N", fs: "bottom", ts: "top", label: "" },
+];
+
+const $ = (s, r) => (r || document).querySelector(s);
+const seedOf = () => SEEDS.find((s) => s.id === ui.seed) || SEEDS[0];
+
+function anchor(n, side) {
+  if (n.kind === "diamond") {
+    const cx = n.x + n.w / 2, cy = n.y + n.h / 2;
+    return side === "left" ? [cx - n.w / 2, cy] : side === "right" ? [cx + n.w / 2, cy]
+      : [cx, side === "top" ? n.y : n.y + n.h];
+  }
+  return side === "left" ? [n.x, n.y + n.h / 2] : side === "right" ? [n.x + n.w, n.y + n.h / 2]
+    : side === "top" ? [n.x + n.w / 2, n.y] : [n.x + n.w / 2, n.y + n.h];
+}
+
+function shapeOf(n, fill, stroke) {
+  const common = `fill="${fill}" stroke="${stroke}" stroke-width="1.6"`;
+  if (n.kind === "diamond") {
+    return `<polygon points="${n.x + n.w / 2},${n.y} ${n.x + n.w},${n.y + n.h / 2} ${n.x + n.w / 2},${n.y + n.h} ${n.x},${n.y + n.h / 2}" ${common}/>`;
+  }
+  if (n.kind === "cylinder") {
+    const ry = 9, cx = n.x + n.w / 2;
+    return `<path d="M${n.x},${n.y + ry} A ${n.w / 2},${ry} 0 0 1 ${n.x + n.w},${n.y + ry} L ${n.x + n.w},${n.y + n.h - ry} A ${n.w / 2},${ry} 0 0 0 ${n.x},${n.y + n.h - ry} Z" ${common}/>`
+      + `<ellipse cx="${cx}" cy="${n.y + ry}" rx="${n.w / 2}" ry="${ry}" fill="none" stroke="${stroke}" stroke-width="1.4"/>`;
+  }
+  return `<rect x="${n.x}" y="${n.y}" width="${n.w}" height="${n.h}" rx="${n.kind === "stadium" ? n.h / 2 : 8}" ${common}/>`;
+}
+
+function nodeOf(id) { return NODES.find((n) => n.id === id); }
+
+function draw() {
+  const seed = seedOf();
+  const muted = edgeColor(seed);
+  const [frameFill, frameStroke, frameText] = groupSwatch(seed, "frame");
+  const [gFill, gStroke, gText] = groupSwatch(seed, "node");
+
+  const es = EDGES.map((e) => {
+    const a = nodeOf(e.from), b = nodeOf(e.to);
+    const [x1, y1] = anchor(a, e.fs);
+    const [x2, y2] = anchor(b, e.ts);
+    const vertical = e.fs === "bottom" || e.ts === "top";
+    const c1 = vertical ? [x1, (y1 + y2) / 2] : [(x1 + x2) / 2, y1];
+    const c2 = vertical ? [x2, (y1 + y2) / 2] : [(x1 + x2) / 2, y2];
+    const label = e.label
+      ? `<text x="${vertical ? x1 + 8 : (x1 + x2) / 2}" y="${(y1 + y2) / 2 - 5}" font-size="10" fill="${muted}" text-anchor="middle" font-family="system-ui,sans-serif">${e.label}</text>`
+      : "";
+    return `<path d="M${x1},${y1} C${c1[0]},${c1[1]} ${c2[0]},${c2[1]} ${x2},${y2}" fill="none" stroke="${muted}" stroke-width="1.4"/>`
+      + `<path d="M${x2},${y2} l-7,-3.5 l0,7 z" fill="${muted}"/>` + label;
+  }).join("");
+
+  const gn = GNODES.map((n) =>
+    `<g><title>${n.id} · 分组内普通节点（g0）</title>${shapeOf(n, gFill, gStroke)}`
+    + `<text x="${n.x + n.w / 2}" y="${n.y + n.h / 2 + 4}" font-size="12" fill="${gText}" text-anchor="middle" font-family="system-ui,sans-serif">${n.label}</text></g>`
+  ).join("");
+
+  const ns = NODES.map((n) => {
+    const c = swatch(seed, n.role, ui.tone);
+    return `<g><title>${n.id} · lvl-${n.role} · ${c.fill}</title>${shapeOf(n, c.fill, c.stroke)}`
+      + `<text x="${n.x + n.w / 2}" y="${n.y + n.h / 2 + (n.kind === "cylinder" ? 10 : 4)}" font-size="12.5" fill="${c.text}" text-anchor="middle" font-family="system-ui,sans-serif">${n.label}</text></g>`;
+  }).join("");
+
+  $("#stage").innerHTML = `<svg viewBox="0 0 700 350" xmlns="http://www.w3.org/2000/svg">
+    <rect x="${FRAME.x}" y="${FRAME.y}" width="${FRAME.w}" height="${FRAME.h}" rx="10" fill="${frameFill}" stroke="${frameStroke}" stroke-width="1.4"/>
+    <text x="${FRAME.x + 12}" y="${FRAME.y + 20}" font-size="11" fill="${frameText}" font-family="system-ui,sans-serif">${FRAME.label}</text>
+    ${gn}${es}${ns}</svg>`;
+}
+
+/* ---------------------------------------------------------------- 读数 */
+function readout() {
+  const seed = seedOf();
+  const roles = ROLES.map((r) => swatch(seed, r, ui.tone));
+  const minText = Math.min(...roles.map((c) => c.contrast));
+  const maxText = Math.max(...roles.map((c) => c.contrast));
+  const canvas = ui.dark ? "#1a1d1f" : "#ffffff";
+  // 钨灰是线框风：填充一律贴底，可见度来自描边 —— 量描边，并额外说明
+  const neutral = seed.sat < NEUTRAL_SAT;
+  const visKey = neutral ? "stroke" : "fill";
+  const minFill = Math.min(...roles.map((c) => cr(c[visKey], canvas)));
+  const maxFill = Math.max(...roles.map((c) => cr(c[visKey], canvas)));
+  // 组框 vs 角色的可分辨度用 ΔE（暗色下两者都很暗，拿亮度差衡量会得出"没层级"的假象）
+  const [frameFill] = groupSwatch(seed, "frame");
+  const minGap = Math.min(...roles.map((c) => dE(c.fill, frameFill)));
+
+  const pill = (v, ok, warn, label) =>
+    `<span class="pill ${v >= ok ? "ok" : v >= warn ? "warn" : "bad"}" title="${label}">${v.toFixed(2)}${label.includes("ΔE") ? "" : ":1"}</span>`;
+
+  $("#readout").innerHTML =
+    `<span class="ro">文字压在填充上 ${pill(minText, 4.5, 3, "文字对比")}–${pill(maxText, 4.5, 3, "文字对比")}<span class="pane-sub">（AAA 需 ≥7${ui.risk === "bold" && ui.tone !== "soft" ? "；告警破格档约 5.8" : ""}）</span></span>`
+    + `<span class="ro">${neutral ? "描边" : "填充"} vs 画布 ${pill(minFill, 2.0, 1.5, "对画布")}–${pill(maxFill, 2.0, 1.5, "对画布")}<span class="pane-sub">（目标 ≥2.0）</span></span>`
+    + `<span class="ro">角色 vs 组框 ΔE <b>${minGap.toFixed(1)}</b><span class="pane-sub">（≥6 才看得出层级）</span></span>`
+    + `<span class="ro">角色之间最小 ΔE <b>${minDeltaE(seed).toFixed(1)}</b><span class="pane-sub">（&lt;2 就是"糊成一片"）</span></span>`
+    + (neutral ? `<span class="ro" style="color:var(--faint)">钨灰是线框风：可见度来自描边，角色差异也在描边上 —— "填充"类读数对它不适用</span>` : "");
+}
+
+function lab(hx) {
+  const [r, g, b] = rgbOf(hx).map((v) => lin(v));
+  const X = (0.4124 * r + 0.3576 * g + 0.1805 * b) / 0.95047;
+  const Y = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  const Z = (0.0193 * r + 0.1192 * g + 0.9505 * b) / 1.08883;
+  const f = (t) => (t > 0.008856 ? Math.cbrt(t) : 7.787 * t + 16 / 116);
+  return [116 * f(Y) - 16, 500 * (f(X) - f(Y)), 200 * (f(Y) - f(Z))];
+}
+function dE(a, b) { const A = lab(a), B = lab(b); return Math.hypot(A[0] - B[0], A[1] - B[1], A[2] - B[2]); }
+function minDeltaE(seed) {
+  // 有色系比填充；中性色系（钨灰）的角色差异全在描边上，比描边才有意义
+  const key = seed.sat < NEUTRAL_SAT ? "stroke" : "fill";
+  const cols = ROLES.filter((r) => r !== "risk").map((r) => swatch(seed, r, ui.tone)[key]);
+  let m = 1e9;
+  for (let i = 0; i < cols.length; i++) for (let j = i + 1; j < cols.length; j++) m = Math.min(m, dE(cols[i], cols[j]));
+  return m;
+}
+
+/* ---------------------------------------------------------------- 代码块 */
+const GROUPS = { "lvl-entry": ["A"], "lvl-decide": ["C"], "lvl-data": ["D"], "lvl-ext": ["E"], "lvl-risk": ["F"], "lvl-note": ["N"], "lvl-main": ["H", "G1", "G2"] };
+
+function code() {
+  const seed = seedOf();
+  const toneName = ui.tone === "soft" ? "" : (ui.tone === "v1" ? " · 鲜明V1" : " · 鲜明V2");
+  const rows = ROLES.map((r) => {
+    const c = swatch(seed, r, ui.tone);
+    return `classDef lvl-${r} fill:${c.fill},stroke:${c.stroke},color:${c.text}`;
+  });
+  const cls = Object.entries(GROUPS).map(([k, ids]) => `class ${ids.join(",")} ${k}`);
+  const frame = groupSwatch(seed, "frame");
+  return [
+    `%% dgm-palette:begin（Diagramon 自动配色 · ${seed.zh}${toneName} · ${ui.dark ? "暗色" : "亮色"}）`,
+    ...rows,
+    ...cls,
+    `style 接入层 fill:${frame[0]},stroke:${frame[1]},color:${frame[2]}`,
+    "%% dgm-palette:end",
+  ].join("\n");
+}
+
+function legend() {
+  const seed = seedOf();
+  return ROLES.map((r) => {
+    const c = swatch(seed, r, ui.tone);
+    return `${(ROLE_ZH[r] + "（lvl-" + r + "）").padEnd(16, " ")} ${c.fill}  文字${c.contrast.toFixed(2)}:1`;
+  }).join("\n");
+}
+
+/* ---------------------------------------------------------------- 矩阵 */
+function matrix() {
+  const key = ui.dark ? "dark" : "light";
+  const head = `<tr><th>色系</th>` + ROLES.map((r) => `<th>${ROLE_ZH[r]}<br><span style="font-family:var(--font-mono)">lvl-${r}</span></th>`).join("") + `</tr>`;
+  const rows = SEEDS.map((s) => {
+    const cells = ROLES.map((r) => {
+      const c = swatch(s, r, ui.tone);
+      return `<td><span class="sw" style="background:${c.fill};border-color:${c.stroke};color:${c.text}">${c.fill.slice(1)}</span>`
+        + `<span class="cr">${c.contrast.toFixed(1)}:1</span></td>`;
+    }).join("");
+    return `<tr><td class="seed"><b>${s.zh}</b><br><span style="color:var(--faint)">${s.en}</span><br><span class="cr">对底 ${cr(swatch(s, "main", ui.tone).fill, ui.dark ? "#1a1d1f" : "#ffffff").toFixed(2)}:1</span></td>${cells}</tr>`;
+  }).join("");
+  $("#matrix-wrap").innerHTML = `<table class="matrix">${head}${rows}</table>`;
+  $("#matrix-wrap").setAttribute("data-key", key);
+}
+
+/* ---------------------------------------------------------------- 渲染 */
+function render() {
+  document.documentElement.dataset.theme = ui.dark ? "dark" : "light";
+  const seed = seedOf();
+  $("#sub").textContent = `Mermaid · 布局 elk · ${seed.zh} · ${ui.tone === "soft" ? "柔和" : ui.tone.toUpperCase()} · ${ui.dark ? "暗色" : "亮色"}`;
+  $("#cur").textContent = `#${(ui.seed + (ui.tone === "soft" ? "" : "-" + ui.tone))}`;
+  draw();
+  readout();
+  $("#code").textContent = code();
+  $("#legend").textContent = legend();
+  matrix();
+  syncURL();
+  for (const [id, val] of [["seg-seed", ui.seed], ["seg-theme", ui.dark ? "dark" : "light"], ["seg-tone", ui.tone],
+                           ["seg-risk", ui.risk], ["seg-group", ui.group], ["seg-text", ui.text]]) {
+    $(`#${id}`).querySelectorAll("button").forEach((b) => b.classList.toggle("on", b.dataset.v === val));
+  }
+}
+
+function syncURL() {
+  // 和隔壁原型同口径：状态写在**查询串**里（?theme=dark&tone=v2），可直接发给别人看同一屏
+  const q = new URLSearchParams({ theme: ui.dark ? "dark" : "light", seed: ui.seed, tone: ui.tone,
+                                  risk: ui.risk, group: ui.group, text: ui.text });
+  history.replaceState(null, "", "?" + q.toString());
+}
+
+/* ---------------------------------------------------------------- 控件 */
+function seg(id, onPick) {
+  $(`#${id}`).addEventListener("click", (e) => {
+    const b = e.target.closest("button");
+    if (!b) return;
+    onPick(b.dataset.v);
+    render();
+  });
+}
+$("#seg-seed").innerHTML = SEEDS.map((s) => `<button data-v="${s.id}">${s.zh}</button>`).join("");
+seg("seg-seed", (v) => { ui.seed = v; });
+seg("seg-theme", (v) => { ui.dark = v === "dark"; });
+seg("seg-tone", (v) => { ui.tone = v; });
+seg("seg-risk", (v) => { ui.risk = v; });
+seg("seg-group", (v) => { ui.group = v; });
+seg("seg-text", (v) => { ui.text = v; });
+
+/* 初始状态：默认给"鲜明 V2 + 破格告警 + 组框保持浅"这一组推荐值，方便直接对比 */
+(function boot() {
+  const qs = new URLSearchParams(location.search);
+  const hs = new URLSearchParams(location.hash.replace(/^#/, ""));
+  const get = (k) => qs.get(k) || hs.get(k);
+  for (const k of ["seed", "tone", "risk", "group", "text"]) if (get(k)) ui[k] = get(k);
+  if (get("theme")) ui.dark = get("theme") === "dark";
+  // 只认合法值：手改 URL 写错了就退回默认，不留下空白状态
+  if (!TONE.hasOwnProperty(ui.tone)) ui.tone = "v2";
+  if (!SEEDS.some((s) => s.id === ui.seed)) ui.seed = "indigo";
+  render();
+})();
+
+/* 给自检/截图脚本用的句柄（页面本身不依赖它） */
+window.PV = { SEEDS, ROLES, swatch, groupSwatch, cr, relY, dE, ui, render };
+</script>
+</body>
+</html>

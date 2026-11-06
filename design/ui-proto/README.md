@@ -9,6 +9,7 @@
 - `ai-intent-settings-proto.html` —— 设置窗口原型：AI 页里的「智能判断 / 意图判定」配置、测试与未配置回退
 - `ai-settings-optimized-proto.html` —— AI 设置重组原型：图文模型 / 意图识别 / 对话行为 / 记忆四组，含官方/自定义意图切换
 - `palette-proto.html` —— 自动配色的色系原型：模型只写角色、色值本地按色系展开；6 色系 × 6 角色 × 明暗两阶，菜单/换色/主题切换都可点（色值由 `crates/app-core/src/palette.rs` 直接导出，与实现逐字节一致）
+- `palette-vivid-proto.html` —— 配色「鲜明」档原型：给上面 6 个色系各加一个高对比版本（填充按**目标相对亮度**反解明度 + 自适应文字色），面板上可切 柔和 / V1 / V2 三档、告警色是否破格、组框是否跟着鲜明、文字色策略，并实时给出文字对比、填充对画布、角色间 ΔE；柔和档的色值与实现逐字节一致，作为对照基线（`?tone=soft|v1|v2` 见页面 URL 状态）
 - `proto.css` —— 设计系统（明暗双主题全走 CSS 变量）+ 全部组件样式
 - `proto-data.js` —— 数据层：格式注册表 / 转换矩阵 / 文档 / 命令表 / 菜单 / AI 会话（对应 `crates/app-core/src/format.rs` 的镜像）
 - `proto-icons.js` —— 内联 SVG 图标精灵（不引图标库）
