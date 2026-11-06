@@ -73,7 +73,7 @@ $env:DGM_PYTHON="C:\Users\rong\.workbuddy\binaries\python\versions\3.13.12\pytho
   ```
 - 判断"整场有没有走到第 10 步"**看报告时间戳**：脚本进循环前会先删报告，所以**时间戳还是旧的 = 前九步里有人 `exit`**。
 - `DGM_PYTHON` 指向的解释器必须能 `import websocket`；本机唯一满足的是上面那条路径（机器上没有 `py` 启动器）。这个环境变量**曾经因为 `findPython()` 的 `shell:true` 从来没生效过**，别再把失败归因成"环境缺件"。
-- 单测当前 460 项（`app-core` 357 + `ai` 79 + `assets` 13 + `platform` 5 + `platform-windows` 5 + `app-ipc` 2）、真机自检 166 条断言 —— 数量会随开发变，**全绿才是要求**。
+- 单测当前 475 项（`app-core` 365 + `ai` 85 + `app-ipc` 2 + `assets` 13 + `platform` 5 + `platform-windows` 5）、真机自检 169 条断言 —— 数量会随开发变，**全绿才是要求**。
 - `canvas_probe` 已并入第 7 步（2026-11-03 审计 G-4：它原来一直存在却没人跑）。它和 `excalidraw_probe` 一样测**产物**（`assets/drawio/host.html`）并在源↔产物不一致时返回 1 拦下验收 —— 所以改了 `tools/drawio-host/host.html` 必须 `node tools/fetch-assets.mjs`。
 
 改 `ui/**` 之后跑本地应用**必须先 `cargo build`**（或把改动 `cp` 到 `target/debug/ui/` 同路径），否则跑的是旧副本。

@@ -1228,10 +1228,13 @@ window.DGM = window.DGM || {};
       //  画布型如实拒绝、选择按文件记住"这四件事，而不是某个具体 hex。
       {
         const pals = (info && info.palettes) || [];
+        const softCount = pals.filter((p) => !String(p.id).endsWith("-vivid")).length;
+        const vividCount = pals.filter((p) => String(p.id).endsWith("-vivid")).length;
         ok(
-          "app_info 带 6 个色系 × 7 个角色",
-          pals.length === 6 && pals.every((p) => p.roles.length === 7 && p.name_zh && p.name_en),
-          pals.map((p) => p.id).join(","),
+          "app_info 带 6 个柔和色系 + 5 个鲜明档（钨灰没有鲜明档）× 7 个角色",
+          pals.length === 11 && softCount === 6 && vividCount === 5 &&
+            pals.every((p) => p.roles.length === 7 && p.name_zh && p.name_en),
+          `${softCount}+${vividCount}：${pals.map((p) => p.id).join(",")}`,
         );
         const body = "flowchart TD\n    A([开始]):::lvl-entry --> C{是否通过?}:::lvl-decide\n    C --> D[(用户库)]:::lvl-data\n";
         const r1 = await invoke("palette_apply", {
@@ -1256,6 +1259,33 @@ window.DGM = window.DGM || {};
           r3.body.length,
         );
         let canvasErr = "";
+
+        // 鲜明档：同一个色系的高对比版本，id 一律带 `-vivid` 后缀（菜单按后缀分两段）。
+        // 这里钉"真展开出不同色值"和"钨灰没有鲜明档不许静默回落"——两条都是用户可见的契约。
+        {
+          const fillOf = (id, role) =>
+            String(pals.find((p) => p.id === id).roles.find((r) => r.role === role).light.fill).toLowerCase();
+          const softFill = fillOf("pine", "data");
+          const vividFill = fillOf("pine-vivid", "data");
+          const rv = await invoke("palette_apply", {
+            req: { body, format: "mermaid", palette: "pine-vivid", dark: false, mode: "all" },
+          });
+          ok(
+            "鲜明档展开出不同的色值（不是空转）",
+            rv.changed && rv.body.includes(vividFill) && !rv.body.includes(softFill),
+            `${softFill} → ${vividFill}`,
+          );
+          let vividNeutralErr = "";
+          try {
+            await invoke("palette_apply", {
+              req: { body, format: "mermaid", palette: "tungsten-vivid", dark: false, mode: "all" },
+            });
+          } catch (e) {
+            vividNeutralErr = String((e && e.message) || e);
+          }
+          ok("钨灰没有鲜明档（如实报错，不静默回落）", vividNeutralErr.includes("没有这个色系"), vividNeutralErr.slice(0, 60));
+        }
+
         try {
           await invoke("palette_apply", {
             req: { body: "{}", format: "drawio", palette: "pine", dark: false, mode: "all" },
