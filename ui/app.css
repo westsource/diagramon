@@ -734,6 +734,13 @@ body.no-ai #ai-gutter { display: none; }
  * 于是面板变窄时卡片**不缩**、整栏出现横向滚动。`.bubble` / `.md-view` 各自写了 `max-width`，
  * 但 `.code-card` / `.think-body` / `.agent-step` 这些没写 —— 与其逐个补，不如在列上统一收口。 */
 .msg-body > * { max-width: 100%; min-width: 0; }
+/* AI 的回答要**撑满这一列**（2026-11-07 用户报的"输出内容框不总是撑满面板宽度"）。
+ * 上面那条只管"不许超出"，撑不撑满仍由 `align-items: flex-start` 决定 —— 于是短回复、
+ * 代码卡片只占左边一条，右边空一大片；而 Markdown 回复单独写了
+ * `.md-body .bubble{width:100%}`，所以**同一栏里有时撑满、有时不撑**。与其逐个块补
+ * `width:100%`（漏一个就又是"有时候"），不如在这一列上统一拉满。
+ * 用户自己的消息仍按内容收紧（下面 `.msg.user` 覆盖回 flex-end），微信式对话照旧。 */
+.msg.bot .msg-body { align-items: stretch; }
 .msg.user .msg-body { align-items: flex-end; flex: 0 1 auto; max-width: 86%; }
 
 .msg-head { display: flex; align-items: center; gap: 6px; font-size: var(--fs-xs); color: var(--muted); }

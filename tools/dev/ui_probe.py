@@ -779,14 +779,16 @@ def main() -> int:
         if ai_min != 260:
             fails.append(f"AI 面板最小宽度应 260，实际 {ai_min}")
 
-        # ---- 断言 6.5：消息里的"块"必须服从气泡列宽（2026-11-07 用户报的） ----
-        # 症状：AI 面板拉窄后，带长行的**代码卡片**不跟着缩，整栏出现横向滚动。
-        # 根因：`.msg-body` 是 flex 列 + `align-items: flex-start`，子项按 fit-content 定宽、
-        # 下限是 min-content；`.code-card` 当时没有 `max-width`，被 `pre` 里的长行钉住。
-        # 这里在**最小宽度**下塞一张最坏情况的代码卡片，然后只认"流没横向溢出 + 卡片不超列宽"。
+        # ---- 断言 6.5：AI 的输出块必须**撑满**这一列，且不许溢出（2026-11-07 用户报的） ----
+        # 症状一：带长行的代码卡片不跟着面板缩，整栏横向滚动；
+        # 症状二：短回复 / 代码卡片只占左边一条，右边空一大片（Markdown 回复却撑满）。
+        # 根因都在 `.msg-body` 这一列的宽度策略：子项按 fit-content 定宽、下限是 min-content。
+        # 现在两件事各有一条规则（`.msg-body > *{max-width:100%}` + `.msg.bot .msg-body{align-items:stretch}`），
+        # 这里在**最小宽度**下用最坏内容一次性验完：不溢出 + 每个块与列同宽。
         ev(
             """document.querySelector('#ai-stream').insertAdjacentHTML('beforeend', `
               <div class="msg bot" id="probe-wide-card"><div class="ava"></div><div class="msg-body">
+                <div class="bubble">好的。</div>
                 <div class="code-card"><div class="code-card-head"><span class="sp"></span></div>
                 <pre>${"x".repeat(400)}</pre></div></div></div>`)"""
         )
@@ -794,15 +796,22 @@ def main() -> int:
         card = ev(
             """(() => {
               const s = document.querySelector('#ai-stream');
-              const c = document.querySelector('#probe-wide-card .code-card');
-              if (!c) return null;
-              return { streamOverflow: s.scrollWidth - s.clientWidth,
-                       cardOver: c.getBoundingClientRect().width - s.clientWidth };
+              const body = document.querySelector('#probe-wide-card .msg-body');
+              const kids = [...body.children];
+              return {
+                streamOverflow: s.scrollWidth - s.clientWidth,
+                col: body.clientWidth,
+                widths: kids.map((k) => Math.round(k.getBoundingClientRect().width)),
+                names: kids.map((k) => (k.className || "").toString().split(" ")[0]),
+                cardOver: kids[kids.length - 1].getBoundingClientRect().width - s.clientWidth,
+              };
             })()"""
         )
-        log(f"最坏代码卡片 @260px：流溢出 {card and card['streamOverflow']}px / 卡片超出 {card and round(card['cardOver'], 1)}px")
+        log(f"最坏代码卡片 @260px：流溢出 {card and card['streamOverflow']}px / 卡片超出 {card and round(card['cardOver'], 1)}px / 列宽 {card and card['col']} 各块 {card and card['widths']}")
         if not card or card["streamOverflow"] > 1 or card["cardOver"] > 1:
             fails.append("AI 消息里的代码卡片没服从列宽（面板变窄后整栏出现横向滚动）")
+        if not card or any(abs(w - card["col"]) > 1 for w in card["widths"]):
+            fails.append(f"AI 输出块没撑满列宽：列 {card and card['col']} vs 各块 {card and card['widths']}")
         ev("document.querySelector('#probe-wide-card')?.remove()")
 
         # ---- 断言 7：源码/预览分隔条拖拽 + 比例落盘 ----
