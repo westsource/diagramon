@@ -23,7 +23,9 @@
     font: 13px/1.6 -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
     user-select: none; -webkit-user-select: none;
   }
-  #shot { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+  /* -webkit-user-drag：冻结帧是 <img>，Chromium 默认允许原生拖拽图片；
+     一旦起来，mousemove/mouseup 就全断了（见 capture.js 的 mousedown 注释）。 */
+  #shot { position: absolute; inset: 0; width: 100%; height: 100%; display: block; -webkit-user-drag: none; }
   /* 选区：一圈白边 + 巨大 box-shadow 把四周压暗（"挖洞"效果，零 JS 额外节点） */
   #sel {
     position: absolute; border: 1px solid #fff; border-radius: 2px;
@@ -57,7 +59,7 @@
 </style>
 </head>
 <body>
-  <img id="shot" alt="">
+  <img id="shot" alt="" draggable="false">
   <div id="sel"><span class="size" id="size"></span></div>
   <div id="bar">
     <span id="hint" data-i18n="cap.hint"></span>

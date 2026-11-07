@@ -95,10 +95,19 @@ window.DGM = window.DGM || {};
   addEventListener("mousedown", (e) => {
     if (e.button !== 0) return;
     if (e.target.closest("#bar")) return; // 工具条上的点击不算起笔
+    // **必须吃掉默认行为**：`<img>` 默认 draggable=true，拖动超过约 5px 后浏览器会
+    // 把它接管成一次**原生图片拖拽**（dragstart），此后 mousemove / mouseup 一律不再
+    // 派发。实测症状（2026-11-07 用户报的"第一次按下只画出一个很小的矩形，松手没反应，
+    // 之后光移动鼠标反而像在框选"）：框停在起笔那一小块，mouseup 永不触发 ⇒ finish()
+    // 不执行 ⇒ 永远等不到 vision_crop。下面的 dragstart 是同一原因的兜底（拖到已选中
+    // 文本等其他来源的原生拖拽也要掐掉）。
+    e.preventDefault();
     dragging = true;
     start = { x: e.clientX, y: e.clientY };
-    show(norm(start, start));
+    sel.style.display = "none"; // 起手不露 0×0 的框，等真的拖出面积再显示
   });
+
+  addEventListener("dragstart", (e) => e.preventDefault());
 
   addEventListener("mousemove", (e) => {
     if (!dragging) return;

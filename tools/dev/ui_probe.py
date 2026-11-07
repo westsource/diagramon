@@ -177,6 +177,168 @@ def serve_ui() -> tuple[ThreadingHTTPServer, int]:
     return srv, srv.server_address[1]
 
 
+# 截屏框选 overlay（ui/capture.html）的桩：capture.js 起步就要 window.__TAURI__
+# （真实应用靠 withGlobalTauri 注入），探针里给一份最小的，只实现它用到的两个命令。
+# 冻结帧用页面自己画的 1600×1200 canvas 当 PNG —— 真实尺寸是这条断言的前提：
+# 1×1 的图会被 capture.js 的"太小"判据（`w * scale < 8`）拦下，测不到主路径。
+CAPTURE_STUB = """(function () {
+  window.__calls = [];
+  window.__events = [];
+  ["mousedown", "mousemove", "mouseup", "dragstart", "dragend"].forEach(function (t) {
+    document.addEventListener(t, function (e) {
+      window.__events.push(t + ":" + Math.round(e.clientX) + "," + Math.round(e.clientY));
+    }, true);
+  });
+  function frame() {
+    var c = document.createElement("canvas");
+    c.width = 1600; c.height = 1200;
+    var g = c.getContext("2d");
+    g.fillStyle = "#335"; g.fillRect(0, 0, 1600, 1200);
+    return c.toDataURL("image/png");
+  }
+  window.__TAURI__ = {
+    core: {
+      invoke: async function (cmd, args) {
+        window.__calls.push([cmd, args]);
+        if (cmd === "vision_frame") {
+          return { monitor: { id: "probe", width: 1600, height: 1200, x: 0, y: 0, scale: 1, is_primary: true },
+                   data_url: frame() };
+        }
+        return null;
+      }
+    },
+    event: { listen: async function () { return function () {}; } }
+  };
+})();
+"""
+
+
+def capture_overlay_check(cdp, ui_port: int, timeout: float = 20.0) -> list[str]:
+    """截屏框选的拖拽回归：按下 → 拖出矩形 → 松手，必须真的发出 `vision_crop`。
+
+    2026-11-07 用户实测症状：「第一次按下只画出一个很小的矩形，然后可以正常画矩形，
+    但画完之后没反应」。根因是冻结帧 `<img>` 默认 `draggable`：拖动超过阈值后浏览器
+    接管成**原生图片拖拽**（dragstart），此后 mousemove / mouseup 一律不再派发 ——
+    框停在起笔那一小块，mouseup 永不触发 ⇒ `finish()` 不执行 ⇒ 永远没有 vision_crop；
+    而松手之后单纯移动鼠标反而继续拉框（dragging 还是 true），看着"像是能画"。
+
+    只能走 CDP `Input` 域复现：`element.dispatchEvent(new MouseEvent(...))` 是合成事件，
+    浏览器不会起原生拖拽，这条缺陷在那种写法下根本现不了形。
+
+    注意：**会把页面导航走**（capture.html 取代 index.html），所以只在 main() 的
+    最后一步调用。
+    """
+    fails: list[str] = []
+
+    def ev(expr: str, wait: float = timeout):
+        return cdp.evaluate(expr, timeout=wait)
+
+    def wait_true(expr: str, wait: float = 10.0, step: float = 0.2) -> bool:
+        end = time.time() + wait
+        while time.time() < end:
+            try:
+                if ev(expr, wait=max(1.0, end - time.time())):
+                    return True
+            except Exception:
+                pass
+            time.sleep(step)
+        return False
+
+    # 与桩里 1600×1200 的冻结帧同比例（4:3），这样两个轴的 scale 相等，期望矩形可以精确比对
+    cdp.call("Page.addScriptToEvaluateOnNewDocument", {"source": CAPTURE_STUB})
+    cdp.call(
+        "Emulation.setDeviceMetricsOverride",
+        {"width": 800, "height": 600, "deviceScaleFactor": 1, "mobile": False},
+    )
+    cdp.call("Page.navigate", {"url": f"http://127.0.0.1:{ui_port}/capture.html"})
+
+    if not wait_true(
+        "!!(window.__calls && window.__calls.some(function (c) { return c[0] === 'vision_frame'; })"
+        " && document.getElementById('shot') && document.getElementById('shot').naturalWidth > 1)"
+    ):
+        fails.append("截屏 overlay 起不来：vision_frame 没回，或冻结帧没解码（img.naturalWidth ≤ 1）")
+        return fails
+
+    geo = json.loads(
+        ev(
+            "var i = document.getElementById('shot');"
+            "JSON.stringify({nw: i.naturalWidth, cw: i.clientWidth, nh: i.naturalHeight, ch: i.clientHeight})"
+        )
+        or "{}"
+    )
+    nw, cw = geo.get("nw") or 0, geo.get("cw") or 1
+    nh, ch = geo.get("nh") or 0, geo.get("ch") or 1
+    if not (nw > 1 and nh > 1):
+        fails.append(f"冻结帧尺寸不对：{geo!r}")
+        return fails
+    sx, sy = nw / cw, nh / ch
+
+    def press() -> None:
+        cdp.call(
+            "Input.dispatchMouseEvent",
+            {"type": "mousePressed", "x": 200, "y": 200, "button": "left", "buttons": 1, "clickCount": 1},
+        )
+
+    def move(x: float, y: float, held: bool) -> None:
+        cdp.call(
+            "Input.dispatchMouseEvent",
+            {
+                "type": "mouseMoved",
+                "x": x,
+                "y": y,
+                # 按住时必须带 button="left"（真实浏览器 / Puppeteer 就是这个口径）。
+                # 只给 buttons=1 的 mouseMoved 不会让 Chromium 接管成原生拖拽 ——
+                # 这条缺陷会因此假绿，断言等于没写（2026-11-07 实测）。
+                "button": "left" if held else "none",
+                "buttons": 1 if held else 0,
+            },
+        )
+
+    move(200, 200, False)
+    press()
+    for i in range(1, 11):
+        move(200 + i * 30, 200 + i * 20, True)
+    cdp.call(
+        "Input.dispatchMouseEvent",
+        {"type": "mouseReleased", "x": 500, "y": 400, "button": "left", "buttons": 0, "clickCount": 1},
+    )
+
+    wait_true("window.__calls.some(function (c) { return c[0] === 'vision_crop'; })", wait=5.0)
+
+    got = json.loads(
+        ev(
+            "JSON.stringify({"
+            "  calls: window.__calls,"
+            "  drags: window.__events.filter(function (e) { return e.indexOf('dragstart') === 0; })"
+            "})"
+        )
+        or "{}"
+    )
+    calls = got.get("calls") or []
+    drags = got.get("drags") or []
+    crops = [c for c in calls if c and c[0] == "vision_crop"]
+    if drags:
+        fails.append(f"截屏框选起了原生拖拽（mousemove/mouseup 会随之断流）：{drags!r}")
+    if not crops:
+        fails.append(
+            "截屏框选松手后没有发出 vision_crop（「画完之后没反应」复现）："
+            f"收到的命令={calls!r}"
+        )
+        return fails
+    rect = ((crops[0][1] or {}).get("rect")) or {}
+    want = {
+        "x": round(200 * sx),
+        "y": round(200 * sy),
+        "w": round(300 * sx),
+        "h": round(200 * sy),
+    }
+    if any(abs((rect.get(k) or 0) - v) > 1 for k, v in want.items()):
+        fails.append(f"框选矩形换算成物理像素不对：期望 {want!r}，实际 {rect!r}（scale {sx:.3f}×{sy:.3f}）")
+    if not fails:
+        log(f"截屏框选：拖拽完成 → vision_crop {rect!r}（scale {sx:.2f}×{sy:.2f}）✓")
+    return fails
+
+
 def main() -> int:
     chrome = find_chrome()
     if not chrome:
@@ -4113,6 +4275,9 @@ def main() -> int:
 
         # 收尾：把开关还原，别把探针改过的设置留给后面（以及真机）
         ev('(async () => { await DGM.state.patchSettings({ ai: { enhance_enabled: false } }); return 1; })()')
+
+        # ---- 最后一步：截屏框选 overlay 的拖拽（会把这一页导航走，必须放最后）----
+        fails.extend(capture_overlay_check(cdp, ui_port))
 
         log("")
         if fails:
