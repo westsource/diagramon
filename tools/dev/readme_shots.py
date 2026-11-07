@@ -78,6 +78,37 @@ MOUNT_ENTRY = {
 
 WIDTH, HEIGHT = 1440, 900
 
+# 09/10（官网首页 hero）共用的预处理：关左侧边栏 → 先开右侧 AI 面板（宽度定型）→
+# 换上用户提供的集团网络拓扑正文 → 渲染 → 「适应视图」→ 向 AI 发问。
+# 标签名在对话收尾后再改：AI 那轮的正文 flush 会把 mock 返回的旧名 clone 写回 state。
+HERO_JS = (
+    "window.__shot = (async () => {"
+    "  DGM.state.patchSettings({ panels: { sidebar: false } });"
+    "  DGM.ai.focus('chat');"
+    "  const d = DGM.state.activeDoc();"
+    "  await DGM.state.setBodyNow(d.id, window.__BUS_SAMPLE);"
+    "  await DGM.state.setLayout(d.id, 'elk');"
+    "  DGM.editor.loadActive();"
+    "  await DGM.preview.render();"
+    "  DGM.preview.fit();"
+    "  DGM.ai.prefill('帮我梳理这张图的网络分区', true);"
+    "  const renWatch = setInterval(() => {"
+    "    if (!DGM.state.ui.aiBusy) {"
+    "      clearInterval(renWatch);"
+    "      DGM.state.upsertDoc({ ...DGM.state.activeDoc(), name: '企业网络拓扑.mmd' });"
+    "      DGM.state.emit('doc:changed');"
+    "      DGM.state.emit('session:changed');"
+    "    }"
+    "  }, 300);"
+    "})();"
+)
+# 就绪 = 新图真的渲染出来了（按节点文案认，防截到默认文档首帧）且 AI 那轮流式回复已收尾。
+HERO_READY = (
+    "!!document.querySelector('#canvas-stage svg')"
+    " && document.querySelector('#canvas-stage').textContent.includes('某企业数据中心')"
+    " && !DGM.state.ui.aiBusy"
+)
+
 # 每张 = (文件名, URL 查询串, 截图前的 JS, 额外等待秒, 截图前的就绪表达式)
 # 查询串走的是 main.js::applyUrlState 认的那几个参数（theme/doc/mode/sidebar/…）。
 # 就绪表达式为空时只按「额外等待秒」等；非空时**轮询它**（D2 那张要等 wasm 实例化，
@@ -108,6 +139,22 @@ PLAN: list[tuple[str, str, str, float, str]] = [
         # `mountSvg` 会给舞台打上 `data-engine=<格式>`，用它才认得出"这次挂的是 D2"。
         "document.querySelector('#canvas-stage').dataset.engine === 'd2'"
         " && !!document.querySelector('#canvas-stage svg')",
+    ),
+    # 09/10 官网首页 hero 用图：明暗两版（集团网络拓扑 + AI 梳理网络分区；
+    # 左侧边栏收起、右侧 AI 面板打开、适应视图）。发布时拷贝到 service/website/assets。
+    (
+        "09-hero-light.png",
+        "doc=0&theme=light&mode=preview",
+        HERO_JS,
+        2.5,
+        HERO_READY,
+    ),
+    (
+        "10-hero-dark.png",
+        "doc=0&theme=dark&mode=preview",
+        HERO_JS,
+        2.5,
+        HERO_READY,
     ),
 ]
 
@@ -141,6 +188,43 @@ classes: {
 网关 -> 本地引擎: "是" { style.stroke-dash: 3 }
 网关 -> 云网关: "否（仅 AI）"
 本地引擎 -> 数据库
+"""
+
+# 09/10（官网首页 hero）的 Mermaid 正文：用户提供的（已匿名化的）企业网络分区拓扑，
+# 原样照抄；布局由 HERO_JS 显式切到 ELK。
+BUS_SAMPLE = """flowchart TD
+    internet([互联网]):::lvl-ext
+
+    subgraph DC["某企业数据中心"]
+        dmz[某企业数据中心 DMZ]
+        ops[某企业数据中心 经营管控域]
+        ext[某企业数据中心 外联域]
+    end
+
+    internet -->|设备巡检、健康监测等采集 IoT；气象数集 互联网；公众出行网站；某企业高速服务| dmz
+    dmz --> ops
+    ops -->|某业务平台服务 数据采集数据 数据传输服务 数据库| ext
+    dmz -->|收费指标数据 采集服务| ext
+
+    ext --> stNet([某企业外联域])
+    stNet --> stCo[某企业 反向代理]
+    stNet --> tollNet([收费网络])
+    tollNet --> tollCenter[收费总中心 收费指标分析服务]
+
+    ops --> monNet([监控网])
+    ops --> entNet([企业网])
+
+    monNet --> infoCenter[信息中心 全程监控业务服务 信息发布服务平台 高速快拍服务 隧道、能耗等采集转发服务]
+
+    monNet --> monSub([监控子网])
+    monSub --> tunnelCenter[隧道监控中心 多个 隧道采集服务 能耗采集服务]
+    monSub --> monBranch[监控分中心 多个 原全程监控通讯服务]
+
+    entNet --> roadNet([车路协同专网])
+    roadNet --> dfc[某分中心 车路协同业务服务]
+
+    entNet --> kefu[客服中心坐席 投诉即办坐席 信息中心、某中心]
+    entNet --> yanghu[养护子公司 养护业务系统]
 """
 
 
@@ -343,8 +427,11 @@ def main() -> int:
             time.sleep(extra)
             if js:
                 try:
-                    # D2 那张的正文从这里注入，免得在 JS 字符串里塞一大段中文正文
+                    # 正文从这里注入，免得在 JS 字符串里塞一大段中文正文
                     cdp.evaluate("window.__D2_SAMPLE = " + json.dumps(D2_SAMPLE) + ";", timeout=10)
+                    cdp.evaluate(
+                        "window.__BUS_SAMPLE = " + json.dumps(BUS_SAMPLE) + ";", timeout=10
+                    )
                     cdp.evaluate(js, timeout=10)
                 except Exception as exc:
                     log(f"  （{name} 的预处理 JS 报错，照样截：{exc}）")
