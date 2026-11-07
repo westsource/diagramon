@@ -728,6 +728,12 @@ body.no-ai #ai-gutter { display: none; }
 /* 气泡列：宽度由内容撑、上限是整条消息的可用宽（`align-items` 不拉伸 flex 项）。
    用户侧再收一档到 86%，长句子不至于从左边贴着 AI 的气泡。 */
 .msg-body { display: flex; flex-direction: column; align-items: flex-start; gap: 5px; min-width: 0; flex: 1 1 auto; }
+/* 正文里的**每一个**块都必须服从气泡列宽（2026-11-07 用户报的"输出框有时不随面板宽度变化"）。
+ * `.msg-body` 是 flex 列 + `align-items: flex-start`，子项按 fit-content 定宽、**下限是 min-content**：
+ * 代码卡片里的 `pre` 有一行长代码（`white-space: pre`）就能把 min-content 顶到几百 px，
+ * 于是面板变窄时卡片**不缩**、整栏出现横向滚动。`.bubble` / `.md-view` 各自写了 `max-width`，
+ * 但 `.code-card` / `.think-body` / `.agent-step` 这些没写 —— 与其逐个补，不如在列上统一收口。 */
+.msg-body > * { max-width: 100%; min-width: 0; }
 .msg.user .msg-body { align-items: flex-end; flex: 0 1 auto; max-width: 86%; }
 
 .msg-head { display: flex; align-items: center; gap: 6px; font-size: var(--fs-xs); color: var(--muted); }

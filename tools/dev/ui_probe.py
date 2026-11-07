@@ -779,6 +779,32 @@ def main() -> int:
         if ai_min != 260:
             fails.append(f"AI 面板最小宽度应 260，实际 {ai_min}")
 
+        # ---- 断言 6.5：消息里的"块"必须服从气泡列宽（2026-11-07 用户报的） ----
+        # 症状：AI 面板拉窄后，带长行的**代码卡片**不跟着缩，整栏出现横向滚动。
+        # 根因：`.msg-body` 是 flex 列 + `align-items: flex-start`，子项按 fit-content 定宽、
+        # 下限是 min-content；`.code-card` 当时没有 `max-width`，被 `pre` 里的长行钉住。
+        # 这里在**最小宽度**下塞一张最坏情况的代码卡片，然后只认"流没横向溢出 + 卡片不超列宽"。
+        ev(
+            """document.querySelector('#ai-stream').insertAdjacentHTML('beforeend', `
+              <div class="msg bot" id="probe-wide-card"><div class="ava"></div><div class="msg-body">
+                <div class="code-card"><div class="code-card-head"><span class="sp"></span></div>
+                <pre>${"x".repeat(400)}</pre></div></div></div>`)"""
+        )
+        drain(0.2)
+        card = ev(
+            """(() => {
+              const s = document.querySelector('#ai-stream');
+              const c = document.querySelector('#probe-wide-card .code-card');
+              if (!c) return null;
+              return { streamOverflow: s.scrollWidth - s.clientWidth,
+                       cardOver: c.getBoundingClientRect().width - s.clientWidth };
+            })()"""
+        )
+        log(f"最坏代码卡片 @260px：流溢出 {card and card['streamOverflow']}px / 卡片超出 {card and round(card['cardOver'], 1)}px")
+        if not card or card["streamOverflow"] > 1 or card["cardOver"] > 1:
+            fails.append("AI 消息里的代码卡片没服从列宽（面板变窄后整栏出现横向滚动）")
+        ev("document.querySelector('#probe-wide-card')?.remove()")
+
         # ---- 断言 7：源码/预览分隔条拖拽 + 比例落盘 ----
         sp0 = ev("parseFloat(document.querySelector('#split').style.getPropertyValue('--split-src'))")
         drag_gutter("splitter", 120, 0)
