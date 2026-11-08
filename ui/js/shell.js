@@ -809,8 +809,8 @@ window.DGM = window.DGM || {};
     parts.push(`<span class="st ${ui.status.kind === "err" ? "err" : ui.status.kind === "warn" ? "warn" : ui.status.kind === "ok" ? "accent" : ""}" id="status-msg">${esc(statusText)}</span>`);
     parts.push(`<span class="st-spacer"></span>`);
     // 有布局引擎的格式才有这一格（DOT 六种、D2 三种、Mermaid elk/dagre；
-    // 泳道图例外：它的布局是固定的 swimlane，没有可选项）
-    const layouts = d && !state.isSwimlaneDoc(d) ? state.docFmt(d).layouts || [] : [];
+    // 泳道图与脑图例外：布局分别是固定的 swimlane / cose-bilkent，没有可选项）
+    const layouts = d && !state.isSwimlaneDoc(d) && !state.isMindmapDoc(d) ? state.docFmt(d).layouts || [] : [];
     if (layouts.length) {
       parts.push(`<button class="st" data-a="layout" title="${esc(t("status.layoutTip"))}">${icon("diagram", "ico-sm")}${esc(t("status.layout", { name: d.layout || layouts[0] }))}</button>`);
     }
@@ -854,6 +854,11 @@ window.DGM = window.DGM || {};
     // 泳道图没有可切的布局（固定 swimlane）—— 状态栏那一格已经隐藏，这里是第二道。
     if (state.isSwimlaneDoc(d)) {
       DGM.toast({ icon: "info", title: t("preview.layoutName"), sub: t("preview.swimlaneFixed") });
+      return;
+    }
+    // 脑图同理（固定 cose-bilkent）。
+    if (state.isMindmapDoc(d)) {
+      DGM.toast({ icon: "info", title: t("preview.layoutName"), sub: t("preview.mindmapFixed") });
       return;
     }
     const fmt = state.docFmt(d);
@@ -1640,7 +1645,16 @@ window.DGM = window.DGM || {};
     });
     cmd({ id: "fmt.format", group: "format", icon: "wand", kbd: "Shift+Alt+F", run: () => formatSource() });
     // 布局菜单按**注册表**开放（DOT 六种、D2 三种），不在前端写第二份格式清单
-    cmd({ id: "fmt.layout", group: "format", icon: "diagram", run: (a) => DGM.dialogs.layout(), avail: () => (state.activeDoc() && !state.isSwimlaneDoc(state.activeDoc()) && (state.docFmt(state.activeDoc()).layouts || []).length ? true : { why: state.isSwimlaneDoc(state.activeDoc()) ? t("preview.swimlaneFixed") : t("status.formatTip") }) });
+    cmd({
+      id: "fmt.layout", group: "format", icon: "diagram", run: (a) => DGM.dialogs.layout(),
+      avail: () => {
+        const d = state.activeDoc();
+        if (!d) return { why: t("status.formatTip") };
+        if (state.isSwimlaneDoc(d)) return { why: t("preview.swimlaneFixed") };
+        if (state.isMindmapDoc(d)) return { why: t("preview.mindmapFixed") };
+        return (state.docFmt(d).layouts || []).length ? true : { why: t("status.formatTip") };
+      },
+    });
     cmd({ id: "exp.png", group: "format", icon: "download", run: () => DGM.preview.exportPng() });
     cmd({ id: "exp.svg", group: "format", icon: "download", run: () => DGM.preview.exportSvg() });
     cmd({ id: "exp.copy", group: "format", icon: "copy", kbd: "Ctrl+Shift+C", run: () => DGM.preview.copyImage() });

@@ -2661,9 +2661,13 @@ window.DGM = window.DGM || {};
     const d = state.activeDoc();
     if (!d) return;
     // 泳道图的布局是它自己的（`swimlane`），没有可切的引擎：命令面板与状态栏都已拦过，
-    // 这是第三道，避免出现一个点了没反应的菜单。
+    // 这是第三道，避免出现一个点了没反应的菜单。脑图同理（固定 cose-bilkent）。
     if (state.isSwimlaneDoc(d)) {
       DGM.toast({ icon: "info", title: t("preview.layoutName"), sub: t("preview.swimlaneFixed") });
+      return;
+    }
+    if (state.isMindmapDoc(d)) {
+      DGM.toast({ icon: "info", title: t("preview.layoutName"), sub: t("preview.mindmapFixed") });
       return;
     }
     const layouts = state.docFmt(d).layouts || [];

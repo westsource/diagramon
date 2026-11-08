@@ -162,16 +162,13 @@ window.DGM = window.DGM || {};
     isCanvasDoc(doc) {
       return state.docFmt(doc).surface === "canvas";
     },
-    /** 这份文档是不是 **Mermaid 泳道图**（`swimlane-beta` 头部）。
-     *
-     *  泳道图与 flowchart 共用解析器，但布局是它自己的（`swimlane.layout = "swimlane"`）：
-     *  顶层 `subgraph` 就是一条泳道。**顶层 `layout` 不能传** —— 传了（应用默认的 elk /
-     *  dagre）会把泳道压回普通流程图，画面上一条泳道都没有（实测）。
+    /** Mermaid 正文的**首个有效头部关键字**（小写）；没有正文时返回 ""。
      *
      *  判断要跳过硬排在头部之前的东西：front matter（`---…---`）、`%%{init}%%` 指令
-     *  （可以跨行）与 `%%` 注释。与 Rust 侧 `app_core::format::mermaid_is_swimlane` 同口径。
+     *  （可以跨行）与 `%%` 注释。与 Rust 侧 `app_core::format::mermaid_is_swimlane`
+     *  同一套跳过规则。
      */
-    mermaidIsSwimlane(body) {
+    mermaidHeaderKeyword(body) {
       const lines = String(body || "").split(/\r?\n/);
       let frontMatter = false;
       let seenContent = false;
@@ -203,13 +200,37 @@ window.DGM = window.DGM || {};
           continue;
         }
         const kw = line.split(/\s+/)[0] || "";
-        return kw.toLowerCase() === "swimlane-beta";
+        return kw.toLowerCase();
       }
-      return false;
+      return "";
+    },
+    /** 这份文档是不是 **Mermaid 泳道图**（`swimlane-beta` 头部）。
+     *
+     *  泳道图与 flowchart 共用解析器，但布局是它自己的（`swimlane.layout = "swimlane"`）：
+     *  顶层 `subgraph` 就是一条泳道。**顶层 `layout` 不能传** —— 传了（应用默认的 elk /
+     *  dagre）会把泳道压回普通流程图，画面上一条泳道都没有（实测）。
+     */
+    mermaidIsSwimlane(body) {
+      return state.mermaidHeaderKeyword(body) === "swimlane-beta";
+    },
+    /** 这份文档是不是 **Mermaid 脑图**（`mindmap` 头部）。
+     *
+     *  脑图同理：布局是它自己的 —— mermaid 12 的 mindmap db 在用户**没有显式**设置
+     *  layout 时强制 `cose-bilkent`。顶层 `layout` 一旦传进来就会被当成用户显式选择，
+     *  默认的 cose-bilkent 兜底随即失效：传 `elk` 时 ELK 渲染器在脑图数据上直接抛
+     *  `Cannot read properties of null (reading 're')`（mermaid 12.2.0 + layout-elk
+     *  1.0.1 实测）；传 `dagre` 虽能画，但脑图会被排成流程图的样子。
+     */
+    mermaidIsMindmap(body) {
+      return state.mermaidHeaderKeyword(body) === "mindmap";
     },
     isSwimlaneDoc(doc) {
       const d = doc || state.activeDoc();
       return !!d && d.format === "mermaid" && state.mermaidIsSwimlane(d.body);
+    },
+    isMindmapDoc(doc) {
+      const d = doc || state.activeDoc();
+      return !!d && d.format === "mermaid" && state.mermaidIsMindmap(d.body);
     },
     /** 当前视图模式（画布型恒为 preview）。 */
     mode(doc) {

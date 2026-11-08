@@ -631,6 +631,79 @@ def main() -> int:
             log(f"（断言 4c 解析失败：{e}）")
             fails.append("断言 4c 拿不到结果")
 
+        # ---- 断言 4c2：mindmap 不能拿到顶层 layout（2026-11-08）----
+        # mermaid 12 的 mindmap 只有在**用户没显式设 layout** 时才用自己的 `cose-bilkent`
+        # （mindmap db 的 getData）。应用默认的 elk 一旦传进 initialize，就会被当成显式选择，
+        # ELK 渲染器在脑图数据上直接抛 `Cannot read properties of null (reading 're')`。
+        # 这条钉住真实预览链路：脑图的 initialize 配置里不能有 layout，且顶栏/状态栏没有
+        # 布局入口；切回 flowchart 后 layout 必须回来（不能把整条布局链路一起关掉）。
+        mm = ev(
+            "(async () => {"
+            "  const out = {};"
+            "  const mm0 = window.mermaid;"
+            "  if (!mm0) return JSON.stringify({ noMermaid: true });"
+            "  const rawInit = mm0.initialize;"
+            "  const cfg = [];"
+            "  mm0.initialize = (c) => { cfg.push(c); return rawInit.call(mm0, c); };"
+            "  try {"
+            "    const d = await DGM.state.newDoc('mermaid');"
+            "    await DGM.state.activateDoc(d.id);"
+            "    DGM.editor.loadActive();"
+            "    await DGM.state.setBodyNow(d.id, 'mindmap\\n  root((R))\\n    A\\n    B\\n');"
+            "    cfg.length = 0;"
+            "    await DGM.preview.render();"
+            "    const st1 = document.querySelector('#canvas-stage');"
+            "    const svg1 = st1 && st1.querySelector('svg');"
+            "    out.mm = {"
+            "      detected: DGM.state.isMindmapDoc(DGM.state.doc(d.id)),"
+            "      svg: !!svg1,"
+            "      nodes: svg1 ? svg1.querySelectorAll('.mindmap-node').length : 0,"
+            "      err: !!(st1 && st1.querySelector('.preview-error')),"
+            "      hasLayout: cfg.length ? Object.prototype.hasOwnProperty.call(cfg[cfg.length - 1], 'layout') : true,"
+            "      opts: document.querySelectorAll('#pv-opts .pv-opt').length,"
+            "      status: !!document.querySelector('#statusbar [data-a=layout]')"
+            "    };"
+            "    await DGM.state.setBodyNow(d.id, 'flowchart TD\\n  A --> B\\n');"
+            "    cfg.length = 0;"
+            "    await DGM.preview.render();"
+            "    out.flow = {"
+            "      detected: DGM.state.isMindmapDoc(DGM.state.doc(d.id)),"
+            "      layout: cfg.length ? String(cfg[cfg.length - 1].layout || '') : '',"
+            "      opts: document.querySelectorAll('#pv-opts .pv-opt').length,"
+            "      status: !!document.querySelector('#statusbar [data-a=layout]')"
+            "    };"
+            "    await DGM.state.closeDoc(d.id);"
+            "  } finally { mm0.initialize = rawInit; }"
+            "  return JSON.stringify(out);"
+            "})()"
+        )
+        log(f"脑图渲染: {mm}")
+        try:
+            r = json.loads(mm or "{}")
+            if r.get("noMermaid"):
+                fails.append("断言 4c2 拿不到 mermaid（vendor 没加载？）")
+            else:
+                m = r.get("mm") or {}
+                if not m.get("detected"):
+                    fails.append("`mindmap` 头部没有被识别成脑图")
+                if not m.get("svg") or not m.get("nodes"):
+                    fails.append(f"脑图没有渲染出图（mermaid 的 layout 被传进去了？）：{m}")
+                if m.get("err"):
+                    fails.append(f"脑图渲染落进报错面板：{m}")
+                if m.get("hasLayout"):
+                    fails.append(f"脑图的 initialize 配置里不该有 layout：{m}")
+                if m.get("opts") != 2 or m.get("status"):
+                    fails.append(f"脑图不该有布局入口（顶栏 2 颗 = 外观+配色，状态栏隐藏）：{m}")
+                f = r.get("flow") or {}
+                if f.get("detected"):
+                    fails.append("flowchart 被误判成脑图")
+                if f.get("layout") != "elk":
+                    fails.append(f"flowchart 仍应拿到默认 elk 布局：{f}")
+                if f.get("opts") != 3 or not f.get("status"):
+                    fails.append(f"flowchart 的布局入口不该消失：{f}")
+        except Exception as e:
+            fails.append(f"断言 4c2 解析失败：{e} / {mm}")
+
         # ---- 断言 4d：拖拽打开（3.11.3）----
         # mock 里没有原生拖放事件（`ipc.onDragDrop` 返回 null ⇒ `state.ui.fileDrop=false`），
         # 所以直接把 payload 喂给公开的分发函数：验「悬停亮提示层 → 落下开标签页 → 不认的扩展名挡下」。
