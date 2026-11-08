@@ -388,6 +388,15 @@ mod tests {
         assert!(issues(FormatId::Mermaid, src).is_empty(), "正常流程图不应报问题");
     }
 
+    /// 架构图的括号全部成对（`group id(icon)[label]` / `service …`），不该被流程图那套
+    /// 括号规则误报；`align row …` 与端口连线也不含未闭合结构。
+    #[test]
+    fn mermaid_accepts_architecture_beta() {
+        let src = "architecture-beta\n    group api(cloud)[API]\n    service db(database)[Database] in api\n    service server(server)[Server] in api\n    junction j1 in api\n    db:R -- L:server\n    server:B -- T:j1\n    align row db server\n";
+        let v = issues(FormatId::Mermaid, src);
+        assert!(v.is_empty(), "合法架构图不应报问题：{v:?}");
+    }
+
     #[test]
     fn mermaid_reports_unclosed_subgraph_and_unbalanced_bracket() {
         let v = issues(FormatId::Mermaid, "flowchart TD\n    subgraph 组\n    A[x --> B[y\n");

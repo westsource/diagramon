@@ -378,14 +378,16 @@ window.DGM = window.DGM || {};
   function renderOpts(d) {
     const host = document.getElementById("pv-opts");
     if (!host) return;
-    // 泳道图与脑图都没有可选的引擎布局（前者固定 `swimlane`，后者固定 mermaid 自带的
-    // `cose-bilkent`）；把它们放进 key，用户把头部改成 `swimlane-beta` / `mindmap` 时
-    // 按钮要立刻消失（key 不包含正文，必须显式带上）。
+    // 泳道图、脑图与架构图都没有可选的引擎布局（依次固定 `swimlane`、`cose-bilkent`、
+    // 架构图自己的 fcose）；把它们放进 key，用户把头部改成 `swimlane-beta` / `mindmap` /
+    // `architecture-beta` 时按钮要立刻消失（key 不包含正文，必须显式带上）。
     const swimlane = !!d && state.isSwimlaneDoc(d);
     const mindmap = !!d && state.isMindmapDoc(d);
+    const architecture = !!d && state.isArchitectureDoc(d);
+    const head = swimlane ? "sw" : mindmap ? "mm" : architecture ? "arch" : "";
     // 配色也进 key：换了色系按钮上的名字/圆点必须立刻跟上（否则显示还是旧的那档）
     const key = d
-      ? [d.id, d.format, d.look || "", d.layout || "", d.scheme === undefined || d.scheme === null ? "auto" : d.scheme, swimlane ? "sw" : mindmap ? "mm" : ""].join("|")
+      ? [d.id, d.format, d.look || "", d.layout || "", d.scheme === undefined || d.scheme === null ? "auto" : d.scheme, head].join("|")
       : "";
     if (key === optsKey) return;
     optsKey = key;
@@ -393,7 +395,7 @@ window.DGM = window.DGM || {};
     if (!d || state.isCanvasDoc(d)) return;
     const fmt = state.docFmt(d);
     const looks = fmt.looks || [];
-    const layouts = swimlane || mindmap ? [] : fmt.layouts || [];
+    const layouts = swimlane || mindmap || architecture ? [] : fmt.layouts || [];
     if (!looks.length && !layouts.length) return;
     if (looks.length) host.appendChild(buildOptBtn(d, "look", t("preview.look"), looks, optsCurLook(d)));
     if (layouts.length) host.appendChild(buildOptBtn(d, "layout", t("preview.layoutName"), layouts, d.layout || layouts[0]));
@@ -967,15 +969,19 @@ window.DGM = window.DGM || {};
     // 应用默认的 elk 一传进来就被当成用户显式选择 —— ELK 渲染器在脑图数据上直接抛
     // `Cannot read properties of null (reading 're')`（12.2.0 + layout-elk 1.0.1 实测）。
     const mindmap = state.isMindmapDoc(d);
+    // 架构图（`architecture-beta`）：布局是它自己的 fcose 力导向，**顶层 layout 对它无效**
+    // （elk / dagre / 不传，节点坐标完全一致）。这里不传是为了不依赖"它会忽略"这个细节，
+    // 顶栏也不再显示对这个图没有任何作用的布局开关。
+    const architecture = state.isArchitectureDoc(d);
     // 外观（look）：文档级 > 设置默认 > 不干预。「auto」与未设置都交给 Mermaid 内建默认
     // （12 的流程图 = neo + redux-color 主题，与 mermaid.live 对齐）。
     const setLookPref = state.settings && state.settings.mermaid && state.settings.mermaid.look;
     let look = d.look && d.look !== "auto" ? d.look : setLookPref && setLookPref !== "auto" ? setLookPref : null;
     // 布局：文档级（Rust 侧按注册表校验过；没记过就取注册表的第一个 —— Mermaid 是 elk）。
     // elk 需要离线包，加载失败回退 dagre 而不是报错断流。
-    // 泳道图与脑图的布局由 mermaid 自己决定，不能走这条（见上面两个 const 的注释）。
+    // 泳道图、脑图与架构图的布局由 mermaid 自己决定，不能走这条（见上面三个 const 的注释）。
     const fmt = state.docFmt(d);
-    let layout = swimlane || mindmap ? null : d.layout && fmt.layouts && fmt.layouts.includes(d.layout) ? d.layout : fmt.layouts[0] || null;
+    let layout = swimlane || mindmap || architecture ? null : d.layout && fmt.layouts && fmt.layouts.includes(d.layout) ? d.layout : fmt.layouts[0] || null;
     if (layout === "elk") {
       try {
         await loadElk();
@@ -1166,6 +1172,8 @@ window.DGM = window.DGM || {};
     if (d.format === "mermaid" && state.isSwimlaneDoc(d)) setSub(t("preview.swimlane"));
     // 脑图同理：顶栏没有布局按钮（固定 cose-bilkent），副标题说明，别让人以为控件丢了。
     if (d.format === "mermaid" && state.isMindmapDoc(d)) setSub(t("preview.mindmap"));
+    // 架构图同理：布局固定为 mermaid 自带的 fcose，顶栏不显示布局开关。
+    if (d.format === "mermaid" && state.isArchitectureDoc(d)) setSub(t("preview.architecture"));
     if (d.format === "d2") {
       // 有 `layers:` 的文档 D2 只渲染 root 板（输出可能是空图）—— 必须说清，否则像坏了。
       // 板切换器按方案不做；提示只在**每份文档第一次**挂图时发一条，免得刷满输出面板。

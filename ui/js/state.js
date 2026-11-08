@@ -224,6 +224,15 @@ window.DGM = window.DGM || {};
     mermaidIsMindmap(body) {
       return state.mermaidHeaderKeyword(body) === "mindmap";
     },
+    /** 这份文档是不是 **Mermaid 架构图**（`architecture-beta` 头部）。
+     *
+     *  架构图有自己的 fcose 力导向布局，**顶层 `layout` 对它无效**：同一份源码传
+     *  `elk` / `dagre` / 不传，节点坐标完全一致（mermaid 12.2.0 实测）。因此不该给它
+     *  提供"布局引擎"这个开关；前端传不传 layout 只是为了避免依赖"它会忽略"这个细节。
+     */
+    mermaidIsArchitecture(body) {
+      return state.mermaidHeaderKeyword(body) === "architecture-beta";
+    },
     isSwimlaneDoc(doc) {
       const d = doc || state.activeDoc();
       return !!d && d.format === "mermaid" && state.mermaidIsSwimlane(d.body);
@@ -231,6 +240,10 @@ window.DGM = window.DGM || {};
     isMindmapDoc(doc) {
       const d = doc || state.activeDoc();
       return !!d && d.format === "mermaid" && state.mermaidIsMindmap(d.body);
+    },
+    isArchitectureDoc(doc) {
+      const d = doc || state.activeDoc();
+      return !!d && d.format === "mermaid" && state.mermaidIsArchitecture(d.body);
     },
     /** 当前视图模式（画布型恒为 preview）。 */
     mode(doc) {

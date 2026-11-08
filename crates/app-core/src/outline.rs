@@ -86,7 +86,118 @@ fn mermaid_nodes_in(text: &str) -> Vec<(String, String)> {
     out
 }
 
+/// 关键词必须独立成词：`service db…` 算，`servicex` / `service:` 不算。
+fn strip_kw<'a>(text: &'a str, kw: &str) -> Option<&'a str> {
+    let rest = text.strip_prefix(kw)?;
+    match rest.chars().next() {
+        None => Some(rest),
+        Some(c) if c.is_whitespace() => Some(rest.trim_start()),
+        _ => None,
+    }
+}
+
+/// `id(icon)[label]` → (id, label)。图标名**不是**标签 —— 大纲里绝不能拿它当节点名。
+fn architecture_decl(rest: &str) -> Option<(String, Option<String>)> {
+    let rest = rest.trim();
+    if rest.is_empty() {
+        return None;
+    }
+    let open = rest.find('(');
+    let (id, label) = match open {
+        // 没有图标位的声明（junction 由调用方另走一条；这里只对宽松输入兜底）
+        None => (rest.split_whitespace().next()?, None),
+        Some(i) => {
+            let id = rest[..i].trim();
+            if id.is_empty() {
+                return None;
+            }
+            let after = &rest[i..];
+            let close = after.find(')')?;
+            let tail = after[close + 1..].trim_start();
+            let label = tail
+                .strip_prefix('[')
+                .and_then(|inner| inner.find(']').map(|j| inner[..j].trim().to_string()))
+                .filter(|s| !s.is_empty());
+            (id, label)
+        }
+    };
+    Some((id.to_string(), label))
+}
+
+/// 架构图的边：`id{group}?:PORT <]?--[>? PORT:id{group}?`。
+/// 只做行式识别（方向/箭头可以贴在 `--` 两侧），解析失败就当普通文本忽略。
+fn architecture_edge(text: &str) -> Option<String> {
+    let (left, right) = text.split_once("--")?;
+    let (left, right) = (left.trim(), right.trim());
+    if !left.contains(':') || !right.contains(':') {
+        return None;
+    }
+    let left_port = left.rsplit(':').next()?.trim_end_matches('<').trim();
+    let right_port = right.split(':').next()?.trim_start_matches('>').trim();
+    let ok = |s: &str| matches!(s.chars().next(), Some('T' | 'B' | 'L' | 'R'));
+    if !ok(left_port) || !ok(right_port) {
+        return None;
+    }
+    Some(text.to_string())
+}
+
+/// 架构图（`architecture-beta`）的大纲：`group` → 分组，`service`/`junction` → 节点，
+/// 端口连线 → 边。**标签优先**：`service db(database)[Database]` 显示 `Database`，
+/// 不是图标名 `database`（旧实现会把 cloud / database / server 当成节点名）。
+fn mermaid_architecture(body: &str) -> Vec<OutlineGroup> {
+    let mut clusters = Vec::new();
+    let mut nodes = Vec::new();
+    let mut edges = Vec::new();
+    let mut seen_groups: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut seen_nodes: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    for (idx, raw) in body.lines().enumerate() {
+        let line = idx as u32 + 1;
+        let text = raw.trim();
+        if text.is_empty() || text.starts_with("%%") || text == "architecture-beta" {
+            continue;
+        }
+        if text.starts_with("align ") || text.starts_with("---") {
+            continue;
+        }
+        if let Some(rest) = strip_kw(text, "group") {
+            if let Some((id, label)) = architecture_decl(rest) {
+                if seen_groups.insert(id.clone()) {
+                    clusters.push(row(label.unwrap_or(id), "cluster", line));
+                }
+            }
+            continue;
+        }
+        if let Some(rest) = strip_kw(text, "service") {
+            if let Some((id, label)) = architecture_decl(rest) {
+                if seen_nodes.insert(id.clone()) {
+                    nodes.push(row(label.unwrap_or(id), "node", line));
+                }
+            }
+            continue;
+        }
+        if let Some(rest) = strip_kw(text, "junction") {
+            let id = rest.split_whitespace().next().unwrap_or("");
+            if !id.is_empty() && id != "in" && seen_nodes.insert(id.to_string()) {
+                nodes.push(row(id.to_string(), "node", line));
+            }
+            continue;
+        }
+        if let Some(edge) = architecture_edge(text) {
+            edges.push(row(edge, "edge", line));
+        }
+    }
+
+    [group("分组 group", clusters), group("节点", nodes), group("边", edges)]
+        .into_iter()
+        .flatten()
+        .collect()
+}
+
 fn mermaid(body: &str) -> Vec<OutlineGroup> {
+    if crate::format::mermaid_is_architecture(body) {
+        return mermaid_architecture(body);
+    }
     let mut clusters = Vec::new();
     let mut nodes = Vec::new();
     let mut edges = Vec::new();
@@ -339,6 +450,47 @@ mod tests {
         assert_eq!(titles, vec!["泳道 lane", "节点", "边"]);
         assert_eq!(g[0].rows[0].name, "Customer");
         assert_eq!(g[0].rows[0].line, 2);
+    }
+
+    /// 架构图的标签在 `[]` 里、图标名在 `()` 里。旧实现把括号里的图标名当成节点名，
+    /// 于是大纲显示 cloud / database / server —— 用户看不出这跟图有什么关系。
+    #[test]
+    fn mermaid_architecture_outline_uses_labels_not_icon_names() {
+        let src = concat!(
+            "architecture-beta\n",
+            "    group api(cloud)[API]\n",
+            "    service db(database)[Database] in api\n",
+            "    service server(server)[Server] in api\n",
+            "    junction j1 in api\n",
+            "    db:R -- L:server\n",
+            "    server:B -- T:j1\n",
+            "    align row db server\n",
+        );
+        let g = outline(FormatId::Mermaid, src);
+        let titles: Vec<_> = g.iter().map(|x| x.title.as_str()).collect();
+        assert_eq!(titles, vec!["分组 group", "节点", "边"]);
+
+        assert_eq!(g[0].rows[0].name, "API");
+        assert_eq!(g[0].rows[0].line, 2);
+
+        let names: Vec<_> = g[1].rows.iter().map(|r| r.name.as_str()).collect();
+        assert_eq!(names, vec!["Database", "Server", "j1"]);
+        assert!(!names.contains(&"cloud"), "图标名不能当节点名");
+
+        let edges: Vec<_> = g[2].rows.iter().map(|r| r.name.as_str()).collect();
+        assert_eq!(edges, vec!["db:R -- L:server", "server:B -- T:j1"]);
+        assert_eq!(g[2].rows[0].line, 6);
+    }
+
+    #[test]
+    fn mermaid_architecture_outline_skips_frontmatter_and_comments() {
+        let src = "---\nconfig:\n  architecture:\n    randomize: true\n---\n%% 说明\narchitecture-beta\nservice a(server)[A]\nservice b(database)[B]\na:R --> L:b\n";
+        let g = outline(FormatId::Mermaid, src);
+        let titles: Vec<_> = g.iter().map(|x| x.title.as_str()).collect();
+        assert_eq!(titles, vec!["节点", "边"]);
+        let names: Vec<_> = g[0].rows.iter().map(|r| r.name.as_str()).collect();
+        assert_eq!(names, vec!["A", "B"]);
+        assert_eq!(g[0].rows[0].line, 8);
     }
 
     #[test]

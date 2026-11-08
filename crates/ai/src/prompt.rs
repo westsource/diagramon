@@ -22,7 +22,11 @@ fn format_rules(id: FormatId) -> &'static str {
              判定节点用 {…}，圆角用 (…)，子图用 subgraph … end。\n\
              用户明确要求「泳道图 / 按角色、部门、系统分道」时，头部改用 `swimlane-beta LR`（或 TB）：\n\
              顶层每个 subgraph 就是一条泳道，节点与连线语法与 flowchart 相同；\n\
-             不要在同一份源码里同时写 flowchart 头，也不要用别的图类型冒充泳道。"
+             用户明确要求「架构图 / 部署图 / 服务与资源关系」时，头部改用 `architecture-beta`：\n\
+             分组写 `group id(图标)[名称]`，服务写 `service id(图标)[名称] in 分组`，连接点写 `junction id`；\n\
+             连线写 `a:R -- L:b`（方向只能用 L/T/R/B）；内置图标只有 cloud / database / disk / internet / server；\n\
+             架构图不支持连线标签、classDef 与 style —— 不要写。\n\
+             不要在同一份源码里同时写 flowchart / swimlane-beta / architecture-beta 头，也不要用别的图类型冒充。"
         }
         FormatId::Dot => {
             "语法要点：digraph 用 ->，graph 用 --；属性写在 [ ] 里；子图写成 subgraph cluster_xxx { … }（cluster_ 前缀才会画边框）。"
@@ -532,6 +536,7 @@ pub fn extract_code(text: &str, format: FormatId) -> Option<String> {
             body.starts_with("flowchart")
                 || body.starts_with("graph")
                 || body.starts_with("swimlane-beta")
+                || body.starts_with("architecture-beta")
                 || body.starts_with("sequenceDiagram")
                 || body.starts_with("stateDiagram")
                 || body.starts_with("classDiagram")
@@ -676,6 +681,23 @@ mod tests {
         let p = system_prompt(FormatId::Mermaid, AiIntent::Generate);
         assert!(p.contains("swimlane-beta"), "{p}");
         assert!(p.contains("泳道"), "{p}");
+    }
+
+    /// 架构图同理：不教语法，模型只会画 flowchart；同时必须说清它不支持的
+    /// 连线标签 / classDef，免得产出一份 parse 不过的源码。
+    #[test]
+    fn mermaid_rules_mention_architecture_when_asked() {
+        let p = system_prompt(FormatId::Mermaid, AiIntent::Generate);
+        assert!(p.contains("architecture-beta"), "{p}");
+        assert!(p.contains("架构图"), "{p}");
+        assert!(p.contains("classDef"), "{p}");
+    }
+
+    /// 模型直出裸的 `architecture-beta`（没有 ``` 围栏）也要能收下。
+    #[test]
+    fn extract_accepts_bare_architecture_block() {
+        let src = "architecture-beta\n  service a(server)[A]\n";
+        assert_eq!(extract_code(src, FormatId::Mermaid).as_deref(), Some(src.trim_end()));
     }
 
     #[test]

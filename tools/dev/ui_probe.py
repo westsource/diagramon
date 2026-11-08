@@ -4305,7 +4305,7 @@ def main() -> int:
         # 收尾：把开关还原，别把探针改过的设置留给后面（以及真机）
         ev('(async () => { await DGM.state.patchSettings({ ai: { enhance_enabled: false } }); return 1; })()')
 
-        # ---- 断言 4c2（放最后跑）：mindmap 不能拿到顶层 layout（2026-11-08）----
+        # ---- 断言 4c2（放最后跑）：mindmap / architecture 不能拿到顶层 layout（2026-11-08）----
         # mermaid 12 的 mindmap 只有在**用户没显式设 layout** 时才用自己的 `cose-bilkent`
         # （mindmap db 的 getData）。应用默认的 elk 一旦传进 initialize，就会被当成显式选择，
         # ELK 渲染器在脑图数据上直接抛 `Cannot read properties of null (reading 're')`。
@@ -4347,12 +4347,27 @@ def main() -> int:
             "      opts: document.querySelectorAll('#pv-opts .pv-opt').length,"
             "      status: !!document.querySelector('#statusbar [data-a=layout]')"
             "    };"
+            "    await DGM.state.setBodyNow(d.id, 'architecture-beta\\n  group api(cloud)[API]\\n  service db(database)[DB] in api\\n  service server(server)[SRV] in api\\n  db:R -- L:server\\n');"
+            "    cfg.length = 0;"
+            "    await DGM.preview.render();"
+            "    const st3 = document.querySelector('#canvas-stage');"
+            "    const svg3 = st3 && st3.querySelector('svg');"
+            "    out.arch = {"
+            "      detected: DGM.state.isArchitectureDoc(DGM.state.doc(d.id)),"
+            "      svg: !!svg3,"
+            "      services: svg3 ? svg3.querySelectorAll('.architecture-service').length : 0,"
+            "      err: !!(st3 && st3.querySelector('.preview-error')),"
+            "      hasLayout: cfg.length ? Object.prototype.hasOwnProperty.call(cfg[cfg.length - 1], 'layout') : true,"
+            "      opts: document.querySelectorAll('#pv-opts .pv-opt').length,"
+            "      status: !!document.querySelector('#statusbar [data-a=layout]'),"
+            "      subtitle: (document.querySelector('#preview-sub') || {}).textContent || ''"
+            "    };"
             "    await DGM.state.closeDoc(d.id);"
             "  } finally { mm0.initialize = rawInit; }"
             "  return JSON.stringify(out);"
             "})()"
         )
-        log(f"脑图渲染: {mm}")
+        log(f"脑图/架构图渲染: {mm}")
         try:
             r = json.loads(mm or "{}")
             if r.get("noMermaid"):
@@ -4376,6 +4391,19 @@ def main() -> int:
                     fails.append(f"flowchart 仍应拿到默认 elk 布局：{f}")
                 if f.get("opts") != 3 or not f.get("status"):
                     fails.append(f"flowchart 的布局入口不该消失：{f}")
+                a = r.get("arch") or {}
+                if not a.get("detected"):
+                    fails.append("`architecture-beta` 头部没有被识别成架构图")
+                if not a.get("svg") or not a.get("services"):
+                    fails.append(f"架构图没有渲染出图：{a}")
+                if a.get("err"):
+                    fails.append(f"架构图渲染落进报错面板：{a}")
+                if a.get("hasLayout"):
+                    fails.append(f"架构图的 initialize 配置里不该有 layout：{a}")
+                if a.get("opts") != 2 or a.get("status"):
+                    fails.append(f"架构图不该有布局入口（顶栏 2 颗 = 外观+配色，状态栏隐藏）：{a}")
+                if "fcose" not in str(a.get("subtitle", "")):
+                    fails.append(f"架构图副标题没有说明固定布局：{a}")
         except Exception as e:
             fails.append(f"断言 4c2 解析失败：{e} / {mm}")
 

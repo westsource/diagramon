@@ -809,8 +809,8 @@ window.DGM = window.DGM || {};
     parts.push(`<span class="st ${ui.status.kind === "err" ? "err" : ui.status.kind === "warn" ? "warn" : ui.status.kind === "ok" ? "accent" : ""}" id="status-msg">${esc(statusText)}</span>`);
     parts.push(`<span class="st-spacer"></span>`);
     // 有布局引擎的格式才有这一格（DOT 六种、D2 三种、Mermaid elk/dagre；
-    // 泳道图与脑图例外：布局分别是固定的 swimlane / cose-bilkent，没有可选项）
-    const layouts = d && !state.isSwimlaneDoc(d) && !state.isMindmapDoc(d) ? state.docFmt(d).layouts || [] : [];
+    // 泳道图 / 脑图 / 架构图例外：布局分别是固定的 swimlane / cose-bilkent / fcose）
+    const layouts = d && !state.isSwimlaneDoc(d) && !state.isMindmapDoc(d) && !state.isArchitectureDoc(d) ? state.docFmt(d).layouts || [] : [];
     if (layouts.length) {
       parts.push(`<button class="st" data-a="layout" title="${esc(t("status.layoutTip"))}">${icon("diagram", "ico-sm")}${esc(t("status.layout", { name: d.layout || layouts[0] }))}</button>`);
     }
@@ -859,6 +859,11 @@ window.DGM = window.DGM || {};
     // 脑图同理（固定 cose-bilkent）。
     if (state.isMindmapDoc(d)) {
       DGM.toast({ icon: "info", title: t("preview.layoutName"), sub: t("preview.mindmapFixed") });
+      return;
+    }
+    // 架构图同理（固定 fcose）。
+    if (state.isArchitectureDoc(d)) {
+      DGM.toast({ icon: "info", title: t("preview.layoutName"), sub: t("preview.architectureFixed") });
       return;
     }
     const fmt = state.docFmt(d);
@@ -1652,6 +1657,7 @@ window.DGM = window.DGM || {};
         if (!d) return { why: t("status.formatTip") };
         if (state.isSwimlaneDoc(d)) return { why: t("preview.swimlaneFixed") };
         if (state.isMindmapDoc(d)) return { why: t("preview.mindmapFixed") };
+        if (state.isArchitectureDoc(d)) return { why: t("preview.architectureFixed") };
         return (state.docFmt(d).layouts || []).length ? true : { why: t("status.formatTip") };
       },
     });

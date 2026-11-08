@@ -26,15 +26,9 @@ pub const MERMAID_LOOKS: [&str; 4] = ["auto", "classic", "neo", "handDrawn"];
 /// 首行关键词：泳道图的头部（Mermaid 12.2 里仍是 beta 图类型 `swimlane`）。
 pub const MERMAID_SWIMLANE_HEADER: &str = "swimlane-beta";
 
-/// 这份 Mermaid 源码是不是**泳道图**（`swimlane-beta` 头部）。
-///
-/// 泳道图与 flowchart 共用解析器，但**布局是它自己的**（`swimlane.layout = "swimlane"`）：
-/// 顶层 `subgraph` 就是一条泳道。前端若照旧把顶层 `layout: "elk"` 传进
-/// `mermaid.initialize`，会把泳道压回普通流程图（实测：2 条泳道 → 0 条）。
-///
-/// 判断要跳过 **front matter**（`---…---`）、`%%{init}%%` 指令（可跨行）与 `%%` 注释：
-/// 真实文档这三样都可能出现在第一行，直接取 `lines().next()` 会漏判。
-pub fn mermaid_is_swimlane(body: &str) -> bool {
+/// Mermaid 正文的**首个有效头部关键字**（小写）；跳过 front matter（`---…---`）、
+/// `%%{init}%%` 指令（可跨行）与 `%%` 注释。这三样都可能排在头部之前，直接取第一行会漏判。
+fn mermaid_header_keyword(body: &str) -> Option<String> {
     let mut front_matter = false;
     let mut seen_content = false;
     let mut directive = false;
@@ -73,12 +67,27 @@ pub fn mermaid_is_swimlane(body: &str) -> bool {
             seen_content = true;
             continue;
         }
-        return line
-            .split_whitespace()
-            .next()
-            .is_some_and(|kw| kw.eq_ignore_ascii_case(MERMAID_SWIMLANE_HEADER));
+        return line.split_whitespace().next().map(|kw| kw.to_ascii_lowercase());
     }
-    false
+    None
+}
+
+/// 这份 Mermaid 源码是不是**泳道图**（`swimlane-beta` 头部）。
+///
+/// 泳道图与 flowchart 共用解析器，但**布局是它自己的**（`swimlane.layout = "swimlane"`）：
+/// 顶层 `subgraph` 就是一条泳道。前端若照旧把顶层 `layout: "elk"` 传进
+/// `mermaid.initialize`，会把泳道压回普通流程图（实测：2 条泳道 → 0 条）。
+pub fn mermaid_is_swimlane(body: &str) -> bool {
+    mermaid_header_keyword(body).is_some_and(|kw| kw == MERMAID_SWIMLANE_HEADER)
+}
+
+/// 这份 Mermaid 源码是不是**架构图**（`architecture-beta` 头部）。
+///
+/// 架构图有自己的 fcose 力导向布局，**顶层 `layout` 对它无效** —— 实测同一份源码
+/// 传 `elk` / `dagre` / 不传 `layout`，节点坐标完全一致。与泳道图、脑图同理，
+/// 前端不该给这类文档提供"布局引擎"这个开关。
+pub fn mermaid_is_architecture(body: &str) -> bool {
+    mermaid_header_keyword(body).is_some_and(|kw| kw == "architecture-beta")
 }
 
 const MERMAID_BODY: &str = "flowchart TD\n    A([开始]) --> B[第一步]\n    B --> C{判断}\n    C -- 是 --> D([结束])\n    C -- 否 --> B\n";
@@ -241,6 +250,21 @@ mod tests {
     #[test]
     fn default_mermaid_body_is_not_swimlane() {
         assert!(!mermaid_is_swimlane(MERMAID_BODY));
+    }
+
+    /// 架构图（`architecture-beta`）与泳道图同一套头部跳过规则；普通流程图里只是
+    /// **标签里**出现这个词不算。
+    #[test]
+    fn architecture_detection_skips_front_matter_directives_and_comments() {
+        assert!(mermaid_is_architecture("architecture-beta\n  service db(database)[DB]\n"));
+        assert!(mermaid_is_architecture(
+            "---\ntitle: Arch\n---\n%% 说明\narchitecture-beta\n  service db(database)[DB]\n"
+        ));
+        assert!(mermaid_is_architecture("%%{init: {'theme': 'dark'}}%%\narchitecture-beta\n"));
+        assert!(!mermaid_is_architecture("flowchart TD\n  A[architecture-beta] --> B\n"));
+        assert!(!mermaid_is_architecture("graph LR\n  A --> B\n"));
+        assert!(!mermaid_is_architecture(""));
+        assert!(!mermaid_is_architecture("%% 只有注释\n"));
     }
 
     #[test]
