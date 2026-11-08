@@ -342,20 +342,13 @@ window.DGM = window.DGM || {};
     { label: "mi.dotDocs", url: "https://graphviz.org/doc/info/lang.html" },
     { label: "mi.d2Docs", url: "https://d2lang.com/tour/intro" },
   ];
+  /** 官网首页（帮助菜单底部那一条；关于窗口里的「官方主页」是同一地址）。 */
+  const SITE_HOME = "https://www.diagramon.com";
 
   function buildMenus() {
     const panels = state.panels();
     const activeId = state.active;
     const recent = (state.settings && state.settings.recent) || [];
-    // 模型子菜单：网关 + 本地合并后分组（形状与 AI 面板下拉一致）
-    const modelChildren = DGM.ai && DGM.ai.modelItems
-      ? DGM.ai.modelItems((m) => ({
-          label: m.name,
-          icon: "robot",
-          act: "model:" + m.id,
-          kbd: m.has_key ? "" : t("set.ai.keyMissing"),
-        }))
-      : [];
     const isText = state.isTextDoc(state.activeDoc());
 
     const recentItems = recent.slice(0, 6).map((r) => {
@@ -407,6 +400,8 @@ window.DGM = window.DGM || {};
           { label: t("mi.copy"), kbd: "Ctrl+C", act: "tip:tip.find" },
           { label: t("mi.paste"), kbd: "Ctrl+V", act: "tip:tip.find" },
           { label: t("mi.selectAll"), kbd: "Ctrl+A", act: "tip:tip.find" },
+          { sep: true },
+          { label: t("mi.appearance"), icon: "palette", act: "cmd:view.settings" },
         ],
       },
       {
@@ -415,7 +410,6 @@ window.DGM = window.DGM || {};
         items: [
           { label: t("mi.palette"), kbd: "Ctrl+Shift+P", icon: "bolt", act: "cmd:palette" },
           { sep: true },
-          { label: t("mi.appearance"), icon: "palette", act: "cmd:view.settings" },
           { label: t("mi.toggleTheme"), kbd: "Ctrl+K Ctrl+T", icon: "moon", act: "cmd:view.theme" },
           { sep: true },
           { label: t("mi.sidebar"), kbd: "Ctrl+B", icon: "panelLeft", act: "cmd:view.sidebar", check: true },
@@ -434,40 +428,20 @@ window.DGM = window.DGM || {};
         ],
       },
       {
-        id: "ai",
-        label: t("menu.ai"),
-        items: [
-          { label: t("mi.aiGenerate"), kbd: "Ctrl+I", icon: "sparkles", act: "cmd:ai.generate" },
-          { label: t("mi.aiVision"), kbd: "Ctrl+Shift+I", icon: "scan", act: "cmd:ai.vision" },
-          { label: t("mi.aiReview"), icon: "wand", act: "cmd:ai.review" },
-          { label: t("mi.aiExplain"), icon: "diagram", kbd: "Ctrl+Shift+E", act: "cmd:ai.explain" },
-          { label: t("mi.aiApply"), icon: "check", act: "cmd:ai.apply" },
-          { sep: true },
-          {
-            label: t("mi.aiModel"), icon: "robot",
-            // 分组规则与 AI 面板的下拉**共用** DGM.ai.modelItems（见那边注释：
-            // 网关与本地两组的凭据来源不同，混排会让人以为网关模型也要填 key）。
-            children: modelChildren.length
-              ? modelChildren
-              : [{ label: t("ai.noModels.title"), icon: "alert", act: "cmd:view.settings.ai" }],
-          },
-          { label: t("mi.aiHistory"), icon: "history", act: "cmd:ai.history" },
-          { sep: true },
-          { label: t("mi.aiSettings"), icon: "settings", act: "cmd:view.settings.ai" },
-        ],
-      },
-      {
         id: "help",
         label: t("menu.help"),
         items: [
-          { label: t("mi.shortcuts"), kbd: "Ctrl+K Ctrl+S", icon: "keyboard", act: "cmd:help.keys" },
+          // 分组：① 应用内帮助（怎么用）② 外部参考（格式文档）③ 应用自身（更新 / 官网 / 关于）。
+          // 关于固定压尾是桌面软件的惯例（VS Code、Firefox 的 Help 菜单同样如此）。
           { label: t("mi.guide"), icon: "info", act: "cmd:help.guide" },
+          { label: t("mi.shortcuts"), kbd: "Ctrl+K Ctrl+S", icon: "keyboard", act: "cmd:help.keys" },
           { label: t("mi.convertRef"), icon: "swap", act: "cmd:help.convertRef" },
           { sep: true },
           // 官方文档：点一下用系统浏览器打开（地址写死在 DOC_LINKS，不硬编码在菜单里）
           ...DOC_LINKS.map((d) => ({ label: t(d.label), icon: "globe", act: "link:" + d.url })),
           { sep: true },
           { label: t("mi.checkUpdate"), icon: "refresh", act: "cmd:help.update" },
+          { label: t("mi.website"), icon: "globe", act: "link:" + SITE_HOME },
           { label: t("mi.about"), icon: "info", act: "cmd:help.about" },
         ],
       },

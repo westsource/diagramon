@@ -1843,7 +1843,7 @@ def main() -> int:
         # 四个环节一起守，缺一个都会红：
         #   ① 未登录 → 网关模型恒为 0（靠它守住"登出必须清空"）
         #   ② 登录（有权益）→ 出现网关模型，且默认被指到第一个
-        #   ③ AI 面板下拉与 AI 菜单子菜单**两处**都要有分组小标题（两套渲染，别只测一处）
+        #   ③ AI 面板下拉要有分组小标题（菜单栏那个独立「AI」菜单已移除，2026-11-08）
         #   ④ 登出 → 清空，且默认不再指向网关别名
         gw = ev(
             "(async () => {"
@@ -1866,15 +1866,6 @@ def main() -> int:
             "  const onRow = document.querySelector('#pop .pop-row.on .lbl');"
             "  out.checked = onRow ? onRow.textContent.trim() : '';"
             "  if (DGM.pop) DGM.pop.hide();"
-            # 菜单栏那条是**另一套渲染**（menuItems 得原样透传 label2），单独验一次
-            "  const tb = [...document.querySelectorAll('#menubar .tb-item')].find(b => b.dataset.menu === 'ai');"
-            "  if (tb) { tb.click(); await wait(150); }"
-            "  const want = DGM.i18n.t('mi.aiModel');"
-            "  const row = [...document.querySelectorAll('#pop .pop-row')].find(b => b.textContent.indexOf(want) >= 0);"
-            "  if (row) { row.dispatchEvent(new MouseEvent('mouseenter', {bubbles: true})); await wait(250); }"
-            "  out.subLabels = [...document.querySelectorAll('#pop-sub .pop-label')].map(e => e.textContent.trim());"
-            "  out.subRows = [...document.querySelectorAll('#pop-sub .pop-row .lbl')].map(e => e.textContent.trim());"
-            "  document.body.click(); await wait(120);"
             "  await DGM.state.cloudLogout(); await wait(300);"
             "  out.afterLogoutGw = DGM.state.gatewayModels().length;"
             "  out.afterLogoutDefault = DGM.state.ai().default_model;"
@@ -1910,16 +1901,54 @@ def main() -> int:
                 fails.append(f"下拉里没有本地那组: {rows}")
             if "GLM-5.2" not in (g.get("checked") or ""):
                 fails.append(f"下拉没把网关默认模型标成选中: {g.get('checked')}")
-            if g.get("subLabels") != want_groups:
-                fails.append(f"AI 菜单的模型子菜单没有分组（label2 没透传？）: {g.get('subLabels')}")
-            if not any("gpt-4o" in r for r in (g.get("subRows") or [])):
-                fails.append(f"AI 菜单子菜单里没有本地那组: {g.get('subRows')}")
             if g.get("afterLogoutGw") != 0:
                 fails.append(f"登出后网关模型没清空: {g.get('afterLogoutGw')}")
             if g.get("afterLogoutIsGw"):
                 fails.append(f"登出后默认模型仍指向网关别名: {g.get('afterLogoutDefault')}")
         except Exception as e:
             log(f"（断言 20 解析失败：{e}）")
+
+        # ---- 断言 20b：菜单结构（2026-11-08 用户拍板）----
+        #   ① 顶级菜单里没有独立的「AI」（命令仍在命令面板 / AI 面板里可用）；
+        #   ②「设置…」挂在**编辑**菜单末尾（原先在视图菜单）；
+        #   ③ 帮助菜单：应用内帮助 → 格式文档 → 应用自身（更新 / 官网 / 关于），「关于」压尾。
+        menu = ev(
+            "(() => {"
+            "  const bar = [...document.querySelectorAll('#menubar .tb-item')];"
+            "  const rows = (id) => {"
+            "    const b = bar.find(x => x.dataset.menu === id);"
+            "    if (!b) return null;"
+            "    b.click();"
+            "    const r = [...document.querySelectorAll('#pop .pop-row .lbl')].map(e => e.textContent.trim());"
+            "    b.click();"
+            "    return r;"
+            "  };"
+            "  const T = (k) => DGM.i18n.t(k);"
+            "  return JSON.stringify({"
+            "    tops: bar.map(b => b.dataset.menu),"
+            "    edit: rows('edit'), help: rows('help'),"
+            "    tSettings: T('mi.appearance'), tWebsite: T('mi.website'), tAbout: T('mi.about'),"
+            "    tGuide: T('mi.guide'), tKeys: T('mi.shortcuts'), tConv: T('mi.convertRef'), tUpd: T('mi.checkUpdate'),"
+            "  });"
+            "})()"
+        )
+        log(f"菜单结构: {menu}")
+        try:
+            m = json.loads(menu)
+            if "ai" in (m.get("tops") or []):
+                fails.append(f"顶级菜单里还有独立的 AI 菜单: {m.get('tops')}")
+            if (m.get("edit") or [None])[-1] != m.get("tSettings"):
+                fails.append(f"「设置…」没挂到编辑菜单末尾: {m.get('edit')}")
+            want_help = [m.get("tGuide"), m.get("tKeys"), m.get("tConv")]
+            got_help = m.get("help") or []
+            if got_help[:3] != want_help:
+                fails.append(f"帮助菜单开头不是「使用指南 / 快捷键 / 转换能力」: {got_help[:3]}")
+            if got_help[-3:] != [m.get("tUpd"), m.get("tWebsite"), m.get("tAbout")]:
+                fails.append(f"帮助菜单尾部不是「检查更新 / 官网 / 关于」: {got_help[-3:]}")
+            if m.get("tAbout") != "关于":
+                fails.append(f"「关于」这一项应就是「关于」（不再带产品名）: {m.get('tAbout')}")
+        except Exception as e:
+            log(f"（断言 20b 解析失败：{e}）")
 
         # ---- 断言 21：保存对话框按**本标签页的格式**推荐扩展名 ----
         # 历史 bug 形态（v2 客户端踩过，见其 FileService.SaveFileAsync 的注释）：类型清单按注册表
