@@ -290,6 +290,45 @@ window.DGM = window.DGM || {};
    * 返回值是 `{ doc, notes }`：`notes` 是**这次转换的保真度说明**（与 Rust 方向共用同一套展示），
    * 目前只有一条 —— 上游把整张图兜底成了一块位图（见 `bitmapFallbackNote`）。
    */
+  /** 把 drawio 的 Mermaid 导入器产物压成**普通 mxCell**。
+   *
+   * 导入器会把每个 cell 包在 `<UserObject>` 里，并附上 `mermaidData` / `mermaidBaseStyle`
+   * / `mermaidId` 等往返元数据。图形本身已经是标准 `mxCell` + `mxGeometry`，这些包装
+   * 只是 drawio 用来"再编辑原始 Mermaid"的附属物；用户要的是干净的 drawio 文件，
+   * 所以把 id / label 搬进 mxCell、丢掉整层 UserObject 与所有 `mermaid*` 属性。
+   *
+   * 失败（XML 解析不了）就原样返回，绝不让"清理"毁掉转换结果。
+   */
+  function flattenDrawio(xml) {
+    if (typeof DOMParser === "undefined" || !xml) return xml;
+    let doc;
+    try {
+      doc = new DOMParser().parseFromString(xml, "application/xml");
+    } catch (e) {
+      return xml;
+    }
+    if (doc.querySelector("parsererror")) return xml;
+    const users = [...doc.querySelectorAll("UserObject")];
+    if (!users.length) return xml;
+    for (const uo of users.reverse()) {
+      const cell = [...uo.children].find((n) => n.nodeName === "mxCell");
+      if (!cell) continue;
+      const id = uo.getAttribute("id");
+      if (id && !cell.getAttribute("id")) cell.setAttribute("id", id);
+      const label = uo.getAttribute("label");
+      if (label != null && !cell.hasAttribute("value")) cell.setAttribute("value", label);
+      for (const attr of [...cell.attributes]) {
+        if (attr.name.startsWith("mermaid")) cell.removeAttribute(attr.name);
+      }
+      uo.replaceWith(cell);
+    }
+    try {
+      return new XMLSerializer().serializeToString(doc);
+    } catch (e) {
+      return xml;
+    }
+  }
+
   async function convertViaEngine(to, source, srcDoc, dir, opts2) {
     const doc = await state.newDoc(to);
     if (!doc) return null;
@@ -314,7 +353,7 @@ window.DGM = window.DGM || {};
     }
     DGM.canvas.setPendingConversion(to, payload, opts);
     await DGM.preview.render(); // 触发 show → 把源码交给引擎
-    const body = await DGM.canvas.waitForBody(to, doc.body || "");
+    let body = await DGM.canvas.waitForBody(to, doc.body || "");
     if (!body) {
       // 取不到就**留着这个标签页**让用户自己看画布，别静默关掉
       state.pushConvert({ from: dir.from, to, doc: srcDoc.name, ok: false, note: t("conv.engineEmpty") });
@@ -322,6 +361,18 @@ window.DGM = window.DGM || {};
       return null;
     }
     await state.setBodyNow(doc.id, body);
+    if (to === "drawio") {
+      const raw = body;
+      const clean = flattenDrawio(raw);
+      if (clean !== raw) {
+        body = clean;
+        await state.setBodyNow(doc.id, body);
+        // 承载页里还是导入器的旧图：不重载的话，保存时的 flush 会把带 UserObject /
+        // mermaidData 的旧 XML 又导出来（正文清洗了、画布没清）。重载后再等它真换成干净 XML。
+        DGM.canvas.reload(state.doc(doc.id) || doc);
+        await DGM.canvas.waitForBody(to, raw).catch(() => "");
+      }
+    }
     const note = bitmapFallbackNote(to, body);
     if (note) state.pushOutput(note, "warn");
     const notes = note ? [note] : [];
@@ -393,7 +444,9 @@ window.DGM = window.DGM || {};
     }
     const doc = await state.newDoc(dir.to);
     if (!doc) return null;
-    await state.setBodyNow(doc.id, made.xml);
+    // D2 → drawio 理论上已经是普通 mxCell；仍过一遍清洗，避免未来引擎换成 UserObject。
+    await state.setBodyNow(doc.id, flattenDrawio(made.xml));
+    DGM.canvas.reload(state.doc(doc.id) || doc);
     return { doc, notes: made.notes };
   }
 
