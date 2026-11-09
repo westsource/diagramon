@@ -1602,11 +1602,21 @@ struct D2Node {
     has_fill: bool,
 }
 
-/// D2 的扫描结果：节点 + 边（边的两端要保持顺序，才好写 `(a -> b).style.stroke`）。
+/// D2 的扫描结果：节点 + 边。
+///
+/// 边必须带上**运算符**（`->` / `--` / `<-`）：写回样式时用错运算符会被 D2 当成
+/// 另一条边（用户看到的就是"一根箭头变成两根"），`--` 用 `->` 甚至直接语法错。
 #[derive(Debug, Default)]
 struct D2Scan {
     nodes: Vec<D2Node>,
-    edges: Vec<(String, String)>,
+    edges: Vec<D2Edge>,
+}
+
+#[derive(Debug)]
+struct D2Edge {
+    from: String,
+    to: String,
+    op: &'static str,
 }
 
 /// 登记一个节点，返回它在 `out` 里的下标。
@@ -1644,12 +1654,15 @@ fn d2_touch(
 
 /// 一条引用路径（`a -> b -> c` 或 `(a -> b)` 里的那串）落地成节点 + 边。
 ///
-/// 边记的是**节点的 path**，不是裸 id —— `apply_d2` 直接把 `(pathA -> pathB)` 写进样式块。
+/// 边记的是**节点的 path** 与**运算符**，不是裸 id —— `apply_d2` 要把
+/// `(pathA OP pathB)[i]` 原样写进样式块；只写 `(a -> b)` 会把带标签的边
+/// 当成另一条新边，`--` 还会直接把语法写坏。
 fn d2_record_path(
     out: &mut Vec<D2Node>,
     idx_of: &mut std::collections::HashMap<String, usize>,
-    edges: &mut Vec<(String, String)>,
+    edges: &mut Vec<D2Edge>,
     path: &[String],
+    ops: &[&'static str],
     line: u32,
     groups: &[String],
 ) {
@@ -1660,15 +1673,17 @@ fn d2_record_path(
         .iter()
         .map(|s| out[idx_of[s.trim_matches('"')]].path.clone())
         .collect();
-    for w in resolved.windows(2) {
-        edges.push((w[0].clone(), w[1].clone()));
+    for (i, w) in resolved.windows(2).enumerate() {
+        if let Some(op) = ops.get(i) {
+            edges.push(D2Edge { from: w[0].clone(), to: w[1].clone(), op });
+        }
     }
 }
 
 fn d2_nodes(body: &str) -> D2Scan {
     let mut out: Vec<D2Node> = Vec::new();
     let mut idx_of: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
-    let mut edges: Vec<(String, String)> = Vec::new();
+    let mut edges: Vec<D2Edge> = Vec::new();
     // 首次见到就记下行号（同一节点后面再出现不改）
     let mut groups: Vec<String> = Vec::new();
     // `classes: { … }` / `style: { … }` 里面全是属性，不是节点。
@@ -1733,15 +1748,16 @@ fn d2_nodes(body: &str) -> D2Scan {
         let (lhs, rhs) = match line.split_once(':') {
             Some((l, r)) => (l.trim(), r.trim()),
             None => {
-                let path = split_d2_path(line);
-                d2_record_path(&mut out, &mut idx_of, &mut edges, &path, (idx + 1) as u32, &groups);
+                let (path, ops) = split_d2_connection(line);
+                d2_record_path(&mut out, &mut idx_of, &mut edges, &path, &ops, (idx + 1) as u32, &groups);
                 continue;
             }
         };
         // 逐条边的样式：`(a -> b).style.stroke: …`（用户手写或我们生成的形态）
+        // 这类行只用来登记节点；边本身已经在声明行记过，重复记会造成索引错位。
         if let Some(inner) = lhs.strip_prefix('(').and_then(|r| r.split(')').next()) {
-            let path = split_d2_path(inner);
-            d2_record_path(&mut out, &mut idx_of, &mut edges, &path, (idx + 1) as u32, &groups);
+            let (path, _) = split_d2_connection(inner);
+            d2_record_path(&mut out, &mut idx_of, &mut edges, &path, &[], (idx + 1) as u32, &groups);
             continue;
         }
         const D2_PROPS: [&str; 20] = [
@@ -1754,8 +1770,8 @@ fn d2_nodes(body: &str) -> D2Scan {
         }
         if lhs.contains("->") || lhs.contains("--") {
             // 边：两端都是节点，冒号右边是**边标签**，别当成节点标签
-            let path = split_d2_path(lhs);
-            d2_record_path(&mut out, &mut idx_of, &mut edges, &path, (idx + 1) as u32, &groups);
+            let (path, ops) = split_d2_connection(lhs);
+            d2_record_path(&mut out, &mut idx_of, &mut edges, &path, &ops, (idx + 1) as u32, &groups);
             continue;
         }
         // 属性行：`a.b.style.fill: "#fff"`
@@ -1815,12 +1831,42 @@ fn d2_nodes(body: &str) -> D2Scan {
     D2Scan { nodes: out, edges }
 }
 
-fn split_d2_path(text: &str) -> Vec<String> {
-    text.split("->")
-        .flat_map(|s| s.split("--"))
-        .map(|s| s.trim().trim_matches('"').to_string())
-        .filter(|s| !s.is_empty())
-        .collect()
+/// 拆分 D2 的连接表达式，**保留每一段的运算符**（`->` / `--` / `<-` / `<->`）。
+///
+/// 旧实现只按 `->` / `--` 切分，运算符在写回时统一成了 `->`：
+/// - 带标签的 `a -> b: "msg"` 写成 `(a -> b)`，D2 会把它当成**另一条无标签边**
+///   ⇒ 画面上一条箭头变成两条；
+/// - `a -- b` 写成 `(a -> b)` 则直接语法错。
+///
+/// `<->` 的引用形态在 D2 里不稳定（实测 `(a <-> b)[0]` 会多画），调用方跳过它。
+fn split_d2_connection(text: &str) -> (Vec<String>, Vec<&'static str>) {
+    const OPS: [&str; 4] = ["<->", "->", "<-", "--"];
+    let mut segs: Vec<String> = Vec::new();
+    let mut ops: Vec<&'static str> = Vec::new();
+    let mut start = 0usize;
+    let mut i = 0usize;
+    while i < text.len() {
+        let op = OPS.iter().find(|op| text[i..].starts_with(**op)).copied();
+        match op {
+            Some(op) => {
+                let seg = text[start..i].trim().trim_matches('"').to_string();
+                if !seg.is_empty() {
+                    segs.push(seg);
+                }
+                ops.push(op);
+                i += op.len();
+                start = i;
+            }
+            None => {
+                i += text[i..].chars().next().map(|c| c.len_utf8()).unwrap_or(1);
+            }
+        }
+    }
+    let tail = text[start..].trim().trim_matches('"').to_string();
+    if !tail.is_empty() {
+        segs.push(tail);
+    }
+    (segs, ops)
 }
 
 /// `a.b.style.fill` → (`a.b`, `style.fill`)；`a.b`（普通节点路径）→ None。
@@ -1919,12 +1965,28 @@ fn apply_d2(
             block.push_str(&format!("{path}.style.font-color: \"{text}\"\n"));
         }
     }
-    // 连线：D2 没有"全局边样式"，只能逐条写（`(a -> b).style.stroke`）。
-    // 端点是扫描时按文档顺序记下的，重跑同序，所以幂等。
+    // 连线：D2 没有"全局边样式"，只能逐条写。
+    //
+    // 引用必须带 **运算符 + 同端点边里的下标**：`(a -> b)[0].style.stroke`。
+    // 只写 `(a -> b)` 对带标签的边（`a -> b: "msg"`）会被 D2 当成另一条无标签边，
+    // 画面上就是"一根箭头变两根"；`--` 还会直接语法错。下标按文档顺序生成，
+    // 重跑同序，所以幂等。`<->` 的引用形态在 D2 里不稳定（实测会多画），跳过不改线色。
     if edges {
         let line = edge_swatch(seed, dark);
-        for (from, to) in &scan.edges {
-            block.push_str(&format!("({from} -> {to}).style.stroke: \"{line}\"\n"));
+        let mut seen: std::collections::HashMap<(String, String, &'static str), usize> =
+            std::collections::HashMap::new();
+        for e in &scan.edges {
+            if !matches!(e.op, "->" | "--" | "<-") {
+                continue;
+            }
+            let idx = seen
+                .entry((e.from.clone(), e.to.clone(), e.op))
+                .or_insert(0);
+            block.push_str(&format!(
+                "({} {} {})[{}].style.stroke: \"{}\"\n",
+                e.from, e.op, e.to, idx, line
+            ));
+            *idx += 1;
         }
     }
     block.push_str("# dgm-palette:end\n");
@@ -2584,6 +2646,43 @@ b -> c
         assert!(!twice.changed);
     }
 
+    /// 带标签的边必须用 `(a -> b)[0]` 引用。只写 `(a -> b)` 时 D2 会把它当成
+    /// 另一条无标签边 —— 用户看到的就是"一根箭头变成两根"。
+    #[test]
+    fn d2_labeled_edges_are_indexed_not_duplicated() {
+        let body = "a -> b: \"msg\"\n";
+        let r = paint(body, FormatId::D2, "pine", false, PaletteMode::All).unwrap();
+        assert!(r.body.contains("(a -> b)[0].style.stroke: \""), "{}", r.body);
+        assert!(!r.body.contains("(a -> b).style.stroke:"), "{}", r.body);
+    }
+
+    /// 写回必须保留原运算符：`--` 换成 `->` 会语法错，`<-` 换成 `->` 会改错边。
+    #[test]
+    fn d2_edge_operators_are_preserved() {
+        let r = paint("a -- b\nc <- d\n", FormatId::D2, "pine", false, PaletteMode::All).unwrap();
+        assert!(r.body.contains("(a -- b)[0].style.stroke: \""), "{}", r.body);
+        assert!(r.body.contains("(c <- d)[0].style.stroke: \""), "{}", r.body);
+        assert!(!r.body.contains("(a -> b)"), "{}", r.body);
+        assert!(!r.body.contains("(c -> d)"), "{}", r.body);
+    }
+
+    /// 同一对端点之间的多条边靠下标区分；按文档顺序生成，幂等。
+    #[test]
+    fn d2_parallel_edges_get_distinct_indices() {
+        let body = "a -> b: \"one\"\na -> b: \"two\"\n";
+        let r = paint(body, FormatId::D2, "pine", false, PaletteMode::All).unwrap();
+        assert!(r.body.contains("(a -> b)[0].style.stroke: \""), "{}", r.body);
+        assert!(r.body.contains("(a -> b)[1].style.stroke: \""), "{}", r.body);
+    }
+
+    /// `<->` 的引用形态在 D2 里不稳定（实测会多画一条），宁可不改它的线色。
+    #[test]
+    fn d2_bidirectional_edges_are_left_alone() {
+        let r = paint("a <-> b\n", FormatId::D2, "pine", false, PaletteMode::All).unwrap();
+        assert!(!r.body.contains("(a <-> b)"), "{}", r.body);
+        assert!(!r.body.contains("(a -> b)"), "{}", r.body);
+    }
+
     #[test]
     fn edges_take_the_palette_but_stay_quiet() {
         // 线是"结构"，只借一点色系倾向：三种格式各有一条统一定义
@@ -2592,7 +2691,7 @@ b -> c
         let d = paint("digraph G {\n  A -> B;\n}\n", FormatId::Dot, "pine", false, PaletteMode::All).unwrap();
         assert!(d.body.contains("edge [color=\"#"), "{}", d.body);
         let t = paint("a -> b\n", FormatId::D2, "pine", false, PaletteMode::All).unwrap();
-        assert!(t.body.contains("(a -> b).style.stroke: \"#"), "{}", t.body);
+        assert!(t.body.contains("(a -> b)[0].style.stroke: \"#"), "{}", t.body);
 
         // 换色系 ⇒ 线色跟着换
         let line = |s: &str| {
