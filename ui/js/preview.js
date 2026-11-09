@@ -392,15 +392,17 @@ window.DGM = window.DGM || {};
     if (key === optsKey) return;
     optsKey = key;
     host.innerHTML = "";
-    if (!d || state.isCanvasDoc(d)) return;
+    if (!d) return;
     const fmt = state.docFmt(d);
     const looks = fmt.looks || [];
     const layouts = swimlane || mindmap || architecture ? [] : fmt.layouts || [];
-    if (!looks.length && !layouts.length) return;
+    // 画布型（drawio / Excalidraw）没有外观/布局，但**有配色**：原色与色系存在文件里。
+    const canPalette = (state.isTextDoc(d) || d.format === "drawio" || d.format === "excalidraw")
+      && (state.palettes || []).length > 0;
+    if (!looks.length && !layouts.length && !canPalette) return;
     if (looks.length) host.appendChild(buildOptBtn(d, "look", t("preview.look"), looks, optsCurLook(d)));
     if (layouts.length) host.appendChild(buildOptBtn(d, "layout", t("preview.layoutName"), layouts, d.layout || layouts[0]));
-    // 配色只在文本型出现（画布型没有节点角色，后端也会拒绝）
-    if (state.isTextDoc(d) && (state.palettes || []).length) host.appendChild(buildPaletteBtn(d));
+    if (canPalette) host.appendChild(buildPaletteBtn(d));
   }
 
   /* ------------------------------------------------------------------ 自动配色 */
@@ -434,6 +436,10 @@ window.DGM = window.DGM || {};
     const live = state.doc(d.id) || d;
     if (!state.schemeOf(live)) {
       schedule(); // 置空 = 不上色（清块由「无」那条路径负责）
+      return;
+    }
+    if (state.isCanvasDoc(live)) {
+      await paintCanvas(live, mode || "only_uncolored");
       return;
     }
     await paintDoc(live, mode || "only_uncolored");
@@ -493,6 +499,48 @@ window.DGM = window.DGM || {};
     if (picked.removed) bits.push(t("preview.palette.removed", { n: picked.removed }));
     DGM.status(bits.join(" · "), picked.skipped ? "warn" : "ok");
     schedule();
+  }
+
+  /** 画布正文以谁为准：正常情况用 flush 回来的（画布有最新编辑）；正文被外部
+   *  改过而画布还没看到时用正文（例如刚 setBody / 导入后立刻点配色）。 */
+  function canvasSource(live, flushed) {
+    const body = live.body || "";
+    if (typeof flushed !== "string" || !flushed.trim()) return body;
+    const seen = DGM.canvas.lastApplied ? DGM.canvas.lastApplied(live.format) : null;
+    if (seen != null && seen !== body) return body;
+    return flushed;
+  }
+
+  /** 画布型配色：先 flush 画布拿到最新正文，改完再让承载页重载。
+   *
+   * 不能走 `paintDoc`：画布的正文不是编辑器里的文本，写状态层后必须让承载页看到，
+   * 而 `canvas.show` 对同一文档刻意不重载（保护撤销历史）—— 用 `canvas.reload` 绕过。
+   */
+  async function paintCanvas(live, mode) {
+    if (!DGM.canvas || !DGM.canvas.supports(live.format)) {
+      throw new Error(t("preview.canvas.noHost", { name: state.docFmt(live).name, id: live.format }));
+    }
+    const eff = state.schemeOf(live);
+    if (!eff) return;
+    const flushed = await DGM.canvas.flush(live.format).catch(() => null);
+    const src = canvasSource(live, flushed);
+    const res = await state.paint(src, live.format, eff, mode || "only_uncolored");
+    const picked = { applied: res.applied, skipped: res.skipped, removed: res.styles_removed };
+    if (res.changed) {
+      await state.setBodyNow(live.id, res.body);
+      DGM.canvas.reload(state.doc(live.id) || live);
+    }
+    const bits = [t("preview.palette.applied", { name: paletteName(eff), n: picked.applied })];
+    if (picked.skipped) bits.push(t("preview.palette.skipped", { n: picked.skipped }));
+    if (picked.removed) bits.push(t("preview.palette.removed", { n: picked.removed }));
+    DGM.status(bits.join(" · "), picked.skipped ? "warn" : "ok");
+    schedule();
+  }
+
+  /** 按文档类型选择写回路径（文本走编辑器，画布走承载页重载）。 */
+  async function paintForDoc(live, mode) {
+    if (state.isCanvasDoc(live)) return paintCanvas(live, mode);
+    return paintDoc(live, mode);
   }
 
   function buildPaletteBtn(d) {
@@ -561,7 +609,7 @@ window.DGM = window.DGM || {};
             ok: t("preview.palette.writeOk"),
           });
           // 只重排"我们的"节点：手写颜色不该被一次换主题的点击覆盖
-          if (ok) await paintDoc(live, "only_uncolored");
+          if (ok) await paintForDoc(live, "only_uncolored");
         } else if (it.act === "ai") {
           await pickPaletteWithAi(d);
         } else if (it.act === "clear") {
@@ -590,6 +638,23 @@ window.DGM = window.DGM || {};
       ok: t("preview.palette.clearOk"),
     });
     if (!ok) return;
+    // 画布型：正文由承载页持有，先 flush，清完再让画布重载。
+    if (state.isCanvasDoc(live)) {
+      const flushed = await DGM.canvas.flush(live.format).catch(() => null);
+      const src = canvasSource(live, flushed);
+      const res = await state.clearPalette(src, live.format);
+      if (res.changed) {
+        await state.setBodyNow(live.id, res.body);
+        DGM.canvas.reload(state.doc(live.id) || live);
+      }
+      await state.setScheme(live.id, "");
+      schedule();
+      DGM.status(
+        res.changed ? t("preview.palette.cleared") : t("preview.palette.clearNothing"),
+        res.changed ? "ok" : "",
+      );
+      return;
+    }
     // ① 本地：删掉我们生成的那一段（确定性、零成本）
     const res = await state.clearPalette(live.body, live.format);
     // 正文改动：落盘由自动保存设置决定（同 applyScheme）
@@ -641,7 +706,8 @@ window.DGM = window.DGM || {};
     await state.patchSettings({ palette_edges: !on });
     DGM.status(t(on ? "preview.palette.edgesOff" : "preview.palette.edgesOn"), "");
     const d = state.activeDoc();
-    if (d && state.isTextDoc(d) && state.schemeOf(d) && hasPaletteBlock(d)) await paintDoc(d, "only_uncolored");
+    if (d && state.isCanvasDoc(d) && state.schemeOf(d)) await paintCanvas(d, "only_uncolored");
+    else if (d && state.isTextDoc(d) && state.schemeOf(d) && hasPaletteBlock(d)) await paintDoc(d, "only_uncolored");
     else schedule();
   }
 

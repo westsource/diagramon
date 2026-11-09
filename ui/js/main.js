@@ -1255,15 +1255,24 @@ window.DGM = window.DGM || {};
             (r3.body.match(/^class .* lvl-/gm) || []).join() === (r1.body.match(/^class .* lvl-/gm) || []).join(),
           r3.body.length,
         );
-        let canvasErr = "";
-        try {
-          await invoke("palette_apply", {
-            req: { body: "{}", format: "drawio", palette: "pine", dark: false, mode: "all" },
-          });
-        } catch (e) {
-          canvasErr = String((e && e.message) || e);
+        // 画布型：原色与色系存进文件（drawio 自定义 style 键 / Excalidraw customData），
+        // 清除要能恢复手写颜色。这条不能只测"能写"——写坏画布文档比不支持更糟。
+        {
+          const drawio = '<mxfile><diagram><mxGraphModel><root><mxCell id="0"/><mxCell id="1" parent="0"/><mxCell id="a" value="入口" vertex="1" parent="1" style="ellipse;whiteSpace=wrap;html=1;"/><mxCell id="e" edge="1" parent="1" source="a" target="a" style="endArrow=classic;"/></root></mxGraphModel></diagram></mxfile>';
+          const dr = await invoke("palette_apply", { req: { body: drawio, format: "drawio", palette: "pine", dark: false, mode: "all" } });
+          ok("drawio 配色写进 cell style", dr.changed && dr.body.includes("dgmPalette=pine") && dr.body.includes("fillColor="), `${dr.applied} 个顶点`);
+          const dc = await invoke("palette_clear", { req: { body: dr.body, format: "drawio" } });
+          ok("drawio 清除恢复原色与 style", dc.changed && !dc.body.includes("dgmPalette") && !dc.body.includes("fillColor="), dc.body.length);
+          const ex = JSON.stringify({ type: "excalidraw", version: 2, elements: [{ id: "a", type: "rectangle", x: 0, y: 0, width: 80, height: 40, strokeColor: "#ff0000", backgroundColor: "#ffffff", version: 1, versionNonce: 1 }], appState: {}, files: {} });
+          const er = await invoke("palette_apply", { req: { body: ex, format: "excalidraw", palette: "pine", dark: false, mode: "all" } });
+          ok("Excalidraw 配色写进 customData", er.changed && er.body.includes("dgmPalette") && er.body.includes("dgmOriginal"), `${er.applied} 个元素`);
+          const ec = await invoke("palette_clear", { req: { body: er.body, format: "excalidraw" } });
+          ok("Excalidraw 清除恢复原色", ec.changed && !ec.body.includes("dgmPalette") && ec.body.includes("#ff0000"), ec.body.length);
+          const cvd = await invoke("doc_new", { format: "drawio" });
+          const cv = await invoke("doc_set_scheme", { id: cvd.id, scheme: "pine" });
+          ok("画布型也能记住配色色系", cv && cv.scheme === "pine", cv && cv.scheme);
+          await invoke("doc_close", { id: cvd.id });
         }
-        ok("画布型如实拒绝配色", canvasErr.includes("画布型"), canvasErr);
 
         // D2：我们靠"后写的属性覆盖先前的"实现整篇重排 —— 这条假设必须真渲染一次验，
         // 否则 D2 上的「重排」可能是个空操作（用户点了没变化）。

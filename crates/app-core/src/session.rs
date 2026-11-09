@@ -229,7 +229,7 @@ impl Session {
     /// 与 `set_layout` 的"拒绝而不是静默改写"同一套约定。
     pub fn set_scheme(&mut self, id: &str, scheme: Option<String>) -> bool {
         match self.entry_mut(id) {
-            Some(e) if format::info(e.doc.format).surface == app_ipc::Surface::Text => match &scheme {
+            Some(e) => match &scheme {
                 None => {
                     e.doc.scheme = None;
                     true

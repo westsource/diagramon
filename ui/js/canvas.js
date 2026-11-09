@@ -581,6 +581,23 @@ window.DGM = window.DGM || {};
   }
 
   /**
+   * 用文档里的新正文强制重载画布（配色等"改正文后要让承载页看到"的场景）。
+   *
+   * `show()` 对同一文档会刻意不重载（保护撤销历史）；这里必须绕过它。
+   * 重载前先 `drain` 一次：flush 之后迟到的 autosave 仍应按旧文档结清，
+   * 直接清 `loadedDoc` 会把这些事件当成无主内容丢掉。
+   */
+  function reload(doc) {
+    if (!doc || !HOST_SRC[doc.format]) return false;
+    const e = hosts[doc.format];
+    if (!e || !e.frame) return false;
+    drain(doc.format);
+    e.loadedDoc = null;
+    e.lastApplied = doc.body || "";
+    return show(doc);
+  }
+
+  /**
    * 等画布产出**与 `before` 不同**的正文。
    *
    * 转换用：把 Mermaid 源码交给引擎解析后要取回结果。不能固定 sleep ——
@@ -722,6 +739,7 @@ window.DGM = window.DGM || {};
     hide,
     teardown,
     flush,
+    reload,
     waitForBody,
     exportPng,
     loadMermaid,
@@ -734,6 +752,7 @@ window.DGM = window.DGM || {};
     hostZoomBy,
     isReady: (format) => Boolean(hosts[format] && hosts[format].ready),
     loadedDoc: (format) => (hosts[format] ? hosts[format].loadedDoc : null),
+    lastApplied: (format) => (hosts[format] ? hosts[format].lastApplied : ""),
     supports: (format) => Boolean(HOST_SRC[format]),
     /** 被代际过滤丢掉的事件数（探针断言「没丢正常事件」用；正常使用下应为 0）。 */
     staleDropped: () => staleDropped,

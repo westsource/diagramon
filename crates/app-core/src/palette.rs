@@ -15,19 +15,22 @@
 //!   * 落地是**纯函数**（正文进、正文出，不读会话），可以在单测里钉死，也可以被
 //!     前端在任何时刻重跑（换色系 = 重新展开，0 次模型调用）。
 //!
-//! 三个文本格式的落地方式（都能被 `convert` 认，换格式时颜色跟着走）：
+//! 五个格式的落地方式（文本格式的颜色能被 `convert` 认，换格式时跟着走）：
 //!
 //! | 格式 | 怎么写 | 为什么这么写 |
 //! |---|---|---|
 //! | Mermaid | 文档末尾追加 `classDef lvl-* …` + `class A,B lvl-*`（分组再追加 `style <subgraphId>`） | classDef 是 Mermaid 唯一不给节点加噪音的批量上色方式；`style` 是唯一能给**框**上色的方式 |
 //! | DOT | 文档末尾追加 `A [fillcolor=…, color=…, fontcolor=…]` | DOT 允许后出现的语句覆盖属性，不必改原文 |
 //! | D2 | 文档末尾追加 `A.style.fill: …` | D2 的属性后写者生效；不碰用户已有的 `classes:` 块 |
+//! | drawio | 每个 cell 的 `style` 里写 `fillColor/strokeColor/fontColor` + `dgmPalette/dgmOrig*` | 未知 style 键 drawio 导出会保留；原色与色系跟着文件走，不需要应用侧影子状态 |
+//! | Excalidraw | element 的 `strokeColor/backgroundColor` + `customData.dgmPalette/dgmOriginal` | element 是唯一的颜色载体；`customData` 随场景 JSON 保存 |
 //!
 //! 生成的内容一律用注释包在 `dgm-palette:begin/end` 之间 —— 重跑就是替换这一块，
 //! **幂等**，且用户看得见"哪些行是程序加的"。
 //!
 //! 已知边界（如实写下来，不假装支持）：
-//!   * 画布型（drawio / Excalidraw）没有稳定的节点角色，直接拒绝；
+//!   * 画布型（drawio / Excalidraw）按元素形状/标签上色；原色与色系存在
+//!     drawio 的自定义 style 键 / Excalidraw 的 `customData` 里，支持换色与清除；
 //!   * Mermaid 只有 flowchart 能这么上色（序列图/状态图/类图没有 classDef）；
 //!   * 色值落进文档后**不跟随主题** —— 换主题要重新点一次配色；
 //!   * "已有颜色"只认**真的带颜色**的 `classDef`（或 `style`）：用户把 `classDef` 删了、
@@ -433,33 +436,29 @@ pub fn apply(
         FormatId::Mermaid => apply_mermaid(body, seed, dark, edges, mode),
         FormatId::Dot => apply_dot(body, seed, dark, edges, mode),
         FormatId::D2 => apply_d2(body, seed, dark, edges, mode),
-        FormatId::Drawio | FormatId::Excalidraw => Err(
-            "画布型格式没有稳定的节点角色，自动配色只在 Mermaid / DOT / D2 上生效"
-                .to_string(),
-        ),
+        FormatId::Drawio => apply_drawio(body, seed, dark, edges, mode),
+        FormatId::Excalidraw => apply_excalidraw(body, seed, dark, edges, mode),
     }
 }
 
 /// 清除配色：把程序生成的那一段**整块**删掉。
 ///
 /// 与「关闭自动配色」的区别：那个只是不再上色，已经写进文档的 `classDef` 会一直留着；
-/// 这里是真正把它拿掉。手写样式/用户自己的 class **一个都不碰** —— 我们只删自己标记块里的行。
+/// 这里是真正把它拿掉。手写样式/用户自己的 class **一个都不碰** —— 我们只删自己写的标记。
 ///
-/// 画布型没有我们的块，返回"没变"（不是错误：在画布型上点清除本来就该是空操作）。
+/// 画布型（drawio / Excalidraw）没有注释块：按元素里存的 `dgmOriginal`
+/// 恢复原色、删掉标记；没有标记就返回"没变"。
 pub fn clear(body: &str, format: FormatId) -> PaletteApplyRes {
+    match format {
+        FormatId::Drawio => return clear_drawio(body),
+        FormatId::Excalidraw => return clear_excalidraw(body),
+        _ => {}
+    }
     let (begin, end) = match format {
         FormatId::Mermaid => ("%% dgm-palette:begin", "%% dgm-palette:end"),
         FormatId::Dot => ("// dgm-palette:begin", "// dgm-palette:end"),
         FormatId::D2 => ("# dgm-palette:begin", "# dgm-palette:end"),
-        FormatId::Drawio | FormatId::Excalidraw => {
-            return PaletteApplyRes {
-                body: body.to_string(),
-                changed: false,
-                applied: 0,
-                skipped: 0,
-                styles_removed: 0,
-            }
-        }
+        FormatId::Drawio | FormatId::Excalidraw => unreachable!(),
     };
     let (out, removed) = strip_block(body, begin, end);
     PaletteApplyRes {
@@ -478,11 +477,16 @@ pub fn clear(body: &str, format: FormatId) -> PaletteApplyRes {
 /// 新块第一行带 `id=<id>`；老块（3.11.3/3.11.4 早期）只有中文名，按名字反向匹配 ——
 /// 兼容它们不是洁癖：用户盘上已经有那种文件了。
 pub fn block_palette(body: &str, format: FormatId) -> Option<String> {
+    match format {
+        FormatId::Drawio => return drawio_block_palette(body),
+        FormatId::Excalidraw => return excalidraw_block_palette(body),
+        _ => {}
+    }
     let marker = match format {
         FormatId::Mermaid => "%% dgm-palette:begin",
         FormatId::Dot => "// dgm-palette:begin",
         FormatId::D2 => "# dgm-palette:begin",
-        FormatId::Drawio | FormatId::Excalidraw => return None,
+        FormatId::Drawio | FormatId::Excalidraw => unreachable!(),
     };
     let line = body.lines().find(|l| l.trim_start().starts_with(marker))?;
     if let Some(rest) = line.split("id=").nth(1) {
@@ -501,7 +505,7 @@ pub fn block_palette(body: &str, format: FormatId) -> Option<String> {
 /// 探测：已经烘焙过就照它，否则按图的内容挑一个。
 pub fn probe(body: &str, format: FormatId) -> PaletteProbe {
     if matches!(format, FormatId::Drawio | FormatId::Excalidraw) {
-        return PaletteProbe::default();
+        return PaletteProbe { baked: block_palette(body, format), suggested: None, why: None };
     }
     if let Some(baked) = block_palette(body, format) {
         return PaletteProbe { baked: Some(baked), suggested: None, why: None };
@@ -2000,6 +2004,788 @@ fn apply_d2(
     Ok(PaletteApplyRes { changed: out != body, body: out, applied, skipped, styles_removed: 0 })
 }
 
+/* ---------------- drawio / Excalidraw（画布型） ----------------
+ *
+ * 画布型和三个文本格式的关键差别：没有可往返的注释块。原色与色系必须**存进文件本身**：
+ *   drawio     → 每个 cell 的 style 里加 `dgmPalette` / `dgmOrig*`（实测 drawio 导出保留未知键）
+ *   Excalidraw → 每个 element 的 `customData` 里加 `dgmPalette` / `dgmOriginal`（实测保留）
+ * 于是"换色 / 清除 / 保留手写颜色"都能做，不需要在应用侧另存一份影子状态。
+ */
+
+fn xml_unescape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut rest = s;
+    while let Some(i) = rest.find('&') {
+        out.push_str(&rest[..i]);
+        rest = &rest[i..];
+        let Some(end) = rest.find(';') else {
+            out.push_str(rest);
+            return out;
+        };
+        let ent = &rest[1..end];
+        let ch = match ent {
+            "amp" => Some('&'),
+            "lt" => Some('<'),
+            "gt" => Some('>'),
+            "quot" => Some('"'),
+            "apos" => Some('\''),
+            "nbsp" => Some(' '),
+            _ if ent.starts_with("#x") || ent.starts_with("#X") => {
+                u32::from_str_radix(&ent[2..], 16).ok().and_then(char::from_u32)
+            }
+            _ if ent.starts_with('#') => ent[1..].parse::<u32>().ok().and_then(char::from_u32),
+            _ => None,
+        };
+        match ch {
+            Some(c) => out.push(c),
+            None => out.push_str(&rest[..=end]),
+        }
+        rest = &rest[end + 1..];
+    }
+    out.push_str(rest);
+    out
+}
+
+fn xml_escape_attr(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('"', "&quot;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+}
+
+/// `<mxCell ...>` 的结束 `>`（引号里的 `>` 不算）。
+fn xml_tag_end(src: &str, start: usize) -> Option<usize> {
+    let b = src.as_bytes();
+    let mut i = start;
+    let mut quote = 0u8;
+    while i < b.len() {
+        let c = b[i];
+        if quote != 0 {
+            if c == quote {
+                quote = 0;
+            }
+        } else if c == b'"' || c == b'\'' {
+            quote = c;
+        } else if c == b'>' {
+            return Some(i);
+        }
+        i += 1;
+    }
+    None
+}
+
+/// 标签里某个属性的**值字符区间**（不含引号）。
+fn attr_span(tag: &str, name: &str) -> Option<(usize, usize)> {
+    let b = tag.as_bytes();
+    let mut i = 1usize;
+    while i < b.len() && !b[i].is_ascii_whitespace() && b[i] != b'>' && b[i] != b'/' {
+        i += 1;
+    }
+    while i < b.len() {
+        while i < b.len() && b[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        if i >= b.len() || b[i] == b'>' || (b[i] == b'/' && i + 1 < b.len() && b[i + 1] == b'>') {
+            break;
+        }
+        let ks = i;
+        while i < b.len() && !b[i].is_ascii_whitespace() && b[i] != b'=' && b[i] != b'>' {
+            i += 1;
+        }
+        let key = &tag[ks..i];
+        while i < b.len() && b[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        if i < b.len() && b[i] == b'=' {
+            i += 1;
+            while i < b.len() && b[i].is_ascii_whitespace() {
+                i += 1;
+            }
+            if i < b.len() && (b[i] == b'"' || b[i] == b'\'') {
+                let q = b[i];
+                i += 1;
+                let vs = i;
+                while i < b.len() && b[i] != q {
+                    i += 1;
+                }
+                if key == name {
+                    return Some((vs, i));
+                }
+                i += 1;
+            } else {
+                let vs = i;
+                while i < b.len() && !b[i].is_ascii_whitespace() && b[i] != b'>' {
+                    i += 1;
+                }
+                if key == name {
+                    return Some((vs, i));
+                }
+            }
+        }
+    }
+    None
+}
+
+fn attr_string(tag: &str, name: &str) -> Option<String> {
+    attr_span(tag, name).map(|(a, b)| xml_unescape(&tag[a..b]))
+}
+
+/// 替换/插入属性；返回新的标签字符串。
+fn set_attr(tag: &str, name: &str, value: &str) -> String {
+    let mut out = tag.to_string();
+    if let Some((a, b)) = attr_span(tag, name) {
+        out.replace_range(a..b, &xml_escape_attr(value));
+    } else {
+        let at = if out.ends_with("/>") { out.len() - 2 } else { out.len().saturating_sub(1) };
+        out.insert_str(at, &format!(" {name}=\"{}\"", xml_escape_attr(value)));
+    }
+    out
+}
+
+fn style_entries(style: &str) -> Vec<(String, Option<String>)> {
+    style
+        .split(';')
+        .filter_map(|part| {
+            let part = part.trim();
+            if part.is_empty() {
+                return None;
+            }
+            Some(match part.split_once('=') {
+                Some((k, v)) => (k.trim().to_string(), Some(v.trim().to_string())),
+                None => (part.to_string(), None),
+            })
+        })
+        .collect()
+}
+
+fn style_get<'a>(entries: &'a [(String, Option<String>)], key: &str) -> Option<&'a str> {
+    entries.iter().find(|(k, _)| k == key).and_then(|(_, v)| v.as_deref())
+}
+
+fn style_set(entries: &mut Vec<(String, Option<String>)>, key: &str, value: Option<&str>) {
+    if let Some((_, v)) = entries.iter_mut().find(|(k, _)| k == key) {
+        *v = value.map(str::to_string);
+        return;
+    }
+    entries.push((key.to_string(), value.map(str::to_string)));
+}
+
+fn style_remove(entries: &mut Vec<(String, Option<String>)>, key: &str) {
+    entries.retain(|(k, _)| k != key);
+}
+
+fn style_join(entries: &[(String, Option<String>)]) -> String {
+    let body: Vec<String> = entries
+        .iter()
+        .map(|(k, v)| match v {
+            Some(v) => format!("{k}={v}"),
+            None => k.clone(),
+        })
+        .collect();
+    if body.is_empty() {
+        String::new()
+    } else {
+        format!("{};", body.join(";"))
+    }
+}
+
+fn plain_text(value: &str) -> String {
+    let mut out = String::new();
+    let mut in_tag = false;
+    for c in xml_unescape(value).chars() {
+        match c {
+            '<' => in_tag = true,
+            '>' => in_tag = false,
+            _ if !in_tag => out.push(c),
+            _ => {}
+        }
+    }
+    out.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+#[derive(Clone)]
+struct DrawioCell {
+    start: usize,
+    end: usize,
+    id: String,
+    style: String,
+    value: String,
+    vertex: bool,
+    edge: bool,
+}
+
+fn drawio_cells(body: &str) -> Vec<DrawioCell> {
+    // `<UserObject label="…" id="…">` 包裹的 cell：标签在 UserObject 上。
+    let mut labels: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    let mut i = 0usize;
+    while let Some(p) = body[i..].find("<UserObject") {
+        let s = i + p;
+        let Some(e) = xml_tag_end(body, s) else { break };
+        let tag = &body[s..=e];
+        if let (Some(id), Some(label)) = (attr_string(tag, "id"), attr_string(tag, "label")) {
+            labels.insert(id, plain_text(&label));
+        }
+        i = e + 1;
+    }
+
+    let mut out = Vec::new();
+    let mut i = 0usize;
+    while let Some(p) = body[i..].find("<mxCell") {
+        let s = i + p;
+        let Some(e) = xml_tag_end(body, s) else { break };
+        let tag = &body[s..=e];
+        let id = attr_string(tag, "id").unwrap_or_default();
+        let mut value = attr_string(tag, "value").unwrap_or_default();
+        if value.is_empty() {
+            value = labels.get(&id).cloned().unwrap_or_default();
+        }
+        out.push(DrawioCell {
+            start: s,
+            end: e + 1,
+            id,
+            style: attr_string(tag, "style").unwrap_or_default(),
+            value: plain_text(&value),
+            vertex: attr_string(tag, "vertex").as_deref() == Some("1"),
+            edge: attr_string(tag, "edge").as_deref() == Some("1"),
+        });
+        i = e + 1;
+    }
+    out
+}
+
+fn drawio_role(cell: &DrawioCell) -> Option<&'static str> {
+    let e = style_entries(&cell.style);
+    let flag = |k: &str| e.iter().any(|(key, v)| key == k && v.as_deref() != Some("0"));
+    let shape = style_get(&e, "shape").unwrap_or("");
+    if flag("rhombus") || shape.contains("rhombus") {
+        return Some("decide");
+    }
+    if flag("ellipse") || shape == "ellipse" || shape == "doubleEllipse" {
+        return Some("entry");
+    }
+    if shape.contains("cylinder") || shape.contains("database") || flag("cylinder") {
+        return Some("data");
+    }
+    if shape.contains("cloud") || flag("cloud") {
+        return Some("ext");
+    }
+    if shape.contains("note") || flag("note") {
+        return Some("note");
+    }
+    role_from_label(&cell.value)
+}
+
+fn drawio_colored(e: &[(String, Option<String>)]) -> bool {
+    for key in ["fillColor", "strokeColor"] {
+        if let Some(v) = style_get(e, key) {
+            let v = v.to_ascii_lowercase();
+            if !v.is_empty() && v != "none" && v != "#ffffff" && v != "#000000" {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn restore_style_key(e: &mut Vec<(String, Option<String>)>, key: &str, orig: &str) {
+    let value = style_get(e, orig).map(str::to_string);
+    if let Some(v) = value {
+        if v == "-" {
+            style_remove(e, key);
+        } else {
+            style_set(e, key, Some(&v));
+        }
+    }
+}
+
+fn unchanged(body: &str) -> PaletteApplyRes {
+    PaletteApplyRes {
+        body: body.to_string(),
+        changed: false,
+        applied: 0,
+        skipped: 0,
+        styles_removed: 0,
+    }
+}
+
+fn apply_drawio(
+    body: &str,
+    seed: &Seed,
+    dark: bool,
+    edges: bool,
+    mode: PaletteMode,
+) -> Result<PaletteApplyRes, String> {
+    let cells = drawio_cells(body);
+    if cells.is_empty() {
+        return Ok(unchanged(body));
+    }
+    let mut items = Vec::new();
+    let mut skipped = 0usize;
+    for cell in &cells {
+        if !cell.vertex || cell.edge || cell.id == "0" || cell.id == "1" {
+            continue;
+        }
+        let e = style_entries(&cell.style);
+        if e.iter().any(|(k, _)| k == "group") {
+            continue; // 容器自己不是节点；子节点各自上色
+        }
+        let ours = style_get(&e, "dgmPalette").is_some();
+        let colored = !ours && drawio_colored(&e);
+        // 画布没有"显式角色声明"；OnlyUncolored 的跳过必须在这里做，
+        // 不能交给 plan —— 它看到 label 推断出的 role 就不跳了。
+        if mode == PaletteMode::OnlyUncolored && colored {
+            skipped += 1;
+            continue;
+        }
+        items.push((
+            cell.id.clone(),
+            drawio_role(cell),
+            colored,
+            Some(cell.value.clone()),
+            None,
+            None,
+        ));
+    }
+    let (by_slot, _, _) = plan(items, PaletteMode::All, &[]);
+    let mut slot_of: std::collections::HashMap<&str, &str> = std::collections::HashMap::new();
+    for (slot, ids) in &by_slot {
+        for id in ids {
+            slot_of.insert(id.as_str(), slot.as_str());
+        }
+    }
+
+    let mut applied = 0usize;
+    let mut reps: Vec<(usize, usize, String)> = Vec::new();
+    for cell in &cells {
+        let mut e = style_entries(&cell.style);
+        let mut changed = false;
+        if let Some(slot) = slot_of.get(cell.id.as_str()) {
+            let (fill, stroke, text) = slot_swatch(seed, slot, dark, 1);
+            for (key, orig) in [
+                ("fillColor", "dgmOrigFillColor"),
+                ("strokeColor", "dgmOrigStrokeColor"),
+                ("fontColor", "dgmOrigFontColor"),
+            ] {
+                if style_get(&e, orig).is_none() {
+                    let cur = style_get(&e, key).unwrap_or("-").to_string();
+                    style_set(&mut e, orig, Some(&cur));
+                }
+            }
+            style_set(&mut e, "fillColor", Some(&fill));
+            style_set(&mut e, "strokeColor", Some(&stroke));
+            style_set(&mut e, "fontColor", Some(&text));
+            style_set(&mut e, "dgmPalette", Some(seed.id));
+            applied += 1;
+            changed = true;
+        }
+        if cell.edge {
+            let ours = style_get(&e, "dgmPalette").is_some();
+            if edges {
+                if !(mode == PaletteMode::OnlyUncolored && drawio_colored(&e) && !ours) {
+                    let line = edge_swatch(seed, dark);
+                    if style_get(&e, "dgmOrigStrokeColor").is_none() {
+                        let cur = style_get(&e, "strokeColor").unwrap_or("-").to_string();
+                        style_set(&mut e, "dgmOrigStrokeColor", Some(&cur));
+                    }
+                    style_set(&mut e, "strokeColor", Some(&line));
+                    style_set(&mut e, "dgmPalette", Some(seed.id));
+                    changed = true;
+                }
+            } else if ours {
+                restore_style_key(&mut e, "strokeColor", "dgmOrigStrokeColor");
+                style_remove(&mut e, "dgmOrigStrokeColor");
+                style_remove(&mut e, "dgmPalette");
+                changed = true;
+            }
+        }
+        if changed {
+            let tag = set_attr(&body[cell.start..cell.end], "style", &style_join(&e));
+            reps.push((cell.start, cell.end, tag));
+        }
+    }
+    if reps.is_empty() {
+        return Ok(PaletteApplyRes { body: body.to_string(), changed: false, applied, skipped, styles_removed: 0 });
+    }
+    let mut out = body.to_string();
+    for (s, e, tag) in reps.iter().rev() {
+        out.replace_range(*s..*e, tag);
+    }
+    Ok(PaletteApplyRes { changed: out != body, body: out, applied, skipped, styles_removed: 0 })
+}
+
+fn clear_drawio(body: &str) -> PaletteApplyRes {
+    let cells = drawio_cells(body);
+    let mut reps = Vec::new();
+    for cell in &cells {
+        let mut e = style_entries(&cell.style);
+        if !e.iter().any(|(k, _)| k == "dgmPalette" || k.starts_with("dgmOrig")) {
+            continue;
+        }
+        restore_style_key(&mut e, "fillColor", "dgmOrigFillColor");
+        restore_style_key(&mut e, "strokeColor", "dgmOrigStrokeColor");
+        restore_style_key(&mut e, "fontColor", "dgmOrigFontColor");
+        e.retain(|(k, _)| k != "dgmPalette" && !k.starts_with("dgmOrig"));
+        let tag = set_attr(&body[cell.start..cell.end], "style", &style_join(&e));
+        reps.push((cell.start, cell.end, tag));
+    }
+    if reps.is_empty() {
+        return unchanged(body);
+    }
+    let mut out = body.to_string();
+    for (s, e, tag) in reps.iter().rev() {
+        out.replace_range(*s..*e, tag);
+    }
+    PaletteApplyRes { changed: out != body, body: out, applied: 0, skipped: 0, styles_removed: 0 }
+}
+
+fn drawio_block_palette(body: &str) -> Option<String> {
+    for cell in drawio_cells(body) {
+        let e = style_entries(&cell.style);
+        if let Some(id) = style_get(&e, "dgmPalette") {
+            if is_known(id) {
+                return Some(id.to_string());
+            }
+        }
+    }
+    None
+}
+
+/* ---------------- Excalidraw ---------------- */
+
+#[derive(Clone, Copy, PartialEq)]
+enum ExKind {
+    Shape,
+    Text,
+    Edge,
+    Skip,
+}
+
+#[derive(Clone)]
+struct ExInfo {
+    id: String,
+    kind: ExKind,
+    role: Option<&'static str>,
+    colored: bool,
+    label: Option<String>,
+    container: Option<String>,
+}
+
+fn ex_kind(t: &str) -> ExKind {
+    match t {
+        "rectangle" | "ellipse" | "diamond" => ExKind::Shape,
+        "text" => ExKind::Text,
+        "arrow" | "line" => ExKind::Edge,
+        _ => ExKind::Skip,
+    }
+}
+
+fn ex_default_color(v: &str) -> bool {
+    matches!(v, "" | "#1e1e1e" | "#000000" | "transparent")
+}
+
+fn ex_colored(el: &serde_json::Value, kind: ExKind) -> bool {
+    if el.get("customData").and_then(|c| c.get("dgmPalette")).is_some() {
+        return false;
+    }
+    match kind {
+        ExKind::Shape => {
+            let bg = el.get("backgroundColor").and_then(|v| v.as_str()).unwrap_or("");
+            let stroke = el.get("strokeColor").and_then(|v| v.as_str()).unwrap_or("");
+            !matches!(bg, "" | "transparent") || !ex_default_color(stroke)
+        }
+        ExKind::Text | ExKind::Edge => {
+            let stroke = el.get("strokeColor").and_then(|v| v.as_str()).unwrap_or("");
+            !ex_default_color(stroke)
+        }
+        ExKind::Skip => false,
+    }
+}
+
+fn ex_role(kind: &str, label: Option<&str>) -> Option<&'static str> {
+    match kind {
+        "ellipse" => Some("entry"),
+        "diamond" => Some("decide"),
+        _ => label.and_then(role_from_label),
+    }
+}
+
+fn ex_marker(el: &mut serde_json::Value, palette: &str, originals: &[(&str, &str)]) {
+    let Some(obj) = el.as_object_mut() else { return };
+    let cd = obj.entry("customData").or_insert_with(|| serde_json::json!({}));
+    if !cd.is_object() {
+        *cd = serde_json::json!({});
+    }
+    let Some(c) = cd.as_object_mut() else { return };
+    if !c.contains_key("dgmPalette") {
+        let mut orig = serde_json::Map::new();
+        for (k, v) in originals {
+            orig.insert((*k).to_string(), serde_json::json!(v));
+        }
+        c.insert("dgmOriginal".to_string(), serde_json::Value::Object(orig));
+    }
+    c.insert("dgmPalette".to_string(), serde_json::json!(palette));
+}
+
+fn ex_bump(el: &mut serde_json::Value) {
+    if let Some(obj) = el.as_object_mut() {
+        if let Some(v) = obj.get("version").and_then(|v| v.as_u64()) {
+            obj.insert("version".to_string(), serde_json::json!(v + 1));
+        }
+        if let Some(v) = obj.get("versionNonce").and_then(|v| v.as_u64()) {
+            obj.insert("versionNonce".to_string(), serde_json::json!(v + 1));
+        }
+    }
+}
+
+fn ex_has_marker(el: &serde_json::Value) -> bool {
+    el.get("customData").and_then(|c| c.get("dgmPalette")).is_some()
+}
+
+fn apply_excalidraw(
+    body: &str,
+    seed: &Seed,
+    dark: bool,
+    edges: bool,
+    mode: PaletteMode,
+) -> Result<PaletteApplyRes, String> {
+    let mut root: serde_json::Value = serde_json::from_str(body)
+        .map_err(|e| format!("不是合法的 Excalidraw 场景 JSON：{e}"))?;
+    let elements = root
+        .get_mut("elements")
+        .and_then(|v| v.as_array_mut())
+        .ok_or_else(|| "Excalidraw 场景缺少 elements 数组".to_string())?;
+
+    // 先收集绑定文本（shape / arrow 的标签在独立 text 元素里，靠 containerId 关联）
+    let mut bound: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    for el in elements.iter() {
+        if el.get("isDeleted").and_then(|v| v.as_bool()).unwrap_or(false) {
+            continue;
+        }
+        if el.get("type").and_then(|v| v.as_str()) == Some("text") {
+            if let Some(cid) = el.get("containerId").and_then(|v| v.as_str()) {
+                if let Some(t) = el.get("text").and_then(|v| v.as_str()) {
+                    bound.insert(cid.to_string(), t.to_string());
+                }
+            }
+        }
+    }
+
+    let mut infos: Vec<ExInfo> = Vec::new();
+    for el in elements.iter() {
+        let id = el.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let t = el.get("type").and_then(|v| v.as_str()).unwrap_or("");
+        let kind = ex_kind(t);
+        if kind == ExKind::Skip || id.is_empty() || el.get("isDeleted").and_then(|v| v.as_bool()).unwrap_or(false) {
+            infos.push(ExInfo { id, kind: ExKind::Skip, role: None, colored: false, label: None, container: None });
+            continue;
+        }
+        let container = el.get("containerId").and_then(|v| v.as_str()).map(str::to_string);
+        let label = match kind {
+            ExKind::Shape => bound.get(&id).cloned(),
+            ExKind::Text => el.get("text").and_then(|v| v.as_str()).map(str::to_string),
+            _ => None,
+        };
+        // 只有**真的从形状/标签推断出来**的角色才算 explicit；
+        // 默认 main 交给 `plan` 补 —— 否则 OnlyUncolored 会把手写颜色的元素当成
+        // "已有显式角色"而不跳过。
+        let role = match kind {
+            ExKind::Shape => ex_role(t, label.as_deref()),
+            ExKind::Text => None,
+            _ => None,
+        };
+        infos.push(ExInfo {
+            id,
+            kind,
+            role,
+            colored: ex_colored(el, kind),
+            label,
+            container,
+        });
+    }
+
+    // 文本继承容器的角色（绑定文本）；自由文本按标签/note。
+    let shape_role: std::collections::HashMap<String, &'static str> = infos
+        .iter()
+        .filter(|i| i.kind == ExKind::Shape)
+        .filter_map(|i| i.role.map(|r| (i.id.clone(), r)))
+        .collect();
+    for info in infos.iter_mut() {
+        if info.kind == ExKind::Text {
+            let from_container = info.container.as_ref().and_then(|c| shape_role.get(c).copied());
+            info.role = from_container.or_else(|| info.label.as_deref().and_then(role_from_label));
+        }
+    }
+
+    let mut items = Vec::new();
+    let mut skipped = 0usize;
+    for info in &infos {
+        if info.kind == ExKind::Shape || (info.kind == ExKind::Text && info.container.is_none()) {
+            if mode == PaletteMode::OnlyUncolored && info.colored {
+                skipped += 1;
+                continue;
+            }
+            items.push((
+                info.id.clone(),
+                info.role,
+                info.colored,
+                info.label.clone(),
+                None,
+                None,
+            ));
+        }
+    }
+    let (by_slot, _, _) = plan(items, PaletteMode::All, &[]);
+    let mut slot_of: std::collections::HashMap<&str, &str> = std::collections::HashMap::new();
+    for (slot, ids) in &by_slot {
+        for id in ids {
+            slot_of.insert(id.as_str(), slot.as_str());
+        }
+    }
+
+    let mut applied = 0usize;
+    let mut changed = false;
+    for (el, info) in elements.iter_mut().zip(infos.iter()) {
+        if info.kind == ExKind::Skip {
+            continue;
+        }
+        let slot = match info.kind {
+            ExKind::Shape | ExKind::Text => {
+                if info.kind == ExKind::Text {
+                    info.container.as_ref().and_then(|c| slot_of.get(c.as_str()).copied())
+                } else {
+                    slot_of.get(info.id.as_str()).copied()
+                }
+            }
+            ExKind::Edge => None,
+            ExKind::Skip => None,
+        };
+        if let Some(slot) = slot {
+            let (fill, stroke, text) = slot_swatch(seed, slot, dark, 1);
+            let a = el.get("strokeColor").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let b = el.get("backgroundColor").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let want = if info.kind == ExKind::Text { text.as_str() } else { stroke.as_str() };
+            let has = ex_has_marker(el);
+            let bg_changed = info.kind == ExKind::Shape && b != fill;
+            if has && !bg_changed && a == want {
+                continue; // 已是这个色系：不 bump 版本，保证重跑逐字节一致
+            }
+            let originals: Vec<(&str, &str)> = if info.kind == ExKind::Shape {
+                vec![("strokeColor", &a), ("backgroundColor", &b)]
+            } else {
+                vec![("strokeColor", &a)]
+            };
+            ex_marker(el, seed.id, &originals);
+            if let Some(obj) = el.as_object_mut() {
+                if info.kind == ExKind::Shape {
+                    obj.insert("backgroundColor".to_string(), serde_json::json!(fill));
+                }
+                obj.insert("strokeColor".to_string(), serde_json::json!(want));
+            }
+            ex_bump(el);
+            applied += 1;
+            changed = true;
+            continue;
+        }
+        if info.kind == ExKind::Edge {
+            let ours = ex_has_marker(el);
+            if edges {
+                if !(mode == PaletteMode::OnlyUncolored && info.colored && !ours) {
+                    let a = el.get("strokeColor").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                    let want = edge_swatch(seed, dark);
+                    if ours && a == want {
+                        continue;
+                    }
+                    ex_marker(el, seed.id, &[("strokeColor", &a)]);
+                    if let Some(obj) = el.as_object_mut() {
+                        obj.insert("strokeColor".to_string(), serde_json::json!(want));
+                    }
+                    ex_bump(el);
+                    changed = true;
+                }
+            } else if ours {
+                if let Some(orig) = el
+                    .get("customData")
+                    .and_then(|c| c.get("dgmOriginal"))
+                    .and_then(|o| o.get("strokeColor"))
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string)
+                {
+                    if let Some(obj) = el.as_object_mut() {
+                        obj.insert("strokeColor".to_string(), serde_json::json!(orig));
+                    }
+                    ex_remove_marker(el);
+                    ex_bump(el);
+                    changed = true;
+                }
+            }
+        }
+    }
+
+    if !changed {
+        return Ok(PaletteApplyRes { body: body.to_string(), changed: false, applied, skipped, styles_removed: 0 });
+    }
+    let out = serde_json::to_string(&root).map_err(|e| format!("序列化 Excalidraw 场景失败：{e}"))?;
+    Ok(PaletteApplyRes { changed: out != body, body: out, applied, skipped, styles_removed: 0 })
+}
+
+fn ex_remove_marker(el: &mut serde_json::Value) {
+    if let Some(obj) = el.as_object_mut() {
+        if let Some(c) = obj.get_mut("customData").and_then(|c| c.as_object_mut()) {
+            c.remove("dgmPalette");
+            c.remove("dgmOriginal");
+            if c.is_empty() {
+                obj.remove("customData");
+            }
+        }
+    }
+}
+
+fn clear_excalidraw(body: &str) -> PaletteApplyRes {
+    let Ok(mut root) = serde_json::from_str::<serde_json::Value>(body) else {
+        return unchanged(body);
+    };
+    let Some(elements) = root.get_mut("elements").and_then(|v| v.as_array_mut()) else {
+        return unchanged(body);
+    };
+    let mut changed = false;
+    for el in elements.iter_mut() {
+        let Some(orig) = el.get("customData").and_then(|c| c.get("dgmOriginal")) else {
+            continue;
+        };
+        let orig = orig.clone();
+        if let Some(obj) = el.as_object_mut() {
+            for key in ["strokeColor", "backgroundColor"] {
+                if let Some(v) = orig.get(key).and_then(|v| v.as_str()) {
+                    obj.insert(key.to_string(), serde_json::json!(v));
+                }
+            }
+        }
+        ex_remove_marker(el);
+        ex_bump(el);
+        changed = true;
+    }
+    if !changed {
+        return unchanged(body);
+    }
+    match serde_json::to_string(&root) {
+        Ok(out) => PaletteApplyRes { changed: out != body, body: out, applied: 0, skipped: 0, styles_removed: 0 },
+        Err(_) => unchanged(body),
+    }
+}
+
+fn excalidraw_block_palette(body: &str) -> Option<String> {
+    let root: serde_json::Value = serde_json::from_str(body).ok()?;
+    let elements = root.get("elements")?.as_array()?;
+    for el in elements {
+        if let Some(id) = el.get("customData").and_then(|c| c.get("dgmPalette")).and_then(|v| v.as_str()) {
+            if is_known(id) {
+                return Some(id.to_string());
+            }
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2921,17 +3707,89 @@ b -> c
     }
 
     #[test]
-    fn probe_is_empty_for_canvas_formats() {
-        let p = probe("<mxfile/>", FormatId::Drawio);
-        assert!(p.baked.is_none() && p.suggested.is_none());
+    fn probe_reads_canvas_markers() {
+        let drawio = r#"<mxfile><diagram><mxGraphModel><root><mxCell id="0"/><mxCell id="1" parent="0"/><mxCell id="a" value="A" vertex="1" parent="1" style="rounded=1;dgmPalette=pine;"/></root></mxGraphModel></diagram></mxfile>"#;
+        assert_eq!(probe(drawio, FormatId::Drawio).baked.as_deref(), Some("pine"));
+        assert!(probe("<mxfile/>", FormatId::Drawio).baked.is_none());
+        assert!(probe("<mxfile/>", FormatId::Drawio).suggested.is_none());
+
+        let ex = r#"{"type":"excalidraw","version":2,"elements":[{"id":"a","type":"rectangle","customData":{"dgmPalette":"lotus"}}]}"#;
+        assert_eq!(probe(ex, FormatId::Excalidraw).baked.as_deref(), Some("lotus"));
+    }
+
+    const DRAWIO_SRC: &str = r#"<mxfile host="Diagramon"><diagram id="p1"><mxGraphModel><root><mxCell id="0"/><mxCell id="1" parent="0"/><mxCell id="a" value="入口" vertex="1" parent="1" style="ellipse;whiteSpace=wrap;html=1;"/><mxCell id="b" value="处理" vertex="1" parent="1" style="rounded=1;"/><mxCell id="e" edge="1" parent="1" source="a" target="b" style="endArrow=classic;"/></root></mxGraphModel></diagram></mxfile>"#;
+
+    #[test]
+    fn drawio_palette_round_trips_and_clears() {
+        let r = paint(DRAWIO_SRC, FormatId::Drawio, "pine", false, PaletteMode::All).unwrap();
+        assert!(r.changed);
+        assert_eq!(r.applied, 2, "两个顶点都该上色：{}", r.body);
+        assert!(r.body.contains("dgmPalette=pine"), "{}", r.body);
+        assert!(r.body.contains("fillColor="), "{}", r.body);
+        assert!(r.body.contains("dgmOrigFillColor=-"), "{}", r.body);
+        // 边只改线色，不复制边
+        assert!(r.body.contains("id=\"e\"") && r.body.contains("strokeColor="), "{}", r.body);
+
+        let again = paint(&r.body, FormatId::Drawio, "pine", false, PaletteMode::All).unwrap();
+        assert_eq!(again.body, r.body, "重跑必须逐字节一致");
+        assert!(!again.changed);
+
+        let c = clear_paint(&r.body, FormatId::Drawio);
+        assert!(c.changed);
+        assert!(!c.body.contains("dgmPalette"), "{}", c.body);
+        assert!(!c.body.contains("fillColor="), "{}", c.body);
+        assert!(!c.body.contains("dgmOrig"), "{}", c.body);
+    }
+
+    /// OnlyUncolored：用户手写颜色的 cell 不能被动；没有颜色的仍要上色。
+    #[test]
+    fn drawio_only_uncolored_keeps_hand_painted_cells() {
+        let src = DRAWIO_SRC.replace(
+            "style=\"rounded=1;\"",
+            "style=\"rounded=1;fillColor=#ff0000;strokeColor=#aa0000;\"",
+        );
+        let r = paint(&src, FormatId::Drawio, "pine", false, PaletteMode::OnlyUncolored).unwrap();
+        assert_eq!(r.applied, 1, "只有没颜色的入口该上色：{}", r.body);
+        assert!(r.body.contains("fillColor=#ff0000"), "手写颜色被覆盖：{}", r.body);
     }
 
     #[test]
-    fn canvas_formats_are_rejected_with_a_reason() {
-        for f in [FormatId::Drawio, FormatId::Excalidraw] {
-            let err = paint("<mxfile/>", f, "pine", false, PaletteMode::All).unwrap_err();
-            assert!(err.contains("画布型"), "{err}");
-        }
+    fn excalidraw_palette_round_trips_and_clears() {
+        let src = r##"{"type":"excalidraw","version":2,"elements":[{"id":"a","type":"rectangle","x":0,"y":0,"width":100,"height":50,"strokeColor":"#ff0000","backgroundColor":"#ffffff","version":1,"versionNonce":1},{"id":"t","type":"text","x":10,"y":10,"width":80,"height":20,"text":"入口","containerId":"a","strokeColor":"#00ff00","version":1,"versionNonce":1},{"id":"e","type":"arrow","x":100,"y":50,"width":80,"height":0,"strokeColor":"#0000ff","version":1,"versionNonce":1}],"appState":{},"files":{}}"##;
+        let r = paint(src, FormatId::Excalidraw, "pine", false, PaletteMode::All).unwrap();
+        assert!(r.changed);
+        assert_eq!(r.applied, 2, "shape + 它的绑定文本各自改色：{}", r.body);
+        let v: serde_json::Value = serde_json::from_str(&r.body).unwrap();
+        assert_ne!(v["elements"][0]["strokeColor"], "#ff0000");
+        assert_eq!(v["elements"][0]["customData"]["dgmOriginal"]["strokeColor"], "#ff0000");
+        assert_ne!(v["elements"][2]["strokeColor"], "#0000ff", "边线没变：{}", r.body);
+        assert!(r.body.contains("dgmPalette"), "{}", r.body);
+        assert!(r.body.contains("dgmOriginal"), "{}", r.body);
+
+        let again = paint(&r.body, FormatId::Excalidraw, "pine", false, PaletteMode::All).unwrap();
+        assert_eq!(again.body, r.body, "重跑必须逐字节一致");
+        assert!(!again.changed);
+
+        let c = clear_paint(&r.body, FormatId::Excalidraw);
+        assert!(c.changed);
+        assert!(c.body.contains("\"strokeColor\":\"#ff0000\""), "原色没恢复：{}", c.body);
+        assert!(c.body.contains("\"strokeColor\":\"#00ff00\""), "{}", c.body);
+        assert!(c.body.contains("\"strokeColor\":\"#0000ff\""), "{}", c.body);
+        assert!(!c.body.contains("dgmPalette"), "{}", c.body);
+        assert!(!c.body.contains("dgmOriginal"), "{}", c.body);
+    }
+
+    #[test]
+    fn excalidraw_only_uncolored_keeps_hand_painted_elements() {
+        let src = r##"{"type":"excalidraw","version":2,"elements":[{"id":"a","type":"rectangle","strokeColor":"#ff0000","backgroundColor":"#ffffff","version":1,"versionNonce":1}],"appState":{},"files":{}}"##;
+        let r = paint(src, FormatId::Excalidraw, "pine", false, PaletteMode::OnlyUncolored).unwrap();
+        assert!(!r.changed);
+        assert_eq!(r.applied, 0);
+        assert!(r.body.contains("#ff0000"), "{}", r.body);
+    }
+
+    fn clear_paint(body: &str, format: FormatId) -> PaletteApplyRes {
+        clear(body, format)
     }
 
     #[test]

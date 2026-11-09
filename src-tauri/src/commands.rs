@@ -340,7 +340,7 @@ pub fn doc_set_scheme(
     scheme: Option<String>,
 ) -> R<Doc> {
     if !state.session().set_scheme(&id, scheme) {
-        return Err("这个格式不接受配色色系（画布型没有节点角色），或色系不存在".to_string());
+        return Err("色系不存在，或该文档不接受配色".to_string());
     }
     commit_render_opt(state.inner(), &id)
 }
