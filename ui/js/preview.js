@@ -542,7 +542,10 @@ window.DGM = window.DGM || {};
     }
     const eff = state.schemeOf(live);
     if (!eff) return;
-    const flushed = await DGM.canvas.flush(live.format).catch(() => null);
+    // Excalidraw 的正文就是场景 JSON，`scene` 事件会即时写回 `live.body`；
+    // 它的 `flush('excalidraw')` 要等一次 getScene 往返（实测常要 4s 超时才落）。
+    // 配色/清除没必要付这个延迟，直接用正文；drawio 的正文靠 autosave 去抖，仍需 flush。
+    const flushed = live.format === "drawio" ? await DGM.canvas.flush(live.format).catch(() => null) : null;
     const src = canvasSource(live, flushed);
     const res = await state.paint(src, live.format, eff, mode || "only_uncolored");
     const picked = { applied: res.applied, skipped: res.skipped, removed: res.styles_removed };
@@ -660,7 +663,7 @@ window.DGM = window.DGM || {};
     if (!ok) return;
     // 画布型：正文由承载页持有，先 flush，清完再让画布重载。
     if (state.isCanvasDoc(live)) {
-      const flushed = await DGM.canvas.flush(live.format).catch(() => null);
+      const flushed = live.format === "drawio" ? await DGM.canvas.flush(live.format).catch(() => null) : null;
       const src = canvasSource(live, flushed);
       const res = await state.clearPalette(src, live.format);
       if (res.changed) {
