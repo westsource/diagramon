@@ -26,7 +26,14 @@ fn format_rules(id: FormatId) -> &'static str {
              分组写 `group id(图标)[名称]`，服务写 `service id(图标)[名称] in 分组`，连接点写 `junction id`；\n\
              连线写 `a:R -- L:b`（方向只能用 L/T/R/B）；内置图标只有 cloud / database / disk / internet / server；\n\
              架构图不支持连线标签、classDef 与 style —— 不要写。\n\
-             不要在同一份源码里同时写 flowchart / swimlane-beta / architecture-beta 头，也不要用别的图类型冒充。"
+             用户点名其它 Mermaid 图种时（sequenceDiagram / classDiagram / stateDiagram-v2 / erDiagram /\n\
+             gantt / pie / journey / gitGraph / timeline / mindmap / quadrantChart / xychart-beta /\n\
+             block-beta / C4Context / requirementDiagram / kanban / sankey-beta / packet-beta /\n\
+             radar-beta / treeView-beta / treemap-beta / venn-beta / cynefin-beta / ishikawa-beta /\n\
+             wardley-beta），按 Mermaid 官方语法直出对应头部，不要都画成 flowchart。\n\
+             脑图用 `mindmap` 开头，缩进表示层级；节点可写 `id((文本))` / `id[文本]` / 纯文本，\n\
+             不要写 flowchart 的箭头。\n\
+             不要在同一份源码里同时写两个图种的头部，也不要用别的图类型冒充。"
         }
         FormatId::Dot => {
             "语法要点：digraph 用 ->，graph 用 --；属性写在 [ ] 里；子图写成 subgraph cluster_xxx { … }（cluster_ 前缀才会画边框）。"
@@ -531,17 +538,19 @@ pub fn extract_code(text: &str, format: FormatId) -> Option<String> {
     if body.is_empty() {
         return None;
     }
+    // 模型不带 ``` 围栏时，只有这些头部才当成代码收下。覆盖 bundle 里的全部图种：
+    // 少一个，模型直出那个图种就会被当成闲聊丢掉（但围栏形式一直都能收）。
+    const MERMAID_BARE_HEADERS: &[&str] = &[
+        "flowchart", "graph", "swimlane-beta", "architecture-beta", "mindmap", "sequenceDiagram",
+        "classDiagram", "stateDiagram", "stateDiagram-v2", "erDiagram", "gantt", "pie", "journey",
+        "gitGraph", "timeline", "quadrantChart", "xychart-beta", "block-beta", "C4Context",
+        "C4Container", "C4Component", "C4Dynamic", "C4Deployment", "requirementDiagram", "kanban",
+        "sankey", "packet", "radar-beta", "treeView-beta", "treemap-beta", "venn-beta",
+        "cynefin-beta", "ishikawa-beta", "wardley-beta", "usecase", "info",
+    ];
     let looks_like_code = match format {
         FormatId::Mermaid => {
-            body.starts_with("flowchart")
-                || body.starts_with("graph")
-                || body.starts_with("swimlane-beta")
-                || body.starts_with("architecture-beta")
-                || body.starts_with("sequenceDiagram")
-                || body.starts_with("stateDiagram")
-                || body.starts_with("classDiagram")
-                || body.starts_with("erDiagram")
-                || body.starts_with("%%")
+            body.starts_with("%%") || MERMAID_BARE_HEADERS.iter().any(|h| body.starts_with(h))
         }
         FormatId::Dot => body.starts_with("digraph") || body.starts_with("graph") || body.starts_with("strict"),
         // D2 没有固定首行（`direction:` 可省），认三样：方向声明、连线、容器块
@@ -691,6 +700,34 @@ mod tests {
         assert!(p.contains("architecture-beta"), "{p}");
         assert!(p.contains("架构图"), "{p}");
         assert!(p.contains("classDef"), "{p}");
+    }
+
+    /// 其它图种也要点名，否则"画一张时序图 / 脑图"只会得到流程图。
+    #[test]
+    fn mermaid_rules_mention_other_diagram_types() {
+        let p = system_prompt(FormatId::Mermaid, AiIntent::Generate);
+        for k in ["sequenceDiagram", "classDiagram", "stateDiagram-v2", "erDiagram", "mindmap", "gantt", "C4Context"] {
+            assert!(p.contains(k), "提示词缺 {k}：{p}");
+        }
+    }
+
+    /// 模型直出裸的 `architecture-beta` / `mindmap` / `sequenceDiagram`（没有 ``` 围栏）
+    /// 也要能收下 —— 白名单漏一个，那个图种就会被当成闲聊丢掉。
+    #[test]
+    fn extract_accepts_bare_mermaid_headers() {
+        for src in [
+            "architecture-beta\n  service a(server)[A]\n",
+            "mindmap\n  root((R))\n",
+            "sequenceDiagram\n  Alice->>Bob: Hi\n",
+            "gantt\n  title A\n",
+            "C4Context\n  Person(u, \"U\")\n",
+        ] {
+            assert_eq!(
+                extract_code(src, FormatId::Mermaid).as_deref(),
+                Some(src.trim_end()),
+                "裸输出没有收下：{src}"
+            );
+        }
     }
 
     /// 模型直出裸的 `architecture-beta`（没有 ``` 围栏）也要能收下。

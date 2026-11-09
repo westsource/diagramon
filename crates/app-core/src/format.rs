@@ -28,7 +28,7 @@ pub const MERMAID_SWIMLANE_HEADER: &str = "swimlane-beta";
 
 /// Mermaid 正文的**首个有效头部关键字**（小写）；跳过 front matter（`---…---`）、
 /// `%%{init}%%` 指令（可跨行）与 `%%` 注释。这三样都可能排在头部之前，直接取第一行会漏判。
-fn mermaid_header_keyword(body: &str) -> Option<String> {
+pub(crate) fn mermaid_header_keyword(body: &str) -> Option<String> {
     let mut front_matter = false;
     let mut seen_content = false;
     let mut directive = false;

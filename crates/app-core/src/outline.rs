@@ -4,6 +4,7 @@
 //! 真正的 AST 解析留给后续（届时本模块的公开签名不变，换实现即可）。
 
 use app_ipc::{FormatId, OutlineGroup, OutlineRow};
+use std::collections::HashSet;
 
 pub fn outline(format: FormatId, body: &str) -> Vec<OutlineGroup> {
     match format {
@@ -194,10 +195,829 @@ fn mermaid_architecture(body: &str) -> Vec<OutlineGroup> {
         .collect()
 }
 
+/* ---------------- Mermaid：按图种分派 ----------------
+ *
+ * 以前只有 flowchart 一套行式解析器，所有 Mermaid 文档都往里走：C4 的
+ * `Person(alias, "…")` 会被当成节点、脑图的图标名会被当成标签，侧栏因此显示
+ * 一堆跟图无关的东西。现在先认头部，再交给对应图种的解析器；没有专门解析器的
+ * 图种返回空大纲 —— **空比错好**。
+ */
 fn mermaid(body: &str) -> Vec<OutlineGroup> {
-    if crate::format::mermaid_is_architecture(body) {
-        return mermaid_architecture(body);
+    match crate::format::mermaid_header_keyword(body).as_deref() {
+        Some("flowchart" | "graph" | "swimlane-beta") => mermaid_flowchart(body),
+        Some("architecture-beta") => mermaid_architecture(body),
+        Some("mindmap") => mermaid_mindmap(body),
+        Some("sequencediagram") => mermaid_sequence(body),
+        Some("classdiagram") => mermaid_class(body),
+        Some("statediagram" | "statediagram-v2") => mermaid_state(body),
+        Some("erdiagram") => mermaid_er(body),
+        Some("gantt") => mermaid_gantt(body),
+        Some("pie") => mermaid_pie(body),
+        Some("journey") => mermaid_journey(body),
+        Some("gitgraph") => mermaid_gitgraph(body),
+        Some("timeline") => mermaid_timeline(body),
+        Some("quadrantchart") => mermaid_quadrant(body),
+        Some("xychart-beta") => mermaid_xychart(body),
+        Some("block-beta") => mermaid_block(body),
+        Some("c4context" | "c4container" | "c4component" | "c4dynamic" | "c4deployment") => mermaid_c4(body),
+        Some("requirementdiagram") => mermaid_requirement(body),
+        Some("kanban") => mermaid_kanban(body),
+        Some("sankey-beta") => mermaid_sankey(body),
+        Some("packet-beta") => mermaid_packet(body),
+        Some("radar-beta") => mermaid_radar(body),
+        Some("treeview-beta") => mermaid_treeview(body),
+        Some("treemap-beta") => mermaid_treemap(body),
+        Some("venn-beta") => mermaid_venn(body),
+        Some("cynefin-beta") => mermaid_cynefin(body),
+        Some("wardley-beta") => mermaid_wardley(body),
+        // usecase / ishikawa / eventmodeling / agentflow / railroad / info：
+        // 没有稳定的行式结构可提取，返回空大纲（不猜、不误报）。
+        _ => Vec::new(),
     }
+}
+
+fn unquote(s: &str) -> &str {
+    s.trim().trim_matches('"').trim()
+}
+
+fn push_node(nodes: &mut Vec<OutlineRow>, seen: &mut HashSet<String>, id: &str, label: &str, line: u32) {
+    let id = id.trim();
+    if id.is_empty() || !seen.insert(id.to_string()) {
+        return;
+    }
+    let label = unquote(label);
+    nodes.push(row(if label.is_empty() { id } else { label }, "node", line));
+}
+
+fn push_cluster(clusters: &mut Vec<OutlineRow>, seen: &mut HashSet<String>, id: &str, label: &str, line: u32) {
+    let id = id.trim();
+    if id.is_empty() || !seen.insert(id.to_string()) {
+        return;
+    }
+    let label = unquote(label);
+    clusters.push(row(if label.is_empty() { id } else { label }, "cluster", line));
+}
+
+/// 一行里最早出现的箭头（同一位置时按 `ops` 的顺序优先，所以长箭头排在前面）。
+fn first_arrow<'a>(text: &str, ops: &[&'a str]) -> Option<(usize, &'a str)> {
+    ops.iter()
+        .filter_map(|op| text.find(op).map(|p| (p, *op)))
+        .min_by_key(|(p, _)| *p)
+}
+
+/// `id["label"]` / `id[label]` → (id, label)。kanban / venn 这类声明共用的形状。
+fn bracket_decl(text: &str) -> Option<(&str, &str)> {
+    let open = text.find('[')?;
+    let close = text[open + 1..].find(']')? + open + 1;
+    let id = text[..open].trim();
+    let label = text[open + 1..close].trim();
+    if id.is_empty() {
+        return None;
+    }
+    Some((id, if label.is_empty() { id } else { label }))
+}
+
+/// 按顶层逗号拆参数（C4 的 `Rel(a, b, "label")`）：引号内与括号内的逗号不算。
+fn split_args(s: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    let mut start = 0;
+    let mut in_quote = false;
+    let mut depth = 0usize;
+    for (i, c) in s.char_indices() {
+        match c {
+            '"' => in_quote = !in_quote,
+            '(' | '[' if !in_quote => depth += 1,
+            ')' | ']' if !in_quote => depth = depth.saturating_sub(1),
+            ',' if !in_quote && depth == 0 => {
+                out.push(s[start..i].trim());
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    out.push(s[start..].trim());
+    out
+}
+
+fn mermaid_mindmap(body: &str) -> Vec<OutlineGroup> {
+    let mut nodes = Vec::new();
+    let mut seen = HashSet::new();
+    for (idx, raw) in body.lines().enumerate() {
+        let line = idx as u32 + 1;
+        let text = raw.trim();
+        if text.is_empty() || text.starts_with("%%") || text == "mindmap" || text.starts_with("::") {
+            continue;
+        }
+        let label = mindmap_label(text);
+        if !label.is_empty() && seen.insert(label.clone()) {
+            nodes.push(row(label, "node", line));
+        }
+    }
+    group("节点", nodes).into_iter().collect()
+}
+
+fn mindmap_label(text: &str) -> String {
+    // 形状：`id((label))` / `id{{label}}` / `id[label]` / `id(label)` /
+    // `id))label((` / `id)label(`；没有形状的纯文本行本身就是标签。
+    for (open, close) in [("((", "))"), ("{{", "}}"), ("[", "]"), ("(", ")")] {
+        if let Some(i) = text.find(open) {
+            let after = &text[i + open.len()..];
+            if let Some(j) = after.find(close) {
+                let label = after[..j].trim();
+                if !label.is_empty() {
+                    return unquote(label).to_string();
+                }
+            }
+        }
+    }
+    for (open, close) in [("))", "(("), (")", "(")] {
+        if let Some(i) = text.find(open) {
+            let after = &text[i + open.len()..];
+            if let Some(j) = after.find(close) {
+                let label = after[..j].trim();
+                if !label.is_empty() {
+                    return unquote(label).to_string();
+                }
+            }
+        }
+    }
+    text.split(":::").next().unwrap_or(text).trim().to_string()
+}
+
+fn mermaid_sequence(body: &str) -> Vec<OutlineGroup> {
+    let mut nodes = Vec::new();
+    let mut edges = Vec::new();
+    let mut seen = HashSet::new();
+    for (idx, raw) in body.lines().enumerate() {
+        let line = idx as u32 + 1;
+        let text = raw.trim();
+        if text.is_empty()
+            || text.starts_with("%%")
+            || text == "sequenceDiagram"
+            || text.starts_with("title")
+            || text.starts_with("accTitle")
+            || text.starts_with("accDescr")
+            || text == "autonumber"
+            || text.starts_with("activate ")
+            || text.starts_with("deactivate ")
+        {
+            continue;
+        }
+        if let Some(rest) = strip_kw(text, "participant").or_else(|| strip_kw(text, "actor")) {
+            let (id, label) = rest
+                .split_once(" as ")
+                .map(|(a, b)| (a.trim(), b.trim()))
+                .unwrap_or((rest.trim(), rest.trim()));
+            push_node(&mut nodes, &mut seen, id, label, line);
+            continue;
+        }
+        if let Some((pos, op)) = first_arrow(
+            text,
+            &["-->>", "->>", "-->", "->", "--x", "-x", "--)", "-)"],
+        ) {
+            let left = text[..pos].trim();
+            let right = text[pos + op.len()..].split(':').next().unwrap_or("").trim();
+            if !left.is_empty() && !right.is_empty() && left.split_whitespace().count() == 1 {
+                push_node(&mut nodes, &mut seen, left, left, line);
+                push_node(&mut nodes, &mut seen, right, right, line);
+                edges.push(row(text, "edge", line));
+            }
+        }
+    }
+    [group("参与者", nodes), group("消息", edges)].into_iter().flatten().collect()
+}
+
+fn mermaid_class(body: &str) -> Vec<OutlineGroup> {
+    const RELS: &[&str] = &["<|--", "--|>", "<|..", "..|>", "*--", "--*", "o--", "--o", "-->", "<--", "..>", "<..", "--", ".."];
+    let mut nodes = Vec::new();
+    let mut edges = Vec::new();
+    let mut seen = HashSet::new();
+    for (idx, raw) in body.lines().enumerate() {
+        let line = idx as u32 + 1;
+        let text = raw.trim();
+        if text.is_empty()
+            || text.starts_with("%%")
+            || text == "classDiagram"
+            || text.starts_with("classDef")
+            || text.starts_with("style ")
+            || text.starts_with("cssClass")
+            || text.starts_with("click ")
+            || text.starts_with("link ")
+            || text.starts_with("direction ")
+            || text.starts_with("note")
+            || text == "end"
+            || text == "}"
+            || matches!(text.chars().next(), Some('+' | '-' | '#' | '~'))
+        {
+            continue;
+        }
+        if let Some(rest) = strip_kw(text, "class") {
+            let rest = rest.trim();
+            let first = rest.split(|c: char| c.is_whitespace() || c == '{').next().unwrap_or("");
+            let (id, label) = match rest.split_once(" as ") {
+                Some((label, id)) => (id.trim(), label.trim()),
+                None => (first, first),
+            };
+            push_node(&mut nodes, &mut seen, id, label, line);
+            continue;
+        }
+        if let Some((pos, op)) = first_arrow(text, RELS) {
+            let left = text[..pos].trim().split_whitespace().last().unwrap_or("");
+            let right = text[pos + op.len()..]
+                .split(':')
+                .next()
+                .unwrap_or("")
+                .trim()
+                .split_whitespace()
+                .next()
+                .unwrap_or("");
+            if !left.is_empty() && !right.is_empty() {
+                push_node(&mut nodes, &mut seen, left, left, line);
+                push_node(&mut nodes, &mut seen, right, right, line);
+                edges.push(row(text, "edge", line));
+            }
+        }
+    }
+    [group("类", nodes), group("关系", edges)].into_iter().flatten().collect()
+}
+
+fn mermaid_state(body: &str) -> Vec<OutlineGroup> {
+    let mut nodes = Vec::new();
+    let mut edges = Vec::new();
+    let mut seen = HashSet::new();
+    for (idx, raw) in body.lines().enumerate() {
+        let line = idx as u32 + 1;
+        let text = raw.trim();
+        if text.is_empty()
+            || text.starts_with("%%")
+            || text.starts_with("stateDiagram")
+            || text == "direction LR"
+            || text == "direction RL"
+            || text == "direction TB"
+            || text == "direction BT"
+            || text.starts_with("classDef")
+            || text.starts_with("class ")
+            || text.starts_with("style ")
+            || text.starts_with("note")
+            || text == "end"
+            || text == "}"
+        {
+            continue;
+        }
+        if let Some(rest) = strip_kw(text, "state") {
+            let rest = rest.trim();
+            let first = rest.split(|c: char| c.is_whitespace() || c == '{').next().unwrap_or("");
+            let (id, label) = match rest.split_once(" as ") {
+                Some((label, id)) => (id.trim(), label.trim()),
+                None => (first, first),
+            };
+            push_node(&mut nodes, &mut seen, id, label, line);
+            continue;
+        }
+        if let Some((pos, _)) = first_arrow(text, &["-->"]) {
+            let left = text[..pos].trim();
+            let right = text[pos + 3..].split(':').next().unwrap_or("").trim();
+            if left != "[*]" && !left.is_empty() {
+                push_node(&mut nodes, &mut seen, left, left, line);
+            }
+            if right != "[*]" && !right.is_empty() {
+                push_node(&mut nodes, &mut seen, right, right, line);
+            }
+            edges.push(row(text, "edge", line));
+        }
+    }
+    [group("状态", nodes), group("转移", edges)].into_iter().flatten().collect()
+}
+
+fn mermaid_er(body: &str) -> Vec<OutlineGroup> {
+    let mut nodes = Vec::new();
+    let mut edges = Vec::new();
+    let mut seen = HashSet::new();
+    for (idx, raw) in body.lines().enumerate() {
+        let line = idx as u32 + 1;
+        let text = raw.trim();
+        if text.is_empty()
+            || text.starts_with("%%")
+            || text == "erDiagram"
+            || text.starts_with("direction ")
+            || text.starts_with("style ")
+            || text.starts_with("classDef")
+            || text == "}"
+        {
+            continue;
+        }
+        if let Some((pos, _)) = text.find("--").map(|p| (p, "--")) {
+            let left = text[..pos]
+                .trim_end_matches(|c| matches!(c, '|' | 'o' | '{' | '}'))
+                .trim();
+            let right = text[pos + 2..]
+                .trim_start_matches(|c| matches!(c, '|' | 'o' | '{' | '}'))
+                .trim()
+                .split(':')
+                .next()
+                .unwrap_or("")
+                .trim();
+            if !left.is_empty() && !right.is_empty() {
+                push_node(&mut nodes, &mut seen, left, left, line);
+                push_node(&mut nodes, &mut seen, right, right, line);
+                edges.push(row(text, "edge", line));
+            }
+        } else if text.ends_with('{') {
+            let entity = text.trim_end_matches('{').trim();
+            push_node(&mut nodes, &mut seen, entity, entity, line);
+        }
+    }
+    [group("实体", nodes), group("关系", edges)].into_iter().flatten().collect()
+}
+
+fn mermaid_gantt(body: &str) -> Vec<OutlineGroup> {
+    let mut clusters = Vec::new();
+    let mut nodes = Vec::new();
+    let mut seen = HashSet::new();
+    let skip = [
+        "title", "dateFormat", "axisFormat", "excludes", "includes", "todayMarker", "tickInterval",
+        "weekday", "weekend", "inclusiveEndDates", "topAxis", "displayMode", "accTitle", "accDescr",
+    ];
+    for (idx, raw) in body.lines().enumerate() {
+        let line = idx as u32 + 1;
+        let text = raw.trim();
+        if text.is_empty() || text.starts_with("%%") || text == "gantt" {
+            continue;
+        }
+        if let Some(rest) = strip_kw(text, "section") {
+            push_cluster(&mut clusters, &mut seen, rest.trim(), rest.trim(), line);
+            continue;
+        }
+        if skip.iter().any(|k| text.starts_with(k)) {
+            continue;
+        }
+        if let Some((label, _)) = text.split_once(':') {
+            let label = label.trim();
+            if !label.is_empty() {
+                nodes.push(row(label, "node", line));
+            }
+        }
+    }
+    [group("分组", clusters), group("任务", nodes)].into_iter().flatten().collect()
+}
+
+fn mermaid_pie(body: &str) -> Vec<OutlineGroup> {
+    let mut nodes = Vec::new();
+    for (idx, raw) in body.lines().enumerate() {
+        let line = idx as u32 + 1;
+        let text = raw.trim();
+        if text.is_empty() || text.starts_with("%%") || text.starts_with("pie") || text.starts_with("title") || text.starts_with("showData") {
+            continue;
+        }
+        if let Some((label, _)) = text.split_once(':') {
+            let label = unquote(label);
+            if !label.is_empty() {
+                nodes.push(row(label, "node", line));
+            }
+        }
+    }
+    group("分片", nodes).into_iter().collect()
+}
+
+fn mermaid_journey(body: &str) -> Vec<OutlineGroup> {
+    let mut clusters = Vec::new();
+    let mut nodes = Vec::new();
+    let mut seen = HashSet::new();
+    for (idx, raw) in body.lines().enumerate() {
+        let line = idx as u32 + 1;
+        let text = raw.trim();
+        if text.is_empty() || text.starts_with("%%") || text == "journey" || text.starts_with("title") {
+            continue;
+        }
+        if let Some(rest) = strip_kw(text, "section") {
+            push_cluster(&mut clusters, &mut seen, rest.trim(), rest.trim(), line);
+            continue;
+        }
+        if let Some((label, _)) = text.split_once(':') {
+            let label = label.trim();
+            if !label.is_empty() {
+                nodes.push(row(label, "node", line));
+            }
+        }
+    }
+    [group("阶段", clusters), group("任务", nodes)].into_iter().flatten().collect()
+}
+
+fn mermaid_gitgraph(body: &str) -> Vec<OutlineGroup> {
+    let mut branches = Vec::new();
+    let mut commits = Vec::new();
+    let mut seen = HashSet::new();
+    for (idx, raw) in body.lines().enumerate() {
+        let line = idx as u32 + 1;
+        let text = raw.trim();
+        if text.is_empty() || text.starts_with("%%") || text == "gitGraph" {
+            continue;
+        }
+        if let Some(rest) = strip_kw(text, "branch") {
+            let name = rest.split_whitespace().next().unwrap_or("");
+            push_node(&mut branches, &mut seen, name, name, line);
+        } else if text == "commit" || text.starts_with("commit ") {
+            let label = text.strip_prefix("commit").unwrap_or("").trim();
+            commits.push(row(if label.is_empty() { "commit" } else { label }, "node", line));
+        } else if let Some(rest) = strip_kw(text, "merge") {
+            commits.push(row(format!("merge {}", rest.trim()), "node", line));
+        } else if text.starts_with("cherry-pick") {
+            commits.push(row(text, "node", line));
+        }
+    }
+    [group("分支", branches), group("提交", commits)].into_iter().flatten().collect()
+}
+
+fn mermaid_timeline(body: &str) -> Vec<OutlineGroup> {
+    let mut clusters = Vec::new();
+    let mut nodes = Vec::new();
+    let mut seen = HashSet::new();
+    for (idx, raw) in body.lines().enumerate() {
+        let line = idx as u32 + 1;
+        let text = raw.trim();
+        if text.is_empty() || text.starts_with("%%") || text == "timeline" || text.starts_with("title") {
+            continue;
+        }
+        if let Some(rest) = strip_kw(text, "section") {
+            push_cluster(&mut clusters, &mut seen, rest.trim(), rest.trim(), line);
+            continue;
+        }
+        if let Some((time, event)) = text.split_once(':') {
+            let time = time.trim();
+            let event = event.trim();
+            let label = if event.is_empty() { time } else if time.is_empty() { event } else { text };
+            if !label.is_empty() {
+                nodes.push(row(label, "node", line));
+            }
+        }
+    }
+    [group("分组", clusters), group("事件", nodes)].into_iter().flatten().collect()
+}
+
+fn mermaid_quadrant(body: &str) -> Vec<OutlineGroup> {
+    let mut clusters = Vec::new();
+    let mut nodes = Vec::new();
+    let mut seen = HashSet::new();
+    for (idx, raw) in body.lines().enumerate() {
+        let line = idx as u32 + 1;
+        let text = raw.trim();
+        if text.is_empty() || text.starts_with("%%") || text == "quadrantChart" || text.starts_with("title") || text.starts_with("x-axis") || text.starts_with("y-axis") {
+            continue;
+        }
+        if let Some(rest) = ["quadrant-1", "quadrant-2", "quadrant-3", "quadrant-4"]
+            .iter()
+            .find_map(|k| strip_kw(text, k))
+        {
+            push_cluster(&mut clusters, &mut seen, rest.trim(), rest.trim(), line);
+            continue;
+        }
+        if let Some((name, _)) = text.split_once(':') {
+            let name = name.trim();
+            if !name.is_empty() && !name.contains(' ') {
+                push_node(&mut nodes, &mut seen, name, name, line);
+            }
+        }
+    }
+    [group("象限", clusters), group("数据点", nodes)].into_iter().flatten().collect()
+}
+
+fn mermaid_xychart(body: &str) -> Vec<OutlineGroup> {
+    let mut nodes = Vec::new();
+    let mut seen = HashSet::new();
+    for (idx, raw) in body.lines().enumerate() {
+        let line = idx as u32 + 1;
+        let text = raw.trim();
+        if text.is_empty() || text.starts_with("%%") || text == "xychart-beta" || text.starts_with("title") || text.starts_with("x-axis") || text.starts_with("y-axis") {
+            continue;
+        }
+        if let Some(kind) = ["bar", "line", "area"].iter().find(|k| strip_kw(text, k).is_some()) {
+            push_node(&mut nodes, &mut seen, kind, kind, line);
+        }
+    }
+    group("系列", nodes).into_iter().collect()
+}
+
+fn mermaid_block(body: &str) -> Vec<OutlineGroup> {
+    let mut nodes = Vec::new();
+    let mut seen = HashSet::new();
+    for (idx, raw) in body.lines().enumerate() {
+        let line = idx as u32 + 1;
+        let text = raw.trim();
+        if text.is_empty()
+            || text.starts_with("%%")
+            || text == "block-beta"
+            || text.starts_with("columns")
+            || text.starts_with("space")
+            || text.starts_with("style ")
+            || text.starts_with("classDef")
+            || text.starts_with("class ")
+            || text == "}"
+        {
+            continue;
+        }
+        if let Some((id, label)) = bracket_decl(text) {
+            let id = id.rsplit(':').next().unwrap_or(id);
+            push_node(&mut nodes, &mut seen, id, label, line);
+            continue;
+        }
+        if !text.contains(':') && !text.contains("->") {
+            for token in text.split_whitespace() {
+                push_node(&mut nodes, &mut seen, token, token, line);
+            }
+        }
+    }
+    group("块", nodes).into_iter().collect()
+}
+
+fn mermaid_c4(body: &str) -> Vec<OutlineGroup> {
+    const ELEMENTS: &[&str] = &[
+        "Person", "Person_Ext", "System", "System_Ext", "SystemDb", "SystemDb_Ext", "System_Boundary",
+        "Enterprise_Boundary", "Container", "Container_Ext", "ContainerDb", "ContainerQueue",
+        "Container_Boundary", "Component", "Component_Ext", "Deployment_Node", "Node", "Boundary",
+    ];
+    let mut nodes = Vec::new();
+    let mut edges = Vec::new();
+    let mut seen = HashSet::new();
+    for (idx, raw) in body.lines().enumerate() {
+        let line = idx as u32 + 1;
+        let text = raw.trim();
+        if text.is_empty()
+            || text.starts_with("%%")
+            || text.starts_with("title")
+            || text.starts_with("accTitle")
+            || text.starts_with("accDescr")
+            || text.starts_with("UpdateLayoutConfig")
+            || text.starts_with("UpdateRelStyle")
+        {
+            continue;
+        }
+        let (Some(open), Some(close)) = (text.find('('), text.rfind(')')) else {
+            continue;
+        };
+        if close <= open {
+            continue;
+        }
+        let kind = text[..open].trim();
+        let args = split_args(&text[open + 1..close]);
+        if kind == "Rel" || kind.starts_with("Rel_") || kind.starts_with("BiRel") {
+            if let (Some(a), Some(b)) = (args.first().copied(), args.get(1).copied()) {
+                if !a.is_empty() && !b.is_empty() {
+                    push_node(&mut nodes, &mut seen, a, a, line);
+                    push_node(&mut nodes, &mut seen, b, b, line);
+                    edges.push(row(text, "edge", line));
+                }
+            }
+        } else if ELEMENTS.contains(&kind) {
+            if let Some(id) = args.first().copied() {
+                let label = args.get(1).copied().unwrap_or(id);
+                push_node(&mut nodes, &mut seen, id, label, line);
+            }
+        }
+    }
+    [group("元素", nodes), group("关系", edges)].into_iter().flatten().collect()
+}
+
+fn mermaid_requirement(body: &str) -> Vec<OutlineGroup> {
+    const KINDS: &[&str] = &[
+        "requirement", "functionalRequirement", "performanceRequirement", "physicalRequirement",
+        "designConstraint", "interfaceRequirement", "element",
+    ];
+    let mut nodes = Vec::new();
+    let mut edges = Vec::new();
+    let mut seen = HashSet::new();
+    for (idx, raw) in body.lines().enumerate() {
+        let line = idx as u32 + 1;
+        let text = raw.trim();
+        if text.is_empty() || text.starts_with("%%") || text == "requirementDiagram" || text == "}" {
+            continue;
+        }
+        if let Some((kind, rest)) = KINDS.iter().find_map(|k| strip_kw(text, k).map(|rest| (*k, rest))) {
+            let id = rest.split(|c: char| c.is_whitespace() || c == '{').next().unwrap_or("");
+            push_node(&mut nodes, &mut seen, id, id, line);
+            let _ = kind;
+            continue;
+        }
+        if let Some((left, right)) = text.split_once(" -> ") {
+            let left = left.split(" - ").next().unwrap_or(left).trim();
+            let right = right.split(':').next().unwrap_or("").trim();
+            if !left.is_empty() && !right.is_empty() {
+                push_node(&mut nodes, &mut seen, left, left, line);
+                push_node(&mut nodes, &mut seen, right, right, line);
+                edges.push(row(text, "edge", line));
+            }
+        }
+    }
+    [group("需求", nodes), group("关系", edges)].into_iter().flatten().collect()
+}
+
+fn mermaid_kanban(body: &str) -> Vec<OutlineGroup> {
+    let mut clusters = Vec::new();
+    let mut nodes = Vec::new();
+    let mut seen = HashSet::new();
+    // 列与卡片靠缩进区分：第一层（最浅缩进）是列，往里缩的是卡片。
+    // 不能写死 `indent == 0` —— 真实文档的整个 kanban 块通常是缩进过的。
+    let mut base: Option<usize> = None;
+    for (idx, raw) in body.lines().enumerate() {
+        let line = idx as u32 + 1;
+        let text = raw.trim();
+        if text.is_empty() || text.starts_with("%%") || text == "kanban" {
+            continue;
+        }
+        let indent = raw.len() - raw.trim_start().len();
+        let decl = match bracket_decl(text) {
+            Some(v) => Some(v),
+            // 卡片可以只写 `[Task]`（没有 id）
+            None => text
+                .strip_prefix('[')
+                .and_then(|rest| rest.find(']').map(|j| (&rest[..j], &rest[..j]))),
+        };
+        if let Some((id, label)) = decl {
+            let level = *base.get_or_insert(indent);
+            if indent <= level {
+                push_cluster(&mut clusters, &mut seen, id, label, line);
+            } else {
+                push_node(&mut nodes, &mut seen, id, label, line);
+            }
+        }
+    }
+    [group("列", clusters), group("卡片", nodes)].into_iter().flatten().collect()
+}
+
+fn mermaid_sankey(body: &str) -> Vec<OutlineGroup> {
+    let mut nodes = Vec::new();
+    let mut edges = Vec::new();
+    let mut seen = HashSet::new();
+    for (idx, raw) in body.lines().enumerate() {
+        let line = idx as u32 + 1;
+        let text = raw.trim();
+        if text.is_empty() || text.starts_with("%%") || text.starts_with("sankey") {
+            continue;
+        }
+        let parts: Vec<&str> = text.split(',').map(|s| unquote(s)).collect();
+        if parts.len() >= 3 {
+            let (a, b, v) = (parts[0], parts[1], parts[2]);
+            if !a.is_empty() && !b.is_empty() {
+                push_node(&mut nodes, &mut seen, a, a, line);
+                push_node(&mut nodes, &mut seen, b, b, line);
+                edges.push(row(format!("{a} → {b}（{v}）"), "edge", line));
+            }
+        }
+    }
+    [group("节点", nodes), group("流量", edges)].into_iter().flatten().collect()
+}
+
+fn mermaid_packet(body: &str) -> Vec<OutlineGroup> {
+    let mut nodes = Vec::new();
+    for (idx, raw) in body.lines().enumerate() {
+        let line = idx as u32 + 1;
+        let text = raw.trim();
+        if text.is_empty() || text.starts_with("%%") || text.starts_with("packet") {
+            continue;
+        }
+        if let Some((_, label)) = text.split_once(':') {
+            let label = unquote(label);
+            if !label.is_empty() {
+                nodes.push(row(label, "node", line));
+            }
+        }
+    }
+    group("字段", nodes).into_iter().collect()
+}
+
+fn mermaid_radar(body: &str) -> Vec<OutlineGroup> {
+    let mut axes = Vec::new();
+    let mut curves = Vec::new();
+    let mut seen = HashSet::new();
+    for (idx, raw) in body.lines().enumerate() {
+        let line = idx as u32 + 1;
+        let text = raw.trim();
+        if text.is_empty() || text.starts_with("%%") || text == "radar-beta" || text.starts_with("title") {
+            continue;
+        }
+        if let Some(rest) = strip_kw(text, "axis") {
+            for a in rest.split(',') {
+                let a = unquote(a.trim());
+                if !a.is_empty() && seen.insert(a.to_string()) {
+                    axes.push(row(a, "node", line));
+                }
+            }
+        } else if let Some(rest) = strip_kw(text, "curve") {
+            let name = rest.split('{').next().unwrap_or("").trim();
+            if !name.is_empty() {
+                curves.push(row(name, "node", line));
+            }
+        }
+    }
+    [group("轴", axes), group("曲线", curves)].into_iter().flatten().collect()
+}
+
+fn mermaid_treeview(body: &str) -> Vec<OutlineGroup> {
+    let mut nodes = Vec::new();
+    for (idx, raw) in body.lines().enumerate() {
+        let line = idx as u32 + 1;
+        let text = raw.trim();
+        if text.is_empty() || text.starts_with("%%") || text.starts_with("treeView") {
+            continue;
+        }
+        nodes.push(row(unquote(text), "node", line));
+    }
+    group("节点", nodes).into_iter().collect()
+}
+
+fn mermaid_treemap(body: &str) -> Vec<OutlineGroup> {
+    let mut nodes = Vec::new();
+    for (idx, raw) in body.lines().enumerate() {
+        let line = idx as u32 + 1;
+        let text = raw.trim();
+        if text.is_empty() || text.starts_with("%%") || text.starts_with("treemap") {
+            continue;
+        }
+        let label = match text.split_once(':') {
+            Some((label, _)) => label.trim(),
+            None => text,
+        };
+        let label = unquote(label);
+        if !label.is_empty() {
+            nodes.push(row(label, "node", line));
+        }
+    }
+    group("节点", nodes).into_iter().collect()
+}
+
+fn mermaid_venn(body: &str) -> Vec<OutlineGroup> {
+    let mut nodes = Vec::new();
+    let mut seen = HashSet::new();
+    for (idx, raw) in body.lines().enumerate() {
+        let line = idx as u32 + 1;
+        let text = raw.trim();
+        if text.is_empty() || text.starts_with("%%") || text == "venn-beta" || text.starts_with("title") || text.starts_with("style ") {
+            continue;
+        }
+        if let Some(rest) = ["set", "union", "text"].iter().find_map(|k| strip_kw(text, k)) {
+            let (id, label) = match bracket_decl(rest) {
+                Some((id, label)) => (id, label),
+                None => {
+                    let id = rest.split(':').next().unwrap_or(rest).trim();
+                    (id, id)
+                }
+            };
+            push_node(&mut nodes, &mut seen, id, label, line);
+        }
+    }
+    group("集合", nodes).into_iter().collect()
+}
+
+fn mermaid_cynefin(body: &str) -> Vec<OutlineGroup> {
+    const DOMAINS: &[&str] = &["complex", "complicated", "clear", "chaotic", "confusion"];
+    let mut clusters = Vec::new();
+    let mut nodes = Vec::new();
+    let mut edges = Vec::new();
+    let mut seen = HashSet::new();
+    for (idx, raw) in body.lines().enumerate() {
+        let line = idx as u32 + 1;
+        let text = raw.trim();
+        if text.is_empty() || text.starts_with("%%") || text == "cynefin-beta" || text.starts_with("title") {
+            continue;
+        }
+        if DOMAINS.contains(&text) {
+            push_cluster(&mut clusters, &mut seen, text, text, line);
+            continue;
+        }
+        if text.starts_with('"') {
+            let label = unquote(text);
+            if !label.is_empty() {
+                nodes.push(row(label, "node", line));
+            }
+            continue;
+        }
+        if text.contains("-->") {
+            edges.push(row(text, "edge", line));
+        }
+    }
+    [group("领域", clusters), group("条目", nodes), group("转移", edges)]
+        .into_iter()
+        .flatten()
+        .collect()
+}
+
+fn mermaid_wardley(body: &str) -> Vec<OutlineGroup> {
+    let mut nodes = Vec::new();
+    let mut seen = HashSet::new();
+    for (idx, raw) in body.lines().enumerate() {
+        let line = idx as u32 + 1;
+        let text = raw.trim();
+        if text.is_empty() || text.starts_with("%%") || text.starts_with("wardley") || text.starts_with("title") {
+            continue;
+        }
+        if let Some(rest) = strip_kw(text, "component").or_else(|| strip_kw(text, "anchor")) {
+            let name = rest.split('[').next().unwrap_or("").trim();
+            push_node(&mut nodes, &mut seen, name, name, line);
+        }
+    }
+    group("组件", nodes).into_iter().collect()
+}
+
+fn mermaid_flowchart(body: &str) -> Vec<OutlineGroup> {
     let mut clusters = Vec::new();
     let mut nodes = Vec::new();
     let mut edges = Vec::new();
@@ -491,6 +1311,198 @@ mod tests {
         let names: Vec<_> = g[0].rows.iter().map(|r| r.name.as_str()).collect();
         assert_eq!(names, vec!["A", "B"]);
         assert_eq!(g[0].rows[0].line, 8);
+    }
+
+    fn names(g: &[OutlineGroup], title: &str) -> Vec<String> {
+        g.iter()
+            .find(|x| x.title == title)
+            .map(|x| x.rows.iter().map(|r| r.name.clone()).collect())
+            .unwrap_or_default()
+    }
+
+    #[test]
+    fn mermaid_mindmap_outline_lists_node_labels() {
+        let g = outline(
+            FormatId::Mermaid,
+            "mindmap\n  root((Root))\n    A[Alpha]\n    B(Beta)\n    plain\n",
+        );
+        assert_eq!(names(&g, "节点"), vec!["Root", "Alpha", "Beta", "plain"]);
+    }
+
+    #[test]
+    fn mermaid_sequence_outline_has_participants_and_messages() {
+        let g = outline(
+            FormatId::Mermaid,
+            "sequenceDiagram\n participant A as Alice\n actor Bob\n A->>Bob: Hi\n Bob-->>A: Ok\n",
+        );
+        assert_eq!(names(&g, "参与者"), vec!["Alice", "Bob"]);
+        assert_eq!(names(&g, "消息").len(), 2);
+    }
+
+    #[test]
+    fn mermaid_class_outline_has_classes_and_relations() {
+        let g = outline(
+            FormatId::Mermaid,
+            "classDiagram\n class Animal { +int age }\n class Dog\n Animal <|-- Dog : owns\n",
+        );
+        assert_eq!(names(&g, "类"), vec!["Animal", "Dog"]);
+        assert_eq!(names(&g, "关系").len(), 1);
+    }
+
+    #[test]
+    fn mermaid_state_outline_has_states_and_transitions() {
+        let g = outline(
+            FormatId::Mermaid,
+            "stateDiagram-v2\n [*] --> Idle\n Idle --> Running : go\n state Done\n",
+        );
+        assert_eq!(names(&g, "状态"), vec!["Idle", "Running", "Done"]);
+        assert_eq!(names(&g, "转移").len(), 2);
+    }
+
+    #[test]
+    fn mermaid_er_outline_has_entities_and_relations() {
+        let g = outline(
+            FormatId::Mermaid,
+            "erDiagram\n CUSTOMER ||--o{ ORDER : places\n ORDER {\n  int id\n }\n",
+        );
+        assert_eq!(names(&g, "实体"), vec!["CUSTOMER", "ORDER"]);
+        assert_eq!(names(&g, "关系").len(), 1);
+    }
+
+    #[test]
+    fn mermaid_gantt_outline_has_sections_and_tasks() {
+        let g = outline(
+            FormatId::Mermaid,
+            "gantt\n title A\n dateFormat YYYY-MM-DD\n section Design\n Wireframe :a1, 2024-01-01, 5d\n",
+        );
+        assert_eq!(names(&g, "分组"), vec!["Design"]);
+        assert_eq!(names(&g, "任务"), vec!["Wireframe"]);
+    }
+
+    #[test]
+    fn mermaid_pie_and_journey_outlines() {
+        let pie = outline(FormatId::Mermaid, "pie title Pets\n \"Dogs\" : 10\n \"Cats\" : 5\n");
+        assert_eq!(names(&pie, "分片"), vec!["Dogs", "Cats"]);
+
+        let journey = outline(
+            FormatId::Mermaid,
+            "journey\n title Day\n section Work\n Task: 5: Me\n",
+        );
+        assert_eq!(names(&journey, "阶段"), vec!["Work"]);
+        assert_eq!(names(&journey, "任务"), vec!["Task"]);
+    }
+
+    #[test]
+    fn mermaid_gitgraph_and_timeline_outlines() {
+        let git = outline(
+            FormatId::Mermaid,
+            "gitGraph\n commit\n branch dev\n checkout dev\n commit id: \"abc\"\n",
+        );
+        assert_eq!(names(&git, "分支"), vec!["dev"]);
+        assert_eq!(names(&git, "提交").len(), 2);
+
+        let tl = outline(
+            FormatId::Mermaid,
+            "timeline\n title H\n section S\n 2024 : Event\n",
+        );
+        assert_eq!(names(&tl, "分组"), vec!["S"]);
+        assert_eq!(names(&tl, "事件"), vec!["2024 : Event"]);
+    }
+
+    #[test]
+    fn mermaid_quadrant_and_xychart_outlines() {
+        let q = outline(
+            FormatId::Mermaid,
+            "quadrantChart\n title T\n quadrant-1 Q1\n A: [0.1, 0.2]\n",
+        );
+        assert_eq!(names(&q, "象限"), vec!["Q1"]);
+        assert_eq!(names(&q, "数据点"), vec!["A"]);
+
+        let xy = outline(FormatId::Mermaid, "xychart-beta\n title \"T\"\n bar [1, 2]\n");
+        assert_eq!(names(&xy, "系列"), vec!["bar"]);
+    }
+
+    #[test]
+    fn mermaid_block_outline_has_blocks() {
+        let g = outline(FormatId::Mermaid, "block-beta\n columns 3\n a b c\n");
+        assert_eq!(names(&g, "块"), vec!["a", "b", "c"]);
+    }
+
+    /// C4 的元素行是 `Person(alias, "Label")`，旧解析器会把 `Person` 当节点、
+    /// 把整段参数当标签；现在必须显示 alias 对应的标签，并把 `Rel` 收成边。
+    #[test]
+    fn mermaid_c4_outline_uses_element_labels_and_relations() {
+        let g = outline(
+            FormatId::Mermaid,
+            "C4Context\n Person(user, \"User\")\n System(sys, \"System\")\n Rel(user, sys, \"Uses\")\n",
+        );
+        assert_eq!(names(&g, "元素"), vec!["User", "System"]);
+        assert_eq!(names(&g, "关系").len(), 1);
+        assert!(!names(&g, "元素").contains(&"Person".to_string()));
+    }
+
+    #[test]
+    fn mermaid_requirement_outline_has_requirements_and_relations() {
+        let g = outline(
+            FormatId::Mermaid,
+            "requirementDiagram\n requirement r {\n  id: 1\n  text: x\n  risk: low\n  verifymethod: test\n }\n element e {\n  type: simulation\n }\n e - satisfies -> r\n",
+        );
+        assert_eq!(names(&g, "需求"), vec!["r", "e"]);
+        assert_eq!(names(&g, "关系").len(), 1);
+    }
+
+    #[test]
+    fn mermaid_kanban_sankey_packet_outlines() {
+        let k = outline(FormatId::Mermaid, "kanban\n todo[Todo]\n  task1[Task]\n");
+        assert_eq!(names(&k, "列"), vec!["Todo"]);
+        assert_eq!(names(&k, "卡片"), vec!["Task"]);
+
+        let s = outline(FormatId::Mermaid, "sankey-beta\n A,B,10\n B,C,5\n");
+        assert_eq!(names(&s, "节点"), vec!["A", "B", "C"]);
+        assert_eq!(names(&s, "流量").len(), 2);
+
+        let p = outline(FormatId::Mermaid, "packet-beta\n 0-15: \"Source Port\"\n");
+        assert_eq!(names(&p, "字段"), vec!["Source Port"]);
+    }
+
+    #[test]
+    fn mermaid_radar_treeview_treemap_outlines() {
+        let r = outline(FormatId::Mermaid, "radar-beta\n axis a, b, c\n curve x{1, 2, 3}\n");
+        assert_eq!(names(&r, "轴"), vec!["a", "b", "c"]);
+        assert_eq!(names(&r, "曲线"), vec!["x"]);
+
+        let tv = outline(FormatId::Mermaid, "treeView-beta\n root\n  child\n");
+        assert_eq!(names(&tv, "节点"), vec!["root", "child"]);
+
+        let tm = outline(FormatId::Mermaid, "treemap-beta\n \"Root\"\n  \"A\": 10\n");
+        assert_eq!(names(&tm, "节点"), vec!["Root", "A"]);
+    }
+
+    #[test]
+    fn mermaid_venn_cynefin_wardley_outlines() {
+        let v = outline(
+            FormatId::Mermaid,
+            "venn-beta\n set A[\"Alpha\"]\n union A,B[\"AB\"]\n",
+        );
+        assert_eq!(names(&v, "集合"), vec!["Alpha", "AB"]);
+
+        let c = outline(
+            FormatId::Mermaid,
+            "cynefin-beta\n complex\n \"Item\"\n complex --> clear : \"x\"\n",
+        );
+        assert_eq!(names(&c, "领域"), vec!["complex"]);
+        assert_eq!(names(&c, "条目"), vec!["Item"]);
+        assert_eq!(names(&c, "转移").len(), 1);
+
+        let w = outline(FormatId::Mermaid, "wardley-beta\n component C [0.5, 0.5]\n");
+        assert_eq!(names(&w, "组件"), vec!["C"]);
+    }
+
+    /// 没有专门解析器的图种必须返回空，而不是套用 flowchart 的括号扫描造出假节点。
+    #[test]
+    fn mermaid_unknown_type_returns_empty_outline() {
+        assert!(outline(FormatId::Mermaid, "info\n").is_empty());
+        assert!(outline(FormatId::Mermaid, "usecase\n actor User\n uc(Do)\n").is_empty());
     }
 
     #[test]

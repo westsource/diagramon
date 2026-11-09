@@ -89,6 +89,12 @@ fn strip_noise(line: &str, comment: &str) -> String {
 
 fn mermaid(body: &str) -> Vec<Issue> {
     let mut out = Vec::new();
+    // 只有"括号是代码结构"的图种才做配对检查。ER 的 `o{` / `}|` 是基数记号，
+    // 脑图的 `))text((` / `)text(` 是形状写法 —— 当成配对会稳定误报。
+    let check_brackets = !matches!(
+        crate::format::mermaid_header_keyword(body).as_deref(),
+        Some("erdiagram" | "mindmap")
+    );
     // 未闭合的 subgraph 栈（记住它出现在哪一行）
     let mut subgraph_stack: Vec<u32> = Vec::new();
     // 括号深度按"行内成对"检查；引号内容跨行丢弃（见 strip_mermaid_line）
@@ -108,6 +114,10 @@ fn mermaid(body: &str) -> Vec<Issue> {
             if subgraph_stack.pop().is_none() {
                 out.push(warn(line, "多余的 end：没有与之配对的 subgraph", "删掉它，或补一个 subgraph"));
             }
+        }
+
+        if !check_brackets {
+            continue;
         }
 
         // 括号配对（逐字符扫描，跨行也能收敛）
@@ -134,8 +144,10 @@ fn mermaid(body: &str) -> Vec<Issue> {
         }
     }
 
-    for line in bracket_stack {
-        out.push(err(line.1, "括号没有闭合", "这一行打开的括号在文件结束前没有关掉"));
+    if check_brackets {
+        for line in bracket_stack {
+            out.push(err(line.1, "括号没有闭合", "这一行打开的括号在文件结束前没有关掉"));
+        }
     }
     for line in subgraph_stack {
         out.push(err(line, "subgraph 没有闭合", "补一个 end"));
@@ -395,6 +407,19 @@ mod tests {
         let src = "architecture-beta\n    group api(cloud)[API]\n    service db(database)[Database] in api\n    service server(server)[Server] in api\n    junction j1 in api\n    db:R -- L:server\n    server:B -- T:j1\n    align row db server\n";
         let v = issues(FormatId::Mermaid, src);
         assert!(v.is_empty(), "合法架构图不应报问题：{v:?}");
+    }
+
+    /// ER 的 `o{` / `}|` 是基数记号，不是花括号代码块；脑图的 `))text((` / `)text(`
+    /// 是形状写法。这两类图种跳过括号配对，否则每张合法图都会报「括号没有闭合」。
+    #[test]
+    fn mermaid_accepts_er_cardinality_and_mindmap_shapes() {
+        let er = "erDiagram\n    CUSTOMER ||--o{ ORDER : places\n    ORDER {\n        int id\n    }\n";
+        let v = issues(FormatId::Mermaid, er);
+        assert!(v.is_empty(), "合法 ER 图不应报问题：{v:?}");
+
+        let mind = "mindmap\n  root((Root))\n    a))cloud((\n    b)round(\n";
+        let v = issues(FormatId::Mermaid, mind);
+        assert!(v.is_empty(), "合法脑图不应报问题：{v:?}");
     }
 
     #[test]
