@@ -2210,6 +2210,7 @@ struct DrawioCell {
     id: String,
     style: String,
     value: String,
+    parent: String,
     vertex: bool,
     edge: bool,
 }
@@ -2245,6 +2246,7 @@ fn drawio_cells(body: &str) -> Vec<DrawioCell> {
             id,
             style: attr_string(tag, "style").unwrap_or_default(),
             value: plain_text(&value),
+            parent: attr_string(tag, "parent").unwrap_or_default(),
             vertex: attr_string(tag, "vertex").as_deref() == Some("1"),
             edge: attr_string(tag, "edge").as_deref() == Some("1"),
         });
@@ -2275,16 +2277,24 @@ fn drawio_role(cell: &DrawioCell) -> Option<&'static str> {
     role_from_label(&cell.value)
 }
 
+/// drawio / Mermaid 导入器写出的**主题默认色**不算"用户已有颜色"。
+/// 转换后的节点常见 `fillColor=light-dark(#ECECFF,#1f2020)` —— 这是主题色，
+/// 不认它，配色会把整张转换图当成"全都手写过颜色"而跳过。
+fn drawio_default_color(v: &str) -> bool {
+    let v = v.trim().to_ascii_lowercase();
+    v.is_empty()
+        || v == "none"
+        || v == "transparent"
+        || v == "#ffffff"
+        || v == "#000000"
+        || v.starts_with("light-dark(")
+}
+
 fn drawio_colored(e: &[(String, Option<String>)]) -> bool {
-    for key in ["fillColor", "strokeColor"] {
-        if let Some(v) = style_get(e, key) {
-            let v = v.to_ascii_lowercase();
-            if !v.is_empty() && v != "none" && v != "#ffffff" && v != "#000000" {
-                return true;
-            }
-        }
-    }
-    false
+    ["fillColor", "strokeColor"]
+        .iter()
+        .filter_map(|key| style_get(e, key))
+        .any(|v| !drawio_default_color(v))
 }
 
 fn restore_style_key(e: &mut Vec<(String, Option<String>)>, key: &str, orig: &str) {
@@ -2308,6 +2318,24 @@ fn unchanged(body: &str) -> PaletteApplyRes {
     }
 }
 
+/// 最近的容器祖先（group / swimlane / container）。普通节点父级是根 `1`，不算分组。
+fn drawio_group(cell: &DrawioCell, by_id: &std::collections::HashMap<&str, &DrawioCell>) -> Option<String> {
+    let mut parent = cell.parent.as_str();
+    let mut guard = 0;
+    while !parent.is_empty() && parent != "0" && parent != "1" && guard < 32 {
+        let Some(p) = by_id.get(parent) else { break };
+        let e = style_entries(&p.style);
+        let flag = |k: &str| e.iter().any(|(key, v)| key == k && v.as_deref() != Some("0"));
+        let shape = style_get(&e, "shape").unwrap_or("");
+        if flag("group") || flag("swimlane") || shape.contains("swimlane") || shape.contains("container") {
+            return Some(parent.to_string());
+        }
+        parent = p.parent.as_str();
+        guard += 1;
+    }
+    None
+}
+
 fn apply_drawio(
     body: &str,
     seed: &Seed,
@@ -2319,6 +2347,8 @@ fn apply_drawio(
     if cells.is_empty() {
         return Ok(unchanged(body));
     }
+    let by_id: std::collections::HashMap<&str, &DrawioCell> =
+        cells.iter().map(|c| (c.id.as_str(), c)).collect();
     let mut items = Vec::new();
     let mut skipped = 0usize;
     for cell in &cells {
@@ -2327,7 +2357,7 @@ fn apply_drawio(
         }
         let e = style_entries(&cell.style);
         if e.iter().any(|(k, _)| k == "group") {
-            continue; // 容器自己不是节点；子节点各自上色
+            continue; // 容器自己不是节点；子节点按容器分组上色
         }
         let ours = style_get(&e, "dgmPalette").is_some();
         let colored = !ours && drawio_colored(&e);
@@ -2343,10 +2373,10 @@ fn apply_drawio(
             colored,
             Some(cell.value.clone()),
             None,
-            None,
+            drawio_group(cell, &by_id),
         ));
     }
-    let (by_slot, _, _) = plan(items, PaletteMode::All, &[]);
+    let (by_slot, _, group_count) = plan(items, PaletteMode::All, &[]);
     let mut slot_of: std::collections::HashMap<&str, &str> = std::collections::HashMap::new();
     for (slot, ids) in &by_slot {
         for id in ids {
@@ -2360,7 +2390,7 @@ fn apply_drawio(
         let mut e = style_entries(&cell.style);
         let mut changed = false;
         if let Some(slot) = slot_of.get(cell.id.as_str()) {
-            let (fill, stroke, text) = slot_swatch(seed, slot, dark, 1);
+            let (fill, stroke, text) = slot_swatch(seed, slot, dark, group_count.max(1));
             for (key, orig) in [
                 ("fillColor", "dgmOrigFillColor"),
                 ("strokeColor", "dgmOrigStrokeColor"),
@@ -2468,6 +2498,7 @@ struct ExInfo {
     colored: bool,
     label: Option<String>,
     container: Option<String>,
+    group: Option<String>,
 }
 
 fn ex_kind(t: &str) -> ExKind {
@@ -2576,10 +2607,23 @@ fn apply_excalidraw(
         let t = el.get("type").and_then(|v| v.as_str()).unwrap_or("");
         let kind = ex_kind(t);
         if kind == ExKind::Skip || id.is_empty() || el.get("isDeleted").and_then(|v| v.as_bool()).unwrap_or(false) {
-            infos.push(ExInfo { id, kind: ExKind::Skip, role: None, colored: false, label: None, container: None });
+            infos.push(ExInfo { id, kind: ExKind::Skip, role: None, colored: false, label: None, container: None, group: None });
             continue;
         }
         let container = el.get("containerId").and_then(|v| v.as_str()).map(str::to_string);
+        let group = el
+            .get("groupIds")
+            .and_then(|v| v.as_array())
+            .and_then(|a| a.first())
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+            .or_else(|| {
+                el.get("frameId")
+                    .and_then(|v| v.as_str())
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_string)
+            });
         let label = match kind {
             ExKind::Shape => bound.get(&id).cloned(),
             ExKind::Text => el.get("text").and_then(|v| v.as_str()).map(str::to_string),
@@ -2600,6 +2644,7 @@ fn apply_excalidraw(
             colored: ex_colored(el, kind),
             label,
             container,
+            group,
         });
     }
 
@@ -2613,6 +2658,50 @@ fn apply_excalidraw(
         if info.kind == ExKind::Text {
             let from_container = info.container.as_ref().and_then(|c| shape_role.get(c).copied());
             info.role = from_container.or_else(|| info.label.as_deref().and_then(role_from_label));
+        }
+    }
+
+    // 没有分组信息的画布：用**矩形包含关系**补出"外层容器"这一层。
+    // 否则外层大框与内部所有节点都落到 main，配色后一片同色。
+    let boxes: Vec<(usize, f64, f64, f64, f64)> = elements
+        .iter()
+        .enumerate()
+        .filter_map(|(i, el)| {
+            if infos[i].kind != ExKind::Shape || el.get("type").and_then(|v| v.as_str()) != Some("rectangle") {
+                return None;
+            }
+            let x = el.get("x")?.as_f64()?;
+            let y = el.get("y")?.as_f64()?;
+            let w = el.get("width")?.as_f64()?;
+            let h = el.get("height")?.as_f64()?;
+            (w > 0.0 && h > 0.0).then_some((i, x, y, w, h))
+        })
+        .collect();
+    let ids: Vec<String> = infos.iter().map(|i| i.id.clone()).collect();
+    for (i, info) in infos.iter_mut().enumerate() {
+        if info.kind != ExKind::Shape {
+            continue;
+        }
+        let Some(&(_, x, y, w, h)) = boxes.iter().find(|b| b.0 == i) else { continue };
+        let area = w * h;
+        let mut best: Option<(f64, String)> = None;
+        for &(j, bx, by, bw, bh) in &boxes {
+            if j == i {
+                continue;
+            }
+            let b_area = bw * bh;
+            if b_area <= area * 1.2 {
+                continue;
+            }
+            if bx - 1.0 <= x && by - 1.0 <= y && bx + bw + 1.0 >= x + w && by + bh + 1.0 >= y + h {
+                let entry = (b_area, ids[j].clone());
+                if best.as_ref().map_or(true, |(a, _)| b_area < *a) {
+                    best = Some(entry);
+                }
+            }
+        }
+        if let Some((_, gid)) = best {
+            info.group = Some(gid);
         }
     }
 
@@ -2630,11 +2719,11 @@ fn apply_excalidraw(
                 info.colored,
                 info.label.clone(),
                 None,
-                None,
+                info.group.clone(),
             ));
         }
     }
-    let (by_slot, _, _) = plan(items, PaletteMode::All, &[]);
+    let (by_slot, _, group_count) = plan(items, PaletteMode::All, &[]);
     let mut slot_of: std::collections::HashMap<&str, &str> = std::collections::HashMap::new();
     for (slot, ids) in &by_slot {
         for id in ids {
@@ -2660,7 +2749,7 @@ fn apply_excalidraw(
             ExKind::Skip => None,
         };
         if let Some(slot) = slot {
-            let (fill, stroke, text) = slot_swatch(seed, slot, dark, 1);
+            let (fill, stroke, text) = slot_swatch(seed, slot, dark, group_count.max(1));
             let a = el.get("strokeColor").and_then(|v| v.as_str()).unwrap_or("").to_string();
             let b = el.get("backgroundColor").and_then(|v| v.as_str()).unwrap_or("").to_string();
             let want = if info.kind == ExKind::Text { text.as_str() } else { stroke.as_str() };
@@ -3753,6 +3842,21 @@ b -> c
         assert!(r.body.contains("fillColor=#ff0000"), "手写颜色被覆盖：{}", r.body);
     }
 
+    /// Mermaid → drawio 的导入器把主题色写成 `light-dark(...)`；这不是用户手写颜色，
+    /// 否则整张转换图都会被 OnlyUncolored 跳过（状态栏报"跳过 N 个已有颜色"）。
+    #[test]
+    fn drawio_theme_defaults_are_not_hand_colors() {
+        let src = DRAWIO_SRC.replace(
+            "style=\"ellipse;whiteSpace=wrap;html=1;\"",
+            "style=\"ellipse;whiteSpace=wrap;html=1;fillColor=light-dark(#ECECFF,#1f2020);strokeColor=light-dark(#9370DB,#cccccc);\"",
+        );
+        let r = paint(&src, FormatId::Drawio, "pine", false, PaletteMode::OnlyUncolored).unwrap();
+        assert_eq!(r.applied, 2, "主题默认色不该被跳过：{}", r.body);
+        assert_eq!(r.skipped, 0);
+        assert!(!r.body.contains("fillColor=light-dark("), "{}", r.body);
+        assert!(r.body.contains("dgmOrigFillColor=light-dark("), "原主题色要存起来：{}", r.body);
+    }
+
     #[test]
     fn excalidraw_palette_round_trips_and_clears() {
         let src = r##"{"type":"excalidraw","version":2,"elements":[{"id":"a","type":"rectangle","x":0,"y":0,"width":100,"height":50,"strokeColor":"#ff0000","backgroundColor":"#ffffff","version":1,"versionNonce":1},{"id":"t","type":"text","x":10,"y":10,"width":80,"height":20,"text":"入口","containerId":"a","strokeColor":"#00ff00","version":1,"versionNonce":1},{"id":"e","type":"arrow","x":100,"y":50,"width":80,"height":0,"strokeColor":"#0000ff","version":1,"versionNonce":1}],"appState":{},"files":{}}"##;
@@ -3786,6 +3890,19 @@ b -> c
         assert!(!r.changed);
         assert_eq!(r.applied, 0);
         assert!(r.body.contains("#ff0000"), "{}", r.body);
+    }
+
+    /// 外层大矩形包含内部节点时，内外不能落到同一个 main 槽。
+    #[test]
+    fn excalidraw_containment_gives_inner_nodes_their_own_slot() {
+        let src = r##"{"type":"excalidraw","version":2,"elements":[{"id":"outer","type":"rectangle","x":0,"y":0,"width":400,"height":200,"strokeColor":"#1e1e1e","backgroundColor":"transparent","groupIds":["g"],"version":1,"versionNonce":1},{"id":"inner","type":"rectangle","x":20,"y":20,"width":100,"height":50,"strokeColor":"#1e1e1e","backgroundColor":"transparent","groupIds":["g"],"version":1,"versionNonce":1},{"id":"dia","type":"diamond","x":200,"y":40,"width":80,"height":80,"strokeColor":"#1e1e1e","backgroundColor":"transparent","groupIds":["g"],"version":1,"versionNonce":1}],"appState":{},"files":{}}"##;
+        let r = paint(src, FormatId::Excalidraw, "pine", false, PaletteMode::All).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&r.body).unwrap();
+        let outer = v["elements"][0]["backgroundColor"].as_str().unwrap().to_string();
+        let inner = v["elements"][1]["backgroundColor"].as_str().unwrap().to_string();
+        let dia = v["elements"][2]["backgroundColor"].as_str().unwrap().to_string();
+        assert_ne!(outer, inner, "外层与内部节点同色：{} / {}", outer, inner);
+        assert_ne!(inner, dia, "同层内部节点也没分槽：{} / {}", inner, dia);
     }
 
     fn clear_paint(body: &str, format: FormatId) -> PaletteApplyRes {
