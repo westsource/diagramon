@@ -146,6 +146,24 @@ window.DGM = window.DGM || {};
     return true;
   }
 
+  /** 画布型：等承载页真正把图加载出来再适应。
+   *
+   * `canvas.show()` 只负责发 load，drawio 的 graph 是异步建好的；立刻调 `__hostFit`
+   * 会拿到 false（没图可适配），于是画布停在 drawio 的默认左上角。这里按 100ms
+   * 重试一小段，成功即 `markFitted()`，失败（空文档）就自然放弃。
+   */
+  function fitCanvasWhenReady(id) {
+    clearTimeout(canvasFitTimer);
+    let tries = 0;
+    const tick = () => {
+      const d = state.activeDoc();
+      if (!canvasMode || !d || d.id !== id) return;
+      if (fit()) return;
+      if (++tries <= 100) canvasFitTimer = setTimeout(tick, 100);
+    };
+    tick();
+  }
+
   /** 视口「初始化」记账：这一次适应之后，本份文档的重渲染不再自动动缩放与位置。 */
   function markFitted() {
     const d = state.activeDoc();
@@ -228,6 +246,8 @@ window.DGM = window.DGM || {};
 
   /** 当前可见面是不是画布承载（决定缩放/导出往哪条路走）。 */
   let canvasMode = false;
+  // 画布型首次挂上/切换标签后的适应重试（承载页 load 是异步的，第一次 __hostFit 往往还没图）
+  let canvasFitTimer = 0;
 
   /** 从画布承载面切回页内舞台（SVG）。 */
   function exitCanvas() {
@@ -1290,6 +1310,9 @@ window.DGM = window.DGM || {};
 
     setSub(t("preview.canvas.sub", { name: fmt.name }));
     toolsVisible(true);
+    // 首次挂上/切回本份文档时先适应一次（与文本预览同一套初始化语义）；用户之后
+    // 自己调过的缩放/位置由 `fittedFor` 保护，不会每次重渲染都被拉回。
+    if (fittedFor !== d.id) fitCanvasWhenReady(d.id);
     const ct = $("#canvas-tools");
     // 画布自带工具栏，本站的浮动工具条往上让一让
     if (ct) ct.classList.add("is-canvas");
