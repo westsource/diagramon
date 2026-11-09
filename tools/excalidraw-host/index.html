@@ -183,6 +183,14 @@
       return false;
     }
 
+    // 刚切到画布标签时 root 可能还是 0×0（iframe 刚解除 hidden，布局还没发生）。
+    // Excalidraw 的 fit 在 0 尺寸下会夹到最小 10% 并滚到左上角 —— 这会被宿主误记成
+    // "已经适应"，之后再也不会重试。尺寸没起来就如实回 false，让宿主稍后重试。
+    const root = document.getElementById('root');
+    if (!root || root.clientWidth <= 0 || root.clientHeight <= 0) {
+      return false;
+    }
+
     const elements = visibleElements();
     if (elements.length === 0) {
       if (options && options.normalizeEmpty) {
@@ -191,7 +199,7 @@
       return false;
     }
 
-    api.scrollToContent(elements, { fitToContent: true, animate: false });
+    api.scrollToContent(elements, { fitToViewport: true, animate: false });
     return true;
   }
 
@@ -260,7 +268,17 @@
       const scene = typeof msg.scene === 'string' ? JSON.parse(msg.scene) : msg.scene;
       messages.pending = scene;               // 记下最近一次外部载入，避免立刻回写成"用户修改"
       const elements = scene.elements || [];
-      out.api.updateScene({ elements: elements, appState: scene.appState || {} });
+      // appState 里只持久化 4 个字段（见 filterAppState），**不含 zoom/scroll**。
+      // Excalidraw 的 updateScene 在收到一个没有视图字段的 appState 时，会把内部
+      // zoom 置成 `{value:null}`（实测 v0.18）：之后 fit/scrollToContent 全部失效，
+      // 画面就是最小 10% + 左上角。载入文档先给一个确定的初始视口（100% + 原点），
+      // 真正的内容适应交给宿主的 __hostFit。
+      const app = Object.assign({}, scene.appState || {}, {
+        zoom: { value: 1 },
+        scrollX: 0,
+        scrollY: 0
+      });
+      out.api.updateScene({ elements: elements, appState: app });
       // 附件走 addFiles（updateScene 不认 files，见文件头）。文档自带的附件在这里交给画布。
       applyFiles(scene.files || {});
       window.__excalidrawApi = out.api;
