@@ -2319,21 +2319,79 @@ fn unchanged(body: &str) -> PaletteApplyRes {
 }
 
 /// 最近的容器祖先（group / swimlane / container）。普通节点父级是根 `1`，不算分组。
-fn drawio_group(cell: &DrawioCell, by_id: &std::collections::HashMap<&str, &DrawioCell>) -> Option<String> {
+fn drawio_group(
+    cell: &DrawioCell,
+    by_id: &std::collections::HashMap<&str, &DrawioCell>,
+    with_children: &std::collections::HashSet<&str>,
+) -> Option<String> {
     let mut parent = cell.parent.as_str();
     let mut guard = 0;
     while !parent.is_empty() && parent != "0" && parent != "1" && guard < 32 {
         let Some(p) = by_id.get(parent) else { break };
         let e = style_entries(&p.style);
-        let flag = |k: &str| e.iter().any(|(key, v)| key == k && v.as_deref() != Some("0"));
+        let flag = |k: &str| {
+            e.iter()
+                .any(|(key, v)| key == k && v.as_deref() != Some("0"))
+        };
         let shape = style_get(&e, "shape").unwrap_or("");
-        if flag("group") || flag("swimlane") || shape.contains("swimlane") || shape.contains("container") {
+        // `with_children` 是 Mermaid→drawio 导入器画出的 subgraph 框：它是普通矩形
+        // （没有 swimlane/container 标记），但子节点挂在它下面，层级就是它的容器语义。
+        if with_children.contains(p.id.as_str())
+            || flag("group")
+            || flag("swimlane")
+            || shape.contains("swimlane")
+            || shape.contains("container")
+        {
             return Some(parent.to_string());
         }
         parent = p.parent.as_str();
         guard += 1;
     }
     None
+}
+
+/// drawio 里真正画出来的"框"（swimlane / container）。它不是语义节点：
+/// 框要和框里的节点同色相，但必须明显更浅，否则内层节点会溶进框的背景里
+/// （和 mermaid subgraph 用 `frame_swatch` 是同一个理由）。
+fn drawio_frame(cell: &DrawioCell, with_children: &std::collections::HashSet<&str>) -> bool {
+    if with_children.contains(cell.id.as_str()) {
+        // Mermaid→drawio 的 subgraph 框是没有 swimlane/container 标记的普通矩形，
+        // 只能靠"它有子节点"认出来。
+        return true;
+    }
+    let e = style_entries(&cell.style);
+    let flag = |k: &str| {
+        e.iter()
+            .any(|(key, v)| key == k && v.as_deref() != Some("0"))
+    };
+    let shape = style_get(&e, "shape").unwrap_or("");
+    flag("swimlane")
+        || flag("container")
+        || shape.contains("swimlane")
+        || shape.contains("container")
+}
+
+fn set_cell_colors(
+    e: &mut Vec<(String, Option<String>)>,
+    fill: &str,
+    stroke: &str,
+    text: &str,
+    palette: &str,
+) {
+    for (key, orig) in [
+        ("fillColor", "dgmOrigFillColor"),
+        ("strokeColor", "dgmOrigStrokeColor"),
+        ("fontColor", "dgmOrigFontColor"),
+    ] {
+        if style_get(e, orig).is_none() {
+            let cur = style_get(e, key).unwrap_or("-").to_string();
+            style_set(e, orig, Some(&cur));
+        }
+    }
+    style_set(e, "fillColor", Some(fill));
+    style_set(e, "strokeColor", Some(stroke));
+    style_set(e, "fontColor", Some(text));
+    style_set(e, "dgmPalette", Some(palette));
 }
 
 fn apply_drawio(
@@ -2349,7 +2407,13 @@ fn apply_drawio(
     }
     let by_id: std::collections::HashMap<&str, &DrawioCell> =
         cells.iter().map(|c| (c.id.as_str(), c)).collect();
+    let with_children: std::collections::HashSet<&str> = cells
+        .iter()
+        .filter(|c| c.vertex && !c.edge && c.parent != "0" && c.parent != "1")
+        .map(|c| c.parent.as_str())
+        .collect();
     let mut items = Vec::new();
+    let mut frames: Vec<&DrawioCell> = Vec::new();
     let mut skipped = 0usize;
     for cell in &cells {
         if !cell.vertex || cell.edge || cell.id == "0" || cell.id == "1" {
@@ -2358,6 +2422,11 @@ fn apply_drawio(
         let e = style_entries(&cell.style);
         if e.iter().any(|(k, _)| k == "group") {
             continue; // 容器自己不是节点；子节点按容器分组上色
+        }
+        if drawio_frame(cell, &with_children) {
+            // 框本身不参与节点槽位：它用更浅的 frame_swatch，否则会和框内节点一个颜色。
+            frames.push(cell);
+            continue;
         }
         let ours = style_get(&e, "dgmPalette").is_some();
         let colored = !ours && drawio_colored(&e);
@@ -2373,8 +2442,25 @@ fn apply_drawio(
             colored,
             Some(cell.value.clone()),
             None,
-            drawio_group(cell, &by_id),
+            drawio_group(cell, &by_id, &with_children),
         ));
+    }
+    // plan 的分组编号按 items 首次出现顺序生成；这里先照同一顺序建一份索引，
+    // 让 frame 能取到框内节点用的那个 gN（同一个色相，只降填充亮度）。
+    let mut frame_idx: std::collections::BTreeMap<String, usize> =
+        std::collections::BTreeMap::new();
+    for (_, _, _, _, _, group) in &items {
+        if let Some(g) = group {
+            let n = frame_idx.len();
+            frame_idx.entry(g.clone()).or_insert(n);
+        }
+    }
+    let mut frame_count = frame_idx.len();
+    for frame in &frames {
+        if !frame_idx.contains_key(&frame.id) {
+            frame_idx.insert(frame.id.clone(), frame_count);
+            frame_count += 1;
+        }
     }
     let (by_slot, _, group_count) = plan(items, PaletteMode::All, &[]);
     let mut slot_of: std::collections::HashMap<&str, &str> = std::collections::HashMap::new();
@@ -2388,23 +2474,27 @@ fn apply_drawio(
     let mut reps: Vec<(usize, usize, String)> = Vec::new();
     for cell in &cells {
         let mut e = style_entries(&cell.style);
+        // group 是结构壳，不是可见框；它恰好“有子节点”，不能在下面的 frame 分支里被上色。
+        if !cell.edge && e.iter().any(|(k, _)| k == "group") {
+            continue;
+        }
         let mut changed = false;
-        if let Some(slot) = slot_of.get(cell.id.as_str()) {
-            let (fill, stroke, text) = slot_swatch(seed, slot, dark, group_count.max(1));
-            for (key, orig) in [
-                ("fillColor", "dgmOrigFillColor"),
-                ("strokeColor", "dgmOrigStrokeColor"),
-                ("fontColor", "dgmOrigFontColor"),
-            ] {
-                if style_get(&e, orig).is_none() {
-                    let cur = style_get(&e, key).unwrap_or("-").to_string();
-                    style_set(&mut e, orig, Some(&cur));
-                }
+        if drawio_frame(cell, &with_children) {
+            let ours = style_get(&e, "dgmPalette").is_some();
+            let colored = !ours && drawio_colored(&e);
+            if mode == PaletteMode::OnlyUncolored && colored {
+                skipped += 1;
+            } else {
+                let idx = frame_idx.get(&cell.id).copied().unwrap_or(0);
+                let (fill, stroke, text) =
+                    frame_swatch(seed, idx, frame_count.max(group_count).max(1), dark);
+                set_cell_colors(&mut e, &fill, &stroke, &text, seed.id);
+                applied += 1;
+                changed = true;
             }
-            style_set(&mut e, "fillColor", Some(&fill));
-            style_set(&mut e, "strokeColor", Some(&stroke));
-            style_set(&mut e, "fontColor", Some(&text));
-            style_set(&mut e, "dgmPalette", Some(seed.id));
+        } else if let Some(slot) = slot_of.get(cell.id.as_str()) {
+            let (fill, stroke, text) = slot_swatch(seed, slot, dark, group_count.max(1));
+            set_cell_colors(&mut e, &fill, &stroke, &text, seed.id);
             applied += 1;
             changed = true;
         }
@@ -3831,6 +3921,55 @@ b -> c
     }
 
     /// OnlyUncolored：用户手写颜色的 cell 不能被动；没有颜色的仍要上色。
+    #[test]
+    fn drawio_container_frame_is_lighter_than_the_nodes_inside_it() {
+        let src = r#"<mxfile><diagram><mxGraphModel><root><mxCell id="0"/><mxCell id="1" parent="0"/><mxCell id="outer" value="外层" vertex="1" parent="1" style="swimlane;whiteSpace=wrap;html=1;"/><mxCell id="inner" value="内层" vertex="1" parent="outer" style="rounded=1;whiteSpace=wrap;html=1;"/></root></mxGraphModel></diagram></mxfile>"#;
+        let r = paint(src, FormatId::Drawio, "pine", false, PaletteMode::All).unwrap();
+        assert_eq!(r.applied, 2, "框和内层节点都该上色：{}", r.body);
+        let cells = drawio_cells(&r.body);
+        let colors = |id: &str| {
+            let cell = cells.iter().find(|c| c.id == id).unwrap();
+            let e = style_entries(&cell.style);
+            (
+                style_get(&e, "fillColor").unwrap_or("").to_string(),
+                style_get(&e, "strokeColor").unwrap_or("").to_string(),
+            )
+        };
+        let (outer_fill, outer_stroke) = colors("outer");
+        let (inner_fill, inner_stroke) = colors("inner");
+        assert_ne!(outer_fill, inner_fill, "外层框不能和内层节点同填充色：{}", r.body);
+        assert_ne!(outer_stroke, inner_stroke, "外层框不能和内层节点同描边色：{}", r.body);
+    }
+
+    #[test]
+    fn drawio_imported_subgraph_rectangles_are_frames_too() {
+        // Mermaid 的 drawio 导入器把 subgraph 画成普通矩形（没有 swimlane/container），
+        // 只靠 parent 链表示嵌套；这里必须按"有子节点"识别为框，否则整棵子树会落到
+        // 外层 group 的同一个槽位里，框和节点全是一种颜色。
+        let src = r#"<mxfile><diagram><mxGraphModel><root><mxCell id="0"/><mxCell id="1" parent="0"/><mxCell id="g" parent="1" vertex="1" style="group;transparentBounds=1;"/><mxCell id="outer" value="外层" parent="g" vertex="1" style="html=1;whiteSpace=wrap;verticalAlign=top;"/><mxCell id="inner" value="内层" parent="outer" vertex="1" style="html=1;whiteSpace=wrap;verticalAlign=top;"/><mxCell id="node" value="节点" parent="inner" vertex="1" style="html=1;whiteSpace=wrap;rounded=1;"/></root></mxGraphModel></diagram></mxfile>"#;
+        let r = paint(src, FormatId::Drawio, "pine", false, PaletteMode::All).unwrap();
+        assert_eq!(r.applied, 3, "两个框和一个节点都该上色：{}", r.body);
+        let cells = drawio_cells(&r.body);
+        let colors = |id: &str| {
+            let cell = cells.iter().find(|c| c.id == id).unwrap();
+            let e = style_entries(&cell.style);
+            (
+                style_get(&e, "fillColor").unwrap_or("").to_string(),
+                style_get(&e, "strokeColor").unwrap_or("").to_string(),
+            )
+        };
+        let group = cells.iter().find(|c| c.id == "g").unwrap();
+        assert!(!group.style.contains("dgmPalette"), "group 壳不该被上色：{}", r.body);
+        let (outer_fill, outer_stroke) = colors("outer");
+        let (inner_fill, inner_stroke) = colors("inner");
+        let (node_fill, node_stroke) = colors("node");
+        assert_ne!(outer_fill, inner_fill, "外层框与内层框不能同色：{}", r.body);
+        assert_ne!(outer_stroke, inner_stroke, "外层框与内层框不能同描边：{}", r.body);
+        assert_ne!(inner_fill, node_fill, "内层框与节点不能同色：{}", r.body);
+        assert_ne!(inner_stroke, node_stroke, "内层框与节点不能同描边：{}", r.body);
+        assert_ne!(outer_fill, node_fill, "外层框与节点不能同色：{}", r.body);
+    }
+
     #[test]
     fn drawio_only_uncolored_keeps_hand_painted_cells() {
         let src = DRAWIO_SRC.replace(

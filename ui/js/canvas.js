@@ -82,6 +82,9 @@ window.DGM = window.DGM || {};
          * 去抖在 `__apply(load B)` 之后、画布真正换文档之前到期。
          */
         epoch: 0,
+        /** drawio：load 已发出、还没收到 `load/loaded` 确认（大图要几秒） */
+        loading: false,
+        loadWaiters: [],
         /** Excalidraw 的 `files` 段（图片等二进制附件），回写时必须原样带上 */
         files: {},
       };
@@ -225,6 +228,8 @@ window.DGM = window.DGM || {};
       // 只有到这里才把代际交给承载页，之后它入队的事件才算新文档的。
       case "load":
       case "loaded":
+        e.loading = false;
+        for (const done of e.loadWaiters.splice(0)) done(true);
         confirmEpoch(format);
         break;
 
@@ -510,6 +515,7 @@ window.DGM = window.DGM || {};
     const body = doc.body || "";
 
     if (format === "drawio") {
+      e.loading = true;
       send(format, { action: "load", xml: body, autosave: 1 });
       return true;
     }
@@ -542,6 +548,8 @@ window.DGM = window.DGM || {};
     const e = hosts[format];
     if (!e) return;
     if (e.frame && e.frame.parentNode) e.frame.parentNode.removeChild(e.frame);
+    e.loading = false;
+    for (const done of e.loadWaiters.splice(0)) done(false);
     delete hosts[format];
     if (activeFormat === format) activeFormat = null;
     // 待用的转换载荷是模块级单例、且按 format 匹配：实例都没了还留着它，
@@ -550,14 +558,43 @@ window.DGM = window.DGM || {};
   }
 
   /**
+   * 等 drawio 的 load 确认（大图换文档时 load 是异步的，export 早取会拿到空图）。
+   * 超时返回 false 并清掉 loading，让调用方按当前状态继续。
+   */
+  function whenLoaded(format, timeoutMs) {
+    const e = hosts[format];
+    if (!e || !e.frame) return Promise.resolve(false);
+    if (!e.loading) return Promise.resolve(true);
+    return new Promise((resolve) => {
+      let done = false;
+      const finish = (ok) => {
+        if (done) return;
+        done = true;
+        clearTimeout(timer);
+        const i = e.loadWaiters.indexOf(finish);
+        if (i >= 0) e.loadWaiters.splice(i, 1);
+        if (!ok) e.loading = false;
+        resolve(ok);
+      };
+      e.loadWaiters.push(finish);
+      const timer = setTimeout(() => finish(false), timeoutMs || 20000);
+    });
+  }
+
+  /**
    * 落盘前取画布当前正文。
    *
    * * drawio：向画布要 XML（与 autosave 同源，只是不等 1.5s 去抖）
    * * Excalidraw：正文由 `scene` 事件持续回写，直接返回当前值（协议没有 XML 导出档）
    */
-  function flush(format) {
+  function flush(format, force) {
     const e = hosts[format];
     if (!e || !e.frame || e.loadedDoc === null) return Promise.resolve(null);
+    // 大 drawio 文件的 load 要几秒；load 还没确认时 export 会拿到残缺/空白图。
+    // 等它加载完再取，超时则强制取一次（宁可拿当前状态，也不要把 flush 挂死）。
+    if (format === "drawio" && !force && e.loading) {
+      return whenLoaded(format, 20000).then(() => flush(format, true));
+    }
     if (format !== "drawio") {
       // Excalidraw：`scene` 事件只在真实变更时推，外部载入（setScene / loadMermaid）
       // 之后被静默挡掉，所以这里**主动要一次**；等它回来再返回。
@@ -740,6 +777,7 @@ window.DGM = window.DGM || {};
     teardown,
     flush,
     reload,
+    whenLoaded,
     waitForBody,
     exportPng,
     loadMermaid,

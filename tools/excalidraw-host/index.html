@@ -263,6 +263,16 @@
   // 而 Excalidraw 的挂载是异步的 —— 直接丢弃会让"打开文件"变成空白画布。
   const pendingCommands = [];
 
+  function clearUndoHistory() {
+    try {
+      if (out.api && out.api.history && typeof out.api.history.clear === 'function') {
+        out.api.history.clear();
+      }
+    } catch (e) {
+      // 历史清理失败不该影响载入/配色：宁可不撤销，也不要把画布弄坏。
+    }
+  }
+
   function applyCommand(msg) {
     if (msg.action === 'setScene') {
       const scene = typeof msg.scene === 'string' ? JSON.parse(msg.scene) : msg.scene;
@@ -284,6 +294,9 @@
       window.__excalidrawApi = out.api;
       suppressEchoes(elements);
       ensureViewportVisible();                // 载入文档 = 视图由这份文档决定，不沿用上一份的视口
+      // 一次载入（切标签/外部替换/配色重载）就是一次新的编辑会话：清掉上一个文档的
+      // undo 栈，避免 Ctrl+Z 把另一个标签页的内容撤回来。
+      clearUndoHistory();
       return true;
     }
 
@@ -314,6 +327,7 @@
         applyFiles(converted.files || {});
         suppressEchoes(elements);
         ensureViewportVisible();
+        clearUndoHistory();
         report('loaded', { count: elements.length });
         return true;
       }).catch(function (e) {

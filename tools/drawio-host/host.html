@@ -89,6 +89,20 @@
       const parsed = JSON.parse(evt.data);
       if (parsed && typeof parsed.event === 'string') {
         window.__hostState = parsed.event;
+        // 每次 load/loaded 都是一次新的文档会话：清掉 drawio 的 undo 栈。
+        // 画布 iframe 按格式复用，不清的话 Ctrl+Z 会把**上一个标签页**的编辑撤回来；
+        // 配色重载（load 同一份文档）也走这里，历史同样从零开始。
+        if (parsed.event === 'load' || parsed.event === 'loaded') {
+          try {
+            const win = frame();
+            const ui = win && win.sb && win.sb.editorUi;
+            if (ui && ui.editor && ui.editor.undoManager) {
+              ui.editor.undoManager.clear();
+            }
+          } catch (e) {
+            // 承载页还没完全起来：不清也不该影响载入
+          }
+        }
       }
     } catch (e) {
       // 非 JSON 载荷照样转交，由 C# 侧决定怎么处理

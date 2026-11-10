@@ -536,7 +536,7 @@ window.DGM = window.DGM || {};
    * 不能走 `paintDoc`：画布的正文不是编辑器里的文本，写状态层后必须让承载页看到，
    * 而 `canvas.show` 对同一文档刻意不重载（保护撤销历史）—— 用 `canvas.reload` 绕过。
    */
-  async function paintCanvas(live, mode) {
+  async function paintCanvas(live) {
     if (!DGM.canvas || !DGM.canvas.supports(live.format)) {
       throw new Error(t("preview.canvas.noHost", { name: state.docFmt(live).name, id: live.format }));
     }
@@ -545,9 +545,19 @@ window.DGM = window.DGM || {};
     // Excalidraw 的正文就是场景 JSON，`scene` 事件会即时写回 `live.body`；
     // 它的 `flush('excalidraw')` 要等一次 getScene 往返（实测常要 4s 超时才落）。
     // 配色/清除没必要付这个延迟，直接用正文；drawio 的正文靠 autosave 去抖，仍需 flush。
+    // 配色只认当前画布：打开大张 drawio 后画布可能还在载入（或还没切到这份文档），
+    // 此时 flush 拿到的是上一份/半截图。先让 show 对一遍文档，再 flush（它会等载入完成）。
+    if (live.format === "drawio" && DGM.canvas.show) {
+      try {
+        DGM.canvas.show(live);
+      } catch (e) {
+      }
+    }
     const flushed = live.format === "drawio" ? await DGM.canvas.flush(live.format).catch(() => null) : null;
     const src = canvasSource(live, flushed);
-    const res = await state.paint(src, live.format, eff, mode || "only_uncolored");
+    // 画布型始终整篇重排：原色已经存进文件（dgmOriginal），「无」能逐元素恢复，
+    // 所以覆盖手写颜色是可逆的；否则打开一张"已经都有颜色"的画布，配色会全部跳过。
+    const res = await state.paint(src, live.format, eff, "all");
     const picked = { applied: res.applied, skipped: res.skipped, removed: res.styles_removed };
     if (res.changed) {
       await state.setBodyNow(live.id, res.body);
@@ -562,7 +572,7 @@ window.DGM = window.DGM || {};
 
   /** 按文档类型选择写回路径（文本走编辑器，画布走承载页重载）。 */
   async function paintForDoc(live, mode) {
-    if (state.isCanvasDoc(live)) return paintCanvas(live, mode);
+    if (state.isCanvasDoc(live)) return paintCanvas(live);
     return paintDoc(live, mode);
   }
 
