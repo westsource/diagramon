@@ -5,7 +5,8 @@
 
 pub mod agent;
 pub mod decision;
-pub mod prompt;
+// 提示词抽到 ai-prompt：那一层不依赖 reqwest，可编到 wasm 让网页与桌面共用。
+pub use ai_prompt as prompt;
 pub mod provider;
 
 pub use agent::{run, AgentOutcome, Completer, Completion, HttpCompleter, StopReason, Tool, DEFAULT_MAX_STEPS};

@@ -8,6 +8,7 @@ repository.workspace = true
 
 [dependencies]
 app-ipc = { workspace = true }
+ai-prompt = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }

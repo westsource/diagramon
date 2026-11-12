@@ -1,0 +1,11 @@
+[package]
+name = "ai-prompt"
+description = "提示词与消息组装（无网络依赖，桌面与网页共用同一份）"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+app-ipc = { workspace = true }
+serde_json = { workspace = true }

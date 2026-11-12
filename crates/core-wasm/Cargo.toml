@@ -11,6 +11,7 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 app-core = { workspace = true }
+ai-prompt = { workspace = true }
 app-ipc = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

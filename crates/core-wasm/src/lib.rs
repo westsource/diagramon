@@ -84,6 +84,23 @@ fn handle(req: &serde_json::Value) -> Result<String, String> {
             let out = app_core::formatter::format_body(f, body());
             Ok(format!("{{\"changed\":{},\"body\":{}}}", out.changed, ser(&out.body)?))
         }
+        "build_messages" => {
+            let format = fid(req.get("format").and_then(|v| v.as_str()).unwrap_or(""))?;
+            let intent: app_ipc::AiIntent = serde_json::from_value(
+                req.get("intent").cloned().unwrap_or(serde_json::Value::String("generate".into())),
+            )
+            .map_err(|e| format!("intent 不是合法值：{e}"))?;
+            let prompt = req.get("prompt").and_then(|v| v.as_str()).unwrap_or("");
+            let context = req.get("context").and_then(|v| v.as_str());
+            let images: Vec<String> = serde_json::from_value(req.get("images").cloned().unwrap_or(serde_json::json!([])))
+                .map_err(|e| e.to_string())?;
+            let history: Vec<app_ipc::AiTurn> = serde_json::from_value(req.get("history").cloned().unwrap_or(serde_json::json!([])))
+                .map_err(|e| e.to_string())?;
+            let files: Vec<app_ipc::AiContextFile> = serde_json::from_value(req.get("files").cloned().unwrap_or(serde_json::json!([])))
+                .map_err(|e| e.to_string())?;
+            let msgs = ai_prompt::build_messages_with_history_images(format, intent, prompt, context, &images, &history, &files);
+            Ok(format!("{{\"messages\":{}}}", ser(&msgs)?))
+        }
         "convert" => {
             let from = fid(req.get("from").and_then(|v| v.as_str()).unwrap_or(""))?;
             let to = fid(req.get("to").and_then(|v| v.as_str()).unwrap_or(""))?;

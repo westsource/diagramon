@@ -13,6 +13,7 @@
 [workspace]
 resolver = "2"
 members = [
+    "crates/ai-prompt",
     "crates/app-ipc",
     "crates/app-core",
     "crates/assets",
@@ -36,6 +37,7 @@ assets = { path = "crates/assets" }
 platform = { path = "crates/platform" }
 platform-windows = { path = "crates/platform-windows" }
 ai = { path = "crates/ai" }
+ai-prompt = { path = "crates/ai-prompt" }
 
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
