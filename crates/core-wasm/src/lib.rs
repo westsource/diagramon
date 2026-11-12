@@ -84,6 +84,10 @@ fn handle(req: &serde_json::Value) -> Result<String, String> {
             let out = app_core::formatter::format_body(f, body());
             Ok(format!("{{\"changed\":{},\"body\":{}}}", out.changed, ser(&out.body)?))
         }
+        "folder" => {
+            let v = req.get("value").cloned().unwrap_or(serde_json::Value::Null);
+            Ok(format!("{{\"folder\":{}}}", ser(&app_core::cloudmap::folder_of(&v))?))
+        }
         "account" => {
             let v = req.get("value").cloned().unwrap_or(serde_json::Value::Null);
             Ok(format!("{{\"account\":{}}}", ser(&app_core::cloudmap::account_of(&v))?))
