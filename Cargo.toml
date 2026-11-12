@@ -19,6 +19,7 @@ members = [
     "crates/platform",
     "crates/platform-windows",
     "crates/ai",
+    "crates/core-wasm",
     "src-tauri",
 ]
 

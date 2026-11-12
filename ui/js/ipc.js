@@ -22,6 +22,12 @@ window.DGM = window.DGM || {};
 
   const TAURI = window.__TAURI__;
   const isTauri = !!(TAURI && (TAURI.core || typeof TAURI.invoke === "function"));
+  // 网页版后端注入口：由部署方的覆盖脚本（私有仓 app/js/boot.js）在 ipc.js 之前挂上。
+  // 公开仓只声明形状，不含任何在线版实现；桌面版不会走到这个分支。
+  const WEB = window.DGM_WEB_BACKEND && typeof window.DGM_WEB_BACKEND.invoke === "function"
+    ? window.DGM_WEB_BACKEND
+    : null;
+  const isWeb = !!WEB;
 
   /* ------------------------------------------------------------------ 事件总线 */
 
@@ -42,6 +48,7 @@ window.DGM = window.DGM || {};
   /* ------------------------------------------------------------------ invoke */
 
   async function invoke(cmd, args) {
+    if (isWeb) return WEB.invoke(cmd, args);
     if (!isTauri) return Mock.invoke(cmd, args);
     const core = TAURI.core;
     if (core && typeof core.invoke === "function") return core.invoke(cmd, args);
@@ -51,6 +58,7 @@ window.DGM = window.DGM || {};
 
   /** 订阅事件（ai://delta 等）。返回取消订阅函数。 */
   function on(event, handler) {
+    if (isWeb && typeof WEB.on === "function") return WEB.on(event, handler);
     if (isTauri && TAURI.event && typeof TAURI.event.listen === "function") {
       let unlisten = null;
       TAURI.event.listen(event, (e) => {
@@ -225,11 +233,14 @@ window.DGM = window.DGM || {};
 
   DGM.ipc = {
     isTauri,
-    isMock: !isTauri,
+    isWeb,
+    isMock: !isTauri && !isWeb,
     invoke,
     on,
     onDragDrop,
     emit: emitLocal, // 仅供 mock 后端内部与本地事件转发
+    // 给网页版适配层用：未实现的命令原样回落内置 mock，避免为了一个外壳复制整份默认设置
+    mockInvoke: (cmd, args) => Mock.invoke(cmd, args),
     win,
     dialog: { pickPaths, pickSavePath, pickImage },
   };

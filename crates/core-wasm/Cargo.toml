@@ -1,0 +1,16 @@
+[package]
+name = "core-wasm"
+description = "app-core 的 wasm 绑定：网页版复用转换/校验/大纲/配色，避免第二套实现"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+app-core = { workspace = true }
+app-ipc = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
