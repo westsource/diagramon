@@ -35,6 +35,30 @@ fn read_capped(path: &Path) -> std::io::Result<Vec<u8>> {
     Ok(out)
 }
 
+/// 从内存字节构造上下文（网页版用：文件由浏览器读，规则仍在核心）。
+pub fn from_bytes(path: &str, name: &str, bytes: &[u8]) -> Result<AiContextFile, String> {
+    if bytes.iter().take(SNIFF_BYTES).any(|b| *b == 0) {
+        return Err("这不是文本文件（开头就有 NUL 字节）".into());
+    }
+    let truncated = bytes.len() > MAX_BYTES;
+    let slice = &bytes[..bytes.len().min(MAX_BYTES)];
+    let text = match std::str::from_utf8(slice) {
+        Ok(s) => s.to_string(),
+        Err(e) if truncated && e.error_len().is_none() && e.valid_up_to() + 3 >= slice.len() => {
+            std::str::from_utf8(&slice[..e.valid_up_to()])
+                .map_err(|_| "不是 UTF-8 文本文件".to_string())?
+                .to_string()
+        }
+        Err(_) => return Err("不是 UTF-8 文本文件（GBK 等编码请先转成 UTF-8）".into()),
+    };
+    Ok(AiContextFile {
+        path: path.replace('\\', "/"),
+        name: name.to_string(),
+        text,
+        truncated,
+    })
+}
+
 /// 读一个文件作为上下文。
 pub fn read(path: &Path) -> Result<AiContextFile, String> {
     let meta = std::fs::metadata(path).map_err(|e| format!("读不到这个文件：{e}"))?;
@@ -137,6 +161,22 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         assert!(read(&dir).unwrap_err().contains("目录"));
         assert!(read(&tmp("never-written.md")).unwrap_err().contains("读不到"));
+    }
+
+    #[test]
+    fn from_bytes_applies_the_same_rules() {
+        let ok = from_bytes("/w/a.mmd", "a.mmd", "flowchart TD\n A-->B".as_bytes()).unwrap();
+        assert_eq!(ok.path, "/w/a.mmd");
+        assert_eq!(ok.name, "a.mmd");
+        assert!(!ok.truncated);
+
+        let big = vec![b'x'; MAX_BYTES + 10];
+        let cut = from_bytes("b.txt", "b.txt", &big).unwrap();
+        assert!(cut.truncated);
+        assert_eq!(cut.text.len(), MAX_BYTES);
+
+        assert!(from_bytes("x.bin", "x.bin", &[0u8, 1, 2]).unwrap_err().contains("NUL"));
+        assert!(from_bytes("gbk.txt", "gbk.txt", &[0xd6, 0xd0]).unwrap_err().contains("UTF-8"));
     }
 
     #[test]

@@ -84,6 +84,17 @@ fn handle(req: &serde_json::Value) -> Result<String, String> {
             let out = app_core::formatter::format_body(f, body());
             Ok(format!("{{\"changed\":{},\"body\":{}}}", out.changed, ser(&out.body)?))
         }
+        "context_file" => {
+            let path = req.get("path").and_then(|v| v.as_str()).unwrap_or("");
+            let name = req.get("name").and_then(|v| v.as_str()).unwrap_or("");
+            let b64 = req.get("bytes").and_then(|v| v.as_str()).unwrap_or("");
+            use base64::Engine as _;
+            let bytes = base64::engine::general_purpose::STANDARD
+                .decode(b64)
+                .map_err(|e| format!("bytes 不是合法 base64：{e}"))?;
+            let f = app_core::context_file::from_bytes(path, name, &bytes)?;
+            Ok(format!("{{\"file\":{}}}", ser(&f)?))
+        }
         "folder" => {
             let v = req.get("value").cloned().unwrap_or(serde_json::Value::Null);
             Ok(format!("{{\"folder\":{}}}", ser(&app_core::cloudmap::folder_of(&v))?))

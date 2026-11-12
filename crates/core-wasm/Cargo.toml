@@ -14,4 +14,5 @@ app-core = { workspace = true }
 ai-prompt = { workspace = true }
 app-ipc = { workspace = true }
 serde = { workspace = true }
+base64 = "0.23.1"
 serde_json = { workspace = true }
