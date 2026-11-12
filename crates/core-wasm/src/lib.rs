@@ -84,6 +84,18 @@ fn handle(req: &serde_json::Value) -> Result<String, String> {
             let out = app_core::formatter::format_body(f, body());
             Ok(format!("{{\"changed\":{},\"body\":{}}}", out.changed, ser(&out.body)?))
         }
+        "account" => {
+            let v = req.get("value").cloned().unwrap_or(serde_json::Value::Null);
+            Ok(format!("{{\"account\":{}}}", ser(&app_core::cloudmap::account_of(&v))?))
+        }
+        "gateway_model" => {
+            let v = req.get("value").cloned().unwrap_or(serde_json::Value::Null);
+            Ok(format!("{{\"model\":{}}}", ser(&app_core::cloudmap::gateway_model_of(&v))?))
+        }
+        "cloud_doc" => {
+            let v = req.get("value").cloned().unwrap_or(serde_json::Value::Null);
+            Ok(format!("{{\"doc\":{}}}", ser(&app_core::cloudmap::doc_of(&v))?))
+        }
         "build_messages" => {
             let format = fid(req.get("format").and_then(|v| v.as_str()).unwrap_or(""))?;
             let intent: app_ipc::AiIntent = serde_json::from_value(
