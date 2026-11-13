@@ -95,6 +95,46 @@ fn handle(req: &serde_json::Value) -> Result<String, String> {
             let f = app_core::context_file::from_bytes(path, name, &bytes)?;
             Ok(format!("{{\"file\":{}}}", ser(&f)?))
         }
+        "palette_apply" => {
+            let r: app_ipc::PaletteApplyReq = serde_json::from_value(
+                req.get("req").cloned().unwrap_or(serde_json::Value::Null),
+            )
+            .map_err(|e| format!("配色请求不合法：{e}"))?;
+            let res = app_core::palette::apply(&r.body, r.format, &r.palette, r.dark, r.edges, r.mode)?;
+            Ok(format!("{{\"result\":{}}}", ser(&res)?))
+        }
+        "palette_clear" => {
+            let r: app_ipc::PaletteClearReq = serde_json::from_value(
+                req.get("req").cloned().unwrap_or(serde_json::Value::Null),
+            )
+            .map_err(|e| format!("配色请求不合法：{e}"))?;
+            let res = app_core::palette::clear(&r.body, r.format);
+            Ok(format!("{{\"result\":{}}}", ser(&res)?))
+        }
+        "palette_probe" => {
+            let r: app_ipc::PaletteClearReq = serde_json::from_value(
+                req.get("req").cloned().unwrap_or(serde_json::Value::Null),
+            )
+            .map_err(|e| format!("配色请求不合法：{e}"))?;
+            let res = app_core::palette::probe(&r.body, r.format);
+            Ok(format!("{{\"result\":{}}}", ser(&res)?))
+        }
+        "palette_scan" => {
+            let r: app_ipc::PaletteClearReq = serde_json::from_value(
+                req.get("req").cloned().unwrap_or(serde_json::Value::Null),
+            )
+            .map_err(|e| format!("配色请求不合法：{e}"))?;
+            let res = app_core::palette::scan(&r.body, r.format);
+            Ok(format!("{{\"result\":{}}}", ser(&res)?))
+        }
+        "palette_annotate" => {
+            let r: app_ipc::PaletteClearReq = serde_json::from_value(
+                req.get("req").cloned().unwrap_or(serde_json::Value::Null),
+            )
+            .map_err(|e| format!("配色请求不合法：{e}"))?;
+            let res = app_core::palette::annotate(&r.body, r.format, r.dark);
+            Ok(format!("{{\"result\":{}}}", ser(&res)?))
+        }
         "folder" => {
             let v = req.get("value").cloned().unwrap_or(serde_json::Value::Null);
             Ok(format!("{{\"folder\":{}}}", ser(&app_core::cloudmap::folder_of(&v))?))

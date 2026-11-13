@@ -1130,6 +1130,15 @@ pub struct FlowFacts {
 /// 自动配色（`palette`）要的就是"这份图里有哪些节点、各自什么形状/标签/类名"。
 /// 这里刻意复用同一个 `parse`：Mermaid 的解析只该有一份，另写一个扫描器迟早漂。
 pub fn flow_facts(src: &str) -> Result<FlowFacts, String> {
+    // 空文档直接给空结果：parse("") 在空输入上不保证可重入（曾让配色展开在 wasm 里 trap）
+    if src.trim().is_empty() {
+        return Ok(FlowFacts {
+            nodes: Vec::new(),
+            class_defs: Vec::new(),
+            colored_classes: std::collections::HashSet::new(),
+            subgraphs: Vec::new(),
+        });
+    }
     let (_, stmts) = parse(src)?;
     let mut order: Vec<String> = Vec::new();
     // (标签, 形状, 内联类, 首次出现行)
@@ -2492,6 +2501,15 @@ mod tests {
         // D2 侧：节点挂 `.class`
         assert!(d.body.contains("A.class: user"), "{}", d.body);
         assert!(d.body.contains("B.class: user"), "{}", d.body);
+    }
+
+    /// 空文档必须给出空 facts（wasm 里 `parse("")` 曾直接 trap，配色展开随之崩）。
+    #[test]
+    fn flow_facts_handles_empty_input() {
+        let f = flow_facts("").expect("空输入应当是 Ok");
+        assert!(f.nodes.is_empty() && f.subgraphs.is_empty() && f.class_defs.is_empty());
+        let f2 = flow_facts("   \n\t").expect("纯空白也应当是 Ok");
+        assert!(f2.nodes.is_empty());
     }
 
     /// 类名里带连字符（`:::lvl-entry`）：**不能**被当成边箭头切碎。
