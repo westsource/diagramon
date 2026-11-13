@@ -609,6 +609,73 @@ def main() -> int:
         except Exception as e:
             fails.append(f"DOT 预览断言解析失败：{e} / {dot_check}")
 
+        # ---- 断言 4b2：清空正文后粘贴新图 → 必须重新适应视图 ----
+        # 2026-11-13 用户问的正是这条：`fittedFor` 原来只在换文档 / 关文档时作废，
+        # 所以"原本有图 → 清空（空文档占位）→ 粘贴新代码"会沿用旧图的缩放与位置。
+        # 实测旧行为：旧图放大到 16x 后粘一张 21 节点的图 ⇒ 3483×29411 px、左上角在视口外。
+        # 断言两条：空占位后重挂的图必须落在视口内；期间用户调过的缩放必须被重新适应。
+        fit_clear = ev(
+            "(async () => {"
+            "  const d = await DGM.state.newDoc('mermaid');"
+            "  if (DGM.state.active !== d.id) await DGM.state.activateDoc(d.id);"
+            "  const settle = async () => {"
+            "    for (let i = 0; i < 80; i++) {"
+            "      const st = document.querySelector('#canvas-stage');"
+            "      if (st && !st.querySelector('.preview-loading')"
+            "          && (st.querySelector('svg') || st.querySelector('.preview-error, .preview-note'))) return;"
+            "      await new Promise(r => setTimeout(r, 100));"
+            "    }"
+            "  };"
+            "  const set = async (body) => {"
+            "    await DGM.state.setBodyNow(d.id, body);"
+            "    DGM.editor.loadActive();"
+            "    await DGM.preview.render();"
+            "    await settle();"
+            "  };"
+            "  const prev = DGM.state.active;"
+            "  await set('graph TD\\n  A[Start] --> B[End]');"
+            "  const fitZoom = DGM.state.ui.zoom;"
+            "  for (let i = 0; i < 8; i++) DGM.preview.zoomIn();"
+            "  const userZoom = DGM.state.ui.zoom;"
+            "  await set('');"
+            "  const empty = !DGM.preview.hasContent();"
+            "  const big = ['graph TD'];"
+            "  for (let i = 0; i < 20; i++) big.push('  N' + i + '[Node ' + i + '] --> N' + (i + 1) + '[Node ' + (i + 1) + ']');"
+            "  await set(big.join('\\n'));"
+            "  const svg = document.querySelector('#canvas-stage svg');"
+            "  const v = document.querySelector('#canvas-viewport').getBoundingClientRect();"
+            "  const s = svg ? svg.getBoundingClientRect() : null;"
+            "  const out = {"
+            "    fitZoom, userZoom, empty, hasSvg: !!svg, zoom: DGM.state.ui.zoom,"
+            "    inside: !!s && s.left >= v.left - 1 && s.top >= v.top - 1"
+            "      && s.left + s.width <= v.left + v.width + 1 && s.top + s.height <= v.top + v.height + 1"
+            "  };"
+            "  await DGM.state.closeDoc(d.id);"
+            # 收尾必须把会话复原到断言前的那份文档并等它真的重渲染完：关掉自己建的
+            # 文档之后，工具栏/顶栏还停在旧文档上，紧接着的 4d/4e 会读到陈旧的控件
+            # （实测：4e 拿到 3 个 pv-opt 而去点一个已经不存在的目标）。
+            "  if (prev && DGM.state.doc(prev)) await DGM.state.activateDoc(prev);"
+            "  await DGM.preview.render();"
+            "  await settle();"
+            "  await new Promise(r => setTimeout(r, 200));"
+            "  return JSON.stringify(out);"
+            "})()"
+        )
+        log(f"清空后粘贴的自动适应: {fit_clear}")
+        try:
+            fc = json.loads(fit_clear or "{}")
+            if not fc.get("empty"):
+                fails.append(f"清空正文后预览应无内容（hasContent 应为 false）：{fit_clear}")
+            elif abs(fc.get("userZoom", 0) - fc.get("fitZoom", 0)) < 0.5:
+                fails.append(f"探针没能把视口调离适应值，断言不成立：{fit_clear}")
+            elif not fc.get("hasSvg"):
+                fails.append(f"粘贴的新图没有挂上：#canvas-stage 里没有 svg：{fit_clear}")
+            elif abs(fc.get("zoom", 0) - fc.get("userZoom", 0)) < 1e-6 or not fc.get("inside"):
+                fails.append(f"清空后粘贴的图没有重新适应视图（沿用了旧图的缩放/位置）：{fit_clear}")
+        except Exception as e:
+            fails.append(f"清空后粘贴的断言解析失败：{e} / {fit_clear}")
+
+
         # ---- 断言 4c：ELK 离线包启动预热（3.11.3 起 elk 是 Mermaid 的默认布局） ----
         # 那份 2.4MB ESM 是一次性且常驻的成本（实测 JS 堆 +7.7MB、进程工作集 +16MB、加载约 0.5s）：
         # 以前只在"有依据"时预热，现在每次开 Mermaid 都要用它，所以 boot 里 3 秒后无条件加载。
