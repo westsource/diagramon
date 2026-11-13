@@ -944,6 +944,10 @@ window.DGM = window.DGM || {};
     });
     // 记在旁路表里（审计 2026-11-03 M-25）：挂在 doc 对象上会被 `applyResult` 抹掉
     rememberCloudIdentity(d.id, saved.id, saved.version, saved.path || d.cloudPath || "");
+    // 保存成功后：清掉这次的去抖落盘，把正文同步给后端，再清脏标（否则 flush 会把 dirty 点亮）
+    pendingBody.delete(d.id);
+    try { await ipc.invoke("doc_set_body", { id: d.id, body: d.body }); } catch (_) {}
+    if (ipc.isWeb) { try { await ipc.invoke("doc_mark_saved", { id: d.id }); } catch (_) {} }
     d.dirty = false;
     if (name) d.name = name;
     emit("session:changed");
