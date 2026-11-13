@@ -944,6 +944,7 @@ window.DGM = window.DGM || {};
     });
     // 记在旁路表里（审计 2026-11-03 M-25）：挂在 doc 对象上会被 `applyResult` 抹掉
     rememberCloudIdentity(d.id, saved.id, saved.version, saved.path || d.cloudPath || "");
+    d.dirty = false;
     if (name) d.name = name;
     emit("session:changed");
     await Promise.all([cloudDocs(), cloudFolders()]);
@@ -963,6 +964,7 @@ window.DGM = window.DGM || {};
       // Session 形响应就把版本号抹了，再保存会在云端多出一份文档。
       rememberCloudIdentity(doc.id, body.id, body.version, body.path || path || "");
       doc.cloudPath = body.path || path || "";
+      doc.dirty = false;
       state.active = doc.id;
       emit("session:changed");
       if (DGM.editor && DGM.editor.loadActive) DGM.editor.loadActive();

@@ -1086,7 +1086,8 @@ window.DGM = window.DGM || {};
           return;
         }
         // 409：让用户明确选"覆盖云端"还是"另存为本地副本"
-        if (window.confirm(t("status.cloudConflictAsk"))) {
+        const overwrite = await DGM.dialogs.confirm({ title: t("status.savedCloudShort"), body: t("status.cloudConflictAsk"), ok: t("common.confirm") });
+        if (overwrite) {
           try {
             ok(await state.cloudSaveActive(undefined, undefined, true));
             return;
