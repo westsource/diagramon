@@ -1152,6 +1152,9 @@ pub struct CloudFolderList {
 pub struct CloudDocBody {
     pub id: String,
     pub name: String,
+    /// 服务端目录路径（`""` = 根）。保存时原样带回，避免把文档挪到根。
+    #[serde(default)]
+    pub path: String,
     pub format: FormatId,
     pub body: String,
     pub version: u64,

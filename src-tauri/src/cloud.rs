@@ -494,6 +494,7 @@ pub async fn cloud_doc_save(
     path: String,
     format: String,
     body: String,
+    force: Option<bool>,
 ) -> R<CloudDoc> {
     let doc_id = if id.trim().is_empty() {
         uuid::Uuid::new_v4().to_string()
@@ -509,7 +510,10 @@ pub async fn cloud_doc_save(
         "path": path.trim(),
     });
     let base = resolve_api_base(state.inner()).await?;
-    let url = format!("{base}/documents/{}", enc_path_seg(&doc_id));
+    let mut url = format!("{base}/documents/{}", enc_path_seg(&doc_id));
+    if force.unwrap_or(false) {
+        url.push_str("?force=true"); // 409 冲突时用户明确选择"覆盖"
+    }
     // 走 authed_send：401 会先静默续期再重试。**错误格式保持原样** ——
     // 409 的响应体带 contentHash/updatedAt，前端靠它提示"云端已被别的设备改过"，
     // 所以这里不能用 call_json（它会把错误体归约成一句 message）。
@@ -554,6 +558,7 @@ pub async fn cloud_doc_open(state: State<'_, Arc<AppState>>, id: String) -> R<Cl
     Ok(CloudDocBody {
         id: str_of(&v, &["id"]),
         name: str_of(&v, &["name"]),
+        path: str_of(&v, &["path"]),
         format: FormatId::from_str_opt(&str_of(&v, &["format"])).unwrap_or(FormatId::Mermaid),
         body: str_of(&v, &["content"]),
         version: u64_of(&v, &["version"]),

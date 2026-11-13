@@ -929,26 +929,28 @@ window.DGM = window.DGM || {};
    *  `path` / `name` 由「保存到云端」窗口给（不传 = 用文档自己的名字、落到根目录）——
    *  保存与改名一次请求搞定（服务端 PUT 的 name/path 就是入口），不必再多一次 PATCH。
    */
-  async function cloudSaveActive(path, name) {
+  async function cloudSaveActive(path, name, force) {
     const d = state.activeDoc();
     if (!d) return null;
     const saved = await ipc.invoke("cloud_doc_save", {
       id: d.cloudId || "",
       version: d.cloudVersion || 0,
       name: name || d.name,
-      path: path == null ? "" : path,
+      // 不传 path = 沿用打开时的云端目录（否则会把文档挪到根）
+      path: path == null ? d.cloudPath || "" : path,
       format: d.format,
       body: d.body,
+      force: !!force,
     });
     // 记在旁路表里（审计 2026-11-03 M-25）：挂在 doc 对象上会被 `applyResult` 抹掉
-    rememberCloudIdentity(d.id, saved.id, saved.version);
+    rememberCloudIdentity(d.id, saved.id, saved.version, saved.path || d.cloudPath || "");
     if (name) d.name = name;
     emit("session:changed");
     await Promise.all([cloudDocs(), cloudFolders()]);
     return saved;
   }
 
-  async function cloudOpenDoc(id) {
+  async function cloudOpenDoc(id, path) {
     const body = await ipc.invoke("cloud_doc_open", { id });
     // 云文档没有磁盘路径：开成一个"无路径"的文档，cloudId 记着，保存时回写云端
     const doc = await ipc.invoke("doc_new", { format: body.format });
@@ -959,7 +961,8 @@ window.DGM = window.DGM || {};
       upsertDoc(doc);
       // 乐观锁起点（审计 2026-11-03 M-25）：必须进旁路表，否则下一次
       // Session 形响应就把版本号抹了，再保存会在云端多出一份文档。
-      rememberCloudIdentity(doc.id, body.id, body.version);
+      rememberCloudIdentity(doc.id, body.id, body.version, body.path || path || "");
+      doc.cloudPath = body.path || path || "";
       state.active = doc.id;
       emit("session:changed");
       if (DGM.editor && DGM.editor.loadActive) DGM.editor.loadActive();
@@ -1043,6 +1046,7 @@ window.DGM = window.DGM || {};
       if (c) {
         d.cloudId = c.cloudId;
         d.cloudVersion = c.cloudVersion;
+        d.cloudPath = c.path;
       }
     }
   }
@@ -1055,17 +1059,18 @@ window.DGM = window.DGM || {};
   const cloudIdentity = new Map();
 
   /** 记下一份文档的云身份（同时写一份到 doc 对象上，方便读）。 */
-  function rememberCloudIdentity(docId, cloudId, cloudVersion) {
+  function rememberCloudIdentity(docId, cloudId, cloudVersion, cloudPath) {
     if (!docId) return;
     if (!cloudId && !cloudVersion) {
       cloudIdentity.delete(docId);
     } else {
-      cloudIdentity.set(docId, { cloudId: cloudId || "", cloudVersion: cloudVersion || 0 });
+      cloudIdentity.set(docId, { cloudId: cloudId || "", cloudVersion: cloudVersion || 0, path: cloudPath || "" });
     }
     const d = state.docs.find((x) => x.id === docId);
     if (d) {
       d.cloudId = cloudId || "";
       d.cloudVersion = cloudVersion || 0;
+      d.cloudPath = cloudPath || "";
     }
   }
 

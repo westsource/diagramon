@@ -822,7 +822,7 @@ window.DGM = window.DGM || {};
       row.innerHTML = `<span class="caret hidden"></span>${DGM.cloud.fmtDot(d.format)}<span class="nm">${DGM.cloud.mark(d.name, q)}</span><span class="sz">${esc(DGM.cloud.fmtBytes(d.size))}</span>`;
       row.title = `${d.path || "/"} · ${DGM.cloud.fmtBytes(d.size)}`;
       row.addEventListener("click", () =>
-        state.cloudOpenDoc(d.id).catch((err) => DGM.status(String((err && err.message) || err), "err")),
+        state.cloudOpenDoc(d.id, d.path).catch((err) => DGM.status(String((err && err.message) || err), "err")),
       );
       host.appendChild(row);
     }

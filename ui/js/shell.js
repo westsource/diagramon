@@ -1065,6 +1065,41 @@ window.DGM = window.DGM || {};
       }
     }
 
+    // 云端文档：Ctrl+S 直接回写云端（不再弹"另存为"本地文件）。
+    // 目录沿用打开时的 cloudPath，避免把文档挪到根。
+    if (!as && d.cloudId && !d.path) {
+      const fallbackName = d.name;
+      const ok = (saved) => {
+        const name = (saved && saved.name) || fallbackName;
+        status(t("status.savedCloud", { name }), "ok");
+        toast({ icon: "cloud", title: t("status.savedCloudShort"), sub: name });
+      };
+      try {
+        ok(await state.cloudSaveActive(undefined, undefined, false));
+        return;
+      } catch (e) {
+        const msg = String((e && e.message) || e);
+        const conflict = (e && e.status === 409) || /(^|\D)409(\D|$)/.test(msg);
+        if (!conflict) {
+          status(t("status.cloudSaveFailed", { msg }), "err");
+          toast({ icon: "alert", title: t("status.cloudSaveFailed", { msg }), sub: "", warn: true });
+          return;
+        }
+        // 409：让用户明确选"覆盖云端"还是"另存为本地副本"
+        if (window.confirm(t("status.cloudConflictAsk"))) {
+          try {
+            ok(await state.cloudSaveActive(undefined, undefined, true));
+            return;
+          } catch (e2) {
+            const m2 = String((e2 && e2.message) || e2);
+            status(t("status.cloudSaveFailed", { msg: m2 }), "err");
+            return;
+          }
+        }
+        return saveActive(true);
+      }
+    }
+
     let path = d.path;
     if (as || !path) {
       const fmt = state.docFmt(d);
