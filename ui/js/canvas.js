@@ -59,12 +59,6 @@ window.DGM = window.DGM || {};
     pendingConversion = { format, source, opts: opts || null };
   }
 
-  /** 目标文档创建失败时清掉刚登记的转换，避免影响下一份同格式文档。 */
-  function clearPendingConversion(format) {
-    if (!pendingConversion) return;
-    if (!format || pendingConversion.format === format) pendingConversion = null;
-  }
-
   let container = null;
   let activeFormat = null;
   let pollTimer = 0;
@@ -484,10 +478,7 @@ window.DGM = window.DGM || {};
     startPolling();
     syncTheme(format);
 
-    // 转换时同一份目标文档可能刚被普通载入过一次（state.newDoc 触发的渲染）。
-    // pendingConversion 还没消费，不能因为 loadedDoc 相同就提前返回，否则
-    // Mermaid 源码永远发不出去 —— live 的慢时序下必现，本地快时序偶尔掩盖。
-    if (e.loadedDoc === doc.id && !(pendingConversion && pendingConversion.format === format)) return true;
+    if (e.loadedDoc === doc.id) return true;
 
     // 换文档之前，先把**旧文档**已经躺在队列里的事件结清（审计 2026-11-03 M-27）。
     //
@@ -524,8 +515,6 @@ window.DGM = window.DGM || {};
     const body = doc.body || "";
 
     if (format === "drawio") {
-      // 正在载入（普通文档或转换导入）时，不要用当前正文再发一次 load 覆盖画布。
-      if (e.loading) return true;
       e.loading = true;
       send(format, { action: "load", xml: body, autosave: 1 });
       return true;
@@ -654,22 +643,13 @@ window.DGM = window.DGM || {};
    */
   function waitForBody(format, before, tries) {
     const max = tries || 30;
-    // 冷启动时承载页本身还没下载完（drawio 首次 65 MB），此时 flush 只会拿到空图。
-    // ready 之前不消耗重试次数；但总等待有上限，避免承载页坏掉时永久挂起。
-    const deadline = Date.now() + 180000;
     return new Promise((resolve) => {
       let i = 0;
       const tick = () => {
-        const e = hosts[format];
-        if (!e || !e.ready || e.loading) {
-          if (Date.now() > deadline) return resolve("");
-          setTimeout(tick, 600);
-          return;
-        }
         flush(format)
           .then((body) => {
             if (typeof body === "string" && body.trim() && body !== before) return resolve(body);
-            if (++i >= max || Date.now() > deadline) return resolve("");
+            if (++i >= max) return resolve("");
             setTimeout(tick, 600);
           })
           .catch(() => resolve(""));
@@ -807,7 +787,6 @@ window.DGM = window.DGM || {};
     exportPng,
     loadMermaid,
     setPendingConversion,
-    clearPendingConversion,
     getOutline,
     select,
     syncThemeAll,

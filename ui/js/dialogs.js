@@ -330,9 +330,8 @@ window.DGM = window.DGM || {};
   }
 
   async function convertViaEngine(to, source, srcDoc, dir, opts2) {
-    // 先算好载荷并登记 pendingConversion，**再**建目标文档：state.newDoc 会触发一次
-    // 普通渲染，若此时还没有 pendingConversion，新建的 drawio 会先载入空正文，
-    // 随后的转换 descriptor 与这次普通载入互相覆盖（live 慢时序下必现空图）。
+    const doc = await state.newDoc(to);
+    if (!doc) return null;
     // 文档级外观（look）只对 Excalidraw 链有效：m2e 的 config 会平铺进内置 mermaid 的
     // initialize。drawio 的内置导入器不收配置位，但**可以走源文本的 frontmatter**
     // （见 buildElkSource）—— 那是它自己的 ELK 引擎，与 mermaid ^12 的 layout-elk 包无关。
@@ -352,13 +351,6 @@ window.DGM = window.DGM || {};
       elk = buildElkSource(payload);
       payload = elk.text;
     }
-    const doc = await state.newDoc(to);
-    if (!doc) return null;
-    // 先普通载入一次并等承载页握手完成：live 上首次 drawio 编辑器还没就绪时直接
-    // 发 descriptor 会被丢掉，表现为转换后仍是空图；已有 host 的第二次转换才成功。
-    // 这里显式复现「第二次」的时序，代价是一瞬间的空白画布。
-    await DGM.preview.render();
-    await DGM.canvas.whenLoaded(to, 20000).catch(() => false);
     DGM.canvas.setPendingConversion(to, payload, opts);
     await DGM.preview.render(); // 触发 show → 把源码交给引擎
     let body = await DGM.canvas.waitForBody(to, doc.body || "");
