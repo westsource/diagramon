@@ -352,12 +352,14 @@ window.DGM = window.DGM || {};
       elk = buildElkSource(payload);
       payload = elk.text;
     }
-    DGM.canvas.setPendingConversion(to, payload, opts);
     const doc = await state.newDoc(to);
-    if (!doc) {
-      if (DGM.canvas.clearPendingConversion) DGM.canvas.clearPendingConversion(to);
-      return null;
-    }
+    if (!doc) return null;
+    // 先普通载入一次并等承载页握手完成：live 上首次 drawio 编辑器还没就绪时直接
+    // 发 descriptor 会被丢掉，表现为转换后仍是空图；已有 host 的第二次转换才成功。
+    // 这里显式复现「第二次」的时序，代价是一瞬间的空白画布。
+    await DGM.preview.render();
+    await DGM.canvas.whenLoaded(to, 20000).catch(() => false);
+    DGM.canvas.setPendingConversion(to, payload, opts);
     await DGM.preview.render(); // 触发 show → 把源码交给引擎
     let body = await DGM.canvas.waitForBody(to, doc.body || "");
     if (!body) {
