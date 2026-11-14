@@ -84,6 +84,10 @@ window.DGM = window.DGM || {};
         epoch: 0,
         /** drawio：load 已发出、还没收到 `load/loaded` 确认（大图要几秒） */
         loading: false,
+        /** drawio：转换 descriptor 的载荷与重试（首次编辑器未就绪时可能被丢） */
+        conversionPayload: null,
+        conversionRetry: 0,
+        conversionTries: 0,
         loadWaiters: [],
         /** Excalidraw 的 `files` 段（图片等二进制附件），回写时必须原样带上 */
         files: {},
@@ -549,6 +553,11 @@ window.DGM = window.DGM || {};
     if (!e) return;
     if (e.frame && e.frame.parentNode) e.frame.parentNode.removeChild(e.frame);
     e.loading = false;
+    e.conversionPayload = null;
+    if (e.conversionRetry) {
+      window.clearTimeout(e.conversionRetry);
+      e.conversionRetry = 0;
+    }
     for (const done of e.loadWaiters.splice(0)) done(false);
     delete hosts[format];
     if (activeFormat === format) activeFormat = null;
@@ -648,11 +657,20 @@ window.DGM = window.DGM || {};
       const tick = () => {
         flush(format)
           .then((body) => {
-            if (typeof body === "string" && body.trim() && body !== before) return resolve(body);
-            if (++i >= max) return resolve("");
+            if (typeof body === "string" && body.trim() && body !== before) {
+              stopConversionRetry(format);
+              return resolve(body);
+            }
+            if (++i >= max) {
+              stopConversionRetry(format);
+              return resolve("");
+            }
             setTimeout(tick, 600);
           })
-          .catch(() => resolve(""));
+          .catch(() => {
+            stopConversionRetry(format);
+            resolve("");
+          });
       };
       tick();
     });
@@ -677,6 +695,31 @@ window.DGM = window.DGM || {};
    *  `opts.mermaid` 仅 Excalidraw 认：随 loadMermaid 消息发给承载页，
    *  由 convertMermaid(source, config) 平铺进 m2e 内置 mermaid 的 initialize。
    *  drawio 的 descriptor 协议没有配置位，不传。 */
+  function stopConversionRetry(format) {
+    const e = entry(format);
+    if (e.conversionRetry) window.clearTimeout(e.conversionRetry);
+    e.conversionRetry = 0;
+    e.conversionPayload = null;
+    e.conversionTries = 0;
+  }
+
+  /** drawio 首次启动时编辑器可能还没装好消息处理器，descriptor 会被丢掉；重发几次。 */
+  function armConversionRetry(format) {
+    const e = entry(format);
+    if (e.conversionRetry) window.clearTimeout(e.conversionRetry);
+    e.conversionRetry = window.setTimeout(() => {
+      e.conversionRetry = 0;
+      if (!e.conversionPayload) return;
+      if (++e.conversionTries > 3) {
+        e.conversionPayload = null;
+        e.loading = false;
+        return;
+      }
+      send(format, e.conversionPayload);
+      armConversionRetry(format);
+    }, 4000);
+  }
+
   function loadMermaid(format, source, opts) {
     const e = entry(format);
     e.lastApplied = "";
@@ -686,7 +729,11 @@ window.DGM = window.DGM || {};
       // export 出那张空图（host 属性与默认正文不同 ⇒ `waitForBody` 误判"已转换"），
       // 用户拿到的是一个没有节点的 drawio。
       e.loading = true;
-      send(format, { action: "load", autosave: 1, descriptor: { format: "mermaid", data: source, wrap: true } });
+      const payload = { action: "load", autosave: 1, descriptor: { format: "mermaid", data: source, wrap: true } };
+      e.conversionPayload = payload;
+      e.conversionTries = 0;
+      send(format, payload);
+      armConversionRetry(format);
     } else {
       send(format, { action: "loadMermaid", source, mermaid: (opts && opts.mermaid) || undefined });
     }
