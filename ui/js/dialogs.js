@@ -1388,12 +1388,19 @@ window.DGM = window.DGM || {};
     const c = (state.settings && state.settings.cloud) || {};
     const signed = !!(state.cloud && state.cloud.status && state.cloud.status.signed_in);
     const acct = signed && state.cloud.status.account;
-    return `
-      <div class="field"><label>${esc(t("set.cloud.baseUrl"))}</label>
+    // 网页版的网关**恒为同源**（`settings_get` 每次写回 location.origin，`cloud_status` 只认
+    // location.origin），所以地址输入框在那里既改不了真实网关、也存不住 —— 不渲染，
+    // 免得让人以为能改。桌面版要能填自建/内网网关，保留。
+    const web = !!(DGM.ipc && DGM.ipc.isWeb);
+    const urlField = web
+      ? ""
+      : `<div class="field"><label>${esc(t("set.cloud.baseUrl"))}</label>
         <input type="text" id="c-baseurl" value="${esc(c.base_url || "")}" placeholder="https://api.example.com/v1" spellcheck="false">
-        <span class="hint">${esc(t("set.cloud.baseUrlHint"))}</span></div>
+        <span class="hint">${esc(t("set.cloud.baseUrlHint"))}</span></div>`;
+    return `
+      ${urlField}
       <div class="cloud-me"><span class="avatar">${icon("user", "ico-sm")}</span><span class="who"><b>${signed && acct ? esc(acct.email || t("side.cloud.signedIn")) : esc(t("side.cloud.notSignedIn"))}</b><small>${signed && acct ? esc(acct.plan_name || "") : esc(t("set.cloud.account"))}</small></span></div>
-      <div class="callout ${signed ? "" : "warn"}">${icon("cloud")}<span>${signed ? esc(t("set.cloud.signedInDesc")) : esc(t("set.cloud.offDesc"))}</span></div>
+      <div class="callout ${signed ? "" : "warn"}">${icon("cloud")}<span>${signed ? esc(t("set.cloud.signedInDesc")) : esc(t(web ? "set.cloud.webDesc" : "set.cloud.offDesc"))}</span></div>
       <div class="callout">${icon("info")}<span>${t("set.cloud.offlineGuard")}<br>${esc(t("set.cloud.offlineGuardHint"))}</span></div>`;
   }
 

@@ -1527,6 +1527,29 @@ def main() -> int:
         except Exception as e:
             log(f"（断言 13 解析失败：{e}）")
 
+        # ---- 断言 13c：桌面版「账户与云端」仍要能填网关地址 ----
+        # 网页版那个输入框是死控件（网关恒为同源），已在公开仓按 `ipc.isWeb` 隐藏；
+        # 这一条守住"别把桌面版也一起藏了"——桌面要支持自建/内网网关。
+        cloud_field = ev(
+            "(async () => {"
+            "  DGM.dialogs.settings('cloud');"
+            "  await new Promise(r => setTimeout(r, 150));"
+            "  const out = { hasField: !!document.getElementById('c-baseurl'),"
+            "    isWeb: !!(DGM.ipc && DGM.ipc.isWeb) };"
+            "  DGM.dialogs.close();"
+            "  return JSON.stringify(out);"
+            "})()"
+        )
+        log(f"桌面版云网关地址输入框: {cloud_field}")
+        try:
+            cf = json.loads(cloud_field)
+            if cf.get("isWeb"):
+                fails.append(f"桌面探针不该跑在 web 模式下: {cloud_field}")
+            if not cf.get("hasField"):
+                fails.append(f"桌面版设置里丢了云网关地址输入框: {cloud_field}")
+        except Exception as e:
+            log(f"（断言 13c 解析失败：{e}）")
+
         # ---- 断言 13b：帮助 →「转换能力一览」的注册表表格不用横向滚动就能看全 ----
         # 该页从设置「格式与转换」与侧栏转换中心合并而来；设置里不应再有这个只读页。
         settings_width = ev(

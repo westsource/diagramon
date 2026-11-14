@@ -222,11 +222,14 @@ window.DGM = window.DGM || {};
   }
 
   function openLoginDialog(onSuccess) {
-    // 标题栏不放共享 head()：要塞进一个「设置服务端」齿轮 —— 没配服务端时登录/注册都无从谈起，
-    // 这是登录窗口里唯一的自救入口（点了就跳设置窗口的「账户与云端」页签去填地址）。
+    // 标题栏不放共享 head()：桌面版要塞进一个「设置服务端」齿轮 —— 没配服务端时登录/注册
+    // 都无从谈起，这是登录窗口里唯一的自救入口（点了就跳设置窗口的「账户与云端」页签去填地址）。
     const headHtml =
       `<div class="dialog-head">${icon("cloud")}<h2>${esc(t("dlg.login.title"))}</h2><span class="sp"></span>` +
-      `<button class="icon-btn" data-act="server-settings" title="${esc(t("dlg.login.serverSettings"))}">${icon("settings", "ico-sm")}</button>` +
+      // 网页版的网关恒为同源站点，没有可配的地址 ⇒ 齿轮在那边是死入口，不渲染
+      (DGM.ipc && DGM.ipc.isWeb
+        ? ""
+        : `<button class="icon-btn" data-act="server-settings" title="${esc(t("dlg.login.serverSettings"))}">${icon("settings", "ico-sm")}</button>`) +
       `<button class="icon-btn" data-close>${icon("close", "ico-sm")}</button></div>`;
     const html =
       headHtml +
