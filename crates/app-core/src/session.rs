@@ -193,6 +193,21 @@ impl Session {
         self.entries.iter().any(|e| e.doc.id == id && e.hold)
     }
 
+    /// 改显示名（云端文档的名字来自服务端，不是由路径推出来的）。
+    ///
+    /// Rust 侧 `Doc.name` 是**唯一权威**：任何 Session 形响应（`session_get` /
+    /// `doc_activate` / `doc_close`）都会整组替换前端的 `state.docs`，名字只写在前端
+    /// 对象上会在下一次响应时变回 `document::untitled()` 生成的「未命名-N.ext」。
+    pub fn set_name(&mut self, id: &str, name: &str) -> bool {
+        match self.entry_mut(id) {
+            Some(e) => {
+                e.doc.name = name.to_string();
+                true
+            }
+            None => false,
+        }
+    }
+
     /// 改文档来源（草稿 / 本地文件 / 云端）。路径切换走 `commit_saved` 的 retarget。
     pub fn set_kind(&mut self, id: &str, kind: DocKind) -> bool {
         match self.entry_mut(id) {
@@ -354,6 +369,19 @@ mod tests {
         let d = s.new_doc(FormatId::Mermaid);
         assert_eq!(s.payload().active.as_deref(), Some(d.id.as_str()));
         assert_eq!(s.dirty_count(), 1, "新文档未落盘，应算脏");
+    }
+
+    /// 云端文档的名字必须落在 Session 里：前端任何 Session 形响应都会整组替换
+    /// `state.docs`，名字只挂在前端对象上，切一次标签页就变回「未命名-N.ext」。
+    #[test]
+    fn set_name_survives_payload_and_rejects_unknown_id() {
+        let mut s = Session::default();
+        let d = s.new_doc(FormatId::Mermaid);
+        assert!(d.name.starts_with("未命名-"), "出生名是 untitled：{}", d.name);
+        assert!(s.set_name(&d.id, "登录流程.mmd"));
+        assert_eq!(s.payload().docs[0].name, "登录流程.mmd");
+        assert_eq!(s.get(&d.id).unwrap().name, "登录流程.mmd");
+        assert!(!s.set_name("nope", "x"), "不存在的文档要如实返回 false");
     }
 
     #[test]

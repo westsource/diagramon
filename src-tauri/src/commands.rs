@@ -291,12 +291,23 @@ pub fn drafts_probe(state: State<'_, Arc<AppState>>, id: String) -> R<bool> {
 ///
 /// 只对**无本地路径**的文档生效；已保存到本地的文件（`File`）保持原样 ——
 /// 它们另有一份本地副本，云端保存不该把本地脏标清掉。
+///
+/// `name` = 云端文档名（打开 / 保存到云端时服务端给的）。**必须在这里落进 Rust 侧**：
+/// 云端文档不是从路径推名字的，`doc_new` 给的是「未命名-N.ext」；而任何 Session 形响应
+/// 都会整组替换前端的 `state.docs`，名字只写在前端对象上，切一次标签页就变回「未命名」。
 #[tauri::command]
-pub fn doc_mark_cloud(state: State<'_, Arc<AppState>>, id: String) -> R<Doc> {
+pub fn doc_mark_cloud(
+    state: State<'_, Arc<AppState>>,
+    id: String,
+    name: Option<String>,
+) -> R<Doc> {
     let mut s = state.session();
     let pathless = s.get(&id).ok_or_else(|| format!("文档不存在：{id}"))?.path.is_none();
     if !pathless {
         return s.get(&id).cloned().ok_or_else(|| format!("文档不存在：{id}"));
+    }
+    if let Some(n) = name.as_deref().map(str::trim).filter(|n| !n.is_empty()) {
+        s.set_name(&id, n);
     }
     s.set_kind(&id, DocKind::Cloud);
     let doc = s

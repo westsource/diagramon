@@ -863,6 +863,9 @@ digraph Pipeline {
           if (d && !d.path) {
             d.kind = "cloud";
             d.dirty = false;
+            // 云端名字来自服务端：真实 Rust 侧同名参数也会落进 Doc.name
+            const name = String(args.name || "").trim();
+            if (name) d.name = name;
           }
           return d ? this._clone(d) : null;
         }

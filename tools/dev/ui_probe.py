@@ -1753,6 +1753,57 @@ def main() -> int:
         except Exception as e:
             log(f"（断言 16 解析失败：{e}）")
 
+        # ---- 断言 16b：点云端文档 → 标签页用云端名字，切走再切回也不会变「未命名」 ----
+        # 2026-11-14 报的问题：打开云端文件后标签页变成「未命名-N.ext」。两个成因一起守：
+        #   ① doc_mark_cloud 返回的 Doc（后端生成的 untitled 名）把前端设好的名字盖掉；
+        #   ② 名字只存在前端对象上，任何 Session 形响应（doc_activate）整组替换 state.docs 后丢失。
+        cloud_open = ev(
+            "(async () => {"
+            "  DGM.shell.setSidebarView('cloud');"
+            "  await new Promise(r => setTimeout(r, 300));"
+            "  const row = [...document.querySelectorAll('#side-view .ct-row')]"
+            "    .find(x => x.querySelector('.sz') && x.textContent.includes('登录流程.mmd'));"
+            "  if (!row) return JSON.stringify({err: 'cloud-row-missing'});"
+            "  row.click();"
+            "  await new Promise(r => setTimeout(r, 500));"
+            "  const d = DGM.state.activeDoc();"
+            "  if (!d) return JSON.stringify({err: 'no-active-doc'});"
+            "  const opened = { name: d.name, kind: d.kind };"
+            "  const id = d.id;"
+            "  await DGM.state.activateDoc('d1');"
+            "  await new Promise(r => setTimeout(r, 200));"
+            "  await DGM.state.activateDoc(id);"
+            "  await new Promise(r => setTimeout(r, 200));"
+            "  const again = DGM.state.doc(id);"
+            "  const tab = [...document.querySelectorAll('#tabs .tab .nm')].map(n => n.textContent.trim());"
+            "  await DGM.state.closeDoc(id);"
+            "  await DGM.state.activateDoc('d1');"
+            # 切回原文档时编辑器也要跟着换回来（activateDoc 不管编辑器；
+            # 否则后面「Tab 光标处插入」那条断言读到的还是云端文档的正文）
+            "  if (DGM.editor && DGM.editor.loadActive) DGM.editor.loadActive();"
+            "  if (DGM.preview && DGM.preview.schedule) DGM.preview.schedule();"
+            "  await new Promise(r => setTimeout(r, 200));"
+            "  return JSON.stringify({opened, after: again && { name: again.name, kind: again.kind }, tab});"
+            "})()"
+        )
+        log(f"云端文档打开后的标签名: {cloud_open}")
+        try:
+            co = json.loads(cloud_open)
+            if co.get("err"):
+                fails.append(f"云端文档没打开: {co.get('err')}")
+            if (co.get("opened") or {}).get("name") != "登录流程.mmd":
+                fails.append(f"打开云端文档后名字不对（应为 登录流程.mmd）: {co.get('opened')}")
+            if (co.get("opened") or {}).get("kind") != "cloud":
+                fails.append(f"云端文档应以 kind=cloud 打开: {co.get('opened')}")
+            if (co.get("after") or {}).get("name") != "登录流程.mmd":
+                fails.append(
+                    f"切走再切回后名字变回未命名（Session 形响应抹掉了名字）: {co.get('after')}"
+                )
+            if "登录流程.mmd" not in (co.get("tab") or []):
+                fails.append(f"标签条里没有云端文档名: {co.get('tab')}")
+        except Exception as e:
+            log(f"（断言 16b 解析失败：{e}）")
+
         # ---- 断言 17：有 AI 权益时，账户视图要给出真实额度（信用点，不是 ¥） ----
         # mock 里换一份带 enabled=true 的账户快照（等价于会员套餐），
         # 验证：AI 行变「已开通」+ 出现第二条额度块 + 剩余与周期都写出来。

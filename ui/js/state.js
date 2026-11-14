@@ -947,8 +947,11 @@ window.DGM = window.DGM || {};
       body: d.body,
       force: !!force,
     });
+    // 云端名字跟着「保存到云端」窗口里填的走。只有无本地路径的文档以云端名字为准：
+    // File 文档的显示名由路径决定，云端名不该改它的标签页。
+    const cloudName = d.path ? "" : saved.name || name || d.name;
     // 记在旁路表里（审计 2026-11-03 M-25）：挂在 doc 对象上会被 `applyResult` 抹掉
-    rememberCloudIdentity(d.id, saved.id, saved.version, saved.path || d.cloudPath || "");
+    rememberCloudIdentity(d.id, saved.id, saved.version, saved.path || d.cloudPath || "", cloudName);
     // 保存成功后：清掉这次的去抖落盘，把正文同步给后端，再清脏标（否则 flush 会把 dirty 点亮）
     pendingBody.delete(d.id);
     try { await ipc.invoke("doc_set_body", { id: d.id, body: d.body }); } catch (_) {}
@@ -956,13 +959,16 @@ window.DGM = window.DGM || {};
     // 有本地路径的文件保持 File：云端保存不该清掉本地未保存标记。
     if (!d.path) {
       try {
-        const marked = await ipc.invoke("doc_mark_cloud", { id: d.id });
+        // 名字一起交给后端（理由见 cloudOpenDoc）：只改前端对象的话，
+        // 下一次 Session 形响应会把它盖回「未命名-N.ext」
+        const marked = await ipc.invoke("doc_mark_cloud", { id: d.id, name: cloudName });
         if (marked) upsertDoc(marked);
       } catch (_) {}
     }
     if (ipc.isWeb) { try { await ipc.invoke("doc_mark_saved", { id: d.id }); } catch (_) {} }
     d.dirty = false;
-    if (name) d.name = name;
+    if (cloudName) d.name = cloudName;
+    else if (name) d.name = name;
     emit("session:changed");
     await Promise.all([cloudDocs(), cloudFolders()]);
     return saved;
@@ -973,18 +979,24 @@ window.DGM = window.DGM || {};
     // 云文档没有磁盘路径：开成一个"无路径"的文档，cloudId 记着，保存时回写云端
     let doc = await ipc.invoke("doc_new", { format: body.format });
     if (doc) {
-      doc.name = body.name || doc.name;
+      const name = body.name || doc.name;
+      doc.name = name;
       doc.body = body.body;
       await ipc.invoke("doc_set_body", { id: doc.id, body: body.body });
       // 显式落成 Cloud：它不是本地草稿，草稿恢复/退出 flush 都不该碰它。
+      // 名字必须**一起交给后端**：`doc_new` 给的是「未命名-N.ext」，而任何 Session 形响应
+      // （`doc_activate` / `doc_close` / `session_get`）都会整组替换 `state.docs` ——
+      // 名字只写在前端对象上，切一次标签页就变回「未命名」（2026-11-14 报的问题）。
       try {
-        const marked = await ipc.invoke("doc_mark_cloud", { id: doc.id });
-        if (marked) doc = { ...doc, ...marked };
-      } catch (_) {}
+        const marked = await ipc.invoke("doc_mark_cloud", { id: doc.id, name });
+        if (marked && marked.id) doc = { ...marked, name: marked.name || name };
+      } catch (_) {
+        /* mark 失败也要留住名字：下面 upsertDoc 用的是本地对象 */
+      }
       upsertDoc(doc);
       // 乐观锁起点（审计 2026-11-03 M-25）：必须进旁路表，否则下一次
       // Session 形响应就把版本号抹了，再保存会在云端多出一份文档。
-      rememberCloudIdentity(doc.id, body.id, body.version, body.path || path || "");
+      rememberCloudIdentity(doc.id, body.id, body.version, body.path || path || "", name);
       doc.cloudPath = body.path || path || "";
       doc.dirty = false;
       state.active = doc.id;
@@ -1071,30 +1083,40 @@ window.DGM = window.DGM || {};
         d.cloudId = c.cloudId;
         d.cloudVersion = c.cloudVersion;
         d.cloudPath = c.path;
+        // 名字也补回来：云端文档的名字来自服务端，不以「未命名-N.ext」为准
+        if (c.name) d.name = c.name;
       }
     }
   }
 
-  /** 云文档身份旁路表：`docId -> { cloudId, cloudVersion }`。
+  /** 云文档身份旁路表：`docId -> { cloudId, cloudVersion, path, name }`。
    *
-   *  为什么不挂在 doc 对象上：后端 `Doc` 没有这两个字段，任何 Session 形响应
+   *  为什么不挂在 doc 对象上：后端 `Doc` 没有 cloudId/cloudVersion，任何 Session 形响应
    *  （`doc_open_paths` / `doc_close` / `doc_activate`）都会整组替换 `state.docs`。
-   *  乐观锁靠这两个值，丢了就会重复创建云端文档。 */
+   *  乐观锁靠这两个值，丢了就会重复创建云端文档。
+   *  `name` 也在表里：后端实现（桌面 Rust / 网页版后端）未必把云端名字写进 Doc，
+   *  名字一丢标签页就显示「未命名-N.ext」。 */
   const cloudIdentity = new Map();
 
   /** 记下一份文档的云身份（同时写一份到 doc 对象上，方便读）。 */
-  function rememberCloudIdentity(docId, cloudId, cloudVersion, cloudPath) {
+  function rememberCloudIdentity(docId, cloudId, cloudVersion, cloudPath, cloudName) {
     if (!docId) return;
     if (!cloudId && !cloudVersion) {
       cloudIdentity.delete(docId);
     } else {
-      cloudIdentity.set(docId, { cloudId: cloudId || "", cloudVersion: cloudVersion || 0, path: cloudPath || "" });
+      cloudIdentity.set(docId, {
+        cloudId: cloudId || "",
+        cloudVersion: cloudVersion || 0,
+        path: cloudPath || "",
+        name: cloudName || "",
+      });
     }
     const d = state.docs.find((x) => x.id === docId);
     if (d) {
       d.cloudId = cloudId || "";
       d.cloudVersion = cloudVersion || 0;
       d.cloudPath = cloudPath || "";
+      if (cloudName) d.name = cloudName;
     }
   }
 
