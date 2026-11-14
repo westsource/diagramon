@@ -17,6 +17,7 @@
  */
 (function () {
   const DGM = (window.DGM = window.DGM || {});
+  const t = (k, v) => DGM.i18n.t(k, v);
 
   /** 与 guard 对齐：超大文档不做引擎级校验（避免万行文档在主线程重 layout）。 */
   const MAX_LINES = 5000;
@@ -117,14 +118,14 @@
     if (err) {
       return {
         ok: false,
-        issues: normalise([{ line: null, column: null, message: "XML 无法解析：" + String(err.textContent || "").trim().slice(0, 200) }]),
+        issues: normalise([{ line: null, column: null, message: t("validate.xmlInvalid", { err: String(err.textContent || "").trim().slice(0, 200) }) }]),
         degraded: false,
       };
     }
     if (!doc.querySelector("mxGraphModel") && !doc.querySelector("mxfile")) {
       return {
         ok: false,
-        issues: normalise([{ line: null, column: null, message: "缺少 mxGraphModel / mxfile 根节点" }]),
+        issues: normalise([{ line: null, column: null, message: t("validate.mxRoot") }]),
         degraded: false,
       };
     }
@@ -139,14 +140,14 @@
     } catch (e) {
       return {
         ok: false,
-        issues: normalise([{ line: null, column: null, message: "JSON 无法解析：" + String(e && e.message ? e.message : e) }]),
+        issues: normalise([{ line: null, column: null, message: t("validate.jsonInvalid", { err: String(e && e.message ? e.message : e) }) }]),
         degraded: false,
       };
     }
     if (!obj || !Array.isArray(obj.elements)) {
       return {
         ok: false,
-        issues: normalise([{ line: null, column: null, message: "缺少 elements 数组" }]),
+        issues: normalise([{ line: null, column: null, message: t("validate.elements") }]),
         degraded: false,
       };
     }
@@ -158,7 +159,7 @@
     const fmt = String(format || "");
     const text = String(body == null ? "" : body);
     if (!text.trim()) {
-      return { ok: false, issues: normalise([{ line: null, column: null, message: "内容为空" }]), degraded: false };
+      return { ok: false, issues: normalise([{ line: null, column: null, message: t("validate.empty") }]), degraded: false };
     }
     if (tooBig(text)) {
       // 与引擎校验同一道护栏：大文档不跑，明确标"没校验"而不是"通过"

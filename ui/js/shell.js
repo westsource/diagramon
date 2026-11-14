@@ -1190,7 +1190,11 @@ window.DGM = window.DGM || {};
         state.refreshDerived(d.id);
       }
     } catch (e) {
-      status(t("status.openFailed") + ": " + (e && e.message), "err");
+      // 失效的「最近打开」（网页版句柄过期、文件被删）点一次失败就从列表里消失，
+      // 不让同一行反复报错。`dropRecent` 对不在列表里的路径是空操作。
+      // 整批失败时把所有尝试过的路径都清掉（成功的不会有异常）。
+      if (state.dropRecent) (paths || []).forEach((p) => state.dropRecent(p));
+      status(t("status.openFailed") + ": " + ((e && e.message) || e), "err");
     }
   }
 
@@ -1201,7 +1205,8 @@ window.DGM = window.DGM || {};
       DGM.preview.schedule();
       state.refreshDerived(state.active);
     } catch (e) {
-      status(t("status.openFailed") + ": " + (e && e.message), "err");
+      if (state.dropRecent) state.dropRecent(path);
+      status(t("status.openFailed") + ": " + ((e && e.message) || e), "err");
     }
   }
 
@@ -1416,7 +1421,8 @@ window.DGM = window.DGM || {};
       el.splitter.classList.remove("drag");
       const val = parseFloat(el.split.style.getPropertyValue("--split-src")) || 33;
       state.patchSettings({ panels: { split_src: Math.round(val) } });
-      status(`源码 : 预览 = ${Math.round(val)} : ${100 - Math.round(val)}`, "");
+      const a = Math.round(val);
+      status(t("ui.splitStatus", { a, b: 100 - a }), "");
     });
     el.splitter.addEventListener("dblclick", () => {
       el.split.style.setProperty("--split-src", "33%");

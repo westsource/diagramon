@@ -1122,15 +1122,48 @@ window.DGM = window.DGM || {};
     }
   }
 
-  function refreshRecent(doc) {
-    if (!doc || !state.settings) return;
-    const list = state.settings.recent || [];
-    const i = list.findIndex((r) => r.path === doc.path);
-    if (doc.path) {
-      const entry = { path: doc.path, name: doc.name, format: doc.format, opened_at: Date.now() };
-      if (i >= 0) list[i] = entry;
-      else list.unshift(entry);
+  /** 「最近打开」在**网页版**最多留多少条：桌面版由 Rust 侧保存完整历史
+   *  （「文件打开历史」窗口要全量），网页版每次打开都会写服务端设置，必须有上限。 */
+  const RECENT_MAX = 20;
+
+  /** 网页版的文件路径是**会话级句柄令牌**（`webfile:…`），同一个文件重开一次就换一个；
+   *  桌面版是稳定的磁盘路径。去重键只能按平台分开，否则网页版会堆出一串同名条目。 */
+  function isWebHandle(path) {
+    return !!(ipc.isWeb && /^(webfile|webdir|download):/.test(String(path || "")));
+  }
+
+  /** 网页版把 recent 写进设置（服务端保存）。桌面版由 Rust 的 `remember_recent`
+   *  在同一条命令里落盘，前端再写一次只会多出一条写路径。 */
+  function persistRecent(list) {
+    try {
+      patchSettings({ recent: list.map((r) => ({ ...r })) }).catch(() => {});
+    } catch (_) {
+      /* 设置还没就绪：下次打开会再写 */
     }
+  }
+
+  function refreshRecent(doc) {
+    if (!doc || !state.settings || !doc.path) return;
+    const list = state.settings.recent || [];
+    const same = isWebHandle(doc.path)
+      ? (r) => r.name === doc.name && r.format === doc.format
+      : (r) => r.path === doc.path;
+    const i = list.findIndex(same);
+    if (i >= 0) list.splice(i, 1);
+    list.unshift({ path: doc.path, name: doc.name, format: doc.format, opened_at: Date.now() });
+    if (ipc.isWeb && list.length > RECENT_MAX) list.length = RECENT_MAX;
+    if (ipc.isWeb) persistRecent(list);
+  }
+
+  /** 删掉一条「最近打开」：句柄失效的行点一次失败后就该消失，不该一直躺在列表里。 */
+  function dropRecent(path) {
+    if (!path || !state.settings) return;
+    const list = state.settings.recent || [];
+    const i = list.findIndex((r) => r.path === path);
+    if (i < 0) return;
+    list.splice(i, 1);
+    if (ipc.isWeb) persistRecent(list);
+    emit("settings:changed");
   }
 
   async function newDoc(format) {
@@ -1610,6 +1643,7 @@ window.DGM = window.DGM || {};
     upsertDoc,
     applyResult,
     refreshRecent,
+    dropRecent,
     newDoc,
     openPaths,
     saveDoc,

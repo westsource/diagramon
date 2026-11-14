@@ -1145,7 +1145,7 @@ window.DGM = window.DGM || {};
    * 不然看起来就是卡死。之后就复用实例（~30ms）。
    */
   async function renderD2(body, engine) {
-    if (!DGM.d2) throw new Error(t("preview.d2.unavailable", { msg: "ui/js/d2.js 未加载" }));
+    if (!DGM.d2) throw new Error(t("preview.d2.unavailable", { msg: t("preview.d2.notLoaded") }));
     if (!DGM.d2.isReady()) {
       showLoading();
       setSub(t("preview.d2.init"));

@@ -14,6 +14,10 @@ window.DGM = window.DGM || {};
 
   const state = DGM.state;
   const t = (k, v) => DGM.i18n.t(k, v);
+
+  /** 格式注册表的说明是双语的（`note_zh` / `note_en`），按界面语言取。
+   *  注册表在 Rust 侧（`crates/app-core/src/format.rs`），不依赖 UI 语言。 */
+  const fmtNote = (f) => (DGM.i18n.lang === "en-US" ? f.note_en : f.note_zh) || "";
   const icon = DGM.icon;
   const { $, $$, h, esc } = DGM.dom;
 
@@ -105,7 +109,7 @@ window.DGM = window.DGM || {};
       <button class="new-card" data-act="new:${f.id}">
         <span class="nc-head"><span class="fmt-dot" style="background:var(--fmt-${f.id})"></span><b>${esc(f.name)}</b><span class="chip ${f.id}">${esc(t(f.surface === "canvas" ? "dlg.new.surface.canvas" : "dlg.new.surface.text"))}</span></span>
         <span class="nc-ext">${esc((f.exts || []).join(" · "))}</span>
-        <span class="nc-note">${esc(f.note || "")}</span>
+        <span class="nc-note">${esc(fmtNote(f))}</span>
         <span class="nc-caps">
           ${f.split_view ? `<span class="cap on">${icon("splitV", "ico-sm")}${esc(t("dlg.new.cap.split"))}</span>` : `<span class="cap off">${icon("splitV", "ico-sm")}${esc(t("dlg.new.cap.nosplit"))}</span>`}
           ${f.ai ? `<span class="cap on">${icon("sparkles", "ico-sm")}${esc(t("dlg.new.cap.ai"))}</span>` : `<span class="cap">${icon("swap", "ico-sm")}${esc(t("dlg.new.cap.viaMermaid"))}</span>`}
@@ -431,7 +435,7 @@ window.DGM = window.DGM || {};
    */
   async function convertViaD2Wasm(source, srcDoc, dir) {
     if (!DGM.d2) {
-      DGM.toast({ icon: "alert", title: t("dlg.convert.title"), sub: t("preview.d2.unavailable", { msg: "ui/js/d2.js 未加载" }), warn: true });
+      DGM.toast({ icon: "alert", title: t("dlg.convert.title"), sub: t("preview.d2.unavailable", { msg: t("preview.d2.notLoaded") }), warn: true });
       return null;
     }
     let made = null;
@@ -1766,7 +1770,7 @@ window.DGM = window.DGM || {};
     // 「编辑器」不再单独占一行备注，也不再有「格式」小节标题：它作为表格最后一行，
     // 与各格式并排（名称列 = 胶囊，ext 列 = `-`，说明列标明它是编辑器）。
     const fmtRows = state.formatList
-      .map((f) => `<tr><td><span class="chip ${f.id}">${esc(f.name)}</span></td><td>${esc((f.exts || []).join(" "))}</td><td>${esc(f.note || "")}</td></tr>`)
+      .map((f) => `<tr><td><span class="chip ${f.id}">${esc(f.name)}</span></td><td>${esc((f.exts || []).join(" "))}</td><td>${esc(fmtNote(f))}</td></tr>`)
       .join("");
     const editorRow = `<tr><td><span class="chip">CodeMirror 6</span></td><td>-</td><td>${esc(t("dlg.about.editor"))}</td></tr>`;
     const body = `
@@ -1939,7 +1943,7 @@ window.DGM = window.DGM || {};
             const who = tn.role === "assistant" ? t("ai.assistant") : t("ai.you");
             const intent = tn.intent || tn.tab || "generate";
             const tabKey = intent === "vision" ? "ai.tab.vision" : intent === "review" ? "ai.tab.review" : intent === "explain" ? "ai.tab.explain" : "ai.tab.chat";
-            const meta = [t(tabKey), tn.model, tn.at ? new Date(tn.at).toLocaleTimeString() : ""].filter(Boolean).join(" · ");
+            const meta = [t(tabKey), tn.model, tn.at ? new Date(tn.at).toLocaleTimeString(DGM.i18n.lang) : ""].filter(Boolean).join(" · ");
             const shown = tn.text.length > 160 ? tn.text.slice(0, 160) + "…" : tn.text;
             // 只有思考、没有正文的那一轮（思考型模型把整轮预算花在推理上）：正文格子空着
             // 会像一条坏记录，如实标出"这一轮只有思考"比留白清楚。
@@ -2113,7 +2117,7 @@ window.DGM = window.DGM || {};
     lines.push("");
     for (const tn of (conv && conv.turns) || []) {
       const who = tn.role === "assistant" ? tn.model || t("ai.assistant") : t("ai.you");
-      lines.push(`## ${who}${tn.at ? " · " + new Date(tn.at).toLocaleString() : ""}`);
+      lines.push(`## ${who}${tn.at ? " · " + new Date(tn.at).toLocaleString(DGM.i18n.lang) : ""}`);
       lines.push("");
       if (tn.thinking) {
         lines.push(`> ${t("dlg.history.exportThinking", { n: (tn.thinking || "").length })}`, "");

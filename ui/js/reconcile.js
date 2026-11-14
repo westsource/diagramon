@@ -15,6 +15,7 @@
   const DGM = (window.DGM = window.DGM || {});
 
   const CANVAS = { drawio: true, excalidraw: true };
+  const t = (k, v) => DGM.i18n.t(k, v);
 
   function fail(why) {
     return { ok: false, degraded: true, why: why, nodes: null, edges: null };
@@ -198,11 +199,11 @@
     if (!r) return "";
     if (r.judge === "unknown") return "";
     const parts = [];
-    if (r.missingNodes > 0) parts.push("少 " + r.missingNodes + " 个节点");
-    if (r.missingEdges > 0) parts.push("少 " + r.missingEdges + " 条连线");
-    if (r.extraNodes > 0) parts.push("多 " + r.extraNodes + " 个节点");
-    if (r.extraEdges > 0) parts.push("多 " + r.extraEdges + " 条连线");
-    return parts.join("，");
+    if (r.missingNodes > 0) parts.push(t("recon.missingNodes", { n: r.missingNodes }));
+    if (r.missingEdges > 0) parts.push(t("recon.missingEdges", { n: r.missingEdges }));
+    if (r.extraNodes > 0) parts.push(t("recon.extraNodes", { n: r.extraNodes }));
+    if (r.extraEdges > 0) parts.push(t("recon.extraEdges", { n: r.extraEdges }));
+    return parts.join(t("recon.sep"));
   }
 
   DGM.reconcile = { counts, run, describe };

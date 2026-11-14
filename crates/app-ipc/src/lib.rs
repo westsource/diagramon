@@ -95,8 +95,10 @@ pub struct FormatInfo {
     pub layouts: Vec<String>,
     /// 外观模式（目前仅 Mermaid：auto/classic/neo/handDrawn，映射 `initialize({ look })`）
     pub looks: Vec<String>,
-    /// 一句话说明，用于新建对话框与 tooltip
-    pub note: String,
+    /// 一句话说明（新建对话框与能力一览）。中英各一份：界面语言决定取哪份，
+    /// Rust 侧不该知道 UI 语言。与调色板的 `name_zh` / `name_en` 同一口径。
+    pub note_zh: String,
+    pub note_en: String,
     /// 新建文档的默认正文
     pub default_body: String,
 }

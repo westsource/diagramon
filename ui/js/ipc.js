@@ -47,13 +47,44 @@ window.DGM = window.DGM || {};
 
   /* ------------------------------------------------------------------ invoke */
 
+  /** 后端抛出的错误统一过一遍本地化（规则见 `i18n.js::ERR_RULES`）。
+   *
+   *  错误对象**原样保留**：`cloud_*` 的 409 带 `.status` / `.body`，调用方靠它们
+   *  决定"覆盖/另存"；这里只换 `.message`。翻译不了就原样返回（绝不吞信息）。 */
+  function localizeError(e) {
+    const translate = window.DGM && DGM.i18n && DGM.i18n.errText;
+    if (!translate) return e;
+    const msg = typeof e === "string" ? e : e && e.message;
+    if (!msg) return e;
+    let out;
+    try {
+      out = translate(msg);
+    } catch (_) {
+      return e;
+    }
+    if (out === msg) return e;
+    if (e && typeof e === "object") {
+      try {
+        e.message = out;
+      } catch (_) {
+        /* 只读的错误对象：退回原文 */
+      }
+      return e;
+    }
+    return new Error(out);
+  }
+
   async function invoke(cmd, args) {
-    if (isWeb) return WEB.invoke(cmd, args);
-    if (!isTauri) return Mock.invoke(cmd, args);
-    const core = TAURI.core;
-    if (core && typeof core.invoke === "function") return core.invoke(cmd, args);
-    if (typeof TAURI.invoke === "function") return TAURI.invoke(cmd, args);
-    throw new Error("Tauri invoke 不可用");
+    try {
+      if (isWeb) return await WEB.invoke(cmd, args);
+      if (!isTauri) return await Mock.invoke(cmd, args);
+      const core = TAURI.core;
+      if (core && typeof core.invoke === "function") return await core.invoke(cmd, args);
+      if (typeof TAURI.invoke === "function") return await TAURI.invoke(cmd, args);
+      throw new Error("Tauri invoke 不可用");
+    } catch (e) {
+      throw localizeError(e);
+    }
   }
 
   /** 订阅事件（ai://delta 等）。返回取消订阅函数。 */
@@ -400,35 +431,35 @@ digraph Pipeline {
       surface: "text", split_view: true, ai: true,
       convert_to: ["drawio", "excalidraw", "dot", "d2"], layouts: ["elk", "dagre"],
       looks: ["auto", "classic", "neo", "handDrawn"],
-      note: "文本图表，支持源码 / 分屏 / 预览三态",
+      note_zh: "文本图表，支持源码 / 分屏 / 预览三态", note_en: "Text-based: source / split / preview",
       default_body: NEW_BODIES.mermaid,
     },
     {
       id: "drawio", name: "drawio", short: "drawio", exts: [".drawio"],
       surface: "canvas", split_view: false, ai: false,
       convert_to: [], layouts: [],
-      note: "画布即编辑器；文件仍是可 diff 的 mxfile XML",
+      note_zh: "画布即编辑器；文件仍是可 diff 的 mxfile XML", note_en: "The canvas is the editor; the file is still a diffable mxfile XML",
       default_body: NEW_BODIES.drawio,
     },
     {
       id: "excalidraw", name: "Excalidraw", short: "Excalidraw", exts: [".excalidraw"],
       surface: "canvas", split_view: false, ai: false,
       convert_to: [], layouts: [],
-      note: "手绘风画布；文件是场景 JSON",
+      note_zh: "手绘风画布；文件是场景 JSON", note_en: "Hand-drawn canvas; the file is scene JSON",
       default_body: NEW_BODIES.excalidraw,
     },
     {
       id: "dot", name: "Graphviz DOT", short: "DOT", exts: [".dot", ".gv"],
       surface: "text", split_view: true, ai: true,
       convert_to: [], layouts: ["dot", "neato", "fdp", "sfdp", "twopi", "circo"],
-      note: "文本图表，支持源码 / 分屏 / 预览三态，六种布局引擎",
+      note_zh: "文本图表，支持源码 / 分屏 / 预览三态，六种布局引擎", note_en: "Text-based: source / split / preview, six layout engines",
       default_body: NEW_BODIES.dot,
     },
     {
       id: "d2", name: "D2", short: "D2", exts: [".d2"],
       surface: "text", split_view: true, ai: true,
       convert_to: ["drawio"], layouts: ["dagre", "elk", "tala"],
-      note: "文本图表，支持源码 / 分屏 / 预览三态；三种布局引擎（tala 较慢）",
+      note_zh: "文本图表，支持源码 / 分屏 / 预览三态；三种布局引擎（tala 较慢）", note_en: "Text-based: source / split / preview, three layout engines (tala is slower)",
       default_body: NEW_BODIES.d2,
     },
   ];

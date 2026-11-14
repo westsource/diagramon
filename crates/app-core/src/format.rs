@@ -128,7 +128,8 @@ pub fn registry() -> Vec<FormatInfo> {
             ],
             layouts: MERMAID_LAYOUTS.iter().map(|s| (*s).to_string()).collect(),
             looks: MERMAID_LOOKS.iter().map(|s| (*s).to_string()).collect(),
-            note: "文本图表，支持源码 / 分屏 / 预览三态".into(),
+            note_zh: "文本图表，支持源码 / 分屏 / 预览三态".into(),
+            note_en: "Text-based: source / split / preview".into(),
             default_body: MERMAID_BODY.into(),
         },
         FormatInfo {
@@ -144,7 +145,8 @@ pub fn registry() -> Vec<FormatInfo> {
             convert_to: vec![],
             layouts: vec![],
             looks: vec![],
-            note: "画布即编辑器；文件仍是可 diff 的 mxfile XML".into(),
+            note_zh: "画布即编辑器；文件仍是可 diff 的 mxfile XML".into(),
+            note_en: "The canvas is the editor; the file is still a diffable mxfile XML".into(),
             default_body: DRAWIO_BODY.into(),
         },
         FormatInfo {
@@ -158,7 +160,8 @@ pub fn registry() -> Vec<FormatInfo> {
             convert_to: vec![],
             layouts: vec![],
             looks: vec![],
-            note: "手绘风画布；文件是场景 JSON".into(),
+            note_zh: "手绘风画布；文件是场景 JSON".into(),
+            note_en: "Hand-drawn canvas; the file is scene JSON".into(),
             default_body: EXCALIDRAW_BODY.into(),
         },
         FormatInfo {
@@ -173,7 +176,8 @@ pub fn registry() -> Vec<FormatInfo> {
             convert_to: vec![FormatId::Mermaid],
             layouts: DOT_LAYOUTS.iter().map(|s| (*s).to_string()).collect(),
             looks: vec![],
-            note: "文本图表，支持源码 / 分屏 / 预览三态，六种布局引擎".into(),
+            note_zh: "文本图表，支持源码 / 分屏 / 预览三态，六种布局引擎".into(),
+            note_en: "Text-based: source / split / preview, six layout engines".into(),
             default_body: DOT_BODY.into(),
         },
         FormatInfo {
@@ -189,7 +193,8 @@ pub fn registry() -> Vec<FormatInfo> {
             convert_to: vec![FormatId::Drawio],
             layouts: D2_LAYOUTS.iter().map(|s| (*s).to_string()).collect(),
             looks: vec![],
-            note: "文本图表，支持源码 / 分屏 / 预览三态；三种布局引擎（tala 较慢）".into(),
+            note_zh: "文本图表，支持源码 / 分屏 / 预览三态；三种布局引擎（tala 较慢）".into(),
+            note_en: "Text-based: source / split / preview, three layout engines (tala is slower)".into(),
             default_body: D2_BODY.into(),
         },
     ]

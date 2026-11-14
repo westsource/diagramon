@@ -1774,7 +1774,7 @@ window.DGM = window.DGM || {};
    */
   async function stripColors(docId) {
     const d = state.doc(docId) || state.activeDoc();
-    if (!d) throw new Error("没有打开的文档");
+    if (!d) throw new Error(t("ai.err.noDoc"));
     const out = await askOnce({
       prompt:
         "把下面这份图表源码里**所有颜色**去掉，只做删除、不要改写任何别的东西：\n" +
@@ -1787,7 +1787,7 @@ window.DGM = window.DGM || {};
       docId: d.id,
     });
     const blk = lastBlock(splitFences((out && out.text) || "").blocks);
-    if (!blk || !String(blk.code || "").trim()) throw new Error("模型没有返回可用的源码");
+    if (!blk || !String(blk.code || "").trim()) throw new Error(t("ai.err.noSource"));
     return blk.code;
   }
 

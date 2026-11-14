@@ -490,7 +490,9 @@ window.DGM = window.DGM || {};
           const openDoc = state.docs.find((d) => d.path && d.path === r.path);
           const row = h("button", "tree-row" + (openDoc && openDoc.id === activeId ? " on" : ""));
           row.append(fmtDot(r.format), h("span", "nm", esc(r.name)), h("span", "meta", esc(recentWhen(r.opened_at))));
-          row.title = r.path;
+          // 网页版的 path 是会话级句柄令牌（webfile:…）：直接拿它当 tooltip 是给用户看 UUID，
+          // 那边只显示文件名；桌面的路径本身就有用，照旧。
+          row.title = DGM.ipc.isWeb && /^(webfile|webdir|download):/.test(r.path) ? r.name : r.path;
           row.addEventListener("click", () => {
             if (openDoc) openDocAt(openDoc.id);
             else if (DGM.shell.openPath) DGM.shell.openPath(r.path);

@@ -328,6 +328,31 @@ async function main() {
       process.exit(2);
     }
     log(C.dim(`  ${ZH.size} 个键：静态引用 ${statics.length} 个全覆盖、键集对称、占位符一致；动态前缀 ${dynamic.length} 个（${dynamic.join(", ")}）`));
+
+    // index.html 的 data-i18n* 也是运行期查表（i18n.apply），但上面的扫描只看 js。
+    // 缺键同样会在界面上显示裸键名 —— 补上这条，别再靠手工核。
+    const html = readFileSync(join(ROOT, "ui", "index.html"), "utf8");
+    const htmlKeys = new Set(
+      [...html.matchAll(/data-i18n(?:-title|-placeholder|-aria-label)?="([^"]+)"/g)].map((m) => m[1]),
+    );
+    const missHtml = [...htmlKeys].filter((k) => !ZH.has(k) || !EN.has(k));
+    if (missHtml.length) {
+      log(C.red("index.html 的 data-i18n 缺键：\n" + missHtml.join("\n")));
+      process.exit(2);
+    }
+    log(C.dim(`  index.html 的 ${htmlKeys.size} 个 data-i18n 键都在`));
+
+    // Rust 侧的用户可见错误仍是中文字面量，英文界面靠 `ui/js/i18n.js::ERR_RULES` 逐条翻译。
+    // 这里只**报告**数量：新增后端错误时要同步补一条规则（或在规则表里明确不翻），
+    // 否则英文界面会漏出中文。不是硬门禁 —— 内部/自检消息也在这一堆里。
+    let rustErrs = 0;
+    for (const dir of ["src-tauri/src", "crates/app-core/src"]) {
+      for (const f of readdirSync(join(ROOT, dir)).filter((f) => f.endsWith(".rs"))) {
+        const code = readFileSync(join(ROOT, dir, f), "utf8");
+        rustErrs += (code.match(/Err\((?:format!\()?"[^"]*[\u4e00-\u9fff]/g) || []).length;
+      }
+    }
+    log(C.dim(`  Rust 中文字面量错误 ${rustErrs} 处：en 界面由 ERR_RULES 翻译，新增时请一并补规则`));
   }
 
   // Rust 编译闸门（审计 2026-11-03 M-1/G-1）：唯一覆盖 src-tauri test cfg 的验收步骤。

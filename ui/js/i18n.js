@@ -1268,6 +1268,64 @@ window.DGM = window.DGM || {};
     "guide.local.h": "本地优先",
     "guide.local.p": "渲染与语法检查全在本机完成，随包分发运行时，零外部请求。只有你主动使用 AI 时，相关代码或图片才会发到模型服务。",
 
+    /* ---- 本地化补齐：原先硬编码在 UI 代码里的文案 ---- */
+    "recon.missingNodes": "少 {n} 个节点",
+    "recon.missingEdges": "少 {n} 条连线",
+    "recon.extraNodes": "多 {n} 个节点",
+    "recon.extraEdges": "多 {n} 条连线",
+    "recon.sep": "，",
+    "ui.splitStatus": "源码 : 预览 = {a} : {b}",
+    "ai.err.noDoc": "没有打开的文档",
+    "ai.err.noSource": "模型没有返回可用的源码",
+    "preview.d2.notLoaded": "ui/js/d2.js 未加载",
+    "validate.xmlInvalid": "XML 无法解析：{err}",
+    "validate.mxRoot": "缺少 mxGraphModel / mxfile 根节点",
+    "validate.jsonInvalid": "JSON 无法解析：{err}",
+    "validate.elements": "缺少 elements 数组",
+    "validate.empty": "内容为空",
+
+    /* ---- 后端错误的本地化（见 `ERR_RULES` / `errText()`） ----
+     * zh-CN 下 errText 直接返回后端原文（原文即真源），只有 en-US 才查这张表 ——
+     * 后端措辞变化不会让中文界面跟着漂。这里的中文只用于文档与键集对称。 */
+    "err.docMissing": "文档不存在：{id}",
+    "err.reloadFailed": "读不到磁盘内容（文件被删了或读不动）：{id}",
+    "err.noSplit": "这个格式没有分屏 / 源码视图，只有预览：{id}",
+    "err.tooBig": "文件太大（{mb} MiB，上限 {max} MiB），不像是图表文件",
+    "err.isDir": "这是一个目录，不是文件",
+    "err.notRegular": "这不是普通文件（管道 / 设备文件不收）",
+    "err.notUtf8": "不是 UTF-8 文本文件（GBK 等编码请先转成 UTF-8）",
+    "err.grewDuringRead": "文件读取过程中变大了，已中止",
+    "err.cloudUnreachable": "连不上云网关（{url}）：{msg}",
+    "err.cloudStatus": "云网关 {status}：{detail}",
+    "err.cloudDocMissing": "云端没有这份文档：{id}",
+    "err.cloudDocGone": "云端没有这份文档（版本冲突或已删除）",
+    "err.cloudNoToken": "云网关没有返回令牌",
+    "err.cloudNoBase": "云网关未配置：先在 设置 → 云端 里填服务地址",
+    "err.cloudNoModel": "云网关模型别名为空",
+    "err.dirMissing": "目录不存在：{dir}",
+    "err.pathMissing": "找不到：{path}",
+    "err.notDir": "不是一个目录：{path}",
+    "err.sameName": "已经有一个同名的了：{path}",
+    "err.wsAbs": "工作区路径必须是绝对路径：{path}",
+    "err.wsFsRoot": "不能把文件系统根当成工作区：{path}",
+    "err.wsOutside": "目标不在工作区内",
+    "err.emptyName": "名称为空",
+    "err.badPath": "路径里不允许出现 .. 或盘符",
+    "err.dirNotEmpty": "目录里还有东西 —— 本客户端只删空目录（递归删除不可逆，不提供）",
+    "err.noCapture": "没有正在进行的截屏",
+    "err.noScreen": "一块可用的屏幕都没找到",
+    "err.watchFailed": "监视器创建失败：{msg}",
+    "err.watchTimeout": "监视器启动超时",
+    "err.cancelled": "这个请求已经结束了",
+    "err.badConvKey": "会话键不合法，拒绝落盘",
+    "err.badLine": "行号从 1 开始",
+    "err.badPalette": "色系不存在，或该文档不接受配色",
+    "err.memoryLimit": "这条记忆是空的，或已经达到条数上限",
+    "err.noAbsPath": "不接受绝对路径",
+    "err.badLayout": "这个格式没有布局引擎「{layout}」",
+    "err.badLook": "这个格式没有外观模式「{look}」",
+    "err.badDirection": "不认识的布局方向「{other}」（支持 TD/TB/BT/LR/RL）",
+
     /* ---- 图形可访问标签 ---- */
     "graph.mermaid": "Mermaid 图",
     "graph.dot": "Graphviz 图",
@@ -2509,6 +2567,63 @@ window.DGM = window.DGM || {};
     "guide.local.h": "Local-first",
     "guide.local.p": "Rendering and syntax checks run entirely on this machine with bundled runtimes and zero external requests. Code or images are only sent to the model service when you actively use AI.",
 
+    /* ---- Localised UI text that used to be hard-coded ---- */
+    "recon.missingNodes": "missing {n} nodes",
+    "recon.missingEdges": "missing {n} edges",
+    "recon.extraNodes": "{n} extra nodes",
+    "recon.extraEdges": "{n} extra edges",
+    "recon.sep": ", ",
+    "ui.splitStatus": "Source : Preview = {a} : {b}",
+    "ai.err.noDoc": "No document is open",
+    "ai.err.noSource": "The model returned no usable source",
+    "preview.d2.notLoaded": "ui/js/d2.js is not loaded",
+    "validate.xmlInvalid": "Can't parse the XML: {err}",
+    "validate.mxRoot": "Missing the mxGraphModel / mxfile root element",
+    "validate.jsonInvalid": "Can't parse the JSON: {err}",
+    "validate.elements": "Missing the elements array",
+    "validate.empty": "The content is empty",
+
+    /* ---- Backend error localisation (see `ERR_RULES` / `errText()`); zh-CN returns the
+     * backend's original text, only en-US uses these entries. ---- */
+    "err.docMissing": "Document not found: {id}",
+    "err.reloadFailed": "Can't read the file from disk (deleted or unreadable): {id}",
+    "err.noSplit": "This format has no split / source view, only preview: {id}",
+    "err.tooBig": "File is too large ({mb} MiB, limit {max} MiB) — it doesn't look like a diagram file",
+    "err.isDir": "That is a folder, not a file",
+    "err.notRegular": "Not a regular file (pipes and device files are rejected)",
+    "err.notUtf8": "Not a UTF-8 text file (convert GBK and similar encodings to UTF-8 first)",
+    "err.grewDuringRead": "The file grew while it was being read; aborted",
+    "err.cloudUnreachable": "Can't reach the cloud gateway ({url}): {msg}",
+    "err.cloudStatus": "Cloud gateway {status}: {detail}",
+    "err.cloudDocMissing": "The cloud has no such document: {id}",
+    "err.cloudDocGone": "The cloud has no such document (version conflict or deleted)",
+    "err.cloudNoToken": "The cloud gateway returned no token",
+    "err.cloudNoBase": "Cloud gateway is not configured: set the service URL in Settings → Cloud first",
+    "err.cloudNoModel": "Empty cloud model alias",
+    "err.dirMissing": "Folder not found: {dir}",
+    "err.pathMissing": "Not found: {path}",
+    "err.notDir": "Not a folder: {path}",
+    "err.sameName": "Something with that name already exists: {path}",
+    "err.wsAbs": "The workspace path must be absolute: {path}",
+    "err.wsFsRoot": "The filesystem root cannot be used as a workspace: {path}",
+    "err.wsOutside": "The target is outside the workspace",
+    "err.emptyName": "The name cannot be empty",
+    "err.badPath": "Paths may not contain .. or a drive letter",
+    "err.dirNotEmpty": "The folder is not empty — this client only deletes empty folders (recursive delete is irreversible and not offered)",
+    "err.noCapture": "No screenshot capture is in progress",
+    "err.noScreen": "No usable screen was found",
+    "err.watchFailed": "Failed to create the file watcher: {msg}",
+    "err.watchTimeout": "The file watcher timed out while starting",
+    "err.cancelled": "This request has already finished",
+    "err.badConvKey": "Invalid conversation key; refused to save",
+    "err.badLine": "Line numbers start at 1",
+    "err.badPalette": "That palette doesn't exist, or this document doesn't accept palettes",
+    "err.memoryLimit": "This memory is empty, or the entry limit has been reached",
+    "err.noAbsPath": "Absolute paths are not accepted here",
+    "err.badLayout": "This format has no layout engine \"{layout}\"",
+    "err.badLook": "This format has no look mode \"{look}\"",
+    "err.badDirection": "Unknown layout direction \"{other}\" (TD/TB/BT/LR/RL are supported)",
+
     "graph.mermaid": "Mermaid diagram",
     "graph.dot": "Graphviz diagram",
     "graph.canvas": "{name} canvas",
@@ -2536,6 +2651,77 @@ window.DGM = window.DGM || {};
     }
     if (!vars) return raw;
     return String(raw).replace(/\{(\w+)\}/g, (_, k) => (vars[k] != null ? String(vars[k]) : ""));
+  }
+
+  /* ---------------------------------------------------------- 后端错误 → 本地化
+   *
+   * Rust 侧的用户可见错误目前是中文字面量（`Err(format!("文档不存在：{id}"))` 之流），
+   * 前端拿到后原样塞进 toast/状态栏。这里按**固定模板**翻译：只有 en-US 需要映射，
+   * zh-CN 直接返回原文（原文即真源 —— 后端改措辞不会让中文界面跟着漂）。
+   *
+   * 规则**顺序敏感**：先具体后宽泛（`云端没有这份文档：{id}` 必须排在
+   * `云端没有这份文档（版本冲突或已删除）` 之后/之前按字面区分，别让宽规则先吃掉）。
+   * 新增后端错误时：在 `ERR_RULES` 补一条，并在 ZH/EN 各加同名 `err.*` 键
+   * （`check.mjs` 查键集对称；`ui_probe` 有一条冒烟断言）。
+   */
+  const ERR_RULES = [
+    [/^文档不存在：([\s\S]+)$/, "err.docMissing", (m) => ({ id: m[1] })],
+    [/^读不到磁盘内容（文件被删了或读不动）：([\s\S]+)$/, "err.reloadFailed", (m) => ({ id: m[1] })],
+    [/^这个格式没有分屏 \/ 源码视图，只有预览：([\s\S]+)$/, "err.noSplit", (m) => ({ id: m[1] })],
+    [/^文件太大（(\d+) MiB，上限 (\d+) MiB），不像是图表文件$/, "err.tooBig", (m) => ({ mb: m[1], max: m[2] })],
+    [/^这是一个目录，不是文件$/, "err.isDir"],
+    [/^这不是普通文件（管道 \/ 设备文件不收）$/, "err.notRegular"],
+    [/^不是 UTF-8 文本文件（GBK 等编码请先转成 UTF-8）$/, "err.notUtf8"],
+    [/^文件读取过程中变大了，已中止$/, "err.grewDuringRead"],
+    [/^连不上云网关（([\s\S]+)）：([\s\S]*)$/, "err.cloudUnreachable", (m) => ({ url: m[1], msg: m[2] })],
+    [/^云网关 (\d{3})：([\s\S]*)$/, "err.cloudStatus", (m) => ({ status: m[1], detail: m[2] })],
+    [/^云端没有这份文档：([\s\S]+)$/, "err.cloudDocMissing", (m) => ({ id: m[1] })],
+    [/^云端没有这份文档（版本冲突或已删除）$/, "err.cloudDocGone"],
+    [/^云网关没有返回(?:新)?令牌$/, "err.cloudNoToken"],
+    [/^云网关未配置：先在 设置 → 云端 里填服务地址$/, "err.cloudNoBase"],
+    [/^云网关模型别名为空$/, "err.cloudNoModel"],
+    [/^云网关没有返回用户后台地址（sso\/console）$/, "acct.consoleNoUrl"],
+    [/^目录不存在：([\s\S]+)$/, "err.dirMissing", (m) => ({ dir: m[1] })],
+    [/^找不到：([\s\S]+)$/, "err.pathMissing", (m) => ({ path: m[1] })],
+    [/^不是一个目录：([\s\S]+)$/, "err.notDir", (m) => ({ path: m[1] })],
+    [/^已经有一个同名的了：([\s\S]+)$/, "err.sameName", (m) => ({ path: m[1] })],
+    [/^工作区路径必须是绝对路径：([\s\S]+)$/, "err.wsAbs", (m) => ({ path: m[1] })],
+    [/^不能把文件系统根当成工作区：([\s\S]+)$/, "err.wsFsRoot", (m) => ({ path: m[1] })],
+    [/^目标(?:路径跑出工作区|目录不在工作区内|不在工作区内)$/, "err.wsOutside"],
+    [/^名称为空$/, "err.emptyName"],
+    [/^路径里不允许出现 \.\. 或盘符$/, "err.badPath"],
+    [/^目录里还有东西 —— 本客户端只删空目录（递归删除不可逆，不提供）$/, "err.dirNotEmpty"],
+    [/^没有正在进行的截屏$/, "err.noCapture"],
+    [/^一块可用的屏幕都没找到$/, "err.noScreen"],
+    [/^监视器创建失败：([\s\S]*)$/, "err.watchFailed", (m) => ({ msg: m[1] })],
+    [/^挂载监视失败：([\s\S]*)$/, "err.watchFailed", (m) => ({ msg: m[1] })],
+    [/^监视器启动超时$/, "err.watchTimeout"],
+    [/^(?:这个请求|这次搜索)已经结束了$/, "err.cancelled"],
+    [/^会话键不合法，拒绝(?:落盘|删除)$/, "err.badConvKey"],
+    [/^会话缺少文档身份，拒绝落盘$/, "err.badConvKey"],
+    [/^行号从 1 开始$/, "err.badLine"],
+    [/^色系不存在，或该文档不接受配色$/, "err.badPalette"],
+    [/^这条记忆是空的，或已经达到条数上限$/, "err.memoryLimit"],
+    [/^不接受绝对路径$/, "err.noAbsPath"],
+    [/^这个格式没有布局引擎「([\s\S]+)」$/, "err.badLayout", (m) => ({ layout: m[1] })],
+    [/^这个格式没有外观模式「([\s\S]+)」$/, "err.badLook", (m) => ({ look: m[1] })],
+    [/^不认识的布局方向「([\s\S]+)」（支持 TD\/TB\/BT\/LR\/RL）$/, "err.badDirection", (m) => ({ other: m[1] })],
+  ];
+
+  /** 把后端错误翻成当前语言；翻不了就返回原文（不吞掉信息）。
+   *
+   *  zh-CN 直接返回原文：中文界面里后端消息本来就是用户读得懂的那一份，
+   *  跟前端逐条对照只会制造第二份需要同步的文案。 */
+  function errText(err) {
+    const raw = typeof err === "string"
+      ? err
+      : (err && (err.message || err.msg)) || (err == null ? "" : String(err));
+    if (!raw || lang === "zh-CN") return raw;
+    for (const [re, key, args] of ERR_RULES) {
+      const m = raw.match(re);
+      if (m) return t(key, args ? args(m) : undefined);
+    }
+    return raw;
   }
 
   /** 系统语言 → 支持的语言码（默认 zh-CN）。 */
@@ -2568,6 +2754,8 @@ window.DGM = window.DGM || {};
     t,
     detect,
     apply,
+    /** 后端错误 → 当前语言（翻不了返回原文）。见 `ERR_RULES`。 */
+    errText,
     languages: SYSTEM,
     /** 该键在当前语言是否存在（用于少量动态判断）。 */
     has(key) {

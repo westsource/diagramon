@@ -1811,6 +1811,36 @@ def main() -> int:
         except Exception as e:
             log(f"（断言 16 解析失败：{e}）")
 
+        # ---- 断言 13e：后端错误在英文界面被翻译（ERR_RULES / errText） ----
+        # Rust 侧错误仍是中文字面量；en-US 下由前端规则表翻译，翻不了就保留原文（不吞信息）。
+        err_i18n = ev(
+            "(() => {"
+            "  const zh0 = DGM.i18n.lang;"
+            "  DGM.i18n.setLang('en-US', { persist: false });"
+            "  const out = {"
+            "    doc: DGM.i18n.errText('文档不存在：untitled-3'),"
+            "    big: DGM.i18n.errText('文件太大（12 MiB，上限 8 MiB），不像是图表文件'),"
+            "    cloud: DGM.i18n.errText('云网关 409：version conflict'),"
+            "    unknown: DGM.i18n.errText('某条未登记的后端错误'),"
+            "  };"
+            "  DGM.i18n.setLang(zh0, { persist: false });"
+            "  return JSON.stringify(out);"
+            "})()"
+        )
+        log(f"后端错误本地化: {err_i18n}")
+        try:
+            ei = json.loads(err_i18n)
+            if "Document not found" not in (ei.get("doc") or ""):
+                fails.append(f"英文界面没翻译「文档不存在」: {ei.get('doc')}")
+            if "File is too large" not in (ei.get("big") or ""):
+                fails.append(f"英文界面没翻译「文件太大」: {ei.get('big')}")
+            if "Cloud gateway 409" not in (ei.get("cloud") or ""):
+                fails.append(f"英文界面没翻译云网关错误: {ei.get('cloud')}")
+            if ei.get("unknown") != "某条未登记的后端错误":
+                fails.append(f"未登记的错误不该被吞掉: {ei.get('unknown')}")
+        except Exception as e:
+            log(f"（断言 13e 解析失败：{e}）")
+
         # ---- 断言 16c：账户页动作按网页版布局（刷新进卡片、退出登录下沉页脚 + 二次确认） ----
         acct_acts = ev(
             "(async () => {"

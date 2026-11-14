@@ -73,7 +73,7 @@ window.DGM = window.DGM || {};
     const d = new Date(iso);
     if (Number.isNaN(d.getTime())) return "";
     try {
-      return d.toLocaleDateString();
+      return d.toLocaleDateString(DGM.i18n.lang);
     } catch (e) {
       return "";
     }
