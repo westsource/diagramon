@@ -125,6 +125,13 @@ window.DGM = window.DGM || {};
     return e && e.frame ? e.frame.contentWindow : null;
   }
 
+  /** 告诉承载页「现在有转换在跑」：它据此拒绝在导入期间加载 stencils。 */
+  function setConverting(format, on) {
+    const win = winFor(format);
+    if (!win) return;
+    try { win.__dgmConverting = !!on; } catch (_) { /* 跨源不该发生 */ }
+  }
+
   /* ------------------------------------------------------------------ 下发 */
 
   /** 向承载页投递一个动作（未就绪先排队：`init` 是 drawio 唯一的同步点）。 */
@@ -521,6 +528,7 @@ window.DGM = window.DGM || {};
     if (format === "drawio") {
       e.loading = true;
       e.converting = false;
+      setConverting(format, false);
       send(format, { action: "load", xml: body, autosave: 1 });
       return true;
     }
@@ -666,6 +674,7 @@ window.DGM = window.DGM || {};
         if (!e || !e.ready) {
           if (Date.now() > deadline) {
             if (e) e.converting = false;
+            setConverting(format, false);
             return resolve("");
           }
           setTimeout(tick, 600);
@@ -677,11 +686,14 @@ window.DGM = window.DGM || {};
           .then((body) => {
             if (accepted(body)) {
               e.loading = false;
+              e.converting = false;
+              setConverting(format, false);
               requestStencils(format);
               return resolve(body);
             }
             if (++i >= max || Date.now() > deadline) {
               e.converting = false;
+              setConverting(format, false);
               return resolve("");
             }
             setTimeout(tick, 600);
@@ -753,6 +765,7 @@ window.DGM = window.DGM || {};
       // 用户拿到的是一个没有节点的 drawio。
       e.loading = true;
       e.converting = true;
+      setConverting(format, true);
       send(format, { action: "load", autosave: 1, descriptor: { format: "mermaid", data: source, wrap: true } });
     } else {
       send(format, { action: "loadMermaid", source, mermaid: (opts && opts.mermaid) || undefined });
