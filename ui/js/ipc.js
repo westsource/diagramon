@@ -548,10 +548,10 @@ digraph Pipeline {
         /* 无 location / 参数非法：忽略 */
       }
       this.docs = [
-        { id: "d1", path: "E:/OpenCode/diagramon/docs/flows/登录流程.mmd", name: "登录流程.mmd", format: "mermaid", body: MERMAID_SRC, dirty: true, view_mode: "split", caret_line: 9, caret_col: 12, layout: null },
-        { id: "d2", path: "E:/OpenCode/diagramon/docs/arch/渲染管线.dot", name: "渲染管线.dot", format: "dot", body: DOT_SRC, dirty: false, view_mode: "split", caret_line: 6, caret_col: 4, layout: "dot" },
-        { id: "d3", path: "E:/OpenCode/diagramon/docs/arch/服务拓扑.drawio", name: "服务拓扑.drawio", format: "drawio", body: DRAWIO_SRC, dirty: false, view_mode: "preview", caret_line: 8, caret_col: 1, layout: null },
-        { id: "d4", path: "E:/OpenCode/diagramon/scratch/白板草图.excalidraw", name: "白板草图.excalidraw", format: "excalidraw", body: EXCALIDRAW_SRC, dirty: true, view_mode: "preview", caret_line: 4, caret_col: 1, layout: null },
+        { id: "d1", path: "E:/OpenCode/diagramon/docs/flows/登录流程.mmd", kind: "file", name: "登录流程.mmd", format: "mermaid", body: MERMAID_SRC, dirty: true, view_mode: "split", caret_line: 9, caret_col: 12, layout: null },
+        { id: "d2", path: "E:/OpenCode/diagramon/docs/arch/渲染管线.dot", kind: "file", name: "渲染管线.dot", format: "dot", body: DOT_SRC, dirty: false, view_mode: "split", caret_line: 6, caret_col: 4, layout: "dot" },
+        { id: "d3", path: "E:/OpenCode/diagramon/docs/arch/服务拓扑.drawio", kind: "file", name: "服务拓扑.drawio", format: "drawio", body: DRAWIO_SRC, dirty: false, view_mode: "preview", caret_line: 8, caret_col: 1, layout: null },
+        { id: "d4", path: "E:/OpenCode/diagramon/scratch/白板草图.excalidraw", kind: "file", name: "白板草图.excalidraw", format: "excalidraw", body: EXCALIDRAW_SRC, dirty: true, view_mode: "preview", caret_line: 4, caret_col: 1, layout: null },
       ];
       this.active = "d1";
       // mock 里默认就"打开着"这个示例工作区：否则浏览器原型永远是空树，
@@ -795,6 +795,7 @@ digraph Pipeline {
           const doc = {
             id: this._newId("n"),
             path: null,
+            kind: "draft",
             name: `未命名-${n}${f.exts[0]}`,
             format: f.id,
             body: f.default_body,
@@ -824,6 +825,7 @@ digraph Pipeline {
             const doc = {
               id: this._newId("o"),
               path: p,
+              kind: "file",
               name,
               format: fid,
               body: f.default_body,
@@ -849,11 +851,30 @@ digraph Pipeline {
           const d = this._doc(args.id);
           if (d) {
             d.path = args.path;
+            d.kind = "file";
             d.name = (args.path || d.name).split(/[\\/]/).pop();
             d.dirty = false;
           }
           return d ? this._clone(d) : null;
         }
+
+        case "doc_mark_cloud": {
+          const d = this._doc(args.id);
+          if (d && !d.path) {
+            d.kind = "cloud";
+            d.dirty = false;
+          }
+          return d ? this._clone(d) : null;
+        }
+
+        case "drafts_flush":
+          return 0;
+
+        case "drafts_discard":
+          return 0;
+
+        case "drafts_probe":
+          return false;
 
         case "doc_close": {
           const i = this.docs.findIndex((d) => d.id === args.id);

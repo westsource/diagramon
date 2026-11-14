@@ -6,7 +6,7 @@
 
 use std::path::Path;
 
-use app_ipc::{Doc, FormatId, Session as SessionPayload, ViewMode};
+use app_ipc::{Doc, DocKind, FormatId, Session as SessionPayload, ViewMode};
 
 use crate::document;
 use crate::format;
@@ -15,12 +15,15 @@ pub struct Entry {
     pub doc: Doc,
     /// 最后一次落盘（或"出生时"）的正文，用于算 dirty
     saved: String,
+    /// 这一次改动是否被 `hold` 摘出了后台持久化（AI 应用/转换产物）。
+    /// 下一次普通 `doc_set_body` 或保存会清掉它。
+    hold: bool,
 }
 
 impl Entry {
     fn new(doc: Doc) -> Self {
         let saved = doc.body.clone();
-        Self { doc, saved }
+        Self { doc, saved, hold: false }
     }
 
     pub fn is_dirty(&self) -> bool {
@@ -31,11 +34,12 @@ impl Entry {
     pub fn mark_saved(&mut self) {
         self.saved = self.doc.body.clone();
         self.doc.dirty = false;
+        self.hold = false;
     }
 
     /// 新建文档"出生即脏"：`saved` 记成空串，于是 body（默认正文）≠ saved 恒成立。
     fn born_dirty(doc: Doc) -> Self {
-        Self { doc, saved: String::new() }
+        Self { doc, saved: String::new(), hold: false }
     }
 }
 
@@ -139,6 +143,7 @@ impl Session {
         let doc = Doc {
             id,
             path: None,
+            kind: DocKind::Draft,
             name,
             format,
             body: document::normalize_newlines(body),
@@ -166,6 +171,33 @@ impl Session {
             Some(e) => {
                 e.doc.body = document::normalize_newlines(body);
                 e.doc.dirty = e.is_dirty();
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// 标记/清除这次改动是否由 `hold` 摘出后台持久化。
+    pub fn set_hold(&mut self, id: &str, hold: bool) -> bool {
+        match self.entry_mut(id) {
+            Some(e) => {
+                e.hold = hold;
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// 这份文档当前是否处于 `hold`（只进内存、不参与 autosave/草稿）。
+    pub fn is_held(&self, id: &str) -> bool {
+        self.entries.iter().any(|e| e.doc.id == id && e.hold)
+    }
+
+    /// 改文档来源（草稿 / 本地文件 / 云端）。路径切换走 `commit_saved` 的 retarget。
+    pub fn set_kind(&mut self, id: &str, kind: DocKind) -> bool {
+        match self.entry_mut(id) {
+            Some(e) => {
+                e.doc.kind = kind;
                 true
             }
             None => false,
@@ -338,6 +370,20 @@ mod tests {
         // 改回去 —— 布尔标志做不到这一点
         s.set_body(&d.id, original);
         assert_eq!(s.dirty_count(), 0, "正文与已保存一致时应恢复干净");
+    }
+
+    #[test]
+    fn hold_tracks_the_last_write_and_save_clears_it() {
+        let mut s = Session::default();
+        let d = s.new_doc(FormatId::Mermaid);
+        assert!(!s.is_held(&d.id), "新文档默认不 hold");
+        s.set_hold(&d.id, true);
+        assert!(s.is_held(&d.id));
+        s.set_hold(&d.id, false);
+        assert!(!s.is_held(&d.id), "下一次普通写入会清掉 hold");
+        s.set_hold(&d.id, true);
+        s.commit_saved(&d.id, None);
+        assert!(!s.is_held(&d.id), "保存成功后 hold 也必须清掉");
     }
 
     #[test]

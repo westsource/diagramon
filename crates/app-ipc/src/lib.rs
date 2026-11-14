@@ -101,12 +101,35 @@ pub struct FormatInfo {
     pub default_body: String,
 }
 
+/// 文档来源：草稿 / 本地文件 / 云端文档。
+///
+/// 这是**显式**属性，不再由 `path` 是否为空来猜：
+/// * `Draft`：还没保存到本地文件；草稿仓恢复只认它。
+/// * `File`：有本地路径；只有它能被 `editor.autosave` 写回原文件。
+/// * `Cloud`：云端文档，本地没有文件；不写本地草稿，也不写本地文件。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum DocKind {
+    Draft,
+    File,
+    Cloud,
+}
+
+impl Default for DocKind {
+    fn default() -> Self {
+        DocKind::Draft
+    }
+}
+
 /// 打开/新建的文档。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Doc {
     pub id: String,
-    /// `None` = 未保存到磁盘
+    /// `None` = 未保存到磁盘（草稿或云端文档，见 `kind`）
     pub path: Option<String>,
+    /// 显式来源/落点。旧数据没有这个字段时按 `Draft` 处理。
+    #[serde(default)]
+    pub kind: DocKind,
     pub name: String,
     pub format: FormatId,
     pub body: String,
@@ -1233,7 +1256,8 @@ pub struct ConvMeta {
     /// **由 `conversation_list` 现算、不落盘**：path 非空但那个文件已经不在了
     #[serde(default)]
     pub missing: bool,
-    /// **由 `conversation_list` 现算、不落盘**：草稿还在草稿仓里（= 那个标签页还开着）
+    /// **由 `conversation_list` 现算、不落盘**：这段草稿会话还活着
+    /// （文档标签页还开着，或草稿仓里还有那份文件 —— 自动保存关闭时只有前者）
     #[serde(default)]
     pub live_draft: bool,
 }
@@ -1315,6 +1339,8 @@ pub mod events {
     pub const SEARCH_DONE: &str = "search://done";
     /// 单实例转交进来的文件
     pub const OPEN_PATHS: &str = "open://paths";
+    /// 后端（托盘「退出」/ Alt+F4）请求前端走未保存确认后再退出
+    pub const APP_QUIT_REQUESTED: &str = "app://quit-requested";
     /// autosave 落了盘（载荷 `Doc`）
     pub const DOC_AUTOSAVED: &str = "doc://autosaved";
     /// 识图框选完成（载荷 `String` dataURL；取消时是 `null`）
@@ -1344,6 +1370,12 @@ pub mod commands {
     pub const DOC_ISSUES: &str = "doc_issues";
     pub const DOC_OUTLINE: &str = "doc_outline";
     pub const DOC_SCOPE: &str = "doc_scope";
+    /// 退出前同步把非 hold 的草稿写入草稿仓（正常退出保留草稿）
+    pub const DRAFTS_FLUSH: &str = "drafts_flush";
+    /// 退出时丢弃草稿（显式「退出并丢弃草稿」）
+    pub const DRAFTS_DISCARD: &str = "drafts_discard";
+    /// 云端文档落成本地身份（kind = Cloud），并清掉本地草稿
+    pub const DOC_MARK_CLOUD: &str = "doc_mark_cloud";
     pub const WORKSPACE_OPEN: &str = "workspace_open";
     pub const WORKSPACE_GET: &str = "workspace_get";
     pub const WORKSPACE_CLOSE: &str = "workspace_close";

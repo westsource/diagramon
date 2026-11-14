@@ -330,6 +330,8 @@ impl AppState {
     /* ---------------- autosave 计时 ---------------- */
 
     /// 正文改动后登记到期时刻（毫秒阈值来自设置）。
+    ///
+    /// 只有 `editor.autosave` 开启时 `doc_set_body` 才会调用它；关闭时正文只留内存。
     pub fn mark_autosave(&self, doc_id: &str) {
         let ms = self.settings().editor.autosave_ms.max(500);
         self.autosave()

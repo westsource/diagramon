@@ -1285,13 +1285,31 @@ window.DGM = window.DGM || {};
     toast({ icon: "close", title: t("status.closed", { name: d.name }), sub: "" });
   }
 
+  /** 草稿（未保存到本地文件）判定：显式 kind 优先，旧 mock/旧数据退回 path。 */
+  function isDraftDoc(d) {
+    if (!d) return false;
+    if (d.kind) return d.kind === "draft";
+    return !d.path && !d.cloudId;
+  }
+
   async function quit() {
     const dirty = state.docs.filter((d) => d.dirty);
+    const drafts = dirty.filter(isDraftDoc);
+    const saved = dirty.filter((d) => !isDraftDoc(d));
+    let choice = "quit";
     if (dirty.length) {
-      const ok = await DGM.dialogs.quit(dirty.length);
-      if (!ok) return;
+      choice = await DGM.dialogs.quit({ drafts: drafts.length, saved: saved.length });
+      if (choice === "cancel") return;
     }
     await state.flushBody();
+    if (choice === "discard") {
+      try { await DGM.ipc.invoke("drafts_discard"); } catch (e) { /* 清理失败也退出；草稿已由前端确认丢弃 */ }
+    } else {
+      try {
+        // 正常退出：把当前脏草稿同步写一份，避免恢复出旧版本。
+        await DGM.ipc.invoke("drafts_flush");
+      } catch (e) { /* 写不进也不挡退出；下次启动最多丢这次未 flush 的改动 */ }
+    }
     // 显式退出必须走 app_exit（整个应用结束）：ipc.win.close() 只关窗口，
     // 会被后端按 close_to_tray 拦成"隐藏到托盘" —— 菜单里点退出却藏起来就错了。
     // mock 模式没有这个命令（返回 null 什么都不做），浏览器里本就没有进程可退。
@@ -1536,8 +1554,8 @@ window.DGM = window.DGM || {};
     });
     $("#win-min").addEventListener("click", () => ipc.win.minimize());
     $("#win-max").addEventListener("click", () => ipc.win.toggleMaximize());
-    // 关闭按钮：设置了"关闭到托盘"就不弹未保存确认（autosave 有草稿兜底），
-    // 直接关窗口交给后端隐藏；否则走完整退出流程
+    // 关闭按钮：设置了"关闭到托盘"就只隐藏窗口（进程还在，不丢内容），真退出走托盘菜单；
+    // 否则走完整退出流程（有脏文档会弹未保存确认）
     $("#win-close").addEventListener("click", () => {
       if (state.settings && state.settings.close_to_tray) return ipc.win.close();
       quit();

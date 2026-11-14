@@ -89,7 +89,8 @@
   async function openResult(format, body) {
     const created = await state.newDoc(format);
     if (!created) return null;
-    await state.setBodyNow(created.id, body);
+    // AI 生成物只进内存：hold 掉自动保存/草稿，用户 Ctrl+S 才落盘。
+    await state.setBodyNow(created.id, body, { hold: true });
     DGM.editor.loadActive();
     DGM.preview.schedule();
     return created;

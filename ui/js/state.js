@@ -386,6 +386,11 @@ window.DGM = window.DGM || {};
       setStatus(t("status.autosaved", { name: doc.name }), "ok");
     });
 
+    // 托盘「退出」/ Alt+F4 / 系统关窗：有脏文档时后端先问这里，不直接退
+    ipc.on("app://quit-requested", () => {
+      if (DGM.shell && DGM.shell.quit) DGM.shell.quit();
+    });
+
     // 第二个实例转交进来的文件（单实例）
     ipc.on("open://paths", (ev) => {
       const paths = (ev && ev.paths) || [];
@@ -947,6 +952,14 @@ window.DGM = window.DGM || {};
     // 保存成功后：清掉这次的去抖落盘，把正文同步给后端，再清脏标（否则 flush 会把 dirty 点亮）
     pendingBody.delete(d.id);
     try { await ipc.invoke("doc_set_body", { id: d.id, body: d.body }); } catch (_) {}
+    // 无本地路径的文档：落成 Cloud 身份（不再算草稿/不再写本地草稿仓）。
+    // 有本地路径的文件保持 File：云端保存不该清掉本地未保存标记。
+    if (!d.path) {
+      try {
+        const marked = await ipc.invoke("doc_mark_cloud", { id: d.id });
+        if (marked) upsertDoc(marked);
+      } catch (_) {}
+    }
     if (ipc.isWeb) { try { await ipc.invoke("doc_mark_saved", { id: d.id }); } catch (_) {} }
     d.dirty = false;
     if (name) d.name = name;
@@ -958,11 +971,16 @@ window.DGM = window.DGM || {};
   async function cloudOpenDoc(id, path) {
     const body = await ipc.invoke("cloud_doc_open", { id });
     // 云文档没有磁盘路径：开成一个"无路径"的文档，cloudId 记着，保存时回写云端
-    const doc = await ipc.invoke("doc_new", { format: body.format });
+    let doc = await ipc.invoke("doc_new", { format: body.format });
     if (doc) {
       doc.name = body.name || doc.name;
       doc.body = body.body;
       await ipc.invoke("doc_set_body", { id: doc.id, body: body.body });
+      // 显式落成 Cloud：它不是本地草稿，草稿恢复/退出 flush 都不该碰它。
+      try {
+        const marked = await ipc.invoke("doc_mark_cloud", { id: doc.id });
+        if (marked) doc = { ...doc, ...marked };
+      } catch (_) {}
       upsertDoc(doc);
       // 乐观锁起点（审计 2026-11-03 M-25）：必须进旁路表，否则下一次
       // Session 形响应就把版本号抹了，再保存会在云端多出一份文档。
@@ -1195,7 +1213,11 @@ window.DGM = window.DGM || {};
     emit("session:changed");
   }
 
-  /** 编辑器改动：本地即时更新（脏标/预览/大纲立刻反映），落盘去抖。 */
+  /** 编辑器改动：本地即时更新（脏标/预览/大纲立刻反映），落盘去抖。
+   *
+   *  撤销/重做由 CodeMirror 自己的历史维护，和这里的落盘调度无关：自动保存关闭时
+   *  正文只在内存里变，Ctrl+Z / Ctrl+Y 照样可用。
+   */
   let bodyTimer = 0;
   const pendingBody = new Map();
   function setBody(id, body) {
@@ -1233,11 +1255,11 @@ window.DGM = window.DGM || {};
     }
   }
 
-  /** AI 应用 / 回退等整块替换正文：立即落盘，不等去抖。 */
-  /** 写正文（**只动缓冲区**，磁盘要等用户保存/自动保存）。
+  /** 整块替换正文：立即同步到后端缓冲区，不等 350ms 去抖（**不等于落盘**）。
    *
    *  `opts.hold = true` ⇒ 这次改动不参与自动保存，并撤掉已排定的那次：
-   *  "先看看效果、满意再存"的动作（应用配色、清除配色、AI 结果应用到编辑器）用它。
+   *  "程序生成、先看效果"的正文（AI 结果、格式转换产物、打开文件补配色）用它 ——
+   *  用户按 Ctrl+S 才写盘。
    */
   async function setBodyNow(id, body, opts) {
     const d = state.doc(id);

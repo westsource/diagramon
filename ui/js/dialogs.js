@@ -360,13 +360,15 @@ window.DGM = window.DGM || {};
       DGM.toast({ icon: "alert", title: t("dlg.convert.title"), sub: t("conv.engineEmpty"), warn: true });
       return null;
     }
-    await state.setBodyNow(doc.id, body);
+    // 转换产物只进新标签页的内存：不排自动保存/草稿，用户 Ctrl+S 才落盘。
+    // 与 AI 应用同一口径 —— 这类"程序生成的正文"不该在用户没点头时写盘。
+    await state.setBodyNow(doc.id, body, { hold: true });
     if (to === "drawio") {
       const raw = body;
       const clean = flattenDrawio(raw);
       if (clean !== raw) {
         body = clean;
-        await state.setBodyNow(doc.id, body);
+        await state.setBodyNow(doc.id, body, { hold: true });
         // 承载页里还是导入器的旧图：不重载的话，保存时的 flush 会把带 UserObject /
         // mermaidData 的旧 XML 又导出来（正文清洗了、画布没清）。重载后再等它真换成干净 XML。
         DGM.canvas.reload(state.doc(doc.id) || doc);
@@ -445,7 +447,8 @@ window.DGM = window.DGM || {};
     const doc = await state.newDoc(dir.to);
     if (!doc) return null;
     // D2 → drawio 理论上已经是普通 mxCell；仍过一遍清洗，避免未来引擎换成 UserObject。
-    await state.setBodyNow(doc.id, flattenDrawio(made.xml));
+    // hold：转换产物只进内存，Ctrl+S 才落盘（同其它转换路径）。
+    await state.setBodyNow(doc.id, flattenDrawio(made.xml), { hold: true });
     DGM.canvas.reload(state.doc(doc.id) || doc);
     return { doc, notes: made.notes };
   }
@@ -642,7 +645,8 @@ window.DGM = window.DGM || {};
     let extraNotes = [];
     if (p.engine === "rust") {
       created = await state.newDoc(dir.to);
-      if (created) await state.setBodyNow(created.id, p.text);
+      // 转换产物只进内存，Ctrl+S 才落盘（与 AI 应用/其它转换路径同口径）。
+      if (created) await state.setBodyNow(created.id, p.text, { hold: true });
     } else if (p.engine === "d2wasm") {
       // D2 → drawio：几何在前端由 wasm 算，产物是一份完整的 mxfile
       const via = await convertViaD2Wasm(srcDoc.body, srcDoc, dir);
@@ -2489,7 +2493,14 @@ window.DGM = window.DGM || {};
     });
   }
 
-  function quit(n) {
+  function quit(opts) {
+    const drafts = Math.max(0, Number(opts && opts.drafts) || 0);
+    const saved = Math.max(0, Number(opts && opts.saved) || 0);
+    const body = drafts
+      ? saved
+        ? t("dlg.quit.bodyBoth", { drafts, saved })
+        : t("dlg.quit.bodyDrafts", { n: drafts })
+      : t("dlg.quit.bodySaved", { n: saved });
     return new Promise((resolve) => {
       let done = false;
       const finish = (v) => {
@@ -2497,19 +2508,28 @@ window.DGM = window.DGM || {};
         done = true;
         resolve(v);
       };
+      const buttons = drafts
+        ? `<button class="btn ghost" data-act="cancel">${esc(t("common.cancel"))}</button>` +
+          `<button class="btn ghost" data-act="discard">${esc(t("dlg.quit.discard"))}</button>` +
+          `<button class="btn primary" data-act="keep">${esc(t("dlg.quit.keep"))}</button>`
+        : `<button class="btn ghost" data-act="cancel">${esc(t("common.cancel"))}</button>` +
+          `<button class="btn primary" data-act="quit">${esc(t("common.quit"))}</button>`;
       openDialog(
         head(t("dlg.quit.title"), "alert") +
-          `<div class="dialog-body"><div class="callout warn">${icon("warn")}<span>${esc(t("dlg.quit.body", { n }))}</span></div></div>` +
-          foot("", `<button class="btn ghost" data-act="no">${esc(t("common.cancel"))}</button><button class="btn primary" data-act="yes">${esc(t("common.quit"))}</button>`),
+          `<div class="dialog-body"><div class="callout warn">${icon("warn")}<span>${esc(body)}</span></div></div>` +
+          foot("", buttons),
       );
       wire((act) => {
         close();
-        finish(act === "yes");
+        if (act === "keep") finish("keep");
+        else if (act === "discard") finish("discard");
+        else if (act === "quit") finish("quit");
+        else finish("cancel");
       });
       overlay().onclick = (e) => {
         if (e.target === overlay()) {
           close();
-          finish(false);
+          finish("cancel");
         }
       };
     });

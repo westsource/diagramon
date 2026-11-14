@@ -1457,6 +1457,16 @@ window.DGM = window.DGM || {};
               String(disk2).includes("B --> D"),
               `磁盘：${String(disk2).replace(/\s+/g, " ").slice(0, 60)}`,
             );
+            // 关闭自动保存：正文改动只留内存，磁盘上必须还是上一次的内容
+            await invoke("settings_patch", { patch: { editor: { autosave: false } } });
+            await DGM.state.setBodyNow(hd.id, "flowchart TD\n    A --> B\n    B --> E\n", {});
+            await new Promise((r) => setTimeout(r, 2500));
+            const disk3 = await read();
+            ok(
+              "关闭自动保存时正文改动不写盘",
+              !String(disk3).includes("B --> E") && String(disk3).includes("B --> D"),
+              `磁盘：${String(disk3).replace(/\s+/g, " ").slice(0, 60)}`,
+            );
             await invoke("doc_close", { id: hd.id });
           } else {
             ok("hold 写入不落盘（自动保存开着也不写）", false, "没打开文件");
@@ -1469,6 +1479,32 @@ window.DGM = window.DGM || {};
           try {
             await invoke("workspace_delete", { path: holdPath });
           } catch (e) { /* 清理失败不影响断言 */ }
+        }
+
+        // 草稿恢复：未保存文档即使关了自动保存也写草稿仓；退出 flush/discard 可同步控制。
+        {
+          const prevAuto3 = !!(DGM.state.settings.editor && DGM.state.settings.editor.autosave);
+          const prevMs3 = (DGM.state.settings.editor && DGM.state.settings.editor.autosave_ms) || 5000;
+          await invoke("settings_patch", { patch: { editor: { autosave: false, autosave_ms: 500 } } });
+          const dd = await invoke("doc_new", { format: "mermaid" });
+          await invoke("doc_set_body", { id: dd.id, body: "flowchart TD\n    D([草稿]) --> E[未保存]\n" });
+          await new Promise((r) => setTimeout(r, 2500));
+          ok("自动保存关闭时草稿仍写草稿仓", await invoke("drafts_probe", { id: dd.id }) === true);
+          ok("drafts_flush 同步落草稿", (await invoke("drafts_flush")) >= 1 && (await invoke("drafts_probe", { id: dd.id })) === true);
+          await invoke("drafts_discard");
+          ok("drafts_discard 清掉草稿", (await invoke("drafts_probe", { id: dd.id })) === false);
+          await invoke("doc_close", { id: dd.id });
+
+          const held = await invoke("doc_new", { format: "mermaid" });
+          await invoke("doc_set_body", {
+            id: held.id,
+            body: "flowchart TD\n    H([AI]) --> I[只进内存]\n",
+            hold: true,
+          });
+          await new Promise((r) => setTimeout(r, 2500));
+          ok("hold 的草稿不写草稿仓", (await invoke("drafts_probe", { id: held.id })) === false);
+          await invoke("doc_close", { id: held.id });
+          await invoke("settings_patch", { patch: { editor: { autosave: prevAuto3, autosave_ms: prevMs3 } } });
         }
 
         // B 方案：源码窗格的行首色块（颜色 = 渲染期真的会染成的色）

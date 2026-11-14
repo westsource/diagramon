@@ -4,9 +4,11 @@
 //!
 //! 1. **doc**：文档有路径 → 身份 = 路径的 SHA256（`doc_key`）。路径才是跨会话稳定的东西。
 //! 2. **draft**：文档还没有路径（新建、AI 生成落进去的新标签页）→ 身份 = `draft-<doc.id>`。
-//!    未保存文档本来就进草稿仓（`recovery/`），重启时 `adopt_draft` **保留原 id** 并推进
-//!    `untitled_seq` 防撞 —— 所以草稿身份跨重启仍然指得回同一份文档。这是"从无到有生成图"
-//!    的对话不再丢的关键：以前这类文档根本没有身份，`save` 直接拒绝，整段对话从不落盘。
+//!    自动保存开启时它同时有草稿仓文件；关闭时草稿仓里没有文件，但会话身份仍然有效 ——
+//!    列表的「草稿 / 已失联」要看**会话里是否还开着这份文档**，不能只看草稿文件在不在。
+//!    `adopt_draft` 会保留原 id 并推进 `untitled_seq` 防撞，所以草稿身份跨重启仍指得回同一份文档。
+//!    这是"从无到有生成图"的对话不再丢的关键：以前这类文档根本没有身份，`save` 直接拒绝，
+//!    整段对话从不落盘。
 //!
 //! 其余三条同样是刻意的：
 //!
@@ -19,6 +21,7 @@
 //! 删一个不会漏。`list()` 只读 meta；**旧文件没有 meta 时就地补写一次**（幂等，见
 //! `list()`），所以从这里升级上来的用户也能立刻在「对话历史 → 全部」里看到历史。
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use app_ipc::{ConvMeta, Conversation, ConversationTurn, FormatId};
@@ -205,6 +208,15 @@ pub const MAX_LIST: usize = 500;
 /// * `missing` / `live_draft` 是 **现算**的，不落盘（文件在不在、草稿还活着吗，只有此刻知道）；
 /// * 按 `updated_at` 倒序，最多 [`MAX_LIST`] 条。
 pub fn list(dir: &Path, recovery_dir: &Path) -> Vec<ConvMeta> {
+    list_with_live(dir, recovery_dir, &[])
+}
+
+/// 与 `list` 相同，但额外知道**会话里还开着哪些未保存文档**（`draft-<id>` 键）。
+///
+/// 自动保存关闭时草稿仓里没有文件；若只看 `recovery::exists`，这些仍然开着的文档会被
+/// 误判成「已失联」，清理时还可能删掉会话。它们不是磁盘上的草稿，但是活着的文档。
+pub fn list_with_live(dir: &Path, recovery_dir: &Path, live_drafts: &[String]) -> Vec<ConvMeta> {
+    let live: HashSet<&str> = live_drafts.iter().map(|k| k.as_str()).collect();
     let Ok(rd) = std::fs::read_dir(dir) else {
         return Vec::new();
     };
@@ -238,7 +250,8 @@ pub fn list(dir: &Path, recovery_dir: &Path) -> Vec<ConvMeta> {
         // 归属现算：文档 / 草稿（还活着）/ 已失联（见 ui 的三种徽章）
         meta.missing = !meta.path.is_empty() && !Path::new(&meta.path).exists();
         meta.live_draft = meta.path.is_empty()
-            && crate::recovery::exists(recovery_dir, key.strip_prefix("draft-").unwrap_or(""));
+            && (live.contains(key.as_str())
+                || crate::recovery::exists(recovery_dir, key.strip_prefix("draft-").unwrap_or("")));
         out.push(meta);
     }
     out.sort_by(|a, b| b.updated_at.cmp(&a.updated_at).then_with(|| a.key.cmp(&b.key)));
@@ -669,6 +682,29 @@ mod tests {
         // 现算的标记**不落盘**：磁盘上的 meta 里不该出现它们
         let text = std::fs::read_to_string(meta_file_for(&dir, &dkey)).unwrap();
         assert!(!text.contains("\"live_draft\": true"), "{text}");
+    }
+
+    /// 自动保存关闭时草稿仓里没有文件；只要会话里还开着这份未保存文档，就不算「已失联」。
+    #[test]
+    fn list_treats_open_unsaved_docs_as_live_without_a_draft_file() {
+        let dir = temp_dir("list-live-no-draft");
+        let rec = temp_dir("list-live-no-draft-recovery");
+        std::fs::create_dir_all(&dir).unwrap();
+        let key = draft_key("untitled-7");
+        let conv = Conversation {
+            doc_key: key.clone(),
+            path: String::new(),
+            turns: vec![turn("user", "问一句", 1)],
+            updated_at: 1,
+        };
+        save_doc(&dir, &conv, "未命名-7.mmd", "mermaid").unwrap();
+
+        let plain = list(&dir, &rec);
+        assert!(!plain[0].live_draft, "没有草稿文件、也没传活文档 → 已失联");
+
+        let got = list_with_live(&dir, &rec, &[key.clone()]);
+        assert!(got[0].live_draft, "会话还开着这份文档 → 草稿");
+        assert!(!got[0].missing, "草稿不该算已失联");
     }
 
     /// 会话目录里可能躺着**不是我们的** JSON（旧 C# 客户端的 `default.json`、原型期的

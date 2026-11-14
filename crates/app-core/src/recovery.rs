@@ -1,7 +1,10 @@
 //! 未落盘文档的草稿仓（"关掉窗口再开，没保存的东西还在"）。
 //!
-//! 有路径的文档由 autosave 直接写回原文件；**没有路径的**（新建后还没另存为）
-//! 才落到这里，一个文档一个 JSON。文档真正落盘（或用户明确放弃）时把草稿删掉。
+//! **只由 `DocKind::Draft` 写入**：新建、AI/转换产物、从草稿恢复的未保存文档。
+//! 已保存的本地文件（`File`）永不进草稿仓；云端文档（`Cloud`）也不进。
+//!
+//! 自动保存关闭时草稿照写 —— 这是"打开软件能恢复"的基础；它只写应用数据目录，
+//! 不碰用户的图形文件。`hold` 的改动（AI 应用/转换产物本身）不写。
 //!
 //! 为什么不是一个 sqlite 或一个大 JSON：草稿是**可丢的**，一个文件坏了不该带走别的。
 //! 一个文档一个小文件，坏了就跳过那一个。
@@ -38,7 +41,11 @@ fn file_for(dir: &Path, id: &str) -> PathBuf {
 pub fn save(dir: &Path, draft: &Draft) -> std::io::Result<()> {
     fs::create_dir_all(dir)?;
     let text = serde_json::to_string_pretty(draft).map_err(std::io::Error::other)?;
-    fs::write(file_for(dir, &draft.id), text)
+    let path = file_for(dir, &draft.id);
+    // 原子写：草稿是未保存内容的唯一副本，崩溃留下半截 JSON 会让 `load_all` 直接跳过它。
+    let tmp = path.with_extension("json.tmp");
+    fs::write(&tmp, text)?;
+    fs::rename(&tmp, path)
 }
 
 pub fn remove(dir: &Path, id: &str) {

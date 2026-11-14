@@ -20,7 +20,7 @@ use app_ipc::{
     events, AiAgentStep, AiChatRequest, AiContextFile, AiDelta, AiDone, AiFailed, AiIntent, AiModel,
     AiThinking, IntentClassifyRequest, IntentClassifyResult,
     AppInfo, ConvMeta, Conversation, ConversationTurn, ConvertOutcome, ConvertRequest, DevFlags, Doc,
-    FormatId, FormatOutcome, FormatRequest,
+    DocKind, FormatId, FormatOutcome, FormatRequest,
     Issue, MemoryEntry, MemoryList, MemoryScope, MemoryState, OutlineGroup, PaletteApplyReq,
     PaletteApplyRes, PaletteClearReq, PaletteScan, Session as SessionPayload, Settings, ViewMode,
 };
@@ -229,37 +229,119 @@ pub fn doc_close(state: State<'_, Arc<AppState>>, id: String) -> R<SessionPayloa
     Ok(state.session().payload())
 }
 
-/// 改正文。返回"现在是否脏"，前端据此显示/清除标签页上的脏标。
+#[tauri::command]
+/// 退出前同步把当前所有「未保存草稿」写进草稿仓。
+///
+/// 正常退出保留草稿；`hold` 的文档（AI 应用/转换产物本身）不写，保持"只进内存"。
+/// 返回实际写入的份数。
+pub fn drafts_flush(state: State<'_, Arc<AppState>>) -> R<usize> {
+    let docs: Vec<Doc> = {
+        let s = state.session();
+        s.payload()
+            .docs
+            .into_iter()
+            .filter(|d| d.kind == DocKind::Draft && d.dirty && !s.is_held(&d.id))
+            .collect()
+    };
+    let mut n = 0usize;
+    for d in docs {
+        let id = d.id.clone();
+        app_core::recovery::save(
+            &state.recovery_dir,
+            &app_core::recovery::Draft {
+                id: id.clone(),
+                name: d.name,
+                format: d.format,
+                body: d.body,
+            },
+        )
+        .map_err(|e| e.to_string())?;
+        state.cancel_autosave(&id);
+        n += 1;
+    }
+    Ok(n)
+}
+
+/// 显式「退出并丢弃草稿」：删掉当前会话所有文档的草稿文件并取消计时。
+///
+/// 已保存文件本来就不该有草稿；一起删是为了清掉旧版本遗留物。
+#[tauri::command]
+pub fn drafts_discard(state: State<'_, Arc<AppState>>) -> R<usize> {
+    let ids: Vec<String> = {
+        let s = state.session();
+        s.payload().docs.into_iter().map(|d| d.id).collect()
+    };
+    for id in &ids {
+        state.cancel_autosave(id);
+        app_core::recovery::remove(&state.recovery_dir, id);
+    }
+    Ok(ids.len())
+}
+
+/// 自检专用：某份文档的草稿文件是否存在。生产环境拒绝调用。
+#[tauri::command]
+pub fn drafts_probe(state: State<'_, Arc<AppState>>, id: String) -> R<bool> {
+    if !crate::selftest_on() {
+        return Err("drafts_probe 只在自检里可用".into());
+    }
+    Ok(app_core::recovery::exists(&state.recovery_dir, &id))
+}
+
+/// 云端文档落成本地身份：`kind = Cloud`，清掉可能刚排上的草稿／计时。
+///
+/// 只对**无本地路径**的文档生效；已保存到本地的文件（`File`）保持原样 ——
+/// 它们另有一份本地副本，云端保存不该把本地脏标清掉。
+#[tauri::command]
+pub fn doc_mark_cloud(state: State<'_, Arc<AppState>>, id: String) -> R<Doc> {
+    let mut s = state.session();
+    let pathless = s.get(&id).ok_or_else(|| format!("文档不存在：{id}"))?.path.is_none();
+    if !pathless {
+        return s.get(&id).cloned().ok_or_else(|| format!("文档不存在：{id}"));
+    }
+    s.set_kind(&id, DocKind::Cloud);
+    let doc = s
+        .commit_saved(&id, None)
+        .ok_or_else(|| format!("文档不存在：{id}"))?;
+    drop(s);
+    state.cancel_autosave(&id);
+    app_core::recovery::remove(&state.recovery_dir, &id);
+    Ok(doc)
+}
+
 #[tauri::command]
 /// 改正文。返回"现在是否脏"，前端据此显示/清除标签页上的脏标。
 ///
-/// `hold = true` 表示这次改动**只留在缓冲区**：不参与自动保存，并撤掉已排定的那次。
-/// 给"先看看效果、满意再存"的动作（应用配色、清除配色、AI 结果应用到编辑器）用；
-/// 默认 `false`，普通键入照旧走自动保存（用户自己开的开关）。
+/// `hold = true` 表示这次改动**只留在缓冲区**：不参与自动保存、也不进草稿仓，并撤掉
+/// 已排定的那次。给"程序生成、先看看效果"的动作（AI 应用、格式转换产物、打开文件补配色）用。
+///
+/// 排表规则按 `DocKind` 分流：
+/// * `Draft`（未保存草稿）：**总是**排表 → 到点写草稿仓，和 `editor.autosave` 无关；
+/// * `File`（本地文件）：只有 `editor.autosave` 开启才排表 → 到点写回原文件；
+/// * `Cloud`（云端文档）：不排表。
+/// `hold` 对所有类型都优先：只进内存，退出/崩溃即丢。
 pub fn doc_set_body(
     state: State<'_, Arc<AppState>>,
     id: String,
     body: String,
     hold: Option<bool>,
 ) -> R<bool> {
+    let held = hold.unwrap_or(false);
     let mut s = state.session();
     if !s.set_body(&id, body) {
         return Err(format!("文档不存在：{id}"));
     }
+    s.set_hold(&id, held);
     let dirty = s.get(&id).map(|d| d.dirty).unwrap_or(false);
+    let kind = s.get(&id).map(|d| d.kind).unwrap_or(DocKind::Draft);
     drop(s);
-    if hold.unwrap_or(false) {
-        // 撤掉已经排定的自动保存：不然 5 秒后它会把这次"只想看看"的改动写进磁盘
-        state.cancel_autosave(&id);
-    } else {
-        // autosave 计时归 Rust：正文一改就重新起表。
-        //
-        // **不论开关都排**（审计 2026-11-03 L-14）：`editor.autosave` 只决定"要不要写回
-        // 原文件"，而草稿仓是**崩溃兜底**，必须恒开。原来关掉自动保存就完全不排表，于是
-        // 升级安装前的 `taskkill /F /T`（见 `nsis/installer.nsh`）把内存里的脏文档直接
-        // 抹掉，用户没有任何找回途径 —— 而那个开关的默认值就是关。
-        // "只写草稿、不碰原文件"这半句落实在 `autosave_one` 里。
+    let autosave_on = state.settings().editor.autosave;
+    let should_schedule = !held
+        && (kind == DocKind::Draft || (kind == DocKind::File && autosave_on));
+    if should_schedule {
+        // 计时归 Rust：正文一改就重新起表。
         state.mark_autosave(&id);
+    } else {
+        state.cancel_autosave(&id);
     }
     Ok(dirty)
 }
@@ -1428,15 +1510,31 @@ fn conversation_key(state: &AppState, doc_id: &str) -> R<(String, String)> {
 
 /* ---------------- 对话历史（全部会话） ---------------- */
 
+/// 当前会话里还开着的无路径文档键（`draft-<id>`）。
+///
+/// 自动保存关闭时它们没有草稿文件，但对「对话历史」来说仍然是活着的文档，
+/// 不能显示成「已失联」，更不该被清理掉。
+fn live_draft_keys(state: &AppState) -> Vec<String> {
+    let s = state.session();
+    s.payload()
+        .docs
+        .iter()
+        .filter(|d| d.path.as_deref().map_or(true, |p| p.trim().is_empty()))
+        .map(|d| app_core::conversations::draft_key(&d.id))
+        .collect()
+}
+
 /// 「对话历史 → 全部」：读出全部会话的元数据（按更新时间倒序，最多 `MAX_LIST` 条）。
 ///
 /// 只读 meta（`<key>.meta.json`），**不解析会话全文**（思考原文落盘后单份可能上百 KB）。
 /// 旧会话没有 meta 时就地补写一次（见 `conversations::list`）。
 #[tauri::command]
 pub fn conversation_list(state: State<'_, Arc<AppState>>) -> R<Vec<ConvMeta>> {
-    Ok(app_core::conversations::list(
+    let live = live_draft_keys(state.inner());
+    Ok(app_core::conversations::list_with_live(
         &state.paths.conversations_dir(),
         &state.recovery_dir,
+        &live,
     ))
 }
 
@@ -1481,8 +1579,10 @@ pub fn conversation_open(state: State<'_, Arc<AppState>>, key: String) -> R<Doc>
         return state.session().get(&id).cloned().ok_or_else(|| format!("文档不存在：{id}"));
     }
 
-    // ② 草稿还活着：那个未保存的标签页就是它
-    if meta.live_draft {
+    // ② 草稿还活着：会话里还开着这份未保存文档就是它。
+    //    不能只看 `meta.live_draft`（= 草稿仓里有文件）—— 自动保存关闭时没有草稿文件，
+    //    但标签页仍然是活着的；直接按 `draft-<id>` 回会话里找。
+    if meta.path.is_empty() {
         if let Some(id) = key.strip_prefix("draft-") {
             if state.session().activate(id) {
                 return state.session().get(id).cloned().ok_or_else(|| format!("文档不存在：{id}"));
@@ -1518,8 +1618,9 @@ pub fn conversation_open(state: State<'_, Arc<AppState>>, key: String) -> R<Doc>
 pub fn conversation_prune(state: State<'_, Arc<AppState>>, days: u32) -> R<u32> {
     let dir = state.paths.conversations_dir();
     let cutoff = now_ms() - (days.max(1) as i64) * 86_400_000;
+    let live = live_draft_keys(state.inner());
     let mut n = 0u32;
-    for m in app_core::conversations::list(&dir, &state.recovery_dir) {
+    for m in app_core::conversations::list_with_live(&dir, &state.recovery_dir, &live) {
         let orphan = (!m.path.is_empty() && m.missing) || (m.path.is_empty() && !m.live_draft);
         if orphan && m.updated_at < cutoff {
             app_core::conversations::clear(&dir, &m.key)?;

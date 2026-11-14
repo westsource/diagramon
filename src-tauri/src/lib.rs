@@ -17,7 +17,7 @@ mod workspace_cmds;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use app_ipc::events;
+use app_ipc::{events, DocKind};
 use assets::AssetRoots;
 use platform::{AppPaths, CredentialStore};
 use state::AppState;
@@ -238,14 +238,20 @@ pub fn run() {
                 return;
             }
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                let to_tray = window
-                    .app_handle()
+                let app = window.app_handle();
+                let to_tray = app
                     .try_state::<Arc<AppState>>()
                     .map(|st| st.settings().close_to_tray)
                     .unwrap_or(false);
                 if to_tray {
+                    // 进程还活着：autosave 若开着就继续落盘；真退出走托盘菜单
                     api.prevent_close();
                     let _ = window.hide();
+                } else {
+                    // 先让前端跑 quit()：它知道 350ms 去抖里还没送到后端的正文，
+                    // 只看后端 dirty_count 会漏掉刚敲下的最后几个字
+                    api.prevent_close();
+                    request_quit(app);
                 }
             }
         })
@@ -272,6 +278,10 @@ pub fn run() {
             commands::doc_activate,
             commands::doc_close,
             commands::doc_set_body,
+            commands::drafts_flush,
+            commands::drafts_discard,
+            commands::drafts_probe,
+            commands::doc_mark_cloud,
             commands::doc_set_caret,
             commands::doc_set_view_mode,
             commands::doc_set_layout,
@@ -376,17 +386,17 @@ fn restore_drafts(state: &AppState) {
     eprintln!("diagramon|recovered|{n}");
 }
 
-/// autosave：每 1 秒醒一次，把到期的脏文档落盘。
+/// autosave：每 1 秒醒一次，把到期的脏文档按 `DocKind` 落盘。
 ///
 /// **为什么归 Rust 而不是前端计时器**：WebView2 对后台窗口把 `setTimeout`
 /// 节流到约 1 次/秒，窗口不聚焦时界面侧的计时器根本不准。这件事必须由不睡觉的一侧做。
+///
+/// 排表规则见 `doc_set_body`：草稿总是排；本地文件只在 `editor.autosave` 开启时排。
+/// 云端文档与 `hold` 改动不排。
 fn spawn_autosave(app: tauri::AppHandle) {
     std::thread::spawn(move || loop {
         std::thread::sleep(std::time::Duration::from_millis(1000));
         let st = app.state::<Arc<AppState>>().inner().clone();
-        // 不再因为 `editor.autosave` 关着就整体跳过（审计 2026-11-03 L-14）：
-        // 那个开关现在由 `autosave_one` 解释为"不写回原文件"，而**草稿仓必须照写** ——
-        // 否则升级安装前的 `taskkill /F /T` 就把未保存内容抹掉了。
         let now = std::time::Instant::now();
         let due: Vec<String> = {
             let map = st.autosave();
@@ -401,39 +411,33 @@ fn spawn_autosave(app: tauri::AppHandle) {
     });
 }
 
-/// 落一份 autosave：`editor.autosave` **开着**才写回原文件；任何情况下脏文档都进草稿仓。
+/// 落一份后台持久化：按 `DocKind` 决定写哪里。
 ///
-/// 开关只该决定"要不要自动覆盖磁盘上的文件"（那是个有风险的写操作）；**草稿仓是崩溃
-/// 兜底**，不该被它关掉（审计 2026-11-03 L-14：升级安装前的 `taskkill /F /T` 会把内存里
-/// 的脏文档直接抹掉，而 `editor.autosave` 默认就是关）。
+/// * `Draft` → 草稿仓（**和 `editor.autosave` 无关**；这是"打开软件能恢复"的基础）；
+/// * `File` + `editor.autosave` 开启 → 写回原文件并清脏标；
+/// * `Cloud` / `File` 且开关关闭 → 什么都不写。
 ///
-/// 副作用（如实记在这里）：关掉自动保存时，一份**有路径**的文档被草稿化之后，正常退出
-/// 也可能在下一次启动被恢复成一个新标签页 —— 内容不丢，但会多一个未命名标签。相比
-/// "升级一次就丢一次未保存内容"，这个取舍是划算的；用户手动保存会清掉对应草稿。
+/// `hold`（AI 应用/转换产物本身）在排表时已被排除；这里再挡一次，防止历史计时器迟到。
 fn autosave_one(app: &tauri::AppHandle, st: &AppState, id: &str) -> Result<(), String> {
-    let (path, name, format, body, dirty) = {
+    let (path, kind, name, format, body, dirty, held) = {
         let s = st.session();
         let d = s.get(id).ok_or_else(|| "文档不存在".to_string())?;
-        (d.path.clone(), d.name.clone(), d.format, d.body.clone(), d.dirty)
+        (
+            d.path.clone(),
+            d.kind,
+            d.name.clone(),
+            d.format,
+            d.body.clone(),
+            d.dirty,
+            s.is_held(id),
+        )
     };
-    if !dirty {
-        return Ok(()); // 期间用户自己存了/改回去了
+    if !dirty || held {
+        return Ok(()); // 期间用户自己存了/改回去了，或这次改动只进内存
     }
     let autosave_on = st.settings().editor.autosave;
-    match (path, autosave_on) {
-        (Some(p), true) => {
-            let p = PathBuf::from(p);
-            // 受限模式下不许写出去 —— 直接不写，留给用户手动保存（别把草稿也弄丢）
-            st.check_writable(&p)?;
-            commands::atomic_write(&p, &body)?;
-            let doc = st
-                .session()
-                .commit_saved(id, None)
-                .ok_or_else(|| "文档不存在".to_string())?;
-            let _ = app.emit(events::DOC_AUTOSAVED, doc);
-        }
-        // 自动保存关着（或有路径但没开自动保存）：**只进草稿仓**，绝不碰原文件
-        _ => {
+    match kind {
+        DocKind::Draft => {
             let draft = app_core::recovery::Draft {
                 id: id.to_string(),
                 name,
@@ -442,6 +446,19 @@ fn autosave_one(app: &tauri::AppHandle, st: &AppState, id: &str) -> Result<(), S
             };
             app_core::recovery::save(&st.recovery_dir, &draft).map_err(|e| e.to_string())?;
         }
+        DocKind::File if autosave_on => {
+            let p = path.ok_or_else(|| "本地文件缺少路径".to_string())?;
+            let p = PathBuf::from(p);
+            // 受限模式下不许写出去 —— 直接不写，留给用户手动保存
+            st.check_writable(&p)?;
+            commands::atomic_write(&p, &body)?;
+            let doc = st
+                .session()
+                .commit_saved(id, None)
+                .ok_or_else(|| "文档不存在".to_string())?;
+            let _ = app.emit(events::DOC_AUTOSAVED, doc);
+        }
+        _ => {}
     }
     Ok(())
 }
@@ -521,7 +538,7 @@ fn build_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match event.id().as_ref() {
             "show" => show_main_window(app),
-            "quit" => app.exit(0),
+            "quit" => request_quit(app),
             _ => {}
         })
         .on_tray_icon_event(|tray, event| {
@@ -539,6 +556,19 @@ fn show_main_window(app: &tauri::AppHandle) {
         let _ = w.show();
         let _ = w.unminimize();
         let _ = w.set_focus();
+    }
+}
+
+/// 请求前端走一遍未保存确认后再退出。
+///
+/// 托盘「退出」与 Alt+F4 / 系统关窗都走这里。**不先看后端 `dirty_count`**：编辑器有
+/// 350ms 去抖，刚敲下的字在 `pendingBody` 里，后端还是干净的；直接 `app.exit` 会把
+/// 它们静默丢掉。前端 `quit()` 用 `state.docs[].dirty` 判，包含这些待发送改动。
+/// 前端不可用（事件发不出去）时退回 `app.exit`，避免窗口关不掉。
+fn request_quit(app: &tauri::AppHandle) {
+    show_main_window(app);
+    if app.emit(events::APP_QUIT_REQUESTED, ()).is_err() {
+        app.exit(0);
     }
 }
 

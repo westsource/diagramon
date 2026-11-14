@@ -175,7 +175,7 @@ DIAGRAMON_SELFTEST=1 ./target/debug/diagramon.exe                         # 真�
 - 打开一个真实目录能看树、能全库搜到结果并跳行；
 - 在编辑器外改文件，界面自动跟上；
 - 双击第二个图文件，不新开进程；
-- 关掉窗口再开，未保存内容能恢复（autosave）。
+- 未保存草稿关闭后重开能恢复（草稿仓与 `editor.autosave` 解耦）；已保存文件只在开启自动保存时写回原文件。
 
 **涉及面**：中—大。
 
@@ -183,13 +183,13 @@ DIAGRAMON_SELFTEST=1 ./target/debug/diagramon.exe                         # 真�
 
 - `crates/app-core/src/workspace.rs` —— 扫描 / 全库搜索 / 路径守卫，**纯函数 + 21 项单测**  
   （跳过 `.git`/`node_modules`/`target`，只收本应用认的扩展名，不含图表文件的目录不出现）；
-- `crates/app-core/src/recovery.rs` —— 未落盘文档的草稿仓（一个文档一个 JSON，坏一个不连累别的）；
+- `crates/app-core/src/recovery.rs` —— 未保存草稿（`DocKind::Draft`）的草稿仓（一个文档一个 JSON，原子写，坏一个不连累别的）；
 - 契约新增 `WorkspaceNode`/`WorkspaceInfo`/`SearchRequest`/`SearchHit`/`SearchDone`/`FsChange`，  
   命令 `workspace_{open,get,close,new_file,rename,delete}`、`search_{run,cancel,once}`、`doc_reload`，  
   事件 `fs://changed`、`search://hit|done`、`open://paths`、`doc://autosaved`；
 - `src-tauri/src/watcher.rs` —— `notify` 递归监视 + 350ms 去抖 + **回声抑制**  
   （比对磁盘内容与文档正文，自己写出去的不上报）+ 冲突判定；
-- autosave **归 Rust**：后台线程每秒醒一次，到期就落盘 —— 前端定时器在后台窗口  
+- autosave **归 Rust**：后台线程每秒醒一次，按 `DocKind` 落盘（草稿恒写草稿仓；本地文件只在开关开启时写回）—— 前端定时器在后台窗口  
   会被 WebView2 节流到 ~1 次/秒，靠不住；
 - 单实例：`tauri-plugin-single-instance`，第二个进程把命令行里的图表文件转交给前端；
 - 冲突 UI：编辑区顶上一条横幅（「用磁盘版本」/「保留我的」）—— 需要决策的状态不做成会自己消失的 toast。

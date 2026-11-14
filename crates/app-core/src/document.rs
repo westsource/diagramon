@@ -2,7 +2,7 @@
 
 use std::path::Path;
 
-use app_ipc::{Doc, FormatId};
+use app_ipc::{Doc, DocKind, FormatId};
 
 use crate::format;
 
@@ -81,6 +81,7 @@ pub fn from_path(id: String, path: &Path) -> std::io::Result<Doc> {
     Ok(Doc {
         id,
         path: Some(path.to_string_lossy().replace('\\', "/")),
+        kind: DocKind::File,
         name: file_name(path),
         format,
         body,
@@ -101,6 +102,7 @@ pub fn untitled(id: String, format: FormatId, seq: u32) -> Doc {
     Doc {
         id,
         path: None,
+        kind: DocKind::Draft,
         name,
         format,
         body: format::default_body(format),
@@ -134,6 +136,7 @@ pub fn file_name(path: &Path) -> String {
 /// 另存为后更新路径与名字（dirty 由 Session 依据 `saved` 重算）。
 pub fn retarget(doc: &mut Doc, path: &Path) {
     doc.path = Some(path.to_string_lossy().replace('\\', "/"));
+    doc.kind = DocKind::File;
     doc.name = file_name(path);
 }
 
@@ -168,6 +171,7 @@ mod tests {
         assert_eq!(d.format, FormatId::Dot);
         assert_eq!(d.name, "a.dot");
         assert!(!d.dirty, "刚从磁盘读出来的文档不算脏");
+        assert_eq!(d.kind, DocKind::File);
         assert_eq!(d.view_mode, crate::format::default_view_mode(FormatId::Dot));
         assert!(d.path.unwrap().ends_with("a.dot"));
     }
@@ -220,6 +224,7 @@ mod tests {
         assert_eq!(a.name, "未命名-1.mmd");
         assert_eq!(b.name, "未命名-2.mmd");
         assert!(a.path.is_none());
+        assert_eq!(a.kind, DocKind::Draft);
         assert!(a.dirty, "新文档应显示未保存标记");
     }
 
@@ -235,5 +240,6 @@ mod tests {
         retarget(&mut d, std::path::Path::new("E:/tmp/x/计划.mmd"));
         assert_eq!(d.name, "计划.mmd");
         assert_eq!(d.path.as_deref(), Some("E:/tmp/x/计划.mmd"));
+        assert_eq!(d.kind, DocKind::File);
     }
 }
