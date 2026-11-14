@@ -84,13 +84,15 @@ window.DGM = window.DGM || {};
         epoch: 0,
         /** drawio：load 已发出、还没收到 `load/loaded` 确认（大图要几秒） */
         loading: false,
-        /** drawio：是否见过第一次 `load/loaded`（初始空白文档握手完成） */
-        everLoaded: false,
-        /** drawio：等待初始空白文档 loaded 后再发的 Mermaid 转换载荷 */
-        pendingMermaid: null,
         loadWaiters: [],
         /** Excalidraw 的 `files` 段（图片等二进制附件），回写时必须原样带上 */
         files: {},
+        /** drawio：形状模具库是否已按需加载（启动时不等它） */
+        stencilsLoaded: false,
+        /** drawio：正常打开文档后延迟加载模具的定时器 */
+        stencilsTimer: 0,
+        /** drawio：当前是否有 Mermaid 转换在跑（跑的时候不加载模具） */
+        converting: false,
       };
     }
     return hosts[format];
@@ -232,18 +234,17 @@ window.DGM = window.DGM || {};
       // 只有到这里才把代际交给承载页，之后它入队的事件才算新文档的。
       case "load":
       case "loaded":
-        e.everLoaded = true;
         e.loading = false;
         for (const done of e.loadWaiters.splice(0)) done(true);
         confirmEpoch(format);
-        // drawio 启动时先载入一张空白文档；转换载荷如果赶在这张空白文档的
-        // load/loaded 之前发出去，可能被引擎丢掉（表现为转换后仍是空图）。
-        // 等第一次握手完成再发，之后按导出的内容判断导入是否真的完成。
-        if (e.pendingMermaid) {
-          const payload = e.pendingMermaid;
-          e.pendingMermaid = null;
-          e.loading = true;
-          send(format, payload);
+        // 普通 drawio 文档载入后再加载模具库；转换期间跳过，转换成功时由
+        // waitForBody 调 requestStencils（避免和 Mermaid 导入抢同一个编辑器时机）。
+        if (format === "drawio" && !e.converting) {
+          if (e.stencilsTimer) window.clearTimeout(e.stencilsTimer);
+          e.stencilsTimer = window.setTimeout(() => {
+            e.stencilsTimer = 0;
+            requestStencils(format);
+          }, 1500);
         }
         break;
 
@@ -530,6 +531,7 @@ window.DGM = window.DGM || {};
 
     if (format === "drawio") {
       e.loading = true;
+      e.converting = false;
       send(format, { action: "load", xml: body, autosave: 1 });
       return true;
     }
@@ -563,6 +565,11 @@ window.DGM = window.DGM || {};
     if (!e) return;
     if (e.frame && e.frame.parentNode) e.frame.parentNode.removeChild(e.frame);
     e.loading = false;
+    e.converting = false;
+    if (e.stencilsTimer) {
+      window.clearTimeout(e.stencilsTimer);
+      e.stencilsTimer = 0;
+    }
     for (const done of e.loadWaiters.splice(0)) done(false);
     delete hosts[format];
     if (activeFormat === format) activeFormat = null;
@@ -672,7 +679,10 @@ window.DGM = window.DGM || {};
       const tick = () => {
         const e = hosts[format];
         if (!e || !e.ready) {
-          if (Date.now() > deadline) return resolve("");
+          if (Date.now() > deadline) {
+            if (e) e.converting = false;
+            return resolve("");
+          }
           setTimeout(tick, 600);
           return;
         }
@@ -682,9 +692,13 @@ window.DGM = window.DGM || {};
           .then((body) => {
             if (accepted(body)) {
               e.loading = false;
+              requestStencils(format);
               return resolve(body);
             }
-            if (++i >= max || Date.now() > deadline) return resolve("");
+            if (++i >= max || Date.now() > deadline) {
+              e.converting = false;
+              return resolve("");
+            }
             setTimeout(tick, 600);
           })
           .catch(() => resolve(""));
@@ -707,6 +721,38 @@ window.DGM = window.DGM || {};
     });
   }
 
+  /**
+   * drawio 的模具库（stencils.min.js，gzip 约 5.8 MB）不在启动链上等，等编辑器/转换完成后再加载。
+   *
+   * 为什么不能和编辑器一起加载：实测在编辑器初始化期间（尤其是 Mermaid descriptor 导入的
+   * 同时）加载这个 bundle，会让转换结果停留在空图。等到画布空闲再加载则一切正常。
+   */
+  function requestStencils(format) {
+    const e = entry(format);
+    if (e.stencilsLoaded) return;
+    const win = winFor(format);
+    if (!win) return;
+    try {
+      if (typeof win.__loadStencils === "function") {
+        if (win.__loadStencils()) e.stencilsLoaded = true;
+        return;
+      }
+      // 兼容旧承载页：直接往 drawio iframe 里注入（同源）。
+      const hostDoc = win.document;
+      const frame = hostDoc && hostDoc.getElementById("dl");
+      const d = frame && frame.contentWindow && frame.contentWindow.document;
+      if (!d) return;
+      if (d.getElementById("dgm-stencils")) { e.stencilsLoaded = true; return; }
+      const s = d.createElement("script");
+      s.id = "dgm-stencils";
+      s.src = "js/stencils.min.js";
+      d.head.appendChild(s);
+      e.stencilsLoaded = true;
+    } catch (_) {
+      /* 承载页还没 ready：下一个 loaded 再试 */
+    }
+  }
+
   /** 把 Mermaid 源码交给画布解析（单向转换；第 3 步的转换中心用它）。
    *
    *  `opts.mermaid` 仅 Excalidraw 认：随 loadMermaid 消息发给承载页，
@@ -721,13 +767,12 @@ window.DGM = window.DGM || {};
       // export 出那张空图（host 属性与默认正文不同 ⇒ `waitForBody` 误判"已转换"），
       // 用户拿到的是一个没有节点的 drawio。
       e.loading = true;
-      const payload = { action: "load", autosave: 1, descriptor: { format: "mermaid", data: source, wrap: true } };
-      if (e.everLoaded) {
-        send(format, payload);
-      } else {
-        // 首次启动：drawio 自己的空白文档还没握手完，先存着（见 handleEvent）。
-        e.pendingMermaid = payload;
+      e.converting = true;
+      if (e.stencilsTimer) {
+        window.clearTimeout(e.stencilsTimer);
+        e.stencilsTimer = 0;
       }
+      send(format, { action: "load", autosave: 1, descriptor: { format: "mermaid", data: source, wrap: true } });
     } else {
       send(format, { action: "loadMermaid", source, mermaid: (opts && opts.mermaid) || undefined });
     }
