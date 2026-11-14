@@ -144,6 +144,11 @@ window.DGM = window.DGM || {};
       return;
     }
     try {
+      // 转换 payload 在真正下发的窗口上再标一次：iframe 导航后
+      // about:blank 上的旧标记会丢，承载页的 __loadStencils 必须看到最终窗口的标记。
+      if (format === "drawio" && action && action.descriptor) {
+        try { win.__dgmConverting = true; } catch (_) {}
+      }
       // 注意：**这里不改 `win.__hostEpoch`**（审计 2026-11-03 M-27）。
       // 代际只在承载页**确认换文档之后**才翻（见 confirmEpoch）——
       // 提前翻会把"换文档前产生、换文档后才入队"的旧内容标成新代际，
@@ -231,6 +236,9 @@ window.DGM = window.DGM || {};
         e.ready = true;
         // 首次 init 也要把代际同步过去（此时 e.epoch 可能已经不是 0）
         confirmEpoch(format);
+        if (format === "drawio" && e.converting) {
+          try { winFor(format).__dgmConverting = true; } catch (_) {}
+        }
         flushPending(format);
         break;
 
@@ -671,6 +679,12 @@ window.DGM = window.DGM || {};
       let i = 0;
       const tick = () => {
         const e = hosts[format];
+        if (e && format === "drawio" && e.converting) {
+          try {
+            const w = winFor(format);
+            if (w) w.__dgmConverting = true;
+          } catch (_) { /* 跨源不该发生 */ }
+        }
         if (!e || !e.ready) {
           if (Date.now() > deadline) {
             if (e) e.converting = false;
