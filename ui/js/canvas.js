@@ -535,8 +535,9 @@ window.DGM = window.DGM || {};
 
     if (format === "drawio") {
       e.loading = true;
-      e.converting = false;
-      setConverting(format, false);
+      // 不在这里清 converting：转换期间的重渲染也可能走到这条正常载入分支；
+      // 清了会让 __loadStencils 在 Mermaid 导入期间触发。转换结束由
+      // waitForBody 成功/超时清理。
       send(format, { action: "load", xml: body, autosave: 1 });
       return true;
     }
