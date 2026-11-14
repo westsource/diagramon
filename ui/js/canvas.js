@@ -89,8 +89,6 @@ window.DGM = window.DGM || {};
         files: {},
         /** drawio：形状模具库是否已按需加载（启动时不等它） */
         stencilsLoaded: false,
-        /** drawio：正常打开文档后延迟加载模具的定时器 */
-        stencilsTimer: 0,
         /** drawio：当前是否有 Mermaid 转换在跑（跑的时候不加载模具） */
         converting: false,
       };
@@ -237,15 +235,6 @@ window.DGM = window.DGM || {};
         e.loading = false;
         for (const done of e.loadWaiters.splice(0)) done(true);
         confirmEpoch(format);
-        // 普通 drawio 文档载入后再加载模具库；转换期间跳过，转换成功时由
-        // waitForBody 调 requestStencils（避免和 Mermaid 导入抢同一个编辑器时机）。
-        if (format === "drawio" && !e.converting) {
-          if (e.stencilsTimer) window.clearTimeout(e.stencilsTimer);
-          e.stencilsTimer = window.setTimeout(() => {
-            e.stencilsTimer = 0;
-            requestStencils(format);
-          }, 1500);
-        }
         break;
 
       case "autosave":
@@ -566,10 +555,6 @@ window.DGM = window.DGM || {};
     if (e.frame && e.frame.parentNode) e.frame.parentNode.removeChild(e.frame);
     e.loading = false;
     e.converting = false;
-    if (e.stencilsTimer) {
-      window.clearTimeout(e.stencilsTimer);
-      e.stencilsTimer = 0;
-    }
     for (const done of e.loadWaiters.splice(0)) done(false);
     delete hosts[format];
     if (activeFormat === format) activeFormat = null;
@@ -768,10 +753,6 @@ window.DGM = window.DGM || {};
       // 用户拿到的是一个没有节点的 drawio。
       e.loading = true;
       e.converting = true;
-      if (e.stencilsTimer) {
-        window.clearTimeout(e.stencilsTimer);
-        e.stencilsTimer = 0;
-      }
       send(format, { action: "load", autosave: 1, descriptor: { format: "mermaid", data: source, wrap: true } });
     } else {
       send(format, { action: "loadMermaid", source, mermaid: (opts && opts.mermaid) || undefined });
