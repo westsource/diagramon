@@ -21,6 +21,7 @@ window.DGM = window.DGM || {};
     /* ---- 界面 chrome 的 tooltip（index.html 的 data-i18n-*；兜底文案见 HTML）---- */
     "ui.cmdPalette": "命令面板  Ctrl+Shift+P",
     "ui.theme": "切换明暗主题  Ctrl+K Ctrl+T",
+    "ui.online": "使用在线版",
     "ui.layout": "自定义布局",
     "ui.minimize": "最小化",
     "ui.maximize": "最大化",
@@ -276,6 +277,11 @@ window.DGM = window.DGM || {};
     "acct.refreshed": "已刷新账户信息",
     "acct.signedOut": "已退出登录",
     "acct.signedOutSub": "本机保存的令牌已清除",
+    "acct.signOutConfirm": "退出登录？",
+    "acct.signOutConfirmBody": "将清除本机保存的登录令牌；云端文档不受影响，重新登录后可继续使用。",
+    "acct.console": "用户后台",
+    "acct.consoleOpened": "已在浏览器中打开用户后台",
+    "acct.consoleNoUrl": "云网关没有返回用户后台地址（服务端未配置公开域名？）",
     "acct.readonly": "账户信息由云端只读提供。改昵称、改密码、充值请到官网账户页。",
     /* ---- 云端文档树（侧栏，只做查找 / 打开） ---- */
     "cloud.tree.filter": "筛选云端文档…",
@@ -1277,6 +1283,7 @@ window.DGM = window.DGM || {};
     /* ---- chrome tooltips (data-i18n-* in index.html; fallbacks live in the HTML) ---- */
     "ui.cmdPalette": "Command palette  Ctrl+Shift+P",
     "ui.theme": "Toggle light/dark theme  Ctrl+K Ctrl+T",
+    "ui.online": "Use web version",
     "ui.layout": "Customise layout",
     "ui.minimize": "Minimize",
     "ui.maximize": "Maximize",
@@ -1529,6 +1536,11 @@ window.DGM = window.DGM || {};
     "acct.refreshed": "Account details refreshed",
     "acct.signedOut": "Signed out",
     "acct.signedOutSub": "The token stored on this machine has been cleared",
+    "acct.signOutConfirm": "Sign out?",
+    "acct.signOutConfirmBody": "This clears the sign-in token stored on this machine. Cloud documents are unaffected — sign in again to keep using them.",
+    "acct.console": "Account console",
+    "acct.consoleOpened": "Account console opened in your browser",
+    "acct.consoleNoUrl": "The cloud gateway did not return an account console URL (public base URL not configured?)",
     "acct.readonly": "Account details are read-only from the cloud. To change your display name or password, or to top up, use the website account page.",
     /* ---- Cloud documents tree (sidebar: find & open only) ---- */
     "cloud.tree.filter": "Filter cloud documents…",

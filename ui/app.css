@@ -292,6 +292,23 @@ body.no-ai #ai-gutter { display: none; }
 }
 .icon-btn:hover { background: var(--surface-3); color: var(--ink); }
 .icon-btn.on { background: var(--accent-soft); color: var(--accent); }
+/* 顶栏「使用在线版」：与网页版顶栏「下载客户端」同形（胶囊 + 图标 + 文案）。
+   定宽是 icon-btn 的默认；这里要带文字，所以宽度交给内容。 */
+.titlebar-online {
+  width: auto; height: 24px;
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 0 10px;
+  border: 1px solid var(--border); border-radius: 999px;
+  color: var(--ink-2); font-size: var(--fs-xs); font-weight: 500;
+  white-space: nowrap;
+}
+.titlebar-online:hover { background: var(--surface-3); color: var(--ink); }
+.titlebar-online .ico { width: 13px; height: 13px; }
+@media (max-width: 1100px) {
+  /* 窄窗口只留图标：标题栏要留给文档名与窗口按钮（与网页版同一条断点） */
+  .titlebar-online { width: 26px; padding: 0; justify-content: center; }
+  .titlebar-online > span { display: none; }
+}
 /* 标签条的「转换」：带文字的图标钮（覆盖 icon-btn 的定宽居中） */
 .tab-conv {
   width: auto;
@@ -2454,6 +2471,15 @@ html[data-theme="dark"] .canvas-stage[data-engine="dot"] svg ellipse { stroke: v
 .acct-card .who { min-width: 0; }
 .acct-card .who b { display: block; font-size: var(--fs-md); font-weight: 600; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .acct-card .who small { display: block; margin-top: 1px; font-size: var(--fs-xs); color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 刷新：卡片右上角的低频动作（网页版同形）；busy 时图标转起来，兼作进度 */
+.acct-card .acct-refresh { margin-left: auto; flex: 0 0 auto; }
+.acct-card .acct-refresh .ico { width: 15px; height: 15px; }
+.acct-card .acct-refresh.busy .ico { animation: acct-spin .8s linear infinite; }
+@keyframes acct-spin { to { transform: rotate(360deg); } }
+/* 退出登录：危险操作下沉到页脚（分割线 + 文字按钮），与网页版一致 */
+.acct-foot { margin: 14px 6px 0; padding-top: 10px; border-top: 1px solid var(--border); }
+.acct-out { width: 100%; justify-content: flex-start; color: var(--err); }
+.acct-out:hover { background: var(--err-soft); color: var(--err); }
 
 .acct-rows { margin: 0 4px; border-top: 1px solid var(--border); }
 .acct-row { display: flex; align-items: center; gap: 10px; padding: 7px 8px; font-size: var(--fs-sm); border-bottom: 1px solid var(--border); }

@@ -344,6 +344,38 @@ window.DGM = window.DGM || {};
   ];
   /** 官网首页（帮助菜单底部那一条；关于窗口里的「官方主页」是同一地址）。 */
   const SITE_HOME = "https://www.diagramon.com";
+  /** 在线版入口（网页版部署地址；与官网里 Web 版入口同一个）。 */
+  const ONLINE_HOME = "https://app.diagramon.com/";
+
+  /** 顶栏「使用在线版」：与网页版顶栏「下载客户端」**同一个位置**（actions 的第一个元素）。
+   *
+   *  在线版自己不需要这个入口（它就是在线的）；`ipc.isWeb` 下直接不渲染。
+   *  点击走与帮助菜单同一条外链通道（系统浏览器），打不开就把地址回显出来。
+   */
+  function onlineUrl() {
+    const lang = DGM.i18n && DGM.i18n.lang === "en-US" ? "en-US" : "zh-CN";
+    return `${ONLINE_HOME}?lang=${lang}`;
+  }
+
+  function installOnlineLink() {
+    if (ipc.isWeb) {
+      const stale = $("#btn-online");
+      if (stale) stale.remove();
+      return;
+    }
+    const actions = $(".titlebar-actions");
+    if (!actions) return;
+    let b = $("#btn-online");
+    if (!b) {
+      b = h("button", "icon-btn titlebar-online");
+      b.id = "btn-online";
+      b.addEventListener("click", () => openDocLink(onlineUrl(), t("ui.online")));
+      // 与网页版「下载客户端」同位置：排在命令面板/主题/布局之前
+      actions.insertBefore(b, actions.firstChild);
+    }
+    b.title = t("ui.online");
+    b.innerHTML = `${icon("globe", "ico-sm")}<span>${esc(t("ui.online"))}</span>`;
+  }
 
   function buildMenus() {
     const panels = state.panels();
@@ -2041,6 +2073,7 @@ window.DGM = window.DGM || {};
     // togglePanel 只写设置，真正把 body 类换掉的是这里。
     // 曾因从不调用，侧栏/AI 面板的关闭按钮"点了没反应"（又一处接线缺失）。
     applyLayoutVars();
+    installOnlineLink();
     renderDocTitle();
     renderMenubar();
     renderActivity();

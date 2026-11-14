@@ -348,6 +348,7 @@ pub fn run() {
             cloud::cloud_doc_save,
             cloud::cloud_doc_open,
             cloud::cloud_doc_delete,
+            cloud::cloud_console_url,
             cloud::ai_gateway_models,
         ])
         .run(tauri::generate_context!())

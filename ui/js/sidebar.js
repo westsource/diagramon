@@ -727,7 +727,8 @@ window.DGM = window.DGM || {};
     }
 
     const a = cloud.status.signed_in ? cloud.status.account : null;
-    box.appendChild(acctCard(a));
+    const card = acctCard(a);
+    box.appendChild(card);
 
     if (!a) {
       const acts = h("div", "side-acts");
@@ -768,27 +769,101 @@ window.DGM = window.DGM || {};
       box.appendChild(acctQuota(t("acct.aiUsage"), used, monthly, fmt, extra, "sparkles"));
     }
 
-    const acts = h("div", "side-acts");
-    acts.innerHTML =
-      `<button class="btn sm" data-a="refresh">${icon("refresh")}${esc(t("acct.refresh"))}</button>` +
-      `<button class="btn sm ghost" data-a="out">${icon("close")}${esc(t("side.cloud.signOut"))}</button>`;
-    acts.addEventListener("click", async (e) => {
-      const b = e.target.closest("button");
-      if (!b) return;
-      try {
-        if (b.dataset.a === "refresh") {
-          await state.cloudRefresh();
-          DGM.toast({ icon: "refresh", title: t("acct.refreshed"), sub: "" });
-        } else if (b.dataset.a === "out") {
-          await state.cloudLogout();
-          DGM.toast({ icon: "close", title: t("acct.signedOut"), sub: t("acct.signedOutSub") });
+    // 两个动作共用同一份实现：网页版的布局由私有覆盖层再排一遍，桌面这边直接按
+    // 网页版的最终形态渲染（刷新 = 卡片角图标，退出登录 = 页脚文字按钮 + 二次确认）。
+    const refreshNow = async () => {
+      await state.cloudRefresh();
+      DGM.toast({ icon: "refresh", title: t("acct.refreshed"), sub: "" });
+    };
+    const signOutNow = async () => {
+      await state.cloudLogout();
+      DGM.toast({ icon: "close", title: t("acct.signedOut"), sub: t("acct.signedOutSub") });
+    };
+    const toastErr = (err) => {
+      DGM.toast({ icon: "alert", title: t("side.cloud.error"), sub: String((err && err.message) || err), warn: true });
+    };
+
+    if (DGM.ipc && DGM.ipc.isWeb) {
+      // 网页版保持它认识的旧结构（`side-acts` 里两个按钮）：私有覆盖层
+      // `patchAccountConsole` 会把它重排成"刷新进卡片 / 用户后台主按钮 / 退出下沉页脚"。
+      // 这里先按桌面新布局渲染的话，覆盖层会再补一遍，出现两个刷新、两个退出。
+      const acts = h("div", "side-acts");
+      acts.innerHTML =
+        `<button class="btn sm" data-a="refresh">${icon("refresh")}${esc(t("acct.refresh"))}</button>` +
+        `<button class="btn sm ghost" data-a="out">${icon("close")}${esc(t("side.cloud.signOut"))}</button>`;
+      acts.addEventListener("click", async (e) => {
+        const b = e.target.closest("button");
+        if (!b) return;
+        try {
+          if (b.dataset.a === "refresh") await refreshNow();
+          else if (b.dataset.a === "out") await signOutNow();
+        } catch (err) {
+          toastErr(err);
         }
+      });
+      box.appendChild(acts);
+      box.appendChild(h("div", "acct-note", esc(t("acct.readonly"))));
+      return box;
+    }
+
+    // 刷新：低频动作不占一行，收到账户卡右上角（忙碌时图标转起来，防重复点击）
+    const rb = h("button", "icon-btn acct-refresh");
+    rb.dataset.a = "refresh";
+    rb.title = t("acct.refresh");
+    rb.setAttribute("aria-label", t("acct.refresh"));
+    rb.innerHTML = icon("refresh", "ico-sm");
+    rb.addEventListener("click", async () => {
+      if (rb.dataset.busy) return;
+      rb.dataset.busy = "1";
+      rb.classList.add("busy");
+      try {
+        await refreshNow();
       } catch (err) {
-        DGM.toast({ icon: "alert", title: t("side.cloud.error"), sub: String((err && err.message) || err), warn: true });
+        toastErr(err);
+      } finally {
+        delete rb.dataset.busy;
+        rb.classList.remove("busy");
       }
     });
-    box.appendChild(acts);
+    card.appendChild(rb);
+
+    // 用户后台：与网页版同一个入口（现换一次性票据，用系统浏览器打开控制台）。
+    // 桌面版没有"控制台会话"要解释，点失败时把地址回显出来即可。
+    const consoleActs = h("div", "side-acts");
+    consoleActs.innerHTML =
+      `<button class="btn sm primary" data-a="console">${icon("globe")}${esc(t("acct.console"))}</button>`;
+    consoleActs.addEventListener("click", () => {
+      if (DGM.cloud && typeof DGM.cloud.openConsole === "function") DGM.cloud.openConsole();
+    });
+    box.appendChild(consoleActs);
+
     box.appendChild(h("div", "acct-note", esc(t("acct.readonly"))));
+
+    // 退出登录：危险操作下沉到页脚，二次确认（网页版同一条取向）
+    const foot = h("div", "acct-foot");
+    const out = h("button", "btn ghost sm acct-out");
+    out.dataset.a = "out";
+    out.innerHTML = `${icon("close", "ico-sm")}<span>${esc(t("side.cloud.signOut"))}</span>`;
+    out.addEventListener("click", async () => {
+      if (out.disabled) return;
+      const ok = await DGM.dialogs.confirm({
+        title: t("acct.signOutConfirm"),
+        body: t("acct.signOutConfirmBody"),
+        ok: t("side.cloud.signOut"),
+        danger: true,
+      });
+      if (!ok) return;
+      out.disabled = true;
+      try {
+        await signOutNow();
+      } catch (err) {
+        toastErr(err);
+      } finally {
+        out.disabled = false;
+      }
+    });
+    foot.appendChild(out);
+    box.appendChild(foot);
     return box;
   }
 

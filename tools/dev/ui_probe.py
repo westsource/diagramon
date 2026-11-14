@@ -1550,6 +1550,41 @@ def main() -> int:
         except Exception as e:
             log(f"（断言 13c 解析失败：{e}）")
 
+        # ---- 断言 13d：顶栏「使用在线版」在动作区第一位，点击走系统浏览器通道 ----
+        # 位置对齐网页版顶栏的「下载客户端」（同一个 .titlebar-actions 首位）；
+        # 在线版自己不渲染这个入口（它就是在线的），由 web 构建用 isWeb 关掉。
+        online_btn = ev(
+            "(async () => {"
+            "  const btn = document.getElementById('btn-online');"
+            "  if (!btn) return JSON.stringify({missing: true});"
+            "  const acts = document.querySelector('.titlebar-actions');"
+            "  const orig = DGM.cloud.openExternal;"
+            "  let got = null;"
+            "  DGM.cloud.openExternal = async (u) => { got = u; return true; };"
+            "  btn.click();"
+            "  await new Promise(r => setTimeout(r, 150));"
+            "  DGM.cloud.openExternal = orig;"
+            "  return JSON.stringify({first: acts.firstElementChild === btn,"
+            "    label: btn.textContent.trim(), title: btn.title || '', got,"
+            "    isWeb: !!(DGM.ipc && DGM.ipc.isWeb)});"
+            "})()"
+        )
+        log(f"顶栏使用在线版: {online_btn}")
+        try:
+            ob = json.loads(online_btn)
+            if ob.get("missing"):
+                fails.append("顶栏缺「使用在线版」入口")
+            else:
+                if not ob.get("first"):
+                    fails.append(f"「使用在线版」不在标题栏动作区第一位（网页版「下载客户端」的位置）: {online_btn}")
+                if not ob.get("label") or not ob.get("title"):
+                    fails.append(f"「使用在线版」没有文案/提示: {online_btn}")
+                got = ob.get("got") or ""
+                if not got.startswith("https://app.diagramon.com/?lang="):
+                    fails.append(f"点「使用在线版」没有打开在线版地址: {online_btn}")
+        except Exception as e:
+            log(f"（断言 13d 解析失败：{e}）")
+
         # ---- 断言 13b：帮助 →「转换能力一览」的注册表表格不用横向滚动就能看全 ----
         # 该页从设置「格式与转换」与侧栏转换中心合并而来；设置里不应再有这个只读页。
         settings_width = ev(
@@ -1775,6 +1810,78 @@ def main() -> int:
                 fails.append(f"免费套餐的 AI 权益应显示为「未开通」: {cu.get('aiText')}")
         except Exception as e:
             log(f"（断言 16 解析失败：{e}）")
+
+        # ---- 断言 16c：账户页动作按网页版布局（刷新进卡片、退出登录下沉页脚 + 二次确认） ----
+        acct_acts = ev(
+            "(async () => {"
+            "  DGM.shell.setSidebarView('account');"
+            "  await new Promise(r => setTimeout(r, 300));"
+            "  const view = document.getElementById('side-view');"
+            "  const card = view.querySelector('.acct-card');"
+            "  const out = view.querySelector('.acct-foot .acct-out');"
+            "  const legacy = view.querySelector('.side-acts [data-a=\"refresh\"], .side-acts [data-a=\"out\"]');"
+            "  const refresh = card ? card.querySelector('.acct-refresh') : null;"
+            "  if (!out) return JSON.stringify({missing: true});"
+            "  out.click();"
+            "  await new Promise(r => setTimeout(r, 250));"
+            "  const confirmOpen = !!(document.querySelector('#dialog .dialog-body .callout.warn'));"
+            "  const noBtn = document.querySelector('#dialog [data-act=\"no\"]');"
+            "  if (noBtn) noBtn.click();"
+            "  await new Promise(r => setTimeout(r, 200));"
+            "  return JSON.stringify({refresh: !!refresh, out: !!out, legacyActs: !!legacy,"
+            "    confirmOpen, stillSigned: !!DGM.state.cloud.status.signed_in});"
+            "})()"
+        )
+        log(f"账户页动作布局: {acct_acts}")
+        try:
+            aa = json.loads(acct_acts)
+            if aa.get("missing"):
+                fails.append("账户页缺「退出登录」页脚按钮")
+            else:
+                if not aa.get("refresh"):
+                    fails.append(f"账户卡右上角没有刷新图标: {acct_acts}")
+                if aa.get("legacyActs"):
+                    fails.append(f"账户页不该再有旧的按钮组（刷新/退出应各归其位）: {acct_acts}")
+                if not aa.get("confirmOpen"):
+                    fails.append(f"点「退出登录」没有二次确认: {acct_acts}")
+                if not aa.get("stillSigned"):
+                    fails.append(f"取消二次确认后不该退出登录: {acct_acts}")
+        except Exception as e:
+            log(f"（断言 16c 解析失败：{e}）")
+
+        # ---- 断言 16d：账户页「用户后台」→ 换一次性票据后用系统浏览器打开控制台 ----
+        console_btn = ev(
+            "(async () => {"
+            "  const view = document.getElementById('side-view');"
+            "  const btn = view.querySelector('[data-a=\"console\"]');"
+            "  if (!btn) return JSON.stringify({missing: true});"
+            "  const origInvoke = DGM.ipc.invoke;"
+            "  const origWindowOpen = window.open;"
+            "  let asked = null, opened = null;"
+            "  DGM.ipc.invoke = (cmd, a) => {"
+            "    if (cmd === 'cloud_console_url') { asked = cmd; return Promise.resolve('https://www.diagramon.com/sso?ticket=probe'); }"
+            "    return origInvoke(cmd, a);"
+            "  };"
+            "  window.open = (u) => { opened = u; return {}; };"
+            "  btn.click();"
+            "  await new Promise(r => setTimeout(r, 250));"
+            "  DGM.ipc.invoke = origInvoke;"
+            "  window.open = origWindowOpen;"
+            "  return JSON.stringify({asked, opened, label: btn.textContent.trim()});"
+            "})()"
+        )
+        log(f"用户后台入口: {console_btn}")
+        try:
+            cb = json.loads(console_btn)
+            if cb.get("missing"):
+                fails.append("账户页缺「用户后台」按钮")
+            else:
+                if cb.get("asked") != "cloud_console_url":
+                    fails.append(f"点用户后台没有先换票据: {console_btn}")
+                if not (cb.get("opened") or "").startswith("https://www.diagramon.com/sso?ticket="):
+                    fails.append(f"用户后台没有交给系统浏览器打开: {console_btn}")
+        except Exception as e:
+            log(f"（断言 16d 解析失败：{e}）")
 
         # ---- 断言 16b：点云端文档 → 标签页用云端名字，切走再切回也不会变「未命名」 ----
         # 2026-11-14 报的问题：打开云端文件后标签页变成「未命名-N.ext」。两个成因一起守：

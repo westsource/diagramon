@@ -578,6 +578,27 @@ pub async fn cloud_doc_delete(state: State<'_, Arc<AppState>>, id: String) -> R<
     Ok(true)
 }
 
+/// 「用户后台」的免登录入口：现换一张一次性票据，返回**控制台自己域上的地址**。
+///
+/// 客户端只把地址交回前端、由系统浏览器打开 —— 不在 WebView 里导航，也不碰控制台的
+/// Cookie/凭据：票据 60 秒有效且一次性，控制台拿它建自己的会话（与在线版同一条链路）。
+#[tauri::command]
+pub async fn cloud_console_url(state: State<'_, Arc<AppState>>) -> R<String> {
+    let v = call_json(
+        state.inner(),
+        reqwest::Method::POST,
+        "/auth/sso/console",
+        Some(json!({})),
+        true,
+    )
+    .await?;
+    let url = str_of(&v, &["url"]);
+    if url.is_empty() {
+        return Err("云网关没有返回用户后台地址（sso/console）".into());
+    }
+    Ok(url)
+}
+
 /* --------------------------------------------------------------- 云网关 AI */
 
 /// 云网关的**可用模型别名**（`GET /v1/ai/models`）。

@@ -383,6 +383,31 @@ window.DGM = window.DGM || {};
   }
 
   /**
+   * 打开「用户后台」（与在线版同一个入口）：先向服务端现换一张 60 秒一次性票据，
+   * 再用系统浏览器打开返回的控制台地址。
+   *
+   * 不在 WebView 里导航：客户端的 Bearer 令牌与控制台 Cookie 是两套凭据、互不读取；
+   * 票据只用于让控制台建自己的会话。打不开就如实提示并把地址回显，让人手工访问。
+   */
+  async function openConsole() {
+    let url = "";
+    try {
+      url = await DGM.ipc.invoke("cloud_console_url");
+    } catch (e) {
+      DGM.toast({ icon: "alert", title: t("acct.console"), sub: String((e && e.message) || e), warn: true });
+      return false;
+    }
+    if (!url) {
+      DGM.toast({ icon: "alert", title: t("acct.console"), sub: t("acct.consoleNoUrl"), warn: true });
+      return false;
+    }
+    const ok = await openExternal(url);
+    if (ok) DGM.toast({ icon: "globe", title: t("acct.console"), sub: t("acct.consoleOpened") });
+    else DGM.toast({ icon: "alert", title: t("acct.console"), sub: t("tip.openFailed", { url }), warn: true });
+    return ok;
+  }
+
+  /**
    * 「没有账号？去官网注册」→ 系统浏览器打开官网注册页。
    *
    * 注册**不在客户端做**：邮箱激活、重发、条款/隐私文案都在网页端，客户端再实现一份
@@ -575,6 +600,8 @@ window.DGM = window.DGM || {};
     fmtDot,
     normPath,
     registerUrl,
+    /** 「用户后台」：现换一次性票据后用系统浏览器打开（失败返回 false，不假装成功）。 */
+    openConsole,
     /** 用系统浏览器打开外链（失败返回 false，不假装成功）。也供其它模块复用。 */
     openExternal,
     ensureTree,
