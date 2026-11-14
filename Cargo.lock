@@ -19,7 +19,7 @@ dependencies = [
 
 [[package]]
 name = "ai"
-version = "3.14.1"
+version = "3.14.2"
 dependencies = [
  "ai-prompt",
  "app-ipc",
@@ -32,7 +32,7 @@ dependencies = [
 
 [[package]]
 name = "ai-prompt"
-version = "3.14.1"
+version = "3.14.2"
 dependencies = [
  "app-ipc",
  "serde_json",
@@ -86,7 +86,7 @@ checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
 
 [[package]]
 name = "app-core"
-version = "3.14.1"
+version = "3.14.2"
 dependencies = [
  "app-ipc",
  "base64 0.23.1",
@@ -100,7 +100,7 @@ dependencies = [
 
 [[package]]
 name = "app-ipc"
-version = "3.14.1"
+version = "3.14.2"
 dependencies = [
  "serde",
 ]
@@ -128,7 +128,7 @@ dependencies = [
 
 [[package]]
 name = "assets"
-version = "3.14.1"
+version = "3.14.2"
 dependencies = [
  "mime_guess",
  "percent-encoding",
@@ -725,7 +725,7 @@ dependencies = [
 
 [[package]]
 name = "core-wasm"
-version = "3.14.1"
+version = "3.14.2"
 dependencies = [
  "ai-prompt",
  "app-core",
@@ -936,7 +936,7 @@ dependencies = [
 
 [[package]]
 name = "diagramon"
-version = "3.14.1"
+version = "3.14.2"
 dependencies = [
  "ai",
  "app-core",
@@ -3543,7 +3543,7 @@ checksum = "f6b464fbc74e149a392436b17d523f769e057cb6877f6a5c4618bc6f11800548"
 
 [[package]]
 name = "platform"
-version = "3.14.1"
+version = "3.14.2"
 dependencies = [
  "dirs",
  "thiserror 2.0.21",
@@ -3551,7 +3551,7 @@ dependencies = [
 
 [[package]]
 name = "platform-windows"
-version = "3.14.1"
+version = "3.14.2"
 dependencies = [
  "platform",
  "sha2",
