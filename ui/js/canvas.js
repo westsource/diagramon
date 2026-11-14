@@ -681,6 +681,11 @@ window.DGM = window.DGM || {};
     const e = entry(format);
     e.lastApplied = "";
     if (format === "drawio") {
+      // 与普通正文载入同一条等待链：descriptor 交给 drawio 后，`load`/`loaded`
+      // 之前画布还是空图。这里不置 `loading` 的话，转换的 `flush()` 会立刻
+      // export 出那张空图（host 属性与默认正文不同 ⇒ `waitForBody` 误判"已转换"），
+      // 用户拿到的是一个没有节点的 drawio。
+      e.loading = true;
       send(format, { action: "load", autosave: 1, descriptor: { format: "mermaid", data: source, wrap: true } });
     } else {
       send(format, { action: "loadMermaid", source, mermaid: (opts && opts.mermaid) || undefined });
