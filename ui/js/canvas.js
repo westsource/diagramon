@@ -646,30 +646,18 @@ window.DGM = window.DGM || {};
     // 冷启动时承载页本身还没下载完（drawio 首次 65 MB），此时 flush 只会拿到空图。
     // ready 之前不消耗重试次数；但总等待有上限，避免承载页坏掉时永久挂起。
     const deadline = Date.now() + 180000;
-    // drawio 的初始空白文档也只有两个 mxCell（0/1）；引擎导入是异步的，早导出会拿到它。
-    // 所以转换结果必须是一个**有实际内容**的图，不能只看“与 before 不同”。
-    const accepted = (body) => {
-      if (typeof body !== "string" || !body.trim() || body === before) return false;
-      if (format === "drawio") return (body.match(/<mxCell\b/g) || []).length > 2;
-      return true;
-    };
     return new Promise((resolve) => {
       let i = 0;
       const tick = () => {
         const e = hosts[format];
-        if (!e || !e.ready) {
+        if (!e || !e.ready || e.loading) {
           if (Date.now() > deadline) return resolve("");
           setTimeout(tick, 600);
           return;
         }
-        // force：转换不等 `load/loaded`。初始空白文档也会发 loaded，拿它当“导入完成”
-        // 会把空画布当成结果；直接导出并按内容判定，导入没完成就下一轮再导。
-        flush(format, true)
+        flush(format)
           .then((body) => {
-            if (accepted(body)) {
-              e.loading = false;
-              return resolve(body);
-            }
+            if (typeof body === "string" && body.trim() && body !== before) return resolve(body);
             if (++i >= max || Date.now() > deadline) return resolve("");
             setTimeout(tick, 600);
           })
