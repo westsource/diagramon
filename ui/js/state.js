@@ -989,7 +989,9 @@ window.DGM = window.DGM || {};
       // 名字只写在前端对象上，切一次标签页就变回「未命名」（2026-11-14 报的问题）。
       try {
         const marked = await ipc.invoke("doc_mark_cloud", { id: doc.id, name });
-        if (marked && marked.id) doc = { ...marked, name: marked.name || name };
+        // 名字以**服务端给的那份**为准：后端实现未必认得新增的 `name` 参数
+        // （网页版后端 / 旧桌面版），返回的 Doc 里可能还是「未命名-N.ext」。
+        if (marked && marked.id) doc = { ...marked, name };
       } catch (_) {
         /* mark 失败也要留住名字：下面 upsertDoc 用的是本地对象 */
       }
