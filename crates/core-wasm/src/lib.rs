@@ -171,8 +171,25 @@ fn handle(req: &serde_json::Value) -> Result<String, String> {
         "convert" => {
             let from = fid(req.get("from").and_then(|v| v.as_str()).unwrap_or(""))?;
             let to = fid(req.get("to").and_then(|v| v.as_str()).unwrap_or(""))?;
-            let c = app_core::convert::convert(from, to, body())?;
-            Ok(format!("{{\"body\":{},\"notes\":{}}}", ser(&c.body)?, ser(&c.notes)?))
+            let source = body();
+            // 与桌面端 `convert_text` 同一契约：先问 plan()，纯 Rust 方向直接产出正文；
+            // 引擎方向回 `engine` + 空正文 + 原因，让前端转交承载页 —— 别把
+            // 「不是 Rust 的活」当成错误（否则界面拿不到 engine，只能猜）。
+            let plan = app_core::convert::plan_for_source(from, to, source)?;
+            if matches!(plan.engine, app_core::convert::Engine::Rust) {
+                let c = app_core::convert::convert(from, to, source)?;
+                Ok(format!(
+                    "{{\"engine\":\"rust\",\"body\":{},\"notes\":{}}}",
+                    ser(&c.body)?,
+                    ser(&c.notes)?
+                ))
+            } else {
+                Ok(format!(
+                    "{{\"engine\":{},\"body\":\"\",\"notes\":{}}}",
+                    ser(&plan.engine.id())?,
+                    ser(&[plan.reason])?
+                ))
+            }
         }
         other => Err(format!("未知 op：{other}")),
     }
@@ -207,10 +224,14 @@ pub extern "C" fn dgm_call(ptr: *const u8, len: usize) -> u64 {
         Ok(fields) => ok(fields),
         Err(e) => err(e),
     };
-    let mut bytes = out.into_bytes();
+    // 用 `Box<[u8]>`（容量恒等于长度）而不是 `Vec` + `mem::forget`：
+    // 返回值只带得回长度，`dgm_free_result` 只能按 `(ptr, len)` 重建所有权。
+    // 若这里交出的是容量 > 长度的 `Vec`，回收时容量对不上，allocator 直接 trap
+    // （`RuntimeError: unreachable`）——而 trap 发生在 free，不在 call，报错还会被
+    // 上层当成「转换失败：unreachable」。
+    let bytes = out.into_bytes().into_boxed_slice();
     let n = bytes.len();
-    let p = bytes.as_mut_ptr();
-    std::mem::forget(bytes);
+    let p = Box::into_raw(bytes) as *mut u8;
     ((p as u64) << 32) | n as u64
 }
 
@@ -220,5 +241,63 @@ pub extern "C" fn dgm_free_result(ptr: *mut u8, len: usize) {
     if ptr.is_null() || len == 0 {
         return;
     }
-    unsafe { drop(Vec::from_raw_parts(ptr, len, len)) }
+    // 与 `dgm_call` 的 `Box<[u8]>` 对称：切片 fat pointer 一起重建，容量即 len。
+    unsafe { drop(Box::from_raw(std::ptr::slice_from_raw_parts_mut(ptr, len))) }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn handle_json(v: serde_json::Value) -> Result<String, String> {
+        handle(&v)
+    }
+
+    /// 引擎方向必须回 `engine`，而不是把「不是 Rust 的活」当成错误：
+    /// 前端按 `engine` 决定把源码交给哪个承载页（与桌面端 `convert_text` 同契约）。
+    #[test]
+    fn engine_directions_report_engine_without_body() {
+        let out = handle_json(serde_json::json!({
+            "op": "convert", "from": "mermaid", "to": "drawio",
+            "body": "flowchart TD\n    A --> B\n"
+        }))
+        .unwrap();
+        assert!(out.contains(r#""engine":"drawio""#), "{out}");
+        assert!(out.contains(r#""body":"""#), "{out}");
+        assert!(out.contains("drawio"), "reason 要说明由谁完成：{out}");
+
+        let out = handle_json(serde_json::json!({
+            "op": "convert", "from": "d2", "to": "drawio", "body": "a -> b"
+        }))
+        .unwrap();
+        assert!(out.contains(r#""engine":"d2wasm""#), "{out}");
+    }
+
+    /// 纯 Rust 方向仍要给出正文，不能被 `plan` 分支吞掉。
+    #[test]
+    fn rust_directions_still_return_body() {
+        let out = handle_json(serde_json::json!({
+            "op": "convert", "from": "mermaid", "to": "dot",
+            "body": "flowchart TD\n    A --> B\n"
+        }))
+        .unwrap();
+        assert!(out.contains(r#""engine":"rust""#), "{out}");
+        assert!(out.contains("digraph G"), "{out}");
+
+        let out = handle_json(serde_json::json!({
+            "op": "convert", "from": "dot", "to": "d2", "body": "digraph G { a -> b }"
+        }))
+        .unwrap();
+        assert!(out.contains(r#""engine":"rust""#), "{out}");
+    }
+
+    /// 真正做不了的方向（源格式不支持）仍是错误，不能被包成 `engine`。
+    #[test]
+    fn unsupported_directions_stay_errors() {
+        let e = handle_json(serde_json::json!({
+            "op": "convert", "from": "dot", "to": "mermaid", "body": "digraph G { a -> b }"
+        }))
+        .unwrap_err();
+        assert!(e.contains("实验方向"), "{e}");
+    }
 }
