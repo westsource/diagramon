@@ -643,13 +643,22 @@ window.DGM = window.DGM || {};
    */
   function waitForBody(format, before, tries) {
     const max = tries || 30;
+    // 冷启动时承载页本身还没下载完（drawio 首次 65 MB），此时 flush 只会拿到空图。
+    // ready 之前不消耗重试次数；但总等待有上限，避免承载页坏掉时永久挂起。
+    const deadline = Date.now() + 180000;
     return new Promise((resolve) => {
       let i = 0;
       const tick = () => {
+        const e = hosts[format];
+        if (!e || !e.ready || e.loading) {
+          if (Date.now() > deadline) return resolve("");
+          setTimeout(tick, 600);
+          return;
+        }
         flush(format)
           .then((body) => {
             if (typeof body === "string" && body.trim() && body !== before) return resolve(body);
-            if (++i >= max) return resolve("");
+            if (++i >= max || Date.now() > deadline) return resolve("");
             setTimeout(tick, 600);
           })
           .catch(() => resolve(""));
