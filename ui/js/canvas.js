@@ -478,7 +478,10 @@ window.DGM = window.DGM || {};
     startPolling();
     syncTheme(format);
 
-    if (e.loadedDoc === doc.id) return true;
+    // 转换时同一份目标文档可能刚被普通载入过一次（state.newDoc 触发的渲染）。
+    // pendingConversion 还没消费，不能因为 loadedDoc 相同就提前返回，否则
+    // Mermaid 源码永远发不出去 —— live 的慢时序下必现，本地快时序偶尔掩盖。
+    if (e.loadedDoc === doc.id && !(pendingConversion && pendingConversion.format === format)) return true;
 
     // 换文档之前，先把**旧文档**已经躺在队列里的事件结清（审计 2026-11-03 M-27）。
     //
