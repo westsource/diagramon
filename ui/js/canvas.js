@@ -59,6 +59,12 @@ window.DGM = window.DGM || {};
     pendingConversion = { format, source, opts: opts || null };
   }
 
+  /** 目标文档创建失败时清掉刚登记的转换，避免影响下一份同格式文档。 */
+  function clearPendingConversion(format) {
+    if (!pendingConversion) return;
+    if (!format || pendingConversion.format === format) pendingConversion = null;
+  }
+
   let container = null;
   let activeFormat = null;
   let pollTimer = 0;
@@ -518,6 +524,8 @@ window.DGM = window.DGM || {};
     const body = doc.body || "";
 
     if (format === "drawio") {
+      // 正在载入（普通文档或转换导入）时，不要用当前正文再发一次 load 覆盖画布。
+      if (e.loading) return true;
       e.loading = true;
       send(format, { action: "load", xml: body, autosave: 1 });
       return true;
@@ -799,6 +807,7 @@ window.DGM = window.DGM || {};
     exportPng,
     loadMermaid,
     setPendingConversion,
+    clearPendingConversion,
     getOutline,
     select,
     syncThemeAll,

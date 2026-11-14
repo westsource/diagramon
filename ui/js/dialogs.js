@@ -330,8 +330,9 @@ window.DGM = window.DGM || {};
   }
 
   async function convertViaEngine(to, source, srcDoc, dir, opts2) {
-    const doc = await state.newDoc(to);
-    if (!doc) return null;
+    // 先算好载荷并登记 pendingConversion，**再**建目标文档：state.newDoc 会触发一次
+    // 普通渲染，若此时还没有 pendingConversion，新建的 drawio 会先载入空正文，
+    // 随后的转换 descriptor 与这次普通载入互相覆盖（live 慢时序下必现空图）。
     // 文档级外观（look）只对 Excalidraw 链有效：m2e 的 config 会平铺进内置 mermaid 的
     // initialize。drawio 的内置导入器不收配置位，但**可以走源文本的 frontmatter**
     // （见 buildElkSource）—— 那是它自己的 ELK 引擎，与 mermaid ^12 的 layout-elk 包无关。
@@ -352,6 +353,11 @@ window.DGM = window.DGM || {};
       payload = elk.text;
     }
     DGM.canvas.setPendingConversion(to, payload, opts);
+    const doc = await state.newDoc(to);
+    if (!doc) {
+      if (DGM.canvas.clearPendingConversion) DGM.canvas.clearPendingConversion(to);
+      return null;
+    }
     await DGM.preview.render(); // 触发 show → 把源码交给引擎
     let body = await DGM.canvas.waitForBody(to, doc.body || "");
     if (!body) {
