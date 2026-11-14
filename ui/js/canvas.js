@@ -84,6 +84,10 @@ window.DGM = window.DGM || {};
         epoch: 0,
         /** drawio：load 已发出、还没收到 `load/loaded` 确认（大图要几秒） */
         loading: false,
+        /** drawio：是否见过第一次 `load/loaded`（初始空白文档握手完成） */
+        everLoaded: false,
+        /** drawio：等待初始空白文档 loaded 后再发的 Mermaid 转换载荷 */
+        pendingMermaid: null,
         loadWaiters: [],
         /** Excalidraw 的 `files` 段（图片等二进制附件），回写时必须原样带上 */
         files: {},
@@ -228,9 +232,19 @@ window.DGM = window.DGM || {};
       // 只有到这里才把代际交给承载页，之后它入队的事件才算新文档的。
       case "load":
       case "loaded":
+        e.everLoaded = true;
         e.loading = false;
         for (const done of e.loadWaiters.splice(0)) done(true);
         confirmEpoch(format);
+        // drawio 启动时先载入一张空白文档；转换载荷如果赶在这张空白文档的
+        // load/loaded 之前发出去，可能被引擎丢掉（表现为转换后仍是空图）。
+        // 等第一次握手完成再发，之后按导出的内容判断导入是否真的完成。
+        if (e.pendingMermaid) {
+          const payload = e.pendingMermaid;
+          e.pendingMermaid = null;
+          e.loading = true;
+          send(format, payload);
+        }
         break;
 
       case "autosave":
@@ -707,7 +721,13 @@ window.DGM = window.DGM || {};
       // export 出那张空图（host 属性与默认正文不同 ⇒ `waitForBody` 误判"已转换"），
       // 用户拿到的是一个没有节点的 drawio。
       e.loading = true;
-      send(format, { action: "load", autosave: 1, descriptor: { format: "mermaid", data: source, wrap: true } });
+      const payload = { action: "load", autosave: 1, descriptor: { format: "mermaid", data: source, wrap: true } };
+      if (e.everLoaded) {
+        send(format, payload);
+      } else {
+        // 首次启动：drawio 自己的空白文档还没握手完，先存着（见 handleEvent）。
+        e.pendingMermaid = payload;
+      }
     } else {
       send(format, { action: "loadMermaid", source, mermaid: (opts && opts.mermaid) || undefined });
     }
