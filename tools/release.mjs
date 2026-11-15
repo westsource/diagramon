@@ -629,9 +629,12 @@ ${WSL_TOOLING}/node_modules/.bin/tauri build --bundles appimage,deb
 
 echo '[linux-check] deb 载荷'
 DEB=$(ls target/release/bundle/deb/*.deb | head -1)
-dpkg-deb -c "$DEB" | grep -q 'ui/index.html'
-dpkg-deb -c "$DEB" | grep -q 'assets/drawio/host.html'
-if dpkg-deb -c "$DEB" | grep -q 'ui/.shots'; then
+# 先落一份清单再 grep：dpkg-deb -c 直接接 grep -q 会让它吃 SIGPIPE，
+# 而脚本开了 pipefail ⇒ 载荷抽查自己把构建判失败（实测 2026-11-16）。
+dpkg-deb -c "$DEB" > /tmp/dgm-deb-list.txt
+grep -q 'ui/index.html' /tmp/dgm-deb-list.txt
+grep -q 'assets/drawio/host.html' /tmp/dgm-deb-list.txt
+if grep -q 'ui/.shots' /tmp/dgm-deb-list.txt; then
   echo 'deb 里有 ui/.shots —— prepack 没跑到' >&2; exit 1
 fi
 echo '[linux-check] AppImage 载荷'
