@@ -845,7 +845,7 @@ window.DGM = window.DGM || {};
     const foot = h("div", "acct-foot");
     const out = h("button", "btn ghost sm acct-out");
     out.dataset.a = "out";
-    out.innerHTML = `${icon("close", "ico-sm")}<span>${esc(t("side.cloud.signOut"))}</span>`;
+    out.innerHTML = `${icon("logout", "ico-sm")}<span>${esc(t("side.cloud.signOut"))}</span>`;
     out.addEventListener("click", async () => {
       if (out.disabled) return;
       const ok = await DGM.dialogs.confirm({

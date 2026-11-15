@@ -20,6 +20,8 @@ window.DGM = window.DGM || {};
     save: '<path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><path d="M17 21v-8H7v8M7 3v5h8"/>',
     plus: '<path d="M12 5v14M5 12h14"/>',
     close: '<path d="M18 6 6 18M6 6l12 12"/>',
+    // 退出登录（与网页版账户页同一个箭头出口图标；桌面颜色跟 ghost 常规文字色，不染红）
+    logout: '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="m16 17 5-5-5-5"/><path d="M21 12H9"/>',
     chevR: '<path d="m9 6 6 6-6 6"/>',
     chevD: '<path d="m6 9 6 6 6-6"/>',
     // 次序调整（供应商上移/下移）。chevD 是"展开"语汇，这里要的是移动，另立两个。

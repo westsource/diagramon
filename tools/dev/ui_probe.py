@@ -1852,6 +1852,15 @@ def main() -> int:
             "  const legacy = view.querySelector('.side-acts [data-a=\"refresh\"], .side-acts [data-a=\"out\"]');"
             "  const refresh = card ? card.querySelector('.acct-refresh') : null;"
             "  if (!out) return JSON.stringify({missing: true});"
+            "  const use = out.querySelector('use');"
+            "  const outIcon = use ? use.getAttribute('href') : '';"
+            # 颜色必须是客户端 ghost 的常规文字色（不是网页版的危险红）：
+            # 造一个同 class 的按钮做对照，避免把主题变量写死进断言。
+            "  const probe = document.createElement('button');"
+            "  probe.className = 'btn ghost sm';"
+            "  document.body.appendChild(probe);"
+            "  const sameColor = getComputedStyle(probe).color === getComputedStyle(out).color;"
+            "  probe.remove();"
             "  out.click();"
             "  await new Promise(r => setTimeout(r, 250));"
             "  const confirmOpen = !!(document.querySelector('#dialog .dialog-body .callout.warn'));"
@@ -1859,7 +1868,7 @@ def main() -> int:
             "  if (noBtn) noBtn.click();"
             "  await new Promise(r => setTimeout(r, 200));"
             "  return JSON.stringify({refresh: !!refresh, out: !!out, legacyActs: !!legacy,"
-            "    confirmOpen, stillSigned: !!DGM.state.cloud.status.signed_in});"
+            "    confirmOpen, stillSigned: !!DGM.state.cloud.status.signed_in, outIcon, sameColor});"
             "})()"
         )
         log(f"账户页动作布局: {acct_acts}")
@@ -1876,6 +1885,10 @@ def main() -> int:
                     fails.append(f"点「退出登录」没有二次确认: {acct_acts}")
                 if not aa.get("stillSigned"):
                     fails.append(f"取消二次确认后不该退出登录: {acct_acts}")
+                if aa.get("outIcon") != "#i-logout":
+                    fails.append(f"「退出登录」没用与网页版同一个出口图标: {acct_acts}")
+                if aa.get("sameColor") is not True:
+                    fails.append(f"「退出登录」文字色应与 ghost 常规色一致（不用网页版的危险红）: {acct_acts}")
         except Exception as e:
             log(f"（断言 16c 解析失败：{e}）")
 

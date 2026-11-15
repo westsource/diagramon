@@ -2476,10 +2476,11 @@ html[data-theme="dark"] .canvas-stage[data-engine="dot"] svg ellipse { stroke: v
 .acct-card .acct-refresh .ico { width: 15px; height: 15px; }
 .acct-card .acct-refresh.busy .ico { animation: acct-spin .8s linear infinite; }
 @keyframes acct-spin { to { transform: rotate(360deg); } }
-/* 退出登录：危险操作下沉到页脚（分割线 + 文字按钮），与网页版一致 */
+/* 退出登录：危险操作下沉到页脚（分割线 + 文字按钮），与网页版**同形**：
+   整行、左对齐、图标 + 文字。颜色**不跟网页版的危险红** —— 客户端沿用 ghost 的
+   常规文字色（--ink-2）与 hover 底色，`--err` 只在二次确认对话框里出现。 */
 .acct-foot { margin: 14px 6px 0; padding-top: 10px; border-top: 1px solid var(--border); }
-.acct-out { width: 100%; justify-content: flex-start; color: var(--err); }
-.acct-out:hover { background: var(--err-soft); color: var(--err); }
+.acct-out { width: 100%; justify-content: flex-start; }
 
 .acct-rows { margin: 0 4px; border-top: 1px solid var(--border); }
 .acct-row { display: flex; align-items: center; gap: 10px; padding: 7px 8px; font-size: var(--fs-sm); border-bottom: 1px solid var(--border); }
