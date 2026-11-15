@@ -975,6 +975,20 @@ window.DGM = window.DGM || {};
   }
 
   async function cloudOpenDoc(id, path) {
+    // 同一份云端文档已经开着：只把那个标签页切到前面，**不再开第二个**。
+    // 也**不重新拉正文**：本地可能有未保存改动，点侧栏的语义是"带我去那个标签页"，
+    // 不是"用云端版本覆盖我"。身份认 `cloudId`（Doc 结构本身没有这个字段，
+    // 由 `cloudIdentity` 旁路表在 `applyResult` 时补回）。
+    const already = state.docs.find((d) => (cloudIdentity.get(d.id) || d).cloudId === id);
+    if (already) {
+      if (state.active !== already.id) {
+        await activateDoc(already.id);
+        if (DGM.editor && DGM.editor.loadActive) DGM.editor.loadActive();
+        if (DGM.preview && DGM.preview.schedule) DGM.preview.schedule();
+        await refreshDerived(already.id);
+      }
+      return already;
+    }
     const body = await ipc.invoke("cloud_doc_open", { id });
     // 云文档没有磁盘路径：开成一个"无路径"的文档，cloudId 记着，保存时回写云端
     let doc = await ipc.invoke("doc_new", { format: body.format });

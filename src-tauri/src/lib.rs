@@ -28,11 +28,19 @@ use tauri::{Emitter, Manager, WebviewUrl, WebviewWindowBuilder}; // Manager 提�
 
 /// 前端产物目录。
 ///
-/// 解析顺序：`DIAGRAMON_UI_DIR` → 可执行文件同级的 `ui/`（发布/便携形态）
+/// 解析顺序：`DIAGRAMON_UI_DIR` → **Tauri 的 `resource_dir()`**（deb / AppImage / rpm
+/// 的安装形态：Linux 的可执行文件在 `/usr/bin`，`bundle.resources` 落在 `resource_dir()`
+/// 下，**不在 exe 旁边**）→ 可执行文件同级的 `ui/`（Windows 安装/便携形态）
 /// → 源码树里的 `ui/`（开发形态）。
-fn ui_dir() -> PathBuf {
+fn ui_dir_for(app: &tauri::AppHandle) -> PathBuf {
     if let Some(p) = std::env::var_os("DIAGRAMON_UI_DIR") {
         return PathBuf::from(p);
+    }
+    if let Ok(dir) = app.path().resource_dir() {
+        let cand = dir.join("ui");
+        if cand.join("index.html").is_file() {
+            return cand;
+        }
     }
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
@@ -143,13 +151,11 @@ pub fn run() {
         let _ = std::fs::remove_dir_all(&app_state.recovery_dir); // 只清自己的临时目录
     }
 
-    let roots = Arc::new(AssetRoots::detect(ui_dir()));
-    eprintln!(
-        "diagramon|roots|ui={}|source={:?}|packaged={:?}",
-        roots.ui.display(),
-        roots.source_tree,
-        roots.packaged
-    );
+    // 资产根要等 AppHandle 才拿得到 `resource_dir()`（deb / AppImage 的安装布局），
+    // 而协议处理器在 builder 阶段注册、窗口在 setup 里建 —— 用 OnceLock 延迟解析：
+    // setup 与首个资源请求拿到的必须是同一份结果。
+    let roots: Arc<std::sync::OnceLock<AssetRoots>> = Arc::default();
+    let roots_setup = roots.clone();
 
     // 上次没保存完的（草稿仓里有）：先收进会话，再开命令行文件 —— 这样命令行那个
     // 文件拿到活动标签页，符合"我点它就是要看它"的直觉。
@@ -184,13 +190,15 @@ pub fn run() {
         // 签名密钥走 TAURI_SIGNING_PRIVATE_KEY 环境变量（见 docs/roadmap-dev3.0.md 第 7 步）。
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
-        .register_asynchronous_uri_scheme_protocol("dgm", move |_ctx, request, responder| {
+        .register_asynchronous_uri_scheme_protocol("dgm", move |ctx, request, responder| {
             let roots = roots.clone();
+            let app = ctx.app_handle().clone();
             let path = request.uri().path().to_string();
             // 文件 I/O 挪到独立线程：回调本身占着 UI 线程，
             // drawio 首屏会并发拉几百个资源，同步读会明显卡首帧。
             std::thread::spawn(move || {
-                let response = match assets::resolve(&roots, &path) {
+                let roots = roots.get_or_init(|| AssetRoots::detect(ui_dir_for(&app)));
+                let response = match assets::resolve(roots, &path) {
                     Some(file) => match std::fs::read(&file) {
                         Ok(bytes) => Response::builder()
                             .status(200)
@@ -255,7 +263,16 @@ pub fn run() {
                 }
             }
         })
-        .setup(|app| {
+        .setup(move |app| {
+            // 先在这里解析一次：自检/诊断日志要能看到实际用的是哪份 ui/ 与 assets/，
+            // 首个资源请求随后复用同一个结果（OnceLock）。
+            let roots = roots_setup.get_or_init(|| AssetRoots::detect(ui_dir_for(app.handle())));
+            eprintln!(
+                "diagramon|roots|ui={}|source={:?}|packaged={:?}",
+                roots.ui.display(),
+                roots.source_tree,
+                roots.packaged
+            );
             let paths = app.state::<Arc<AppState>>().paths.clone();
             build_main_window(app, &paths)?;
             if let Err(e) = build_tray(app.handle()) {
@@ -472,6 +489,9 @@ fn autosave_one(app: &tauri::AppHandle, st: &AppState, id: &str) -> Result<(), S
 /// 这个环境变量（实测：进程起了、21 个 msedgewebview2 子进程都在，但 9333 端口不监听）。
 /// 所以要开调试端口必须走 `additional_browser_args`，这也是它被搬到运行时的原因。
 fn build_main_window(app: &mut tauri::App, paths: &AppPaths) -> Result<(), Box<dyn std::error::Error>> {
+    // 只有 Windows 的 WebView2 参数分支会改写 builder；Linux 上这是"无需 mut"，
+    // 用 allow 而不是拆两个变量，免得两边再漂。
+    #[allow(unused_mut)]
     let mut builder = WebviewWindowBuilder::new(app, "main", webview_url())
         // 页面加载事件：真机排查"白窗口"时，第一件要知道的就是页面有没有起来
         .on_page_load(|_window, payload| {
@@ -496,6 +516,8 @@ fn build_main_window(app: &mut tauri::App, paths: &AppPaths) -> Result<(), Box<d
         .always_on_top(crate::selftest_on())
         .center();
 
+    // WebView2 专属：Linux（WebKitGTK）没有这两条命令行参数。
+    #[cfg(windows)]
     if let Some(args) = debug_browser_args() {
         eprintln!("diagramon|debug-port|{args}");
         builder = builder.additional_browser_args(&args);
@@ -633,6 +655,7 @@ pub(crate) const fn dev_build() -> bool {
 ///
 /// 这四个开关是 Chromium/WebView2 通用的反后台节流组合：
 /// 关遮挡判定 + 关定时器节流 + 关"被遮挡即降级" + 关渲染进程后台降级。
+#[cfg(windows)]
 fn debug_browser_args() -> Option<String> {
     let selftest = std::env::var(app_ipc::ENV_SELFTEST)
         .map(|v| !v.trim().is_empty() && v.trim() != "0")
@@ -680,11 +703,24 @@ fn debug_browser_args() -> Option<String> {
     Some(args)
 }
 
-/// Windows 用 DPAPI；其它平台暂时用明文兜底（仅够开发，正式适配层补齐后删除）。
+/// Windows 用 DPAPI；Linux 用 Secret Service（GNOME Keyring / KWallet 的同一套 D-Bus 接口）；
+/// 其它平台只剩开发用的明文兜底。
 fn credential_store(paths: &AppPaths) -> Arc<dyn CredentialStore> {
     #[cfg(windows)]
     let store: Arc<dyn CredentialStore> = Arc::new(platform_windows::store_in(&paths.config_dir));
-    #[cfg(not(windows))]
+    #[cfg(target_os = "linux")]
+    let store: Arc<dyn CredentialStore> = {
+        // 明文兜底只用于开发/受限环境（WSL、CI：那里没有密钥环服务），必须显式开启。
+        // 正式发布路径**绝不静默降级**：没有 Secret Service 就如实报"密钥环不可用"，
+        // 而不是把云令牌与 AI 密钥写进 ~/.config 的明文件。
+        if std::env::var_os("DGM_ALLOW_PLAINTEXT_CREDS").is_some() {
+            eprintln!("diagramon|warn|凭据使用明文兜底（DGM_ALLOW_PLAINTEXT_CREDS）—— 仅限开发环境");
+            Arc::new(platform::PlaintextStore::new(paths.credentials_dir()))
+        } else {
+            Arc::new(platform_linux::SecretServiceStore::new())
+        }
+    };
+    #[cfg(not(any(windows, target_os = "linux")))]
     let store: Arc<dyn CredentialStore> =
         Arc::new(platform::PlaintextStore::new(paths.credentials_dir()));
     store

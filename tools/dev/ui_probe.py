@@ -1943,6 +1943,14 @@ def main() -> int:
             "  if (!d) return JSON.stringify({err: 'no-active-doc'});"
             "  const opened = { name: d.name, kind: d.kind };"
             "  const id = d.id;"
+            # 再点一次同一行：必须只切回已有标签页，不能再开一个（2026-11-15 报的问题）
+            "  const docsBefore = DGM.state.docs.length;"
+            "  const row2 = [...document.querySelectorAll('#side-view .ct-row')]"
+            "    .find(x => x.querySelector('.sz') && x.textContent.includes('登录流程.mmd'));"
+            "  if (!row2) return JSON.stringify({err: 'cloud-row-missing-2'});"
+            "  row2.click();"
+            "  await new Promise(r => setTimeout(r, 400));"
+            "  const dup = { before: docsBefore, after: DGM.state.docs.length, active: DGM.state.active };"
             "  await DGM.state.activateDoc('d1');"
             "  await new Promise(r => setTimeout(r, 200));"
             "  await DGM.state.activateDoc(id);"
@@ -1956,7 +1964,7 @@ def main() -> int:
             "  if (DGM.editor && DGM.editor.loadActive) DGM.editor.loadActive();"
             "  if (DGM.preview && DGM.preview.schedule) DGM.preview.schedule();"
             "  await new Promise(r => setTimeout(r, 200));"
-            "  return JSON.stringify({opened, after: again && { name: again.name, kind: again.kind }, tab});"
+            "  return JSON.stringify({opened, after: again && { name: again.name, kind: again.kind }, tab, dup, id});"
             "})()"
         )
         log(f"云端文档打开后的标签名: {cloud_open}")
@@ -1974,6 +1982,11 @@ def main() -> int:
                 )
             if "登录流程.mmd" not in (co.get("tab") or []):
                 fails.append(f"标签条里没有云端文档名: {co.get('tab')}")
+            dup = co.get("dup") or {}
+            if dup.get("after") != dup.get("before"):
+                fails.append(f"重复点击同一份云端文档又开了一个标签页: {dup}")
+            if dup.get("active") != co.get("id"):
+                fails.append(f"重复点击同一份云端文档没有切回原标签页: {dup}")
         except Exception as e:
             log(f"（断言 16b 解析失败：{e}）")
 

@@ -19,13 +19,14 @@ members = [
     "crates/assets",
     "crates/platform",
     "crates/platform-windows",
+    "crates/platform-linux",
     "crates/ai",
     "crates/core-wasm",
     "src-tauri",
 ]
 
 [workspace.package]
-version = "3.14.4"
+version = "3.14.5"
 edition = "2021"
 license = "Apache-2.0"
 repository = "https://github.com/westsource/diagramon"
@@ -36,6 +37,7 @@ app-core = { path = "crates/app-core" }
 assets = { path = "crates/assets" }
 platform = { path = "crates/platform" }
 platform-windows = { path = "crates/platform-windows" }
+platform-linux = { path = "crates/platform-linux" }
 ai = { path = "crates/ai" }
 ai-prompt = { path = "crates/ai-prompt" }
 

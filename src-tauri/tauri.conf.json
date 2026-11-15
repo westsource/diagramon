@@ -24,7 +24,8 @@
         ],
         "name": "Diagramon Mermaid",
         "description": "Mermaid 图表（Diagramon）",
-        "role": "Editor"
+        "role": "Editor",
+        "mimeType": "text/x-mermaid"
       },
       {
         "ext": [
@@ -33,7 +34,8 @@
         ],
         "name": "Diagramon Graphviz DOT",
         "description": "Graphviz DOT 图表（Diagramon）",
-        "role": "Editor"
+        "role": "Editor",
+        "mimeType": "text/vnd.graphviz"
       },
       {
         "ext": [
@@ -41,7 +43,8 @@
         ],
         "name": "Diagramon D2",
         "description": "D2 图表（Diagramon）",
-        "role": "Editor"
+        "role": "Editor",
+        "mimeType": "text/x-d2"
       },
       {
         "ext": [
@@ -49,7 +52,8 @@
         ],
         "name": "Diagramon drawio",
         "description": "drawio 图表（Diagramon）",
-        "role": "Editor"
+        "role": "Editor",
+        "mimeType": "application/x-drawio"
       },
       {
         "ext": [
@@ -57,12 +61,17 @@
         ],
         "name": "Diagramon Excalidraw",
         "description": "Excalidraw 场景（Diagramon）",
-        "role": "Editor"
+        "role": "Editor",
+        "mimeType": "application/vnd.excalidraw+json"
       }
     ],
     "icon": [
-      "icons/icon.ico",
-      "icons/icon.png"
+      "icons/32x32.png",
+      "icons/64x64.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.png",
+      "icons/icon.ico"
     ],
     "category": "DeveloperTool",
     "shortDescription": "AI 优先的多格式图表编辑器",
@@ -78,11 +87,30 @@
       "nsis": {
         "installerHooks": "nsis/installer.nsh"
       }
+    },
+    "linux": {
+      "deb": {
+        "depends": [
+          "libpipewire-0.3-0",
+          "libgbm1",
+          "libegl1",
+          "libwayland-client0"
+        ],
+        "section": "devel",
+        "files": {
+          "/usr/share/mime/packages/diagramon.xml": "linux/diagramon-mime.xml"
+        },
+        "postInstallScript": "linux/postinst.sh",
+        "postRemoveScript": "linux/postrm.sh"
+      },
+      "appimage": {
+        "bundleMediaFramework": false
+      }
     }
   },
   "plugins": {
     "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEU2NDQ3OUFBRTE1NjMzOTkKUldTWk0xYmhxbmxFNWtpS1ZqQ21BQU55MXdtTUxReW52b3BOTWFrTzRJSHhBVTM2UWgvWENUZlIK",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEU2NDQ3OUFBRTE1NjMzOTkKUldTWk0xYmhxbmxFNWtpS1ZqQ21BQU55MXdtTUxRWW52b3BOTWFrTzRJSHhBVTM2UWgvWENUZlIK",
       "endpoints": [
         "https://www.diagramon.com/updates/{{target}}/{{arch}}/{{current_version}}",
         "https://github.com/westsource/diagramon/releases/latest/download/latest.json"

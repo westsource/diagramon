@@ -60,11 +60,11 @@ const CFG = {
 const UPLOAD_TIMEOUT_S = 1800;
 const UPLOAD_ATTEMPTS = 3;
 
-const STEPS = ["preflight", "prepack", "build", "portable", "manifest", "tag", "branches", "push", "publish", "verify"];
+const STEPS = ["preflight", "prepack", "build", "linux", "portable", "manifest", "tag", "branches", "push", "publish", "verify"];
 
 // ── 参数 ──────────────────────────────────────────────────────────────────
 const argv = process.argv.slice(2);
-const opts = { dryRun: false, skipGate: false, portable: true, moveTag: false, bodyOnly: false, createIfMissing: false, branch: "main", keys: KEYS_DEFAULT, from: null, only: null };
+const opts = { dryRun: false, skipGate: false, portable: true, linux: true, moveTag: false, bodyOnly: false, createIfMissing: false, branch: "main", keys: KEYS_DEFAULT, from: null, only: null };
 let rawVersion = null;
 for (const a of argv) {
   if (a === "--help" || a === "-h") { printHelp(); process.exit(0); }
@@ -72,6 +72,7 @@ for (const a of argv) {
   else if (a === "--dry-run") opts.dryRun = true;
   else if (a === "--skip-gate") opts.skipGate = true;
   else if (a === "--no-portable") opts.portable = false;
+  else if (a === "--no-linux") opts.linux = false;
   else if (a === "--move-tag") opts.moveTag = true;
   else if (a === "--body-only") opts.bodyOnly = true;
   else if (a === "--create-if-missing") opts.createIfMissing = true;
@@ -395,6 +396,36 @@ function setupExe() { return join(nsisDir(), `Diagramon_${VERSION}_x64-setup.exe
 function sigFile() { return `${setupExe()}.sig`; }
 function manifestFile() { return join(nsisDir(), "latest.json"); }
 function portableZip() { return join(portableDir(), `Diagramon-${VERSION}-win-x64.zip`); }
+
+/* ------------------------------ Linux 产物（WSL 里构建） ------------------------------
+ *
+ * 桌面端不能在 Windows 上交叉编译 Linux（webkit2gtk 的 C 依赖），而发版机是 Windows。
+ * 这里用 WSL2 里的一套 Ubuntu 构建，产物再拷回 `target/release/bundle/linux/`，
+ * 后续 manifest / 上传 / 回读三条红线与 Windows 完全同一套。
+ */
+const WSL_DISTRO = process.env.DGM_WSL_DISTRO || "Ubuntu";
+const WSL_REPO = "/root/diagramon";
+const WSL_TOOLING = "/root/tooling";
+
+function linuxDir() { return join(ROOT, "target", "release", "bundle", "linux"); }
+function listLinux() {
+  try { return readdirSync(linuxDir()); } catch { return []; }
+}
+function linuxFile(re) {
+  const hit = listLinux().find((n) => re.test(n));
+  return hit ? join(linuxDir(), hit) : null;
+}
+function appImage() { return linuxFile(/\.AppImage$/i); }
+function appImageSig() { const a = appImage(); return a ? `${a}.sig` : null; }
+function debFile() { return linuxFile(/\.deb$/i); }
+
+/** Windows 绝对路径 → WSL 挂载路径（只支持盘符路径，够发版机用）。 */
+function wslPath(p) {
+  const abs = resolve(p).replaceAll("\\", "/");
+  const m = abs.match(/^([A-Za-z]):\/(.*)$/);
+  if (!m) die(`WSL 只挂载了盘符路径，收到：${p}`);
+  return `/mnt/${m[1].toLowerCase()}/${m[2]}`;
+}
 function notesFile() { return join(ROOT, "docs", "release-notes", `${TAG}.md`); }
 function mb(p) { return (statSync(p).size / 1048576).toFixed(2); }
 function gitClean() { return git(["status", "--porcelain"]) === ""; }
@@ -436,6 +467,11 @@ async function preflight() {
   if (!existsSync(notesFile())) die(`缺少发布说明：docs/release-notes/${TAG}.md。从 docs/release-notes/TEMPLATE.md 复制一份写好再发。`);
   const notes = readFileSync(notesFile(), "utf8");
   for (const need of ["# 中文", "# English"]) if (!notes.includes(need)) die(`发布说明缺少 "${need}" 段 —— Release 说明一律中英双语。`);
+  if (opts.linux) {
+    for (const need of ["{{appimage_url}}", "{{deb_url}}"]) {
+      if (!notes.includes(need)) die(`发布说明缺少 ${need} —— Linux 包只在 GitHub Release 附件里，正文必须给直链`);
+    }
+  }
   log(`✓ 发布说明存在且中英双语：docs/release-notes/${TAG}.md`);
 
   // 4. 密钥与工具
@@ -474,6 +510,19 @@ async function preflight() {
     if (!existsSync(join(ROOT, "assets", mp))) die(`资产缺 ${mp} —— 先 node tools/fetch-assets.mjs`);
   }
   log(`✓ ${MOUNTS.length} 个挂载点都在（assets/）`);
+
+  // 8. Linux 产物：由 WSL 里的 Ubuntu 构建（本机只有 Windows 工具链）
+  if (opts.linux) {
+    if (process.platform !== "win32") die("Linux 产物依赖 WSL，本脚本要在 Windows 上跑（只想发 Windows 用 --no-linux）");
+    const r = capture("wsl.exe", [
+      "-d", WSL_DISTRO, "-u", "root", "--", "bash", "-lc",
+      'export PATH="/root/.cargo/bin:$PATH"; command -v cargo >/dev/null && command -v dpkg-deb >/dev/null && pkg-config --exists webkit2gtk-4.1 && echo dgm-wsl-ok',
+    ]);
+    if (!r.out.includes("dgm-wsl-ok")) {
+      die(`WSL(${WSL_DISTRO}) 缺 Linux 构建依赖。按 var/tmp/wsl/setup.sh 装一遍（webkit2gtk-4.1-dev / dpkg-deb / cargo）。输出：${(r.out + r.err).trim().slice(0, 300)}`);
+    }
+    log(`✓ WSL(${WSL_DISTRO}) 构建环境就绪（cargo / dpkg-deb / webkit2gtk-4.1）`);
+  }
 }
 
 async function prepack() {
@@ -526,6 +575,96 @@ async function build() {
   log(`✓ 安装包 ${mb(setupExe())} MiB，签名已生成`);
 }
 
+async function linuxStep() {
+  step("linux · AppImage + deb（WSL 里构建，产物回拷）");
+  if (!opts.linux) { warn("--no-linux：跳过 Linux 产物"); return; }
+  if (opts.dryRun) {
+    log(`  （--dry-run：WSL(${WSL_DISTRO}) 里同步工作树 → tauri build --bundles appimage,deb → 回拷 ${linuxDir().replace(ROOT, ".")}）`);
+    return;
+  }
+  mkdirSync(linuxDir(), { recursive: true });
+  // appimagetool 自己会去 GitHub 下 runtime，但受限网络/国内链路经常失败
+  // （实测：`server returned status code 0`）。先自己下一份，用 `LDAI_RUNTIME_FILE`
+  // 交给 linuxdeploy 的 appimage 插件（它直接转成 `--runtime-file`）。
+  const runtime = join(ROOT, "var", "tmp", "appimage-runtime-x86_64");
+  if (!existsSync(runtime)) {
+    mkdirSync(dirname(runtime), { recursive: true });
+    log("  下载 AppImage runtime（GitHub，走代理）…");
+    must(await runLive("curl", [
+      "-sSL", "--proxy", CFG.ghProxy, "--max-time", "180", "-o", runtime,
+      "https://github.com/AppImage/type2-runtime/releases/download/continuous/runtime-x86_64",
+    ], { label: "下载 AppImage runtime" }), "下载 AppImage runtime");
+  }
+  const src = wslPath(ROOT);
+  const dest = wslPath(linuxDir());
+  const key = wslPath(join(opts.keys, "diagramon.key"));
+  const pw = wslPath(join(opts.keys, "password.txt"));
+  const runtimeFile = wslPath(runtime);
+  const script = join(TMP_DIR, `linux-build-${VERSION}.sh`);
+  writeFileSync(script, `#!/bin/bash
+set -euo pipefail
+export PATH="/root/.cargo/bin:$PATH"
+# linuxdeploy/appimagetool 在没有 FUSE 的环境里也能跑（CI/容器/受限桌面）
+export APPIMAGE_EXTRACT_AND_RUN=1
+# 用本地 runtime：appimagetool 的在线下载在受限网络里会直接失败
+export LDAI_RUNTIME_FILE=${runtimeFile}
+mkdir -p ${WSL_TOOLING}
+if [ ! -x ${WSL_TOOLING}/node_modules/.bin/tauri ]; then
+  cd ${WSL_TOOLING}
+  npm init -y >/dev/null 2>&1 || true
+  npm i --no-audit --no-fund @tauri-apps/cli@^2
+fi
+mkdir -p ${WSL_REPO}
+rsync -a --delete \
+  --exclude '.git/' --exclude 'target/' --exclude 'var/' --exclude 'node_modules/' \
+  --exclude '.tooling/' --exclude 'local-build/' --exclude 'ui/.shots/' \
+  ${src}/ ${WSL_REPO}/
+cd ${WSL_REPO}
+# 红线 1：开发产物清干净再打包（deb/AppImage 的载荷抽查在这里做，Windows 侧没有 dpkg）
+node tools/prepack.mjs
+node tools/prepack.mjs --check
+export TAURI_SIGNING_PRIVATE_KEY=${key}
+export TAURI_SIGNING_PRIVATE_KEY_PASSWORD=$(cat ${pw})
+${WSL_TOOLING}/node_modules/.bin/tauri build --bundles appimage,deb
+
+echo '[linux-check] deb 载荷'
+DEB=$(ls target/release/bundle/deb/*.deb | head -1)
+dpkg-deb -c "$DEB" | grep -q 'ui/index.html'
+dpkg-deb -c "$DEB" | grep -q 'assets/drawio/host.html'
+if dpkg-deb -c "$DEB" | grep -q 'ui/.shots'; then
+  echo 'deb 里有 ui/.shots —— prepack 没跑到' >&2; exit 1
+fi
+echo '[linux-check] AppImage 载荷'
+TMPD=$(mktemp -d)
+cd "$TMPD"
+${WSL_REPO}/target/release/bundle/appimage/*.AppImage --appimage-extract >/dev/null 2>&1
+for base in squashfs-root/usr/lib/Diagramon squashfs-root/usr/lib/diagramon; do
+  if [ -d "$base" ]; then
+    test -f "$base/ui/index.html"
+    test -f "$base/assets/drawio/host.html"
+    echo "[linux-check] AppImage 资源目录 $base"
+    ok=1
+    break
+  fi
+done
+if [ "\${ok:-}" != "1" ]; then echo 'AppImage 里找不到 ui/ 与 assets/ 的安装目录' >&2; exit 1; fi
+cd ${WSL_REPO}
+
+mkdir -p ${dest}
+cp -f target/release/bundle/appimage/*.AppImage ${dest}/
+cp -f target/release/bundle/appimage/*.AppImage.sig ${dest}/ 2>/dev/null || true
+cp -f target/release/bundle/deb/*.deb ${dest}/
+ls -l ${dest}
+`, "utf8");
+  must(await runLive("wsl.exe", ["-d", WSL_DISTRO, "-u", "root", "--", "bash", wslPath(script)], {
+    label: `WSL 构建 Linux 产物（${WSL_DISTRO}）`,
+  }), "Linux 构建");
+  if (!appImage()) die("Linux 产物缺失：*.AppImage（WSL 构建没产出或没拷回）");
+  if (!debFile()) die("Linux 产物缺失：*.deb");
+  if (!existsSync(appImageSig())) die("Linux 更新产物缺失：*.AppImage.sig（update artifacts 没开？）");
+  log(`✓ ${basename(appImage())} ${mb(appImage())} MB · ${basename(debFile())} ${mb(debFile())} MB`);
+}
+
 async function portableStep() {
   step("portable · 便携版 ZIP");
   if (!opts.portable) { warn("--no-portable：跳过（公开发版不推荐）"); return; }
@@ -556,17 +695,30 @@ async function manifest() {
   const sum = rawNotes.match(/^(?:摘要|summary)[:：]\s*(.+)$/im)?.[1];
   const fallback = rawNotes.replace(/^#.*$/gm, "").replace(/\s+/g, " ").trim();
   const notes = (sum || fallback).slice(0, 220);
+  const platforms = { "windows-x86_64": { signature: sig, url } };
+  if (opts.linux) {
+    const ai = appImage();
+    const asig = appImageSig();
+    if (!ai || !asig || !existsSync(asig)) die("Linux 更新产物缺失：AppImage 或 .sig —— 先跑 linux 步");
+    const aurl = `https://github.com/${CFG.repo}/releases/download/${TAG}/${basename(ai)}`;
+    // 红线 3 的 Linux 版：Tauri 更新器在 Linux **只认 AppImage**（deb/rpm 没有自更新）。
+    if (!/\.AppImage$/i.test(aurl)) die(`Linux 清单 url 必须指向 .AppImage（收到 ${aurl}）`);
+    platforms["linux-x86_64"] = { signature: readFileSync(asig, "utf8").trim(), url: aurl };
+  }
   const m = {
     version: VERSION,
     notes: notes.startsWith("Diagramon") ? notes : `Diagramon ${VERSION}：${notes}`,
     pub_date: new Date().toISOString().replace(/\.\d+Z$/, "Z"),
-    platforms: { "windows-x86_64": { signature: sig, url } },
+    platforms,
   };
   if (opts.dryRun) return;   // 已在本函数开头早退，这里只是兜底
   writeFileSync(manifestFile(), JSON.stringify(m, null, 2) + "\n", "utf8");
   const back = JSON.parse(readFileSync(manifestFile(), "utf8"));
   if (back.version !== VERSION || back.platforms["windows-x86_64"].signature !== sig) die("清单回读不一致");
-  log(`✓ latest.json 重新生成（pub_date ${m.pub_date}，签名 ${sig.length} 字符）`);
+  if (opts.linux && back.platforms["linux-x86_64"].signature !== platforms["linux-x86_64"].signature) {
+    die("清单回读不一致（linux-x86_64 签名）");
+  }
+  log(`✓ latest.json 重新生成（pub_date ${m.pub_date}，Windows 签名 ${sig.length} 字符${opts.linux ? "，含 linux-x86_64" : ""}）`);
 }
 
 async function tag() {
@@ -678,20 +830,34 @@ async function push() {
 function releaseBody() {
   const setupUrl = `https://github.com/${CFG.repo}/releases/download/${TAG}/${basename(setupExe())}`;
   const zipUrl = `https://github.com/${CFG.repo}/releases/download/${TAG}/${basename(portableZip())}`;
+  const ai = appImage();
+  const appimageUrl = ai ? `https://github.com/${CFG.repo}/releases/download/${TAG}/${basename(ai)}` : "";
+  const deb = debFile();
+  const debUrl = deb ? `https://github.com/${CFG.repo}/releases/download/${TAG}/${basename(deb)}` : "";
   let body = readFileSync(notesFile(), "utf8")
     .replace(/^(?:摘要|summary)[:：].*$\n?/im, "")   // 「摘要：」只喂 latest.json 的 notes，不进 Release 正文
     .replaceAll("{{version}}", VERSION)
     .replaceAll("{{date}}", new Date().toISOString().slice(0, 10))
     .replaceAll("{{setup_url}}", setupUrl)
     .replaceAll("{{zip_url}}", zipUrl)
+    .replaceAll("{{appimage_url}}", appimageUrl)
+    .replaceAll("{{deb_url}}", debUrl)
     .replaceAll("{{setup_size_mb}}", existsSync(setupExe()) ? mb(setupExe()) : "?")
-    .replaceAll("{{zip_size_mb}}", existsSync(portableZip()) ? mb(portableZip()) : "?");
+    .replaceAll("{{zip_size_mb}}", existsSync(portableZip()) ? mb(portableZip()) : "?")
+    .replaceAll("{{appimage_size_mb}}", ai ? mb(ai) : "?")
+    .replaceAll("{{deb_size_mb}}", deb ? mb(deb) : "?");
   if (!body.includes("# 中文") || !body.includes("# English")) die("正文双语段缺失");
   if (!body.includes(setupUrl)) die("正文里没有安装包下载链接（模板里要写 {{setup_url}}）");
   // 便携包链接同样必须**可点**：Gitee 不传便携 ZIP，正文没链接等于拿不到便携版
   // （2026-10-12 就漏过一次：两个 zip 只在正文外当附件躺着）。
   if (opts.portable && !body.includes(zipUrl)) {
     die(`正文里没有便携包下载链接（模板里要写 {{zip_url}}）—— Gitee 不传便携 ZIP，没链接就拿不到 ${basename(portableZip())}`);
+  }
+  // Linux 只发 GitHub（Gitee 单附件上限 100 MiB，AppImage 会超）：正文必须给出直链，
+  // 否则在 Release 页外根本拿不到 Linux 包。
+  if (opts.linux) {
+    if (!appimageUrl || !body.includes(appimageUrl)) die("正文里没有 AppImage 下载链接（模板里要写 {{appimage_url}}）");
+    if (!debUrl || !body.includes(debUrl)) die("正文里没有 deb 下载链接（模板里要写 {{deb_url}}）");
   }
   return body;
 }
@@ -765,6 +931,9 @@ async function publish() {
   if (!opts.dryRun && id) {
     const assets = curlJson({ url: `https://api.github.com/repos/${CFG.repo}/releases/${id}/assets`, token: ghToken(), proxy: CFG.ghProxy }).json || [];
     const mine = new Set([basename(setupExe()), basename(sigFile()), "latest.json", basename(portableZip())]);
+    if (opts.linux) {
+      for (const f of [appImage(), appImageSig(), debFile()]) if (f) mine.add(basename(f));
+    }
     for (const a of assets) {
       if (!mine.has(a.name)) continue;
       log(`  删旧附件 ${a.name}（id ${a.id}）`);
@@ -772,7 +941,8 @@ async function publish() {
     }
     const files = [setupExe(), sigFile(), manifestFile()];
     if (opts.portable) files.push(portableZip());
-    for (const f of files) await uploadAsset(id, f);
+    if (opts.linux) files.push(appImage(), appImageSig(), debFile());
+    for (const f of files) if (f) await uploadAsset(id, f);
     // ⚠️ 这里**不能**立刻 draft=false：先让 Gitee 把安装包与 latest-cn.json 传完、校验通过，
     // 再把 GitHub 正式发布。否则国内用户可能拿到一个指向 404 的清单，而 updater 不会回退。
   }
@@ -808,6 +978,19 @@ async function publish() {
   }
 }
 
+/** 远端文件总字节数（Range 请求，不真下整包）。GitHub 会 302 到对象存储，
+ *  响应头逐段打印 —— 取**最后一段**的 content-range / content-length。 */
+function remoteFileSize(url, tagName) {
+  const hdr = join(TMP_DIR, `head-${tagName}-${VERSION}.txt`);
+  const sink = join(TMP_DIR, `head-${tagName}-${VERSION}.bin`);
+  capture("curl", ["-sL", "-r", "0-0", "-D", hdr, "-o", sink, "--proxy", CFG.ghProxy, "--max-time", "180", url]);
+  const text = existsSync(hdr) ? readFileSync(hdr, "utf8") : "";
+  const range = text.match(/content-range:\s*bytes\s+\d+-\d+\/(\d+)/i);
+  if (range) return Number(range[1]);
+  const cls = [...text.matchAll(/^content-length:\s*(\d+)/gim)].map((m) => Number(m[1]));
+  return cls.length ? cls[cls.length - 1] : null;
+}
+
 async function verify() {
   step("verify · 回读更新链（红线 7）");
   if (opts.dryRun) { log("  （--dry-run：回读 latest.json / 附件列表 / content-length）"); return; }
@@ -820,6 +1003,25 @@ async function verify() {
   if (pulled.version !== VERSION) die(`更新源上的版本是 ${pulled.version}，不是 ${VERSION}（Release 是否真的发布了？）`);
   if (got !== local) die("更新源的 signature 与本地 .sig 不一致 —— 传错文件了");
   log(`✓ version=${pulled.version}，signature 与本地 .sig 逐字节一致`);
+
+  // Linux（Tauri 更新器在 Linux 只认 AppImage）：签名与 url 都要逐字节/逐字核对。
+  if (opts.linux) {
+    const lSigPath = appImageSig();
+    if (!lSigPath || !existsSync(lSigPath)) die("本地缺少 Linux .AppImage.sig —— linux 步没跑？");
+    const pl = pulled.platforms?.["linux-x86_64"];
+    if (!pl) die("更新源上没有 linux-x86_64 —— Linux 清单没写进去或 Release 不是本次那版");
+    if (pl.signature !== readFileSync(lSigPath, "utf8").trim()) {
+      die("更新源的 linux-x86_64 signature 与本地 AppImage.sig 不一致");
+    }
+    if (!/\.AppImage$/i.test(String(pl.url || "")) || !String(pl.url).includes(`/releases/download/${TAG}/`)) {
+      die(`更新源 linux-x86_64 的 url 不对（必须指向本次 AppImage）：${pl.url}`);
+    }
+    const aiSize = statSync(appImage()).size;
+    const aiRemote = remoteFileSize(pl.url, "linux");
+    if (aiRemote == null) warn("拿不到远端 AppImage 长度，跳过字节数核对");
+    else if (aiRemote !== aiSize) die(`远端 AppImage ${aiRemote} 字节 ≠ 本地 ${aiSize} 字节`);
+    else log(`✓ linux-x86_64：signature 一致、url 指向本次 AppImage、字节数与本地一致（${aiSize}）`);
+  }
 
   // 远端安装包的字节数：用 **Range 请求**取总长度 —— 206 的 content-range 里带着文件总大小，
   // 不必真下 54MB。
@@ -842,8 +1044,9 @@ async function verify() {
   const names = (rel.json.assets || []).map((a) => `${a.name}(${(a.size / 1048576).toFixed(1)}M,${a.state})`);
   log(`  附件：${names.join("  ")}`);
   const want = [basename(setupExe()), basename(sigFile()), "latest.json", ...(opts.portable ? [basename(portableZip())] : [])];
+  if (opts.linux) want.push(basename(appImage()), basename(appImageSig()), basename(debFile()));
   for (const w of want) if (!(rel.json.assets || []).some((a) => a.name === w && a.state === "uploaded")) die(`附件缺失或未完成：${w}`);
-  log("✓ 四个附件齐全且状态 uploaded");
+  log(`✓ ${want.length} 个附件齐全且状态 uploaded`);
 
   // ── Gitee 国内更新源（安装包 + latest-cn.json）
   const gRel = curlJson({
@@ -885,6 +1088,7 @@ function printHelp() {
   --body-only     只更新两端 Release 的说明，不动附件、不改发布状态（改错字/补链接时用）
   --create-if-missing  配合 --body-only：Gitee 上还没有 Release 时顺手建一个
   --no-portable   不产便携 ZIP
+  --no-linux      不产 Linux 产物（AppImage + deb；默认产，走 WSL 构建）
   --branch=<名>   主分支，默认 main
   --keys=<目录>   签名密钥目录，默认 ../keys
   --list-steps    列出步骤
@@ -894,7 +1098,7 @@ function printHelp() {
 }
 
 // ── 主流程 ────────────────────────────────────────────────────────────────
-const IMPL = { preflight, prepack, build, portable: portableStep, manifest, tag, branches, push, publish, verify };
+const IMPL = { preflight, prepack, build, linux: linuxStep, portable: portableStep, manifest, tag, branches, push, publish, verify };
 
 async function main() {
   log(`Diagramon 发布 ${TAG}${opts.dryRun ? "（--dry-run：不产生任何改动、不发任何请求）" : ""}`);

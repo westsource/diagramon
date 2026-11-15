@@ -19,7 +19,7 @@ dependencies = [
 
 [[package]]
 name = "ai"
-version = "3.14.4"
+version = "3.14.5"
 dependencies = [
  "ai-prompt",
  "app-ipc",
@@ -32,7 +32,7 @@ dependencies = [
 
 [[package]]
 name = "ai-prompt"
-version = "3.14.4"
+version = "3.14.5"
 dependencies = [
  "app-ipc",
  "serde_json",
@@ -86,7 +86,7 @@ checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
 
 [[package]]
 name = "app-core"
-version = "3.14.4"
+version = "3.14.5"
 dependencies = [
  "app-ipc",
  "base64 0.23.1",
@@ -100,7 +100,7 @@ dependencies = [
 
 [[package]]
 name = "app-ipc"
-version = "3.14.4"
+version = "3.14.5"
 dependencies = [
  "serde",
 ]
@@ -128,7 +128,7 @@ dependencies = [
 
 [[package]]
 name = "assets"
-version = "3.14.4"
+version = "3.14.5"
 dependencies = [
  "mime_guess",
  "percent-encoding",
@@ -725,7 +725,7 @@ dependencies = [
 
 [[package]]
 name = "core-wasm"
-version = "3.14.4"
+version = "3.14.5"
 dependencies = [
  "ai-prompt",
  "app-core",
@@ -936,7 +936,7 @@ dependencies = [
 
 [[package]]
 name = "diagramon"
-version = "3.14.4"
+version = "3.14.5"
 dependencies = [
  "ai",
  "app-core",
@@ -947,6 +947,7 @@ dependencies = [
  "image",
  "notify",
  "platform",
+ "platform-linux",
  "platform-windows",
  "reqwest",
  "serde",
@@ -993,7 +994,7 @@ dependencies = [
  "libc",
  "option-ext",
  "redox_users",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1254,7 +1255,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -2470,6 +2471,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "keyring"
+version = "3.6.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "eebcc3aff044e5944a8fbaf69eb277d11986064cba30c468730e8b9909fb551c"
+dependencies = [
+ "linux-keyutils",
+ "log",
+ "zeroize",
+]
+
+[[package]]
 name = "khronos-egl"
 version = "6.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2619,6 +2631,16 @@ dependencies = [
  "wayland-client",
  "wayland-protocols",
  "wayland-protocols-wlr",
+]
+
+[[package]]
+name = "linux-keyutils"
+version = "0.2.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "83270a18e9f90d0707c41e9f35efada77b64c0e6f3f1810e71c8368a864d5590"
+dependencies = [
+ "bitflags 2.13.2",
+ "libc",
 ]
 
 [[package]]
@@ -2783,7 +2805,7 @@ dependencies = [
  "png 0.18.1",
  "serde",
  "thiserror 2.0.21",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -3352,7 +3374,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7d8fae84b431384b68627d0f9b3b1245fcf9f46f6c0e3dc902e9dce64edd1967"
 dependencies = [
  "libc",
- "windows-sys 0.45.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -3543,15 +3565,23 @@ checksum = "f6b464fbc74e149a392436b17d523f769e057cb6877f6a5c4618bc6f11800548"
 
 [[package]]
 name = "platform"
-version = "3.14.4"
+version = "3.14.5"
 dependencies = [
  "dirs",
  "thiserror 2.0.21",
 ]
 
 [[package]]
+name = "platform-linux"
+version = "3.14.5"
+dependencies = [
+ "keyring",
+ "platform",
+]
+
+[[package]]
 name = "platform-windows"
-version = "3.14.4"
+version = "3.14.5"
 dependencies = [
  "platform",
  "sha2",
@@ -3968,7 +3998,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.12.1",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -4376,7 +4406,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c3d1e2c7f27f8d4cb10542a02c49005dbd6e93095799d6f3be745fae9f8fedd4"
 dependencies = [
  "libc",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -5006,10 +5036,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "once_cell",
  "rustix 1.1.5",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -5360,7 +5390,7 @@ dependencies = [
  "png 0.18.1",
  "serde",
  "thiserror 2.0.21",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -5400,7 +5430,7 @@ checksum = "f2f6fb2847f6742cd76af783a2a2c49e9375d0a111c7bef6f71cd9e738c72d6e"
 dependencies = [
  "memoffset",
  "tempfile",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -5850,7 +5880,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -5871,7 +5901,7 @@ dependencies = [
  "objc2-foundation",
  "objc2-quartz-core",
  "raw-window-handle",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
  "windows-version",
 ]
 
@@ -6241,7 +6271,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7d6f32a0ff4a9f6f01231eb2059cc85479330739333e0e58cadf03b6af2cca10"
 dependencies = [
  "cfg-if",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

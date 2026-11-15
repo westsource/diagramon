@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Diagramon 的五个图表扩展名。deb 把它装到 /usr/share/mime/packages/，
+     postinst 跑 update-mime-database，.desktop 里的 MimeType 才有意义。
+     与 tauri.conf.json 的 bundle.fileAssociations[].mimeType 一一对应。 -->
+<mime-info xmlns="http://www.freedesktop.org/standards/shared-mime-info">
+  <mime-type type="text/x-mermaid">
+    <comment>Mermaid diagram</comment>
+    <comment xml:lang="zh_CN">Mermaid 图表</comment>
+    <glob pattern="*.mmd"/>
+    <glob pattern="*.mermaid"/>
+  </mime-type>
+  <mime-type type="text/vnd.graphviz">
+    <comment>Graphviz DOT diagram</comment>
+    <comment xml:lang="zh_CN">Graphviz DOT 图表</comment>
+    <glob pattern="*.dot"/>
+    <glob pattern="*.gv"/>
+  </mime-type>
+  <mime-type type="text/x-d2">
+    <comment>D2 diagram</comment>
+    <comment xml:lang="zh_CN">D2 图表</comment>
+    <glob pattern="*.d2"/>
+  </mime-type>
+  <mime-type type="application/x-drawio">
+    <comment>drawio diagram</comment>
+    <comment xml:lang="zh_CN">drawio 图表</comment>
+    <glob pattern="*.drawio"/>
+  </mime-type>
+  <mime-type type="application/vnd.excalidraw+json">
+    <comment>Excalidraw scene</comment>
+    <comment xml:lang="zh_CN">Excalidraw 场景</comment>
+    <glob pattern="*.excalidraw"/>
+  </mime-type>
+</mime-info>

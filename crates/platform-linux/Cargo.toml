@@ -1,0 +1,15 @@
+[package]
+name = "platform-linux"
+description = "Diagramon Linux 平台适配层：Secret Service（freedesktop 密钥环）凭据存储"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# 依赖也按目标门控：本 crate 在非 Linux 上编译成空 lib（lib.rs 的 `#![cfg]`），
+# 不该让 Windows/macOS 的 `cargo check --workspace` 去拉 zbus/secret-service。
+[target.'cfg(target_os = "linux")'.dependencies]
+platform = { workspace = true }
+# `linux-native` 走 freedesktop Secret Service（zbus，纯 Rust），不依赖 libsecret 的 C 库；
+# GNOME Keyring / KWallet（Secret Service 兼容层）都能用。
+keyring = { version = "3", default-features = false, features = ["linux-native"] }

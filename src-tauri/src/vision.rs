@@ -43,7 +43,51 @@ impl Frames {
 
 /* ------------------------------------------------------------------ 显示器 */
 
+/// xcap / libwayshot 在部分 Wayland 合成器上会 **panic**（例如 WSLg 的
+/// `UnsupportedVersion`），而不是返回 `Err`。截屏是可选能力，不能让一次枚举把整个
+/// 应用带走 —— 这里把 panic 折成一条普通错误，界面如实显示"截屏不可用"。
+///
+/// 注意：发布构建是 `panic = "abort"`，`catch_unwind` 接不住 —— 这道守卫只在
+/// dev 构建里生效；发布版的 Wayland 限制因此写进了发布说明（X11 或支持
+/// screencopy 协议的合成器才可用）。
+fn guarded<T>(what: &str, f: impl FnOnce() -> R<T>) -> R<T> {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)) {
+        Ok(v) => v,
+        Err(_) => Err(format!("{what}不可用：当前桌面环境（Wayland 合成器）不支持截屏")),
+    }
+}
+
+/// Wayland 下的应用内截屏**默认关闭**：GNOME / KDE 等合成器不提供
+/// `zwlr_screencopy`，xcap 会 panic；而发布构建是 `panic = "abort"`，
+/// 一次截图请求足以把整个应用带走。X11 正常；wlroots 系合成器可用
+/// `DGM_WAYLAND_CAPTURE=1` 显式开启。
+#[cfg(target_os = "linux")]
+fn wayland_capture_blocked() -> Option<String> {
+    let wayland = std::env::var_os("WAYLAND_DISPLAY").is_some();
+    let forced = std::env::var("DGM_WAYLAND_CAPTURE").map(|v| v == "1").unwrap_or(false);
+    if wayland && !forced {
+        Some(
+            "Wayland 下暂不支持应用内截屏：请用系统截图工具（X11 正常；wlroots 系合成器可设 DGM_WAYLAND_CAPTURE=1 试用）"
+                .into(),
+        )
+    } else {
+        None
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn wayland_capture_blocked() -> Option<String> {
+    None
+}
+
 fn enumerate() -> R<Vec<(MonitorInfo, Monitor)>> {
+    if let Some(msg) = wayland_capture_blocked() {
+        return Err(msg);
+    }
+    guarded("枚举显示器", || enumerate_inner())
+}
+
+fn enumerate_inner() -> R<Vec<(MonitorInfo, Monitor)>> {
     let all = Monitor::all().map_err(|e| format!("枚举显示器失败：{e}"))?;
     let mut out = Vec::new();
     for (i, m) in all.into_iter().enumerate() {
@@ -104,7 +148,7 @@ pub async fn vision_capture_start(app: AppHandle, state: State<'_, Arc<AppState>
         .ok_or_else(|| "找不到可截取的屏幕".to_string())?;
 
     let (info, monitor) = (picked.0.clone(), &picked.1);
-    let img = monitor.capture_image().map_err(|e| format!("截屏失败：{e}"))?;
+    let img = guarded("截屏", || monitor.capture_image().map_err(|e| format!("截屏失败：{e}")))?;
 
     state.vision.lock().insert(info.id.clone(), (info.clone(), img));
 
@@ -125,6 +169,9 @@ fn open_overlay(app: &AppHandle, info: &MonitorInfo) -> R<()> {
     }
     // 物理像素 → 逻辑坐标：窗口必须正好盖满那块屏
     let scale = if info.scale > 0.0 { info.scale } else { 1.0 };
+    // 只有 Windows 的 WebView2 参数分支会改写 builder；Linux 上这是"无需 mut"，
+    // 用 allow 而不是拆两个变量，免得两边再漂。
+    #[allow(unused_mut)]
     let mut builder = WebviewWindowBuilder::new(
         app,
         "vision-overlay",
@@ -151,8 +198,11 @@ fn open_overlay(app: &AppHandle, info: &MonitorInfo) -> R<()> {
     // 直接回 ERROR_INVALID_STATE(0x8007139F)。自检/调试跑法只给主窗口挂了参数、overlay
     // 没挂 ⇒ overlay 的 webview 永远建不出来（真机实测：报"开框选窗口失败：failed to
     // create webview: WebView2 error: WindowsError(0x8007139F)"）。
-    if let Some(args) = crate::debug_browser_args() {
-        builder = builder.additional_browser_args(&args);
+    #[cfg(windows)]
+    {
+        if let Some(args) = crate::debug_browser_args() {
+            builder = builder.additional_browser_args(&args);
+        }
     }
 
     let w = builder.build().map_err(|e| format!("开框选窗口失败：{e}"))?;
