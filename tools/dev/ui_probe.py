@@ -1550,7 +1550,7 @@ def main() -> int:
         except Exception as e:
             log(f"（断言 13c 解析失败：{e}）")
 
-        # ---- 断言 13d：顶栏「使用在线版」在动作区第一位，点击走系统浏览器通道 ----
+        # ---- 断言 13d：顶栏「使用在线版」：未登录走无票地址，已登录带一次性票据 ----
         # 位置对齐网页版顶栏的「下载客户端」（同一个 .titlebar-actions 首位）；
         # 在线版自己不渲染这个入口（它就是在线的），由 web 构建用 isWeb 关掉。
         online_btn = ev(
@@ -1558,15 +1558,33 @@ def main() -> int:
             "  const btn = document.getElementById('btn-online');"
             "  if (!btn) return JSON.stringify({missing: true});"
             "  const acts = document.querySelector('.titlebar-actions');"
-            "  const orig = DGM.cloud.openExternal;"
+            # openOnline 用的是模块内的 openExternal（mock 下回落到 window.open），
+            # 所以桩要打在 window.open 上，而不是 DGM.cloud.openExternal。
+            "  const origWindowOpen = window.open;"
             "  let got = null;"
-            "  DGM.cloud.openExternal = async (u) => { got = u; return true; };"
+            "  window.open = (u) => { got = u; return {}; };"
+            "  const st = DGM.state.cloud.status || {};"
+            # ① 未登录：不回落到带票地址（没有票可换）
+            "  DGM.state.cloud.status = { ...st, signed_in: false };"
             "  btn.click();"
-            "  await new Promise(r => setTimeout(r, 150));"
-            "  DGM.cloud.openExternal = orig;"
+            "  await new Promise(r => setTimeout(r, 250));"
+            "  const fallback = got;"
+            # ② 已登录：先换 web 票据，再带 sso 打开（浏览器未登录也能直接进）
+            "  DGM.state.cloud.status = { ...st, signed_in: true };"
+            "  const origInvoke = DGM.ipc.invoke;"
+            "  DGM.ipc.invoke = (cmd, a) => cmd === 'cloud_online_url'"
+            "    ? Promise.resolve('https://app.diagramon.com/?lang=zh-CN&sso=probe')"
+            "    : origInvoke(cmd, a);"
+            "  got = null;"
+            "  btn.click();"
+            "  await new Promise(r => setTimeout(r, 300));"
+            "  const ticketed = got;"
+            "  DGM.ipc.invoke = origInvoke;"
+            "  DGM.state.cloud.status = st;"
+            "  window.open = origWindowOpen;"
             "  return JSON.stringify({first: acts.firstElementChild === btn,"
-            "    label: btn.textContent.trim(), title: btn.title || '', got,"
-            "    isWeb: !!(DGM.ipc && DGM.ipc.isWeb)});"
+            "    label: btn.textContent.trim(), title: btn.title || '',"
+            "    fallback, ticketed, isWeb: !!(DGM.ipc && DGM.ipc.isWeb)});"
             "})()"
         )
         log(f"顶栏使用在线版: {online_btn}")
@@ -1579,9 +1597,14 @@ def main() -> int:
                     fails.append(f"「使用在线版」不在标题栏动作区第一位（网页版「下载客户端」的位置）: {online_btn}")
                 if not ob.get("label") or not ob.get("title"):
                     fails.append(f"「使用在线版」没有文案/提示: {online_btn}")
-                got = ob.get("got") or ""
-                if not got.startswith("https://app.diagramon.com/?lang="):
-                    fails.append(f"点「使用在线版」没有打开在线版地址: {online_btn}")
+                fb = ob.get("fallback") or ""
+                if not fb.startswith("https://app.diagramon.com/?lang="):
+                    fails.append(f"未登录点「使用在线版」没有打开在线版地址: {online_btn}")
+                if "sso=" in fb:
+                    fails.append(f"未登录不该带票: {online_btn}")
+                tk = ob.get("ticketed") or ""
+                if "sso=probe" not in tk:
+                    fails.append(f"已登录点「使用在线版」没有换票据: {online_btn}")
         except Exception as e:
             log(f"（断言 13d 解析失败：{e}）")
 

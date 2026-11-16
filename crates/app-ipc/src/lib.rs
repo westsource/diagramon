@@ -1415,6 +1415,8 @@ pub mod commands {
     pub const CLOUD_DOC_DELETE: &str = "cloud_doc_delete";
     /// 「用户后台」的免登录入口：现换一张一次性票据，返回控制台地址（前端用系统浏览器打开）
     pub const CLOUD_CONSOLE_URL: &str = "cloud_console_url";
+    /// 「使用在线版」的免登录入口：现换一张一次性票据，返回带 `?sso=` 的在线版地址
+    pub const CLOUD_ONLINE_URL: &str = "cloud_online_url";
     /// 云网关**可用模型别名**（登录后才有；无 AI 权益时为空列表）
     pub const AI_GATEWAY_MODELS: &str = "ai_gateway_models";
     /// 会话持久化：读 / 存 / 清（按文档身份，见 `Conversation`）

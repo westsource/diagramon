@@ -599,6 +599,30 @@ pub async fn cloud_console_url(state: State<'_, Arc<AppState>>) -> R<String> {
     Ok(url)
 }
 
+
+/// 「使用在线版」的免登录入口：现签一张 `audience=web` 的 60 秒一次性票据，返回带 `?sso=` 的地址。
+///
+/// 与控制台入口同一条链路（`/auth/sso/web`，Bearer 鉴权）：浏览器里原本没登录也能直接
+/// 进去 —— 在线版启动时用 `?sso=` 兑换成自己的 Cookie 会话。语言只传 zh-CN / en-US，
+/// 服务端会再归一化一次（不把任意串带进跳转地址）。
+#[tauri::command]
+pub async fn cloud_online_url(state: State<'_, Arc<AppState>>, lang: String) -> R<String> {
+    let lang = if lang.trim().to_ascii_lowercase().starts_with("en") { "en-US" } else { "zh-CN" };
+    let v = call_json(
+        state.inner(),
+        reqwest::Method::POST,
+        &format!("/auth/sso/web?lang={lang}"),
+        Some(json!({})),
+        true,
+    )
+    .await?;
+    let url = str_of(&v, &["url"]);
+    if url.is_empty() {
+        return Err("云网关没有返回在线版地址（sso/web）".into());
+    }
+    Ok(url)
+}
+
 /* --------------------------------------------------------------- 云网关 AI */
 
 /// 云网关的**可用模型别名**（`GET /v1/ai/models`）。

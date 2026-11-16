@@ -382,6 +382,37 @@ window.DGM = window.DGM || {};
     }
   }
 
+  /** 在线版地址（无票据兜底）。与官网里 Web 版入口同一个。 */
+  const ONLINE_HOME = "https://app.diagramon.com/";
+  function onlineUrl(lang) {
+    return `${ONLINE_HOME}?lang=${lang === "en-US" ? "en-US" : "zh-CN"}`;
+  }
+
+  /**
+   * 打开在线版：**客户端已登录时现换一张 60 秒一次性票据**，浏览器原本没登录也能直接进去
+   * （在线版启动时用 `?sso=` 兑换成自己的 Cookie，见网页版的 redeemSso）。
+   *
+   * 未登录 / 换不到（离线、服务端还是旧版本）就退回无票据地址 —— 按钮永远可用。
+   * 失败提示里只回显**无票据**地址：票据一次性且 60 秒过期，没有再展示的意义。
+   */
+  async function openOnline() {
+    const lang = DGM.i18n && DGM.i18n.lang === "en-US" ? "en-US" : "zh-CN";
+    let url = "";
+    const signed = !!(state.cloud && state.cloud.status && state.cloud.status.signed_in);
+    if (signed) {
+      try {
+        url = await DGM.ipc.invoke("cloud_online_url", { lang });
+      } catch (_) {
+        url = "";
+      }
+    }
+    if (!url) url = onlineUrl(lang);
+    const ok = await openExternal(url);
+    if (ok) DGM.toast({ icon: "globe", title: t("ui.online"), sub: t("ui.onlineOpened") });
+    else DGM.toast({ icon: "alert", title: t("ui.online"), sub: t("tip.openFailed", { url: onlineUrl(lang) }), warn: true });
+    return ok;
+  }
+
   /**
    * 打开「用户后台」（与在线版同一个入口）：先向服务端现换一张 60 秒一次性票据，
    * 再用系统浏览器打开返回的控制台地址。
@@ -602,6 +633,8 @@ window.DGM = window.DGM || {};
     registerUrl,
     /** 「用户后台」：现换一次性票据后用系统浏览器打开（失败返回 false，不假装成功）。 */
     openConsole,
+    /** 「使用在线版」：已登录时带一次性票据打开（浏览器未登录也能直接进）。 */
+    openOnline,
     /** 用系统浏览器打开外链（失败返回 false，不假装成功）。也供其它模块复用。 */
     openExternal,
     ensureTree,

@@ -344,18 +344,12 @@ window.DGM = window.DGM || {};
   ];
   /** 官网首页（帮助菜单底部那一条；关于窗口里的「官方主页」是同一地址）。 */
   const SITE_HOME = "https://www.diagramon.com";
-  /** 在线版入口（网页版部署地址；与官网里 Web 版入口同一个）。 */
-  const ONLINE_HOME = "https://app.diagramon.com/";
-
   /** 顶栏「使用在线版」：与网页版顶栏「下载客户端」**同一个位置**（actions 的第一个元素）。
    *
    *  在线版自己不需要这个入口（它就是在线的）；`ipc.isWeb` 下直接不渲染。
-   *  点击走与帮助菜单同一条外链通道（系统浏览器），打不开就把地址回显出来。
+   *  点击交给 `DGM.cloud.openOnline()`：已登录时带一次性票据，浏览器未登录也能直接进去；
+   *  换不到票就退回无票据地址（按钮永远可用）。
    */
-  function onlineUrl() {
-    const lang = DGM.i18n && DGM.i18n.lang === "en-US" ? "en-US" : "zh-CN";
-    return `${ONLINE_HOME}?lang=${lang}`;
-  }
 
   function installOnlineLink() {
     if (ipc.isWeb) {
@@ -369,7 +363,9 @@ window.DGM = window.DGM || {};
     if (!b) {
       b = h("button", "icon-btn titlebar-online");
       b.id = "btn-online";
-      b.addEventListener("click", () => openDocLink(onlineUrl(), t("ui.online")));
+      b.addEventListener("click", () => {
+        if (DGM.cloud && typeof DGM.cloud.openOnline === "function") DGM.cloud.openOnline();
+      });
       // 与网页版「下载客户端」同位置：排在命令面板/主题/布局之前
       actions.insertBefore(b, actions.firstChild);
     }
