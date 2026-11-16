@@ -8,7 +8,9 @@
 渲染失败时把出错的行列回灌给它自己修。渲染、校验、转换全部在本机完成，只有你主动使用 AI 时，
 内容才会发往你自己选定的上游。
 
-版本 **3.12.1** · 官网 <https://www.diagramon.com>
+**桌面端**：Windows 10/11（x64）· Linux（x64，AppImage 或 deb）—— **在线版**：<https://app.diagramon.com>
+
+下载：<https://www.diagramon.com/download/> · 发布记录：<https://github.com/westsource/diagramon/releases>
 
 ## 它解决的问题
 
@@ -46,7 +48,7 @@ token 花在哪个环节说不清；写着真实服务名和内网域名的架�
 编辑重发都是显式动作；转换有损就逐条列出没迁移什么，并核对两侧节点与连线数量，少了就说少了多少。
 
 **5. 边界、成本、风格都归你。** 会员走官方网关、或 BYOK 直连自己的模型（OpenAI 兼容 / Ollama /
-自建端点），密钥只存在 Rust 进程内（Windows DPAPI），前端拿不到；只有你主动用 AI 时内容才发往你选定
+自建端点），密钥只存在 Rust 进程内（Windows DPAPI / Linux Secret Service 密钥环），前端拿不到；只有你主动用 AI 时内容才发往你选定
 的上游，首次外发前先告诉你要发什么；用量只计供应商实报的 token。想让它按你的习惯画，就把偏好存进
 长期记忆（你确认后才生效）。配色也不靠模型随手挑色值：它只标「这是主链路 / 判断 / 数据 / 外部 / 异常」，
 色值由应用的色系表落地 —— 换色系不改一个字的正文。要落地成能继续拖的图，AI 产物可直接进五种格式之一，drawio / Excalidraw
@@ -164,10 +166,10 @@ token 花在哪个环节说不清；写着真实服务名和内网域名的架�
 - **受控工具循环（试验）**：AI 回答前可"读文档 → 查语法 → 校验 → 查配色"，最多 5 步，只作用于内存文档模型，
   不接触文件系统、shell 或网络
 - **用量如实标注**：只累计供应商实报的 token，未回报显示 `—`，不显示 0，也不掺本地估算
-- **密钥永不进前端**：Key 只存在 Rust 进程内（Windows DPAPI 按用户加密），前端只拿 `has_key` 与掩码
+- **密钥永不进前端**：Key 只存在 Rust 进程内（Windows DPAPI 按用户加密 / Linux 用系统密钥环），前端只拿 `has_key` 与掩码
 
 ### 云端
-- **登录令牌只进凭据库**（DPAPI），过期静默续期，重启不再要求重新登录
+- **登录令牌只进凭据库**（DPAPI / Secret Service），过期静默续期，重启不再要求重新登录
 - **账户视图**：邮箱、昵称、套餐、角色、存储用量，以及 AI 权益与信用点额度
 - **云端文档**：目录树（空目录也在）、筛选、打开；保存到云端可挑目录、可新建子目录
 - **网关 auto 档位**：由服务端按能力与图片输入需求路由
@@ -183,23 +185,35 @@ token 花在哪个环节说不清；写着真实服务名和内网域名的架�
 - **关闭到托盘（可选）**：✕ 只隐藏窗口，托盘图标可唤回或退出
 - **Mermaid 默认外观**：文档没选外观时的全局兜底
 
+## 获取 Diagramon
+
+| 方式 | 拿到什么 | 说明 |
+|---|---|---|
+| **Windows** | 安装包（`Diagramon_<版本>_x64-setup.exe`）或便携 ZIP | 内置自动更新；需要 WebView2 运行时（Win10/11 通常已预装） |
+| **Linux** | AppImage（单文件、可自更新）或 deb | 需要 WebKitGTK 4.1（Ubuntu 22.04+ / Debian 12+）；deb 无应用内更新，升级请下载新包 |
+| **在线版** | <https://app.diagramon.com> | 免安装；与桌面端同一账号，在浏览器里登录一次即可 |
+
+每个版本同时提供 Windows 与 Linux 产物；下载、校验与发布说明都在 <https://www.diagramon.com/download/>。
+Wayland 下应用内截屏默认关闭（桌面合成器缺 screencopy 协议），X11 不受影响。
+
 ## 技术栈
 
-- **语言 / 框架**：Rust（2021 版次）+ Tauri 2，界面跑在系统 WebView（Windows 上是 WebView2）
+- **语言 / 框架**：Rust（2021 版次）+ Tauri 2，界面跑在系统 WebView（Windows 上是 WebView2，Linux 上是 WebKitGTK）
 - **前端**：无框架、无构建链、零 CDN；编辑器是随包的 CodeMirror 6
 - **渲染**：Mermaid（打包 JS）· Graphviz（WASM）· D2（官方 wasm 构建）· drawio（裁剪运行时）·
   Excalidraw（本地打包）—— 全部随安装包分发，本地运行
-- **AI**：Rust 侧 `reqwest` + SSE 流式，凭据走 DPAPI
-- **打包**：NSIS 安装包，渲染运行时与前端资源一并入包
+- **AI**：Rust 侧 `reqwest` + SSE 流式，凭据走 DPAPI（Windows）或系统密钥环 Secret Service（Linux）
+- **打包**：NSIS 安装包（Windows）与 AppImage / deb（Linux），渲染运行时与前端资源一并入包
 
 架构与设计决策（同源承载页与自定义协议、运行时分工、阈值来历、转换语义、AI 架构、发版纪律）
 不在 README 展开，随内部设计文档与仓库规则文件维护。
 
 ## 运行环境
 
-- Windows 10 / 11 64 位，需要 WebView2 运行时（Win10/11 通常已预装）
-- **不需要** VC++ 运行库：release 已静态链接 CRT
-- 渲染与画布运行时（约 110 MB）和前端资源都在安装包里，装完即用，无需额外下载
+- **Windows**：10 / 11 64 位，需要 WebView2 运行时（通常已预装）；**不需要** VC++ 运行库（release 已静态链接 CRT）
+- **Linux**：x64，需要 WebKitGTK 4.1（Ubuntu 22.04+ / Debian 12+）；AppImage 无需安装依赖，
+  deb 由包管理器拉依赖
+- 渲染与画布运行时（约 110 MB）和前端资源都在包里，装完即用，无需额外下载
 
 ## 许可
 
