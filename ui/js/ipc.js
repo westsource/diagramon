@@ -1190,6 +1190,8 @@ digraph Pipeline {
             name: cloudDoc.name || "未命名图",
             format: cloudDoc.format || "mermaid",
             hasPassword: !!String(args.password || "").trim(),
+            layout: args.layout || null,
+            look: args.look || null,
             expiresAt: args.expiresDays ? new Date(Date.now() + args.expiresDays * 86400000).toISOString() : null,
             expired: false,
             revoked: false,

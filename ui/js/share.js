@@ -158,6 +158,9 @@ window.DGM = window.DGM || {};
             documentId: d.cloudId,
             expiresDays: days,
             password: pass ? ($("#share-pass") || {}).value || "" : "",
+            // 把"我现在看到的布局/外观"一起带过去：分享页按同一套参数渲染。
+            layout: d.layout || null,
+            look: d.look || null,
           });
           DGM.toast({ icon: "share", title: t("share.created"), sub: "" });
           refreshMarks();

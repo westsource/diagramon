@@ -635,11 +635,17 @@ pub async fn share_create(
     document_id: String,
     expires_days: Option<u32>,
     password: Option<String>,
+    layout: Option<String>,
+    look: Option<String>,
 ) -> R<ShareInfo> {
+    // 渲染选项随分享一起存：分享页要按分享者当时的布局/外观渲染，
+    // 而不是客户端默认布局（否则同一张图在链接里长得不一样）。
     let body = json!({
         "documentId": document_id,
         "expiresDays": expires_days,
         "password": password.unwrap_or_default(),
+        "layout": layout,
+        "look": look,
     });
     let v = call_json(state.inner(), reqwest::Method::POST, "/shares", Some(body), true).await?;
     serde_json::from_value(v).map_err(|e| format!("分享响应格式不对：{e}"))
