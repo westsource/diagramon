@@ -2796,5 +2796,7 @@ window.DGM = window.DGM || {};
     layout,
     close,
     open: openDialog,
+    /** 复制文本（共享链接等复用；失败会 toast，不静默） */
+    copyText,
   };
 })();

@@ -2013,6 +2013,58 @@ def main() -> int:
         except Exception as e:
             log(f"（断言 16b 解析失败：{e}）")
 
+        # ---- 断言 16e：共享对话（已登录 + 云端文档）→ 创建链接 / 复制可用 ----
+        share_dlg = ev(
+            "(async () => {"
+            "  DGM.shell.setSidebarView('cloud');"
+            "  await new Promise(r => setTimeout(r, 300));"
+            "  const row = [...document.querySelectorAll('#side-view .ct-row')]"
+            "    .find(x => x.querySelector('.sz') && x.textContent.includes('登录流程.mmd'));"
+            "  if (!row) return JSON.stringify({err: 'cloud-row-missing'});"
+            "  row.click();"
+            "  await new Promise(r => setTimeout(r, 500));"
+            "  const doc = DGM.state.activeDoc();"
+            "  if (!doc) return JSON.stringify({err: 'no-doc'});"
+            "  const cloudId = doc.cloudId;"
+            "  document.getElementById('tab-share').click();"
+            "  await new Promise(r => setTimeout(r, 300));"
+            "  const dlg = document.getElementById('dialog');"
+            "  const title = (dlg.querySelector('h2') || {}).textContent || '';"
+            "  const create = dlg.querySelector('[data-act=\"create\"]');"
+            "  if (!create) return JSON.stringify({err: 'no-create', title});"
+            "  create.click();"
+            "  await new Promise(r => setTimeout(r, 600));"
+            "  const url = (document.getElementById('share-url') || {}).value || '';"
+            "  const copy = !!document.querySelector('[data-act=\"copy\"]');"
+            "  const marked = !!(DGM.share && DGM.share.isActive(cloudId));"
+            "  const close = document.getElementById('dialog').querySelector('[data-close]');"
+            "  if (close) close.click();"
+            "  await new Promise(r => setTimeout(r, 200));"
+            "  await DGM.state.closeDoc(doc.id);"
+            "  await DGM.state.activateDoc('d1');"
+            "  if (DGM.editor && DGM.editor.loadActive) DGM.editor.loadActive();"
+            "  if (DGM.preview && DGM.preview.schedule) DGM.preview.schedule();"
+            "  await new Promise(r => setTimeout(r, 200));"
+            "  return JSON.stringify({title, url, copy, marked});"
+            "})()"
+        )
+        log(f"共享对话: {share_dlg}")
+        try:
+            sd = json.loads(share_dlg)
+            if sd.get("err"):
+                fails.append(f"共享对话没走通: {sd}")
+            else:
+                if sd.get("title") != "共享这份图":
+                    fails.append(f"共享窗口标题不对: {sd.get('title')}")
+                if not (sd.get("url") or "").startswith("https://app.diagramon.com/s/"):
+                    fails.append(f"创建分享后没有链接: {sd}")
+                if not sd.get("copy"):
+                    fails.append(f"分享链接窗口缺复制按钮: {sd}")
+                if not sd.get("marked"):
+                    fails.append(f"创建后标签条共享按钮没有点亮: {sd}")
+        except Exception as e:
+            log(f"（断言 16e 解析失败：{e}）")
+
         # ---- 断言 17：有 AI 权益时，账户视图要给出真实额度（信用点，不是 ¥） ----
         # mock 里换一份带 enabled=true 的账户快照（等价于会员套餐），
         # 验证：AI 行变「已开通」+ 出现第二条额度块 + 剩余与周期都写出来。

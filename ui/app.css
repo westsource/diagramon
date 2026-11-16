@@ -317,6 +317,15 @@ body.no-ai #ai-gutter { display: none; }
   font-size: var(--fs-xs);
   white-space: nowrap;
 }
+/* 「共享」与「转换」同形：带文字的文档级动作，未共享描边、已共享时由 JS 加 .on */
+.tab-share {
+  width: auto;
+  display: flex; align-items: center; gap: 5px;
+  padding: 0 8px;
+  font-size: var(--fs-xs);
+  white-space: nowrap;
+}
+.tab-share.on { background: var(--accent-soft); color: var(--accent); }
 .win-btns { display: flex; gap: 2px; margin-left: 4px; }
 .win-btn { width: 30px; height: 24px; display: grid; place-items: center; color: var(--muted); border-radius: var(--radius-sm); }
 .win-btn:hover { background: var(--surface-3); color: var(--ink); }
@@ -1256,6 +1265,27 @@ button.st:hover { background: var(--surface-3); }
 .seg button { padding: 3px 11px; font-size: var(--fs-xs); color: var(--muted); border-radius: var(--radius-sm); display: flex; align-items: center; gap: 5px; }
 .seg button:hover { color: var(--ink); background: var(--surface-3); }
 .seg button.on { color: var(--accent-ink); background: var(--accent); }
+
+/* 共享窗口（share.js）：范围单选 / 链接行 / 管理列表 */
+.choice { display: flex; flex-direction: column; gap: 8px; }
+.opt { display: flex; gap: 10px; align-items: flex-start; padding: 9px 11px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-inset); cursor: pointer; }
+.opt.on { border-color: var(--accent); background: var(--accent-soft); }
+.opt .rd { width: 14px; height: 14px; border-radius: 50%; border: 1.5px solid var(--border-strong); flex: 0 0 auto; margin-top: 2px; display: grid; place-items: center; }
+.opt.on .rd { border-color: var(--accent); }
+.opt.on .rd::after { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
+.opt b { display: block; font-size: var(--fs-sm); font-weight: 600; }
+.opt small { display: block; color: var(--muted); font-size: var(--fs-xs); margin-top: 2px; }
+.input { height: 30px; padding: 0 9px; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); background: var(--surface-inset); color: var(--ink); font: var(--fs-sm)/1 var(--font-ui); }
+.input:focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); outline: none; }
+.link-row { display: flex; gap: 8px; }
+.link-row .input { flex: 1; font-family: var(--font-mono); font-size: var(--fs-xs); }
+.share-row { display: flex; align-items: center; gap: 10px; padding: 8px 2px; border-bottom: 1px solid var(--border); }
+.share-row:last-child { border-bottom: 0; }
+.share-row .t { flex: 1; min-width: 0; }
+.share-row .t b { display: block; font-size: var(--fs-sm); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.share-row .t small { display: block; color: var(--muted); font-size: var(--fs-xs); margin-top: 1px; }
+.share-row .acts { display: flex; gap: 6px; }
+[hidden] { display: none !important; }
 
 .switch { display: flex; align-items: center; gap: 9px; padding: 6px 0; }
 .switch .track {

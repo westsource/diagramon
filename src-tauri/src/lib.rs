@@ -367,6 +367,9 @@ pub fn run() {
             cloud::cloud_doc_delete,
             cloud::cloud_console_url,
             cloud::cloud_online_url,
+            cloud::share_create,
+            cloud::share_list,
+            cloud::share_revoke,
             cloud::ai_gateway_models,
         ])
         .run(tauri::generate_context!())

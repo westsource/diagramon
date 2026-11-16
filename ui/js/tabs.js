@@ -127,9 +127,16 @@ window.DGM = window.DGM || {};
       const n = $(id);
       if (n) n.hidden = !text;
     }
-    // 「转换为」近入口：没文档就藏（与 viewmodes 同进退）
+    // 「转换为」「共享」都是文档级动作：没文档就藏（与 viewmodes 同进退）
     const conv = $("#tab-convert");
     if (conv) conv.hidden = !d;
+    const share = $("#tab-share");
+    if (share) {
+      share.hidden = !d;
+      // 已分享（当前文档有进行中的链接）给一颗 accent 底，提醒"这份图已经对外开放"
+      const active = !!(d && DGM.share && DGM.share.isActive(d.cloudId));
+      share.classList.toggle("on", active);
+    }
   }
 
   /* ------------------------------------------------------------------ 标签菜单 */
@@ -138,6 +145,7 @@ window.DGM = window.DGM || {};
     const isActive = d.id === state.active;
     const items = [
       { label: t("tab.explain"), icon: "diagram", act: "explain" },
+      { label: t("mi.share"), icon: "share", act: "share" },
       { sep: true },
       { label: t("tab.close"), icon: "close", act: "close" },
       { label: t("tab.closeOthers"), icon: "close", act: "others" },
@@ -162,6 +170,8 @@ window.DGM = window.DGM || {};
       else if (it.act === "explain") {
         // 对**右键的那份**文档解读（不是右键时碰巧活动的另一份）：等激活落地再发
         Promise.resolve(activated || true).then(() => DGM.ai.explain());
+      } else if (it.act === "share") {
+        Promise.resolve(activated || true).then(() => DGM.share.open(d.id));
       } else if (it.act === "reveal") DGM.toast({ icon: "folderOpen", title: t("tab.reveal"), sub: t("common.notWired") });
     });
   }
@@ -212,6 +222,13 @@ window.DGM = window.DGM || {};
       conv.addEventListener("click", (e) => {
         e.stopPropagation();
         if (state.activeDoc()) DGM.shell.popConvertMenu(e.currentTarget);
+      });
+    }
+    const shareBtn = $("#tab-share");
+    if (shareBtn) {
+      shareBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        if (DGM.share) DGM.share.open();
       });
     }
     const more = $("#tab-more");

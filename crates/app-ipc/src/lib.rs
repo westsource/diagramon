@@ -1120,6 +1120,32 @@ pub struct GatewayModelList {
     pub items: Vec<GatewayModel>,
 }
 
+/// 一条只读分享链接（服务端 `/v1/shares`）。时间字段是服务端产出的 RFC 3339 串，
+/// 客户端只展示、不解析。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ShareInfo {
+    pub id: String,
+    pub token: String,
+    /// 完整分享地址（`{web_app_url}/s/{token}`），由服务端生成 —— 客户端不拼域名。
+    pub url: String,
+    pub document_id: String,
+    pub name: String,
+    pub format: FormatId,
+    pub has_password: bool,
+    pub expires_at: Option<String>,
+    pub expired: bool,
+    pub revoked: bool,
+    pub view_count: u64,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ShareList {
+    #[serde(default)]
+    pub items: Vec<ShareInfo>,
+}
+
 /// 云文档列表项。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CloudDoc {
@@ -1417,6 +1443,10 @@ pub mod commands {
     pub const CLOUD_CONSOLE_URL: &str = "cloud_console_url";
     /// 「使用在线版」的免登录入口：现换一张一次性票据，返回带 `?sso=` 的在线版地址
     pub const CLOUD_ONLINE_URL: &str = "cloud_online_url";
+    /// 只读分享链接：创建 / 列表 / 撤销
+    pub const SHARE_CREATE: &str = "share_create";
+    pub const SHARE_LIST: &str = "share_list";
+    pub const SHARE_REVOKE: &str = "share_revoke";
     /// 云网关**可用模型别名**（登录后才有；无 AI 权益时为空列表）
     pub const AI_GATEWAY_MODELS: &str = "ai_gateway_models";
     /// 会话持久化：读 / 存 / 清（按文档身份，见 `Conversation`）

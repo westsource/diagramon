@@ -17,7 +17,9 @@
 <meta http-equiv="Content-Security-Policy"
       content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' data: blob: http://ipc.localhost https://ipc.localhost; font-src 'self' data:; frame-src 'self' blob:; object-src 'none'; base-uri 'none'">
 <title>Diagramon</title>
-<link rel="stylesheet" href="./app.css">
+<!-- 资源一律用根绝对路径：在线版的只读分享页住在 /s/<token>，相对路径会打到 /s/js/… 404。
+     桌面版加载在 http://dgm.localhost/ 根上，绝对路径等价。 -->
+<link rel="stylesheet" href="/app.css">
 </head>
 <body>
 
@@ -74,6 +76,7 @@
         <button class="tab-add" id="tab-add" data-i18n-title="ui.newTab" title="新建图表  Ctrl+N"><svg class="ico ico-sm"><use href="#i-plus"></use></svg></button>
         <div class="tabbar-right">
           <div class="viewmodes" id="viewmodes" role="group" data-i18n-aria-label="ui.viewMode" aria-label="视图模式"><!-- JS 渲染 --></div>
+          <button class="icon-btn tab-share" id="tab-share" data-i18n-title="share.title" title="共享"><svg class="ico ico-sm"><use href="#i-share"></use></svg><span data-i18n="tab.share">共享</span></button>
           <button class="icon-btn tab-conv" id="tab-convert" data-i18n-title="mi.convertTo" title="转换为"><svg class="ico ico-sm"><use href="#i-swap"></use></svg><span data-i18n="conv.title">转换</span></button>
           <button class="icon-btn" id="tab-more" data-i18n-title="ui.tabActions" title="标签页操作"><svg class="ico ico-sm"><use href="#i-more"></use></svg></button>
         </div>
@@ -244,32 +247,33 @@
 
 <!-- ══ 厂商脚本（charset 必须显式声明：file:// 下浏览器不继承文档 charset，
         含非 ASCII 的 mermaid.min.js 会被误码成语法错误） ══ -->
-<script charset="utf-8" src="./vendor/mermaid.min.js"></script>
-<script charset="utf-8" src="./vendor/editor.bundle.js"></script>
+<script charset="utf-8" src="/vendor/mermaid.min.js"></script>
+<script charset="utf-8" src="/vendor/editor.bundle.js"></script>
 <!-- graphviz 预载：原内联 module 已外置（CSP script-src 'self' 不放行内联脚本） -->
-<script type="module" src="./js/graphviz-loader.js"></script>
+<script type="module" src="/js/graphviz-loader.js"></script>
 
 <!-- ══ 应用脚本（顺序即依赖；charset 同上） ══ -->
-<script charset="utf-8" src="./js/icons.js"></script>
-<script charset="utf-8" src="./js/i18n.js"></script>
-<script charset="utf-8" src="./js/ipc.js"></script>
-<script charset="utf-8" src="./js/state.js"></script>
-<script charset="utf-8" src="./js/shell.js"></script>
-<script charset="utf-8" src="./js/markdown.js"></script>
-<script charset="utf-8" src="./js/palette.js"></script>
-<script charset="utf-8" src="./js/sidebar.js"></script>
-<script charset="utf-8" src="./js/panels.js"></script>
-<script charset="utf-8" src="./js/tabs.js"></script>
-<script charset="utf-8" src="./js/editor.js"></script>
-<script charset="utf-8" src="./js/canvas.js"></script>
-<script charset="utf-8" src="./js/d2.js"></script>
-<script charset="utf-8" src="./js/preview.js"></script>
-<script charset="utf-8" src="./js/validate.js"></script>
-<script charset="utf-8" src="./js/reconcile.js"></script>
-<script charset="utf-8" src="./js/ai.js"></script>
-<script charset="utf-8" src="./js/enhance.js"></script>
-<script charset="utf-8" src="./js/dialogs.js"></script>
-<script charset="utf-8" src="./js/cloud.js"></script>
-<script charset="utf-8" src="./js/main.js"></script>
+<script charset="utf-8" src="/js/icons.js"></script>
+<script charset="utf-8" src="/js/i18n.js"></script>
+<script charset="utf-8" src="/js/ipc.js"></script>
+<script charset="utf-8" src="/js/state.js"></script>
+<script charset="utf-8" src="/js/shell.js"></script>
+<script charset="utf-8" src="/js/markdown.js"></script>
+<script charset="utf-8" src="/js/palette.js"></script>
+<script charset="utf-8" src="/js/sidebar.js"></script>
+<script charset="utf-8" src="/js/panels.js"></script>
+<script charset="utf-8" src="/js/tabs.js"></script>
+<script charset="utf-8" src="/js/editor.js"></script>
+<script charset="utf-8" src="/js/canvas.js"></script>
+<script charset="utf-8" src="/js/d2.js"></script>
+<script charset="utf-8" src="/js/preview.js"></script>
+<script charset="utf-8" src="/js/validate.js"></script>
+<script charset="utf-8" src="/js/reconcile.js"></script>
+<script charset="utf-8" src="/js/ai.js"></script>
+<script charset="utf-8" src="/js/enhance.js"></script>
+<script charset="utf-8" src="/js/dialogs.js"></script>
+<script charset="utf-8" src="/js/cloud.js"></script>
+<script charset="utf-8" src="/js/share.js"></script>
+<script charset="utf-8" src="/js/main.js"></script>
 </body>
 </html>

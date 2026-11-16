@@ -1,0 +1,415 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>共享原型 · Diagramon</title>
+<style>
+  /* 与 ui/app.css 同一套主题变量（这里只复制共享原型用得到的部分，避免外部依赖） */
+  :root{
+    --radius:7px; --radius-sm:5px;
+    --font-ui:-apple-system,"Segoe UI","Microsoft YaHei","Noto Sans CJK SC",system-ui,sans-serif;
+    --font-mono:"Cascadia Code","JetBrains Mono","SF Mono",Consolas,"Noto Sans Mono CJK SC",monospace;
+    --fs-xs:11px; --fs-sm:12px; --fs-md:13px;
+    --bg:#f7f8f8; --surface:#fff; --surface-2:#f2f4f3; --surface-3:#e9eceb; --surface-inset:#fbfbfb;
+    --border:#e2e5e4; --border-strong:#cfd4d3;
+    --ink:#232b2a; --ink-2:#4b5756; --muted:#7d8887; --faint:#a3acab;
+    --accent:#3d7d72; --accent-hover:#356e64; --accent-ink:#fff; --accent-soft:#e4efec; --accent-line:#b8d4ce;
+    --ok:#46885a; --warn:#a97a26; --err:#b0554a; --ok-soft:#e7f1e9; --warn-soft:#f7efdf; --err-soft:#f8e9e6;
+    --shadow:0 18px 50px rgba(20,30,28,.18),0 2px 8px rgba(20,30,28,.08);
+  }
+  html[data-theme="dark"]{
+    --bg:#141817; --surface:#1a1f1e; --surface-2:#202524; --surface-3:#262c2b; --surface-inset:#181d1c;
+    --border:#2b3132; --border-strong:#3a4241;
+    --ink:#e8eceb; --ink-2:#b7c0be; --muted:#8b9694; --faint:#68726f;
+    --accent:#66b3a4; --accent-hover:#7cc4b6; --accent-ink:#0f1514; --accent-soft:#22322f; --accent-line:#355a52;
+    --ok:#7fc394; --ok-soft:#20302a; --warn:#e0b567; --warn-soft:#332a1c; --err:#e09a90; --err-soft:#33211e;
+    --shadow:0 18px 50px rgba(0,0,0,.5),0 2px 8px rgba(0,0,0,.35);
+  }
+  *{box-sizing:border-box}
+  [hidden]{display:none!important}
+  html,body{height:100%}
+  body{margin:0;background:var(--bg);color:var(--ink);font:var(--fs-md)/1.55 var(--font-ui);-webkit-font-smoothing:antialiased}
+  button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
+  a{color:var(--accent)}
+  code{font-family:var(--font-mono);font-size:.94em;background:var(--surface-3);padding:1px 5px;border-radius:4px}
+
+  /* 原型开关条 */
+  .proto-bar{position:sticky;top:0;z-index:50;display:flex;align-items:center;gap:6px;
+    padding:8px 14px;background:color-mix(in srgb,var(--surface) 88%,transparent);
+    border-bottom:1px solid var(--border);backdrop-filter:blur(8px)}
+  .proto-bar b{font-size:var(--fs-sm);color:var(--ink-2);margin-right:6px}
+  .proto-bar .tag{font-size:var(--fs-xs);color:var(--muted);border:1px dashed var(--border-strong);border-radius:999px;padding:1px 8px}
+  .proto-bar .sp{flex:1}
+  .seg{display:inline-flex;border:1px solid var(--border);border-radius:999px;overflow:hidden}
+  .seg button{padding:5px 11px;font-size:var(--fs-sm);color:var(--ink-2)}
+  .seg button+button{border-left:1px solid var(--border)}
+  .seg button.on{background:var(--accent);color:var(--accent-ink)}
+
+  .stage{min-height:calc(100vh - 47px);display:flex;align-items:flex-start;justify-content:center;padding:34px 18px 60px}
+
+  /* 通用组件 */
+  .btn{display:inline-flex;align-items:center;justify-content:center;gap:5px;height:30px;padding:0 13px;
+    border:1px solid var(--border-strong);border-radius:var(--radius-sm);background:var(--surface);color:var(--ink);
+    font-size:var(--fs-sm);white-space:nowrap}
+  .btn:hover{background:var(--surface-3)}
+  .btn.sm{height:24px;padding:0 9px;font-size:var(--fs-xs)}
+  .btn.primary{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
+  .btn.primary:hover{background:var(--accent-hover);border-color:var(--accent-hover)}
+  .btn.ghost{background:transparent;border-color:transparent;color:var(--ink-2)}
+  .btn.ghost:hover{background:var(--surface-3)}
+  .btn.danger{color:var(--err)}
+  .btn[disabled]{opacity:.45;cursor:not-allowed}
+  .ico{width:16px;height:16px;flex:0 0 auto}
+
+  .dialog{width:min(560px,100%);background:var(--surface);border:1px solid var(--border);border-radius:12px;box-shadow:var(--shadow);overflow:hidden}
+  .dialog-head{display:flex;align-items:center;gap:9px;padding:14px 16px;border-bottom:1px solid var(--border)}
+  .dialog-head h2{margin:0;font-size:15px;font-weight:600}
+  .dialog-head .sub{font-size:var(--fs-xs);color:var(--muted)}
+  .dialog-head .sp{flex:1}
+  .dialog-body{padding:16px;display:flex;flex-direction:column;gap:15px}
+  .dialog-foot{display:flex;align-items:center;gap:8px;padding:12px 16px;border-top:1px solid var(--border);background:var(--surface-2)}
+  .dialog-foot .sp{flex:1}
+  .dialog-foot .note{font-size:var(--fs-xs);color:var(--muted);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+  .field{display:flex;flex-direction:column;gap:6px}
+  .field>label{font-size:var(--fs-sm);color:var(--ink-2);font-weight:600}
+  .field .hint{font-size:var(--fs-xs);color:var(--muted)}
+  .input{height:32px;padding:0 10px;border:1px solid var(--border-strong);border-radius:var(--radius-sm);background:var(--surface-inset);color:var(--ink);font:var(--fs-sm)/1 var(--font-ui)}
+  .input:focus{outline:2px solid var(--accent-line);outline-offset:-1px}
+
+  .choice{display:flex;flex-direction:column;gap:8px}
+  .opt{display:flex;gap:10px;align-items:flex-start;padding:10px 11px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface-inset);cursor:pointer}
+  .opt.on{border-color:var(--accent);background:var(--accent-soft)}
+  .opt .rd{width:15px;height:15px;border-radius:50%;border:1.5px solid var(--border-strong);flex:0 0 auto;margin-top:2px;display:grid;place-items:center}
+  .opt.on .rd{border-color:var(--accent)}
+  .opt.on .rd::after{content:"";width:7px;height:7px;border-radius:50%;background:var(--accent)}
+  .opt b{display:block;font-size:var(--fs-sm);font-weight:600}
+  .opt small{display:block;color:var(--muted);font-size:var(--fs-xs);margin-top:2px}
+
+  .callout{display:flex;gap:9px;padding:10px 12px;border-radius:var(--radius-sm);background:var(--surface-2);border:1px solid var(--border);font-size:var(--fs-sm);color:var(--ink-2)}
+  .callout.warn{background:var(--warn-soft);border-color:color-mix(in srgb,var(--warn) 35%,var(--border))}
+  .callout.info{background:var(--accent-soft);border-color:var(--accent-line)}
+  .callout .ico{margin-top:1px;color:var(--ink-2)}
+  .callout b{color:var(--ink)}
+
+  .link-row{display:flex;gap:8px}
+  .link-row .input{flex:1;font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--ink-2)}
+  .copied{color:var(--ok);font-size:var(--fs-xs);min-height:16px}
+
+  .chip{display:inline-flex;align-items:center;gap:4px;padding:1px 7px;border-radius:999px;font-size:var(--fs-xs);background:var(--surface-3);color:var(--ink-2)}
+  .chip.ok{background:var(--ok-soft);color:var(--ok)}
+  .chip.warn{background:var(--warn-soft);color:var(--warn)}
+  .chip.err{background:var(--err-soft);color:var(--err)}
+
+  /* 分享页（对方视角） */
+  .share-page{width:min(1080px,100%);display:flex;flex-direction:column;gap:0;background:var(--surface);border:1px solid var(--border);border-radius:14px;overflow:hidden;box-shadow:var(--shadow)}
+  .share-head{display:flex;align-items:center;gap:10px;padding:13px 18px;border-bottom:1px solid var(--border)}
+  .share-head .logo{width:26px;height:26px;border-radius:7px;background:linear-gradient(135deg,#5b7d9b,#4a6888);display:grid;place-items:center;color:#fff}
+  .share-head b{font-size:14px;font-weight:600}
+  .share-head .meta{font-size:var(--fs-xs);color:var(--muted)}
+  .share-head .sp{flex:1}
+  .share-canvas{background:
+      linear-gradient(90deg,color-mix(in srgb,var(--border) 45%,transparent) 1px,transparent 1px) 0 0/22px 22px,
+      linear-gradient(color-mix(in srgb,var(--border) 45%,transparent) 1px,transparent 1px) 0 0/22px 22px,
+      var(--surface-inset);
+    min-height:420px;display:grid;place-items:center;padding:34px}
+  .share-foot{display:flex;align-items:center;gap:8px;padding:10px 16px;border-top:1px solid var(--border);background:var(--surface-2);font-size:var(--fs-xs);color:var(--muted)}
+  .share-foot .sp{flex:1}
+
+  .empty{width:min(520px,100%);text-align:center;background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:34px 26px;box-shadow:var(--shadow)}
+  .empty .big{font-size:34px;line-height:1}
+  .empty h3{margin:10px 0 4px;font-size:16px}
+  .empty p{margin:0;color:var(--muted);font-size:var(--fs-sm)}
+
+  /* 管理列表 */
+  .list{width:min(720px,100%);background:var(--surface);border:1px solid var(--border);border-radius:14px;box-shadow:var(--shadow);overflow:hidden}
+  .list-head{display:flex;align-items:center;gap:10px;padding:14px 18px;border-bottom:1px solid var(--border)}
+  .list-head h2{margin:0;font-size:15px}
+  .list-head .sp{flex:1}
+  .row{display:flex;align-items:center;gap:12px;padding:12px 18px;border-bottom:1px solid var(--border)}
+  .row:last-child{border-bottom:0}
+  .row .t{min-width:0;flex:1}
+  .row .t b{display:block;font-size:var(--fs-md);font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .row .t small{display:block;color:var(--muted);font-size:var(--fs-xs);margin-top:2px}
+  .row .acts{display:flex;gap:6px}
+
+  .toast{position:fixed;left:50%;bottom:26px;transform:translateX(-50%) translateY(8px);opacity:0;pointer-events:none;
+    background:var(--ink);color:var(--bg);padding:8px 14px;border-radius:999px;font-size:var(--fs-sm);transition:.18s}
+  .toast.on{opacity:1;transform:translateX(-50%)}
+</style>
+</head>
+<body>
+
+<div class="proto-bar">
+  <b>共享原型</b><span class="tag">可点 · 离线</span>
+  <div class="seg" id="states"></div>
+  <span class="sp"></span>
+  <button class="btn sm ghost" id="theme">切换明暗</button>
+</div>
+
+<div class="stage" id="stage"></div>
+<div class="toast" id="toast"></div>
+
+<script>
+const $ = (s, r) => (r || document).querySelector(s);
+const el = (tag, cls, html) => { const n = document.createElement(tag); if (cls) n.className = cls; if (html != null) n.innerHTML = html; return n; };
+const icon = (name, cls) => {
+  const paths = {
+    share: '<circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><path d="m8.6 13.5 6.8 4M15.4 6.5l-6.8 4"/>',
+    cloud: '<path d="M17.5 19H7a4 4 0 0 1-.7-7.94A6 6 0 0 1 18 9.5a4.75 4.75 0 0 1-.5 9.5"/>',
+    link: '<path d="M10 13a5 5 0 0 0 7 0l2-2a5 5 0 0 0-7-7l-1 1"/><path d="M14 11a5 5 0 0 0-7 0l-2 2a5 5 0 0 0 7 7l1-1"/>',
+    copy: '<rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/>',
+    lock: '<rect x="4" y="10" width="16" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/>',
+    warn: '<path d="M12 3 2 20h20z"/><path d="M12 9v5M12 17h.01"/>',
+    info: '<circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/>',
+    close: '<path d="M18 6 6 18M6 6l12 12"/>',
+    eye: '<path d="M2 12s3.6-6 10-6 10 6 10 6-3.6 6-10 6S2 12 2 12z"/><circle cx="12" cy="12" r="2.6"/>',
+    logout: '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="m16 17 5-5-5-5"/><path d="M21 12H9"/>',
+  };
+  return `<svg class="ico ${cls || ""}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">${paths[name] || ""}</svg>`;
+};
+
+/* 一张“渲染后”的示意图（原型里用静态 SVG 代替真引擎输出） */
+const DIAGRAM = `
+<svg viewBox="0 0 620 300" width="620" height="300" role="img" aria-label="登录流程">
+  <defs>
+    <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 10 5 0 10z" fill="currentColor"/>
+    </marker>
+  </defs>
+  <g fill="none" stroke="var(--ink-2)" stroke-width="1.6" font-family="var(--font-ui)">
+    <rect x="30" y="30" width="150" height="46" rx="23" fill="var(--accent-soft)" stroke="var(--accent)"/>
+    <text x="105" y="58" text-anchor="middle" fill="var(--ink)" stroke="none" font-size="13">输入邮箱 / 密码</text>
+
+    <rect x="210" y="30" width="150" height="46" rx="8" fill="var(--surface)" stroke="var(--border-strong)"/>
+    <text x="285" y="58" text-anchor="middle" fill="var(--ink)" stroke="none" font-size="13">校验凭据</text>
+
+    <polygon points="460,30 550,63 460,96 370,63" fill="var(--surface)" stroke="var(--border-strong)"/>
+    <text x="460" y="68" text-anchor="middle" fill="var(--ink)" stroke="none" font-size="12">密码正确？</text>
+
+    <rect x="30" y="180" width="150" height="46" rx="23" fill="var(--surface)" stroke="var(--err)"/>
+    <text x="105" y="208" text-anchor="middle" fill="var(--ink)" stroke="none" font-size="13">提示重新输入</text>
+
+    <rect x="300" y="180" width="150" height="46" rx="8" fill="var(--surface)" stroke="var(--border-strong)"/>
+    <text x="375" y="208" text-anchor="middle" fill="var(--ink)" stroke="none" font-size="13">签发会话 Cookie</text>
+
+    <rect x="500" y="180" width="120" height="46" rx="8" fill="var(--surface)" stroke="var(--border-strong)"/>
+    <text x="560" y="208" text-anchor="middle" fill="var(--ink)" stroke="none" font-size="13">进入工作区</text>
+
+    <path d="M180 53h30" marker-end="url(#ar)"/>
+    <path d="M360 53h10" marker-end="url(#ar)"/>
+    <path d="M410 96v44h-35v40" marker-end="url(#ar)"/>
+    <path d="M510 96v44H105v40" marker-end="url(#ar)" stroke-dasharray="5 4"/>
+    <path d="M450 203h50" marker-end="url(#ar)"/>
+    <text x="420" y="128" fill="var(--muted)" stroke="none" font-size="11">是</text>
+    <text x="518" y="128" fill="var(--muted)" stroke="none" font-size="11">否</text>
+  </g>
+</svg>`;
+
+const SVG = {
+  share: icon("share"), cloud: icon("cloud"), link: icon("link"), copy: icon("copy"),
+  lock: icon("lock"), warn: icon("warn"), info: icon("info"), close: icon("close"),
+  eye: icon("eye"), logout: icon("logout"),
+};
+
+let toastTimer = null;
+function toast(msg) {
+  const t = $("#toast");
+  t.textContent = msg;
+  t.classList.add("on");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.classList.remove("on"), 1600);
+}
+
+const STATES = [
+  ["cloud", "共享（已云端）"],
+  ["local", "共享（本地未上传）"],
+  ["anon", "未登录"],
+  ["page", "对方看到的分享页"],
+  ["manage", "管理分享"],
+  ["expired", "失效链接"],
+];
+
+function renderCloud() {
+  return `
+  <section class="dialog" role="dialog" aria-label="共享">
+    <div class="dialog-head">${SVG.share}<div><h2>共享这份图</h2><div class="sub">登录流程.mmd · 云端文档 · 版本 12</div></div><span class="sp"></span><button class="btn ghost sm" title="关闭">${SVG.close}</button></div>
+    <div class="dialog-body">
+      <div class="choice">
+        <div class="opt on" data-opt="all"><span class="rd"></span><div><b>整份图</b><small>对方看到一份完整的只读图，始终是当前最新版本。</small></div></div>
+        <div class="opt" data-opt="focus"><span class="rd"></span><div><b>整份图 + 高亮选中范围</b><small>只高亮你在画布上选中的节点，不裁剪、不改变图的完整性。</small></div></div>
+      </div>
+
+      <div class="field">
+        <label>链接有效期</label>
+        <div class="seg" style="align-self:flex-start" data-expiry>
+          <button>7 天</button><button class="on">30 天</button><button>永久</button>
+        </div>
+        <span class="hint">到期后链接自动失效；你也可以随时在「管理分享」里撤销。</span>
+      </div>
+
+      <label class="opt" data-pass style="align-items:center">
+        <span class="rd"></span>
+        <div style="flex:1"><b>需要访问密码</b><small>默认关闭。开启后，对方要输入口令（不需要登录）。</small></div>
+      </label>
+      <div class="field" data-pass-field hidden><input class="input" placeholder="设置访问口令" value=""></div>
+
+      <div class="callout info">${SVG.info}<span><b>对方无需登录。</b>链接本身就是凭据；页面只渲染图，不显示你的邮箱与客户端界面。</span></div>
+
+      <div class="field">
+        <label>分享链接</label>
+        <div class="link-row"><input class="input" readonly value="https://app.diagramon.com/s/9fK2mQ7xLpR4wZ1a"><button class="btn sm" data-copy>${SVG.copy}复制</button></div>
+        <span class="copied" data-copied></span>
+      </div>
+    </div>
+    <div class="dialog-foot"><span class="note">随时可撤销 · 访问计数在「管理分享」</span><span class="sp"></span><button class="btn ghost" data-close>取消</button><button class="btn primary" data-copy>${SVG.link}创建并复制链接</button></div>
+  </section>`;
+}
+
+function renderLocal() {
+  return `
+  <section class="dialog" role="dialog" aria-label="共享（需要先上传）">
+    <div class="dialog-head">${SVG.share}<div><h2>共享这份图</h2><div class="sub">登录流程.mmd · 本地文件（尚未上传）</div></div><span class="sp"></span><button class="btn ghost sm" title="关闭">${SVG.close}</button></div>
+    <div class="dialog-body">
+      <div class="callout warn">${SVG.warn}<span><b>共享需要先上传一份到云端。</b>上传的是当前正文，会占用你的云端配额；<b>本地文件不会被改动</b>。</span></div>
+
+      <div class="field"><label>云端目录</label>
+        <div class="link-row"><input class="input" readonly value="/flows"><button class="btn sm">选择目录…</button></div>
+        <span class="hint">沿用「保存到云端」的目录树；根目录也可以。</span>
+      </div>
+      <div class="field"><label>文件名</label><input class="input" value="登录流程.mmd"><span class="hint">扩展名决定格式，保持 .mmd 即可。</span></div>
+
+      <div class="callout">${SVG.info}<span>上传后分享的是<b>云端副本</b>。之后你在本地文件上的修改不会自动出现在分享页 ——
+        需要在这里点「同步共享版本」（或菜单里的「保存到云端」）。</span></div>
+
+      <div class="field"><label>链接有效期</label>
+        <div class="seg" style="align-self:flex-start" data-expiry><button>7 天</button><button class="on">30 天</button><button>永久</button></div>
+      </div>
+    </div>
+    <div class="dialog-foot"><span class="note">上传前不会有任何网络请求</span><span class="sp"></span><button class="btn ghost" data-close>取消</button><button class="btn primary" data-upload>${SVG.cloud}上传并创建链接</button></div>
+  </section>`;
+}
+
+function renderAnon() {
+  return `
+  <section class="dialog" role="dialog" aria-label="登录后共享">
+    <div class="dialog-head">${SVG.share}<div><h2>登录后共享</h2><div class="sub">共享对象保存在云端，需要你的账号</div></div><span class="sp"></span><button class="btn ghost sm" title="关闭">${SVG.close}</button></div>
+    <div class="dialog-body">
+      <label class="field"><span>邮箱</span><input class="input" placeholder="you@example.com"></label>
+      <label class="field"><span>密码</span><input class="input" type="password" placeholder="••••••••"></label>
+      <div class="callout info">${SVG.info}<span>登录成功后会<b>接着完成这次共享</b>，不用回来再点一次。</span></div>
+    </div>
+    <div class="dialog-foot"><span class="note">没有账号？<a href="#">去官网注册</a></span><span class="sp"></span><button class="btn ghost" data-close>取消</button><button class="btn primary" data-login>登录并继续</button></div>
+  </section>`;
+}
+
+function renderPage() {
+  return `
+  <section class="share-page">
+    <div class="share-head">
+      <span class="logo">${SVG.share}</span>
+      <div><b>登录流程.mmd</b><div class="meta">只读 · 打开时重新渲染最新版本</div></div>
+      <span class="sp"></span>
+      <button class="btn sm ghost" title="适应窗口">${SVG.eye}适应</button>
+      <button class="btn sm ghost" title="复制链接">${SVG.copy}</button>
+    </div>
+    <div class="share-canvas">${DIAGRAM}</div>
+    <div class="share-foot">
+      <span class="chip ok">已是最新 · v12</span><span class="sp"></span>
+      <span>由 Diagramon 提供 · 只读分享</span>
+      <a class="btn sm ghost" href="#">打开在线版</a>
+    </div>
+  </section>`;
+}
+
+function renderManage() {
+  const rows = [
+    ["登录流程.mmd", "整份图 · 30 天", "创建 2 天前 · 到期 2026-12-14", "37 次浏览"],
+    ["渲染管线.dot", "整份图 · 永久", "创建 2026-10-02", "12 次浏览"],
+    ["服务拓扑.drawio", "整份图 + 高亮 · 7 天", "创建 5 小时前 · 明天到期", "3 次浏览"],
+  ].map(([name, kind, meta, views], i) => `
+    <div class="row" data-row="${i}">
+      <div class="t"><b>${name}</b><small>${kind} · ${meta} · ${views}</small></div>
+      <div class="acts"><button class="btn sm ghost" data-copy>${SVG.copy}复制</button><button class="btn sm ghost danger" data-revoke>撤销</button></div>
+    </div>`).join("");
+  return `
+  <section class="list">
+    <div class="list-head"><h2>管理分享</h2><span class="chip">3 个进行中</span><span class="sp"></span><button class="btn sm ghost">${SVG.share}共享当前图</button></div>
+    ${rows}
+    <div class="row" style="justify-content:center;color:var(--muted);font-size:var(--fs-xs)">撤销后链接立即失效，已打开的人刷新即看不到</div>
+  </section>`;
+}
+
+function renderExpired() {
+  return `
+  <section class="empty">
+    <div class="big">${SVG.link}</div>
+    <h3>链接已失效或图已删除</h3>
+    <p>分享者撤销了这条链接、或它已经过期。<br>请向分享者索要新的链接。</p>
+    <p style="margin-top:14px"><a class="btn sm" href="#">了解 Diagramon</a></p>
+  </section>`;
+}
+
+const RENDER = { cloud: renderCloud, local: renderLocal, anon: renderAnon, page: renderPage, manage: renderManage, expired: renderExpired };
+
+function current() {
+  const s = new URLSearchParams(location.search).get("s");
+  return RENDER[s] ? s : "cloud";
+}
+function go(s) { const u = new URL(location.href); u.searchParams.set("s", s); location.search = u.search; }
+
+function wire() {
+  // 状态条
+  const box = $("#states");
+  box.innerHTML = "";
+  for (const [id, label] of STATES) {
+    const b = el("button", id === current() ? "on" : "", label);
+    b.onclick = () => go(id);
+    box.appendChild(b);
+  }
+  // 关闭 / 取消：回第一个状态（原型里对话框只是页面内容）
+  document.querySelectorAll("[data-close]").forEach((b) => b.onclick = () => go("cloud"));
+  // 复制
+  document.querySelectorAll("[data-copy]").forEach((b) => b.onclick = () => {
+    const tip = $("[data-copied]");
+    if (tip) tip.textContent = "已复制到剪贴板（原型不写系统剪贴板）";
+    toast("链接已复制");
+  });
+  // 范围/有效期/密码
+  document.querySelectorAll("[data-opt]").forEach((o) => o.onclick = () => {
+    document.querySelectorAll("[data-opt]").forEach((x) => x.classList.toggle("on", x === o));
+  });
+  document.querySelectorAll("[data-expiry] button").forEach((b) => b.onclick = () => {
+    b.parentElement.querySelectorAll("button").forEach((x) => x.classList.toggle("on", x === b));
+  });
+  const pass = document.querySelector("[data-pass]");
+  if (pass) {
+    pass.onclick = () => { pass.classList.toggle("on"); const f = $("[data-pass-field]"); if (f) f.hidden = !pass.classList.contains("on"); };
+  }
+  // 上传
+  const up = document.querySelector("[data-upload]");
+  if (up) up.onclick = () => { toast("已上传到云端并创建链接"); setTimeout(() => go("cloud"), 700); };
+  const lg = document.querySelector("[data-login]");
+  if (lg) lg.onclick = () => { toast("登录成功，继续共享"); setTimeout(() => go("cloud"), 700); };
+  // 撤销
+  document.querySelectorAll("[data-revoke]").forEach((b) => b.onclick = () => {
+    const row = b.closest("[data-row]");
+    if (!row) return;
+    row.style.opacity = ".45";
+    row.querySelectorAll("button").forEach((x) => x.disabled = true);
+    const t = row.querySelector(".t small");
+    if (t) t.textContent += " · 已撤销";
+    toast("链接已撤销（对方刷新即失效）");
+  });
+  $("#theme").onclick = () => {
+    const h = document.documentElement;
+    h.dataset.theme = h.dataset.theme === "dark" ? "light" : "dark";
+  };
+}
+
+$("#stage").innerHTML = RENDER[current()]();
+wire();
+</script>
+</body>
+</html>

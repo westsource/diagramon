@@ -108,6 +108,7 @@ window.DGM = window.DGM || {};
       "ai.model": "mi.aiModel", "ai.apply": "mi.aiApply", "ai.history": "mi.aiHistory",
       "file.new": "mi.new", "file.open": "mi.open", "file.save": "mi.save", "file.saveAs": "mi.saveAs",
       "file.recent": "mi.openRecent", "file.cloud": "mi.cloudDocs",
+      "share.current": "cmd.share", "share.manage": "cmd.shareManage",
       "file.openFolder": "mi.openFolder", "file.closeFolder": "mi.closeWorkspace",
       "file.searchWorkspace": "mi.searchWorkspace", "file.newFileHere": "mi.newFileHere",
       "view.mode.source": "mi.modeSource", "view.mode.split": "mi.modeSplit", "view.mode.preview": "mi.modePreview",
@@ -406,6 +407,9 @@ window.DGM = window.DGM || {};
           { sep: true },
           { label: t("mi.cloudSave"), icon: "cloud", act: "cmd:file.cloudSave" },
           { label: t("mi.cloudDocs"), icon: "cloud", act: "cmd:file.cloud" },
+          { sep: true },
+          { label: t("mi.share"), icon: "share", act: "cmd:share.current" },
+          { label: t("mi.shareManage"), icon: "share", act: "cmd:share.manage" },
           { sep: true },
           { label: t("mi.save"), kbd: "Ctrl+S", icon: "save", act: "cmd:file.save" },
           { label: t("mi.saveAs"), kbd: "Ctrl+Shift+S", icon: "save", act: "cmd:file.saveAs" },
@@ -1557,6 +1561,11 @@ window.DGM = window.DGM || {};
     if (mod && e.shiftKey && k === "c") { e.preventDefault(); return DGM.preview.copyImage(); }
     // Alt+Shift+C：转换为（弹目标选择对话框；唯一可见入口在标签条右侧）
     if (e.altKey && e.shiftKey && k === "c") { e.preventDefault(); return DGM.dialogs.convertTo(); }
+    // Ctrl+Alt+S：共享当前图（与标签条/文件菜单同一个入口）
+    if (mod && e.altKey && !e.shiftKey && k === "s") {
+      e.preventDefault();
+      if (DGM.share) return DGM.share.open();
+    }
 
     if (e.altKey && ["1", "2", "4", "5"].includes(k)) {
       e.preventDefault();
@@ -1677,6 +1686,16 @@ window.DGM = window.DGM || {};
     cmd({ id: "file.saveAs", group: "file", icon: "save", kbd: "Ctrl+Shift+S", run: () => saveActive(true), avail: () => (state.activeDoc() ? true : { why: t("status.noDoc") }) });
     cmd({ id: "file.recent", group: "file", icon: "clock", kbd: "Ctrl+R", run: () => DGM.dialogs.fileHistory() });
     cmd({ id: "file.cloud", group: "file", icon: "cloud", run: () => setSidebarView("cloud") });
+    cmd({
+      id: "share.current", group: "file", icon: "share", kbd: "Ctrl+Alt+S",
+      run: () => DGM.share && DGM.share.open(),
+      avail: () => (state.activeDoc() ? true : { why: t("share.noDoc") }),
+    });
+    cmd({
+      id: "share.manage", group: "file", icon: "share",
+      run: () => DGM.share && DGM.share.manage(),
+      avail: () => (state.cloud.status.signed_in ? true : { why: t("acct.needLogin") }),
+    });
     cmd({
       id: "file.cloudSave", group: "file", icon: "cloud",
       run: () => DGM.cloud.saveDoc(),

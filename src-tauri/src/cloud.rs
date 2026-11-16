@@ -37,7 +37,7 @@ use app_core::cloudmap::{
 };
 use app_ipc::{
     CloudAccount, CloudDoc, CloudDocBody, CloudDocList, CloudFolder, CloudFolderList, CloudStatus,
-    FormatId, GatewayModelList,
+    FormatId, GatewayModelList, ShareInfo, ShareList,
 };
 use tauri::State;
 
@@ -621,6 +621,47 @@ pub async fn cloud_online_url(state: State<'_, Arc<AppState>>, lang: String) -> 
         return Err("云网关没有返回在线版地址（sso/web）".into());
     }
     Ok(url)
+}
+
+/* --------------------------------------------------------------- 只读分享 */
+
+/// 创建一条只读分享链接。`expires_days = None` = 永久；`password` 空串/None = 无口令。
+///
+/// 服务端返回**完整 URL**（`{web_app_url}/s/{token}`）：域名只存在服务端一处，
+/// 客户端不拼第二份，换域名时不用重发客户端。
+#[tauri::command]
+pub async fn share_create(
+    state: State<'_, Arc<AppState>>,
+    document_id: String,
+    expires_days: Option<u32>,
+    password: Option<String>,
+) -> R<ShareInfo> {
+    let body = json!({
+        "documentId": document_id,
+        "expiresDays": expires_days,
+        "password": password.unwrap_or_default(),
+    });
+    let v = call_json(state.inner(), reqwest::Method::POST, "/shares", Some(body), true).await?;
+    serde_json::from_value(v).map_err(|e| format!("分享响应格式不对：{e}"))
+}
+
+#[tauri::command]
+pub async fn share_list(state: State<'_, Arc<AppState>>) -> R<ShareList> {
+    let v = call_json(state.inner(), reqwest::Method::GET, "/shares", None, true).await?;
+    serde_json::from_value(v).map_err(|e| format!("分享列表格式不对：{e}"))
+}
+
+#[tauri::command]
+pub async fn share_revoke(state: State<'_, Arc<AppState>>, id: String) -> R<()> {
+    call_json(
+        state.inner(),
+        reqwest::Method::DELETE,
+        &format!("/shares/{}", enc_path_seg(id.trim())),
+        None,
+        true,
+    )
+    .await?;
+    Ok(())
 }
 
 /* --------------------------------------------------------------- 云网关 AI */

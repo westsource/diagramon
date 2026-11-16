@@ -1177,6 +1177,36 @@ digraph Pipeline {
           this._cloud.folders.push(path);
           return { path, name: path.split("/").pop(), depth: path.split("/").length - 1, document_count: 0, has_children: false, is_explicit: true };
         }
+        // ---- 只读分享（mock：内存表，供浏览器原型/探针走完整对话） ----
+        case "share_create": {
+          this._shares = this._shares || [];
+          const cloudDoc = this._cloud.docs.find((d) => d.id === args.documentId) || {};
+          const id = "share-" + this._newId("");
+          const rec = {
+            id,
+            token: "tok-" + id,
+            url: "https://app.diagramon.com/s/tok-" + id,
+            documentId: args.documentId,
+            name: cloudDoc.name || "未命名图",
+            format: cloudDoc.format || "mermaid",
+            hasPassword: !!String(args.password || "").trim(),
+            expiresAt: args.expiresDays ? new Date(Date.now() + args.expiresDays * 86400000).toISOString() : null,
+            expired: false,
+            revoked: false,
+            viewCount: 0,
+            createdAt: new Date().toISOString(),
+          };
+          this._shares.unshift(rec);
+          return { ...rec };
+        }
+        case "share_list":
+          return { items: (this._shares || []).filter((x) => !x.revoked).map((x) => ({ ...x })) };
+        case "share_revoke": {
+          const rec = (this._shares || []).find((x) => x.id === args.id);
+          if (rec) rec.revoked = true;
+          return true;
+        }
+
         case "cloud_doc_save": {
           if (!this._cloud.signed) throw new Error("尚未登录云网关");
           // 乐观锁与真实服务端同口径：version=0 = 仅当不存在时创建；
