@@ -4171,7 +4171,7 @@ def main() -> int:
             "  await new Promise(r => setTimeout(r, 400));"
             "  const w = document.querySelector('#welcome');"
             "  out.welcomeShown = !!w && !w.hidden;"
-            "  out.rowCount = w ? w.querySelectorAll('[data-recent]').length : 0;"
+            "  out.rowCount = w ? w.querySelectorAll('[data-recent-i]').length : 0;"
             "  const more = document.querySelector('#w-recent-more');"
             "  out.hasMore = !!more;"
             "  more.click();"
