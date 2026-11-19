@@ -412,7 +412,10 @@ function listLinux() {
   try { return readdirSync(linuxDir()); } catch { return []; }
 }
 function linuxFile(re) {
-  const hit = listLinux().find((n) => re.test(n));
+  // 必须再按版本号收窄：linuxDir 里可能留着上一版产物（WSL 构建只 `cp -f` 不回删），
+  // 而 readdir 的顺序不保证 —— 2026-11-19 发 3.15.0 时清单就这样被写进了 3.14.5 的
+  // AppImage 签名与文件名（红线 2 直接失守），所以这里两道防线：按版本挑 + 构建前清目录。
+  const hit = listLinux().find((n) => re.test(n) && n.includes(VERSION));
   return hit ? join(linuxDir(), hit) : null;
 }
 function appImage() { return linuxFile(/\.AppImage$/i); }
@@ -583,6 +586,10 @@ async function linuxStep() {
     return;
   }
   mkdirSync(linuxDir(), { recursive: true });
+  // 清掉上一版残留（见 linuxFile 的说明）：否则 manifest/publish 取到的是旧文件。
+  for (const n of listLinux()) {
+    if (/\.(AppImage|deb)(\.sig)?$/i.test(n)) rmSync(join(linuxDir(), n), { force: true });
+  }
   // appimagetool 自己会去 GitHub 下 runtime，但受限网络/国内链路经常失败
   // （实测：`server returned status code 0`）。先自己下一份，用 `LDAI_RUNTIME_FILE`
   // 交给 linuxdeploy 的 appimage 插件（它直接转成 `--runtime-file`）。
