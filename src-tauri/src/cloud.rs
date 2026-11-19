@@ -555,14 +555,17 @@ pub async fn cloud_doc_open(state: State<'_, Arc<AppState>>, id: String) -> R<Cl
         true,
     )
     .await?;
-    Ok(CloudDocBody {
+    let body = CloudDocBody {
         id: str_of(&v, &["id"]),
         name: str_of(&v, &["name"]),
         path: str_of(&v, &["path"]),
         format: FormatId::from_str_opt(&str_of(&v, &["format"])).unwrap_or(FormatId::Mermaid),
         body: str_of(&v, &["content"]),
         version: u64_of(&v, &["version"]),
-    })
+    };
+    // 与本地文件一样：取回正文就是"打开"，记一条最近打开（云文档按 cloud_id 去重）。
+    state.remember_recent_cloud(&body.id, &body.name, body.format, &body.path);
+    Ok(body)
 }
 
 #[tauri::command]

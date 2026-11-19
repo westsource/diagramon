@@ -487,15 +487,23 @@ window.DGM = window.DGM || {};
     const recent = (state.settings && state.settings.recent) || [];
     const rows = recent.length
       ? recent.slice(0, 8).map((r) => {
-          const openDoc = state.docs.find((d) => d.path && d.path === r.path);
+          const openDoc = r.cloud_id
+            ? state.docs.find((d) => d.cloudId === r.cloud_id)
+            : state.docs.find((d) => d.path && d.path === r.path);
           const row = h("button", "tree-row" + (openDoc && openDoc.id === activeId ? " on" : ""));
           row.append(fmtDot(r.format), h("span", "nm", esc(r.name)), h("span", "meta", esc(recentWhen(r.opened_at))));
           // 网页版的 path 是会话级句柄令牌（webfile:…）：直接拿它当 tooltip 是给用户看 UUID，
-          // 那边只显示文件名；桌面的路径本身就有用，照旧。
-          row.title = DGM.ipc.isWeb && /^(webfile|webdir|download):/.test(r.path) ? r.name : r.path;
+          // 那边只显示文件名；桌面的路径本身就有用，照旧。云文档没有磁盘路径，显示云端目录。
+          row.title = r.cloud_id
+            ? r.cloud_path
+              ? "/" + r.cloud_path
+              : t("side.cloud.docs")
+            : DGM.ipc.isWeb && /^(webfile|webdir|download):/.test(r.path)
+              ? r.name
+              : r.path;
           row.addEventListener("click", () => {
             if (openDoc) openDocAt(openDoc.id);
-            else if (DGM.shell.openPath) DGM.shell.openPath(r.path);
+            else if (DGM.shell.openRecent) DGM.shell.openRecent(r);
           });
           return row;
         })

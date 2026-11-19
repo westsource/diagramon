@@ -381,10 +381,17 @@ window.DGM = window.DGM || {};
     const isText = state.isTextDoc(state.activeDoc());
 
     const recentItems = recent.slice(0, 6).map((r) => {
-      const d = state.docs.find((x) => x.path === r.path);
+      const d = r.cloud_id
+        ? state.docs.find((x) => x.cloudId === r.cloud_id)
+        : state.docs.find((x) => x.path && x.path === r.path);
       return d
         ? { label: r.name, icon: "file", act: "open:" + d.id, kbd: "" }
-        : { label: r.name, icon: "file", act: "openpath:" + r.path, kbd: "" };
+        : {
+            label: r.name,
+            icon: "file",
+            act: (r.cloud_id ? "opencloud:" : "openpath:") + (r.cloud_id || r.path),
+            kbd: "",
+          };
     });
     recentItems.push({ sep: true });
     recentItems.push({ label: t("mi.recentMore"), icon: "search", act: "cmd:file.recent" });
@@ -584,6 +591,7 @@ window.DGM = window.DGM || {};
     if (act.startsWith("new:")) return DGM.dialogs.newDoc(act.slice(4));
     if (act.startsWith("open:")) return activateDocById(act.slice(5));
     if (act.startsWith("openpath:")) return openPath(act.slice(9));
+    if (act.startsWith("opencloud:")) return openRecent({ cloud_id: act.slice(10) });
     if (act.startsWith("conv:")) return DGM.dialogs.convertTo(act.slice(5));
     if (act.startsWith("model:")) return setModel(act.slice(6));
     if (act.startsWith("mode:")) return setMode(act.slice(5));
@@ -1208,6 +1216,27 @@ window.DGM = window.DGM || {};
       if (state.dropRecent) state.dropRecent(path);
       status(t("status.openFailed") + ": " + ((e && e.message) || e), "err");
     }
+  }
+
+  /** 打开一条「最近打开」。云文档没有磁盘 path，必须按 `cloud_id` 走云端打开；
+   *  本地文件仍走 `openPath`。欢迎页、菜单、侧栏、历史窗口共用这一个入口。 */
+  async function openRecent(r) {
+    if (!r) return;
+    if (r.cloud_id) {
+      try {
+        await state.cloudOpenDoc(r.cloud_id, r.cloud_path || "");
+      } catch (e) {
+        const msg = String((e && e.message) || e);
+        // 只有"文档确实没了"才把记录移出列表；连不上/登录过期是暂时的，
+        // 把一条有效历史删掉比留一条 404 更糟。
+        if (state.dropRecent && /\b404\b|云端没有这份文档/.test(msg)) {
+          state.dropRecent("", r.cloud_id);
+        }
+        status(t("status.openFailed") + ": " + msg, "err");
+      }
+      return;
+    }
+    return openPath(r.path);
   }
 
   /* ------------------------------------------------------------------ 拖拽打开文件 */
@@ -2148,6 +2177,7 @@ window.DGM = window.DGM || {};
     saveActive,
     openFile,
     openPath,
+    openRecent,
     /** 用系统浏览器打开外部链接（帮助文档 / 关于窗口的官网与源码）。**用户点了才发请求。** */
     openDocLink,
     /** 原生拖放分发（供自检/探针直接喂 payload；OS 级拖放没法脚本化）。 */

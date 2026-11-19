@@ -2154,10 +2154,16 @@ window.DGM = window.DGM || {};
     const all = ((state.settings && state.settings.recent) || []).slice();
     const rowHtml = (r) => {
       const fmt = (r.format || "").toString();
+      const cloud = !!r.cloud_id;
+      const where = cloud
+        ? r.cloud_path
+          ? "/" + r.cloud_path
+          : t("side.cloud.docs")
+        : r.path;
       return (
-        `<button class="hist-row" data-act="open" data-path="${esc(r.path)}" title="${esc(r.path)}">` +
+        `<button class="hist-row" data-act="open" data-path="${esc(r.path)}" data-cloud="${esc(r.cloud_id || "")}" title="${esc(where)}">` +
         `<span class="fmt-dot" style="background:var(--fmt-${esc(fmt)})"></span>` +
-        `<span class="hr-main"><b>${esc(r.name)}</b><span>${esc(r.path)}</span></span>` +
+        `<span class="hr-main"><b>${esc(r.name)}</b><span>${esc(where)}</span></span>` +
         `<span class="hr-side">${esc(openedWhen(r.opened_at))}</span></button>`
       );
     };
@@ -2245,7 +2251,10 @@ window.DGM = window.DGM || {};
       // 只换列表、不重绘输入框：整块重绘会把光标踢出过滤框
       list = q
         ? all.filter(
-            (r) => (r.name || "").toLowerCase().includes(q) || (r.path || "").toLowerCase().includes(q),
+            (r) =>
+              (r.name || "").toLowerCase().includes(q) ||
+              (r.path || "").toLowerCase().includes(q) ||
+              (r.cloud_path || "").toLowerCase().includes(q),
           )
         : all;
       reset();
@@ -2253,10 +2262,17 @@ window.DGM = window.DGM || {};
     box.focus();
     wire((act, el) => {
       if (act === "more") return appendPage();
-      if (act !== "open" || !el.dataset.path) return;
-      const path = el.dataset.path;
+      if (act !== "open") return;
+      const path = el.dataset.path || "";
+      const cloudId = el.dataset.cloud || "";
+      if (!path && !cloudId) return;
       close();
-      DGM.shell.openPath(path);
+      if (cloudId) {
+        const r = all.find((x) => x.cloud_id === cloudId);
+        DGM.shell.openRecent(r || { cloud_id: cloudId });
+      } else {
+        DGM.shell.openPath(path);
+      }
     });
   }
 

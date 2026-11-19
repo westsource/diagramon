@@ -295,6 +295,40 @@ impl AppState {
                 name: name.to_string(),
                 format,
                 opened_at: now_ms(),
+                cloud_id: String::new(),
+                cloud_path: String::new(),
+            },
+        );
+        let snapshot = s.clone();
+        drop(s);
+        let _ = self.persist_settings(&snapshot);
+    }
+
+    /// 记一条云端文档的「最近打开」。
+    ///
+    /// 云文档没有磁盘路径，`path` 留空，去重键是 `cloud_id`；其余语义与
+    /// `remember_recent` 一致（置顶、不设上限、写失败只吞掉不报错）。
+    pub fn remember_recent_cloud(
+        &self,
+        cloud_id: &str,
+        name: &str,
+        format: app_ipc::FormatId,
+        cloud_path: &str,
+    ) {
+        if cloud_id.is_empty() {
+            return;
+        }
+        let mut s = self.settings();
+        s.recent.retain(|r| r.cloud_id != cloud_id);
+        s.recent.insert(
+            0,
+            app_ipc::RecentEntry {
+                path: String::new(),
+                name: name.to_string(),
+                format,
+                opened_at: now_ms(),
+                cloud_id: cloud_id.to_string(),
+                cloud_path: cloud_path.to_string(),
             },
         );
         let snapshot = s.clone();

@@ -417,10 +417,17 @@ impl Default for AiPrefs {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RecentEntry {
+    /// 本地文件路径；云端文档为空（见 `cloud_id`）。
     pub path: String,
     pub name: String,
     pub format: FormatId,
     pub opened_at: i64,
+    /// 云端文档 id；本地文件为空。云文档没有磁盘路径，去重与重新打开都靠它。
+    #[serde(default)]
+    pub cloud_id: String,
+    /// 云端目录（`""` = 根）；仅 `cloud_id` 非空时有意义。
+    #[serde(default)]
+    pub cloud_path: String,
 }
 
 /// 云网关偏好。`base_url` 为空 = 未配置（界面如实写"未配置"，不伪造状态）。

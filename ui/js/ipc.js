@@ -1233,7 +1233,7 @@ digraph Pipeline {
           if (!this._cloud.signed) throw new Error("尚未登录云网关");
           const d = this._cloud.docs.find((x) => x.id === args.id);
           if (!d) throw new Error("云端没有这份文档：" + args.id);
-          return { id: d.id, name: d.name, format: d.format, body: this._fmt(d.format).default_body, version: d.version || 1 };
+          return { id: d.id, name: d.name, path: d.path || "", format: d.format, body: this._fmt(d.format).default_body, version: d.version || 1 };
         }
         case "cloud_doc_delete": {
           if (!this._cloud.signed) throw new Error("尚未登录云网关");

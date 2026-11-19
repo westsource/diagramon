@@ -981,6 +981,13 @@ window.DGM = window.DGM || {};
     // 由 `cloudIdentity` 旁路表在 `applyResult` 时补回）。
     const already = state.docs.find((d) => (cloudIdentity.get(d.id) || d).cloudId === id);
     if (already) {
+      const ident = cloudIdentity.get(already.id) || {};
+      refreshRecentCloud(
+        id,
+        already.name || ident.name,
+        already.format,
+        path || ident.path || already.cloudPath || "",
+      );
       if (state.active !== already.id) {
         await activateDoc(already.id);
         if (DGM.editor && DGM.editor.loadActive) DGM.editor.loadActive();
@@ -1016,6 +1023,7 @@ window.DGM = window.DGM || {};
       doc.cloudPath = body.path || path || "";
       doc.dirty = false;
       state.active = doc.id;
+      refreshRecentCloud(body.id || id, name, body.format, doc.cloudPath);
       emit("session:changed");
       if (DGM.editor && DGM.editor.loadActive) DGM.editor.loadActive();
       if (DGM.preview && DGM.preview.schedule) DGM.preview.schedule();
@@ -1146,8 +1154,10 @@ window.DGM = window.DGM || {};
     return !!(ipc.isWeb && /^(webfile|webdir|download):/.test(String(path || "")));
   }
 
-  /** 网页版把 recent 写进设置（服务端保存）。桌面版由 Rust 的 `remember_recent`
-   *  在同一条命令里落盘，前端再写一次只会多出一条写路径。 */
+  /** 把整份 recent 写回设置（服务端 / settings.json）。
+   *
+   *  网页版每次都用；桌面版的**新增**由 Rust 在打开命令里落盘，这里只负责
+   *  没有 Rust 入口的**删除**（例如云端文档已被删掉、点开失败后移出列表）。 */
   function persistRecent(list) {
     try {
       patchSettings({ recent: list.map((r) => ({ ...r })) }).catch(() => {});
@@ -1169,14 +1179,40 @@ window.DGM = window.DGM || {};
     if (ipc.isWeb) persistRecent(list);
   }
 
-  /** 删掉一条「最近打开」：句柄失效的行点一次失败后就该消失，不该一直躺在列表里。 */
-  function dropRecent(path) {
-    if (!path || !state.settings) return;
+  /** 云端文档的「最近打开」：没有磁盘路径，去重键是 `cloud_id`。
+   *
+   *  桌面版的完整历史由 Rust 的 `cloud_doc_open` 落盘（`remember_recent_cloud`）；
+   *  这里同步内存里的 settings.recent，让欢迎页/菜单/侧栏立即看到。
+   *  网页版则照旧把整份列表写回服务端设置。 */
+  function refreshRecentCloud(cloudId, name, format, cloudPath) {
+    if (!cloudId || !state.settings) return;
+    if (!Array.isArray(state.settings.recent)) state.settings.recent = [];
+    const list = state.settings.recent;
+    const i = list.findIndex((r) => r.cloud_id === cloudId);
+    if (i >= 0) list.splice(i, 1);
+    list.unshift({
+      path: "",
+      name: name || "",
+      format: format || "",
+      opened_at: Date.now(),
+      cloud_id: cloudId,
+      cloud_path: cloudPath || "",
+    });
+    if (ipc.isWeb && list.length > RECENT_MAX) list.length = RECENT_MAX;
+    if (ipc.isWeb) persistRecent(list);
+    emit("settings:changed");
+  }
+
+  /** 删掉一条「最近打开」：句柄失效的行点一次失败后就该消失，不该一直躺在列表里。
+   *  云端条目没有 path，必须按 `cloudId` 找；删除也要落盘（否则重启后从
+   *  Rust 保存的历史里回来）。 */
+  function dropRecent(path, cloudId) {
+    if ((!path && !cloudId) || !state.settings) return;
     const list = state.settings.recent || [];
-    const i = list.findIndex((r) => r.path === path);
+    const i = list.findIndex((r) => (cloudId ? r.cloud_id === cloudId : r.path === path));
     if (i < 0) return;
     list.splice(i, 1);
-    if (ipc.isWeb) persistRecent(list);
+    if (ipc.isWeb || cloudId) persistRecent(list);
     emit("settings:changed");
   }
 
