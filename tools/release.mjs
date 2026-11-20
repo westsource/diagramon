@@ -697,9 +697,11 @@ if [ "\${ok:-}" != "1" ]; then echo 'AppImage 里找不到 ui/ 与 assets/ 的�
 cd ${WSL_REPO}
 
 mkdir -p ${dest}
-cp -f target/release/bundle/appimage/*.AppImage ${dest}/
-cp -f target/release/bundle/appimage/*.AppImage.sig ${dest}/ 2>/dev/null || true
-cp -f target/release/bundle/deb/*.deb ${dest}/
+# 只回拷本版产物：WSL 的 target 跨次保留（rsync 排除了 target/），
+# '*.deb' 会把上一版一起拷回来（3.15.1 发布时目录里就又是 3.14.5/3.15.0 的 deb）。
+cp -f target/release/bundle/appimage/Diagramon_${VERSION}_*.AppImage ${dest}/
+cp -f target/release/bundle/appimage/Diagramon_${VERSION}_*.AppImage.sig ${dest}/ 2>/dev/null || true
+cp -f target/release/bundle/deb/Diagramon_${VERSION}_*.deb ${dest}/
 ls -l ${dest}
 `, "utf8");
   must(await runLive("wsl.exe", ["-d", WSL_DISTRO, "-u", "root", "--", "bash", wslPath(script)], {
