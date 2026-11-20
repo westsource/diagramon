@@ -21,6 +21,7 @@
  * 步骤（按顺序）
  *   preflight  prepack  build  portable  manifest  tag  branches  push  publish  verify
  */
+import { createHash, createPublicKey, verify as verifySignature } from "node:crypto";
 import { spawn, spawnSync } from "node:child_process";
 import {
   appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync,
@@ -397,6 +398,40 @@ function sigFile() { return `${setupExe()}.sig`; }
 function manifestFile() { return join(nsisDir(), "latest.json"); }
 function portableZip() { return join(portableDir(), `Diagramon-${VERSION}-win-x64.zip`); }
 
+/**
+ * 用 `tauri.conf.json` 里的 pubkey 验证 `.sig`（minisign，Tauri 以 base64 包裹）。
+ *
+ * 2026-11-19 事故：`d43e1d8`（Linux 首发）把 pubkey 改坏了一个字符
+ * （`…MLQynvop…` → `…MLQYnvop…`），而签名仍由正确的私钥生成 —— 于是 3.14.5 / 3.15.0
+ * 的客户端一检查更新就报 `The signature verification failed`，且**这两个版本自己
+ * 再也收不到任何更新**。流水线当时对签名与公钥是否成对没有任何校验，所以照发不误。
+ * 这条闸门补上：签字后的产物必须能被将要编进 exe 的那把公钥验证。
+ */
+function assertSignature(file, sigPath) {
+  const confText = Buffer.from(conf().plugins.updater.pubkey || "", "base64").toString("latin1");
+  const pkLine = confText.split(/\r?\n/).filter(Boolean)[1];
+  if (!pkLine) die("tauri.conf.json 的 plugins.updater.pubkey 不是合法的 minisign 公钥");
+  const pk = Buffer.from(pkLine, "base64");
+  // `.sig` 文件本身是 base64（内容才是 minisign 的四行文本）；manifest 里放的也是这段 base64。
+  const sigText = Buffer.from(readFileSync(sigPath, "utf8").trim(), "base64").toString("utf8");
+  const sigLine = sigText.split(/\r?\n/).filter(Boolean)[1];
+  const sig = Buffer.from(sigLine || "", "base64");
+  if (sig.length !== 74) die(`${basename(sigPath)} 不是合法的 minisign 签名（长度 ${sig.length}）`);
+  if (!sig.subarray(2, 10).equals(pk.subarray(2, 10))) {
+    die(`${basename(file)} 的签名 key id（${sig.subarray(2, 10).toString("hex")}）与 tauri.conf.json 的 pubkey（${pk.subarray(2, 10).toString("hex")}）不是同一把密钥`);
+  }
+  const alg = sig.subarray(0, 2).toString("latin1");
+  const data = readFileSync(file);
+  const msg = alg === "ED" ? createHash("blake2b512").update(data).digest() : data;
+  const der = Buffer.concat([Buffer.from("302a300506032b6570032100", "hex"), pk.subarray(10, 42)]);
+  const key = createPublicKey({ key: der, format: "der", type: "spki" });
+  if (!verifySignature(null, msg, key, sig.subarray(10, 74))) {
+    die(`${basename(file)} 的签名无法被 tauri.conf.json 的 pubkey 验证 —— 客户端会报 `
+      + `"The signature verification failed"。pubkey 必须与签名私钥成对（见 ../keys/diagramon.key.pub）。`);
+  }
+  log(`✓ 签名可由 tauri.conf.json 的 pubkey 验证：${basename(file)}`);
+}
+
 /* ------------------------------ Linux 产物（WSL 里构建） ------------------------------
  *
  * 桌面端不能在 Windows 上交叉编译 Linux（webkit2gtk 的 C 依赖），而发版机是 Windows。
@@ -560,6 +595,7 @@ async function build() {
   must(await runLive(SELF, [TAURI_CLI, "build", "--bundles", "nsis"], { env, label: "tauri build --bundles nsis" }), "打包");
   if (opts.dryRun) return;
   for (const f of [setupExe(), sigFile()]) if (!existsSync(f)) die(`打包后缺件：${basename(f)}`);
+  assertSignature(setupExe(), sigFile());
   // 抽查载荷：安装包必须带 ui/ 与 assets/，否则装出来白屏。
   // **7z 是发版机的硬依赖，找不到就直接失败**（审计 G-7）：原来只 warn 然后继续，
   // 于是"带着开发产物的安装包"可以一路发出去 —— 那正是红线 1 记载的那次事故。
@@ -672,6 +708,7 @@ ls -l ${dest}
   if (!appImage()) die("Linux 产物缺失：*.AppImage（WSL 构建没产出或没拷回）");
   if (!debFile()) die("Linux 产物缺失：*.deb");
   if (!existsSync(appImageSig())) die("Linux 更新产物缺失：*.AppImage.sig（update artifacts 没开？）");
+  assertSignature(appImage(), appImageSig());
   log(`✓ ${basename(appImage())} ${mb(appImage())} MB · ${basename(debFile())} ${mb(debFile())} MB`);
 }
 
