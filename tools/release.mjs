@@ -205,18 +205,29 @@ function curlJson({ method = "GET", url, body = null, token = null, proxy = null
   if (body) args.push("-H", "Content-Type: application/json; charset=utf-8", "--data-binary", `@${body}`);
   args.push(url);
   if (opts.dryRun) { log(`  （--dry-run：${method} ${redact(url)}）`); return { code: 0, json: {} }; }
-  const r = capture("curl", args);
-  const lines = r.out.trimEnd().split("\n");
-  const httpCode = Number(lines.pop());
-  const text = lines.join("\n");
-  let json = {};
-  try { json = text ? JSON.parse(text) : {}; } catch { json = { _raw: text }; }
-  if (!expect.includes(httpCode)) {
-    const detail = JSON.stringify(json).slice(0, 300);
-    if (httpCode === 404) return { code: 404, json };
-    die(`${method} ${redact(url)} 返回 ${httpCode}：${redact(detail)}`);
+  // 走 socks5 的链路会偶发 curl 0（握手/连接被掐）与 5xx：GET/DELETE/PATCH 都是幂等的，
+  // 直接重试；POST 不重试（避免重复建 Release / 重复建附件），由调用方整步重跑。
+  const retriable = method !== "POST";
+  for (let attempt = 1; ; attempt++) {
+    const r = capture("curl", args);
+    const lines = r.out.trimEnd().split("\n");
+    const httpCode = Number(lines.pop());
+    const text = lines.join("\n");
+    let json = {};
+    try { json = text ? JSON.parse(text) : {}; } catch { json = { _raw: text }; }
+    const transient = httpCode === 0 || httpCode >= 500 || httpCode === 429;
+    if (retriable && transient && attempt < 3) {
+      warn(`${method} ${redact(url)} 传输失败（${httpCode || r.err.trim() || "空响应"}），重试 ${attempt}/2`);
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1500 * attempt);
+      continue;
+    }
+    if (!expect.includes(httpCode)) {
+      const detail = JSON.stringify(json).slice(0, 300);
+      if (httpCode === 404) return { code: 404, json };
+      die(`${method} ${redact(url)} 返回 ${httpCode}：${redact(detail)}`);
+    }
+    return { code: httpCode, json };
   }
-  return { code: httpCode, json };
 }
 /** 删掉某个同名附件（重传前清残留：上传中断会留下 state=starter 的空壳，同名再 POST 会 422）。 */
 function deleteAssetByName(releaseId, name) {
@@ -976,22 +987,34 @@ async function publish() {
     if (!id && !opts.dryRun) die("创建 GitHub Release 没拿到 id");
     log(`  新建草稿 Release id=${id}`);
   }
-  // 换产物 = 先删同名旧附件（否则同名上传会失败）
+  // 换产物 = 先删同名旧附件（否则同名上传会失败）。
+  // 断点续跑：已完整上传（state=uploaded 且字节数一致）的附件直接跳过 —— 否则网络一抖，
+  // 重跑一次就要把 300MB 全部重传一遍（2026-11-20 实测重传三次）。
   if (!opts.dryRun && id) {
-    const assets = curlJson({ url: `https://api.github.com/repos/${CFG.repo}/releases/${id}/assets`, token: ghToken(), proxy: CFG.ghProxy }).json || [];
-    const mine = new Set([basename(setupExe()), basename(sigFile()), "latest.json", basename(portableZip())]);
-    if (opts.linux) {
-      for (const f of [appImage(), appImageSig(), debFile()]) if (f) mine.add(basename(f));
-    }
-    for (const a of assets) {
-      if (!mine.has(a.name)) continue;
-      log(`  删旧附件 ${a.name}（id ${a.id}）`);
-      curlJson({ method: "DELETE", url: `https://api.github.com/repos/${CFG.repo}/releases/assets/${a.id}`, token: ghToken(), proxy: CFG.ghProxy, expect: [204] });
-    }
     const files = [setupExe(), sigFile(), manifestFile()];
     if (opts.portable) files.push(portableZip());
     if (opts.linux) files.push(appImage(), appImageSig(), debFile());
-    for (const f of files) if (f) await uploadAsset(id, f);
+    const mine = new Set(files.filter(Boolean).map((f) => basename(f)));
+    const byName = new Map();
+    const assets = curlJson({ url: `https://api.github.com/repos/${CFG.repo}/releases/${id}/assets`, token: ghToken(), proxy: CFG.ghProxy }).json || [];
+    for (const a of assets) byName.set(a.name, a);
+    for (const a of assets) {
+      if (!mine.has(a.name)) continue;
+      const want = files.find((f) => f && basename(f) === a.name);
+      if (a.state === "uploaded" && statSync(want).size === a.size) continue;
+      log(`  删旧附件 ${a.name}（id ${a.id}，state=${a.state}）`);
+      curlJson({ method: "DELETE", url: `https://api.github.com/repos/${CFG.repo}/releases/assets/${a.id}`, token: ghToken(), proxy: CFG.ghProxy, expect: [204] });
+      byName.delete(a.name);
+    }
+    for (const f of files) {
+      if (!f) continue;
+      const have = byName.get(basename(f));
+      if (have && have.state === "uploaded" && have.size === statSync(f).size) {
+        log(`  ✓ 已存在且大小一致，跳过上传：${basename(f)}`);
+        continue;
+      }
+      await uploadAsset(id, f);
+    }
     // ⚠️ 这里**不能**立刻 draft=false：先让 Gitee 把安装包与 latest-cn.json 传完、校验通过，
     // 再把 GitHub 正式发布。否则国内用户可能拿到一个指向 404 的清单，而 updater 不会回退。
   }
