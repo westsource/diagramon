@@ -8,9 +8,10 @@
  * 承载页的契约写在 `tools/drawio-host/host.html` 的注释里（那是它的真源）：
  *   画布 → 本站 : window.__hostQueue.push(str) + window.__hostEpochs.push(代际)
  *   本站 → 画布 : frame.contentWindow.__apply(str)
- * 外加三个可选钩子：`__hostZoom()`（当前缩放读数）/ `__hostFit()` / `__hostZoomBy(factor)`。
- * 三者的真源都在各自承载页里；`__hostFit` 返回**是否真的适配了**（false = 没内容可适配 /
- * 画布还没起来），别把它当"命令已发出"。
+ * 外加五个可选钩子：`__hostZoom()`（当前缩放读数）/ `__hostFit()` / `__hostZoomBy(factor)` /
+ * `__hostOverview()`（鹰眼：内容框 + 视口框 + 结构轮廓）/ `__hostCenterOn(x,y)`（把 model/scene
+ * 坐标放到视口正中）。它们的真源都在各自承载页里；`__hostFit`/`__hostCenterOn` 返回
+ * **是否真的做了**（false = 没内容可适配 / 画布还没起来），别把它当"命令已发出"。
  *
  * **代际令牌**（`__hostEpoch` / `__hostEpochs`，审计 2026-11-03 M-27）解决"这条画布事件
  * 属于哪份文档"：`show()` 换文档时 +1，但**只在承载页回 `load`/`loaded` 之后**才把新值
@@ -777,6 +778,33 @@ window.DGM = window.DGM || {};
   }
 
   /**
+   * 鹰眼数据：承载页给出 `{ rev, content, view, shapes }`（坐标由它自己的
+   * model/scene 口径决定，外壳不猜）。返回 null = 没内容 / 承载页还没起来 / 旧版本，
+   * 鹰眼据此隐藏，不做假数据。
+   */
+  function hostOverview(format) {
+    const win = format && winFor(format);
+    if (!win || typeof win.__hostOverview !== "function") return null;
+    try {
+      const ov = win.__hostOverview();
+      return ov && ov.content && Array.isArray(ov.shapes) ? ov : null;
+    } catch (err) {
+      return null;
+    }
+  }
+
+  /** 鹰眼定位：把承载页坐标系里的 (x,y) 放到画布视口正中。只改滚动，不改正文。 */
+  function hostCenterOn(format, x, y) {
+    const win = format && winFor(format);
+    if (!win || typeof win.__hostCenterOn !== "function") return false;
+    try {
+      return win.__hostCenterOn(x, y) === true;
+    } catch (err) {
+      return false;
+    }
+  }
+
+  /**
    * C5-①：取画布结构树（供侧栏大纲渲染）。
    * 向承载页发 `{action:'getOutline'}`，等 `report('outline')` 回来解析成树。
    * 承载页未就绪时命令会被承载页入队、ready 后再重放；万一一直不 ready，
@@ -840,6 +868,8 @@ window.DGM = window.DGM || {};
     hostZoom,
     hostFit,
     hostZoomBy,
+    hostOverview,
+    hostCenterOn,
     isReady: (format) => Boolean(hosts[format] && hosts[format].ready),
     loadedDoc: (format) => (hosts[format] ? hosts[format].loadedDoc : null),
     lastApplied: (format) => (hosts[format] ? hosts[format].lastApplied : ""),

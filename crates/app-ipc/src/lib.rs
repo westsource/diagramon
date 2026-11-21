@@ -253,6 +253,9 @@ pub struct EditorPrefs {
     /// 图不该只露一角或缩成一小团。不想要这个联动就在设置里关掉 ——
     /// 关掉后视口只在「打开/切换文档」与显式「适应视图」时变。
     pub fit_on_resize: bool,
+    /// 预览右下角是否显示鹰眼导航（总览 + 当前视口框）。
+    /// **默认开**：它不改变正文、只提供定位；嫌占地方的人可以在预览顶栏或设置里关掉。
+    pub minimap: bool,
     /// 打开工作区后，是否把文件读写限制在工作区内。
     /// 默认关：自由「另存为」到别处是常见需求，开成默认会莫名挡住用户。
     pub restrict_to_workspace: bool,
@@ -270,6 +273,7 @@ impl Default for EditorPrefs {
             source_tint: false,
             autosave_ms: 5000,
             fit_on_resize: true,
+            minimap: true,
             restrict_to_workspace: false,
         }
     }
@@ -1476,6 +1480,7 @@ mod tests {
         let e = crate::EditorPrefs::default();
         assert!(!e.source_tint, "source_tint 默认必须是 false");
         assert!(!e.autosave, "autosave 默认也必须是 false（写盘是不可逆副作用）");
+        assert!(e.minimap, "minimap 默认开启（可关，但默认给导航能力）");
     }
 
     use super::*;

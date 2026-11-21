@@ -1,7 +1,9 @@
 //! Diagramon 装配层：插件、状态、命令、启动路径。
 //!
-//! 窗口是**自绘标题栏**（`decorations: false`）：拖动区与三个窗口按钮由前端调
-//! `core:window:*` 权限完成，见 `capabilities/default.json`。
+//! 窗口默认是**自绘标题栏**（Windows/Linux：`decorations: false`）：拖动区与三个窗口
+//! 按钮由前端调 `core:window:*` 权限完成，见 `capabilities/default.json`。
+//! macOS 例外：交给系统原生交通灯（`TitleBarStyle::Overlay` + `hidden_title`），
+//! 前端只隐藏自绘按钮并给左侧留位。
 //!
 //! 外壳与资产都由自定义协议 `dgm` 提供（不是只用它供资产），这样**外壳页与五个挂载点
 //! 同源**：iframe 通信不受跨源限制，离线守卫只需管一个 origin。
@@ -93,7 +95,7 @@ fn window_url_label() -> &'static str {
 ///
 /// ⚠️ 与 `ui/index.html` 里的 `<meta>` **逐字一致**（那边保留一份做兜底：
 /// 万一这里的挂载点判断出错，外壳页至少还有一道）。改一处必须改两处。
-const CSP_SHELL: &str = "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; \
+const CSP_SHELL: &str = "default-src 'self'; script-src 'self' 'wasm-unsafe-eval' blob:; \
 worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; \
 connect-src 'self' data: blob: http://ipc.localhost https://ipc.localhost; \
 font-src 'self' data:; frame-src 'self' blob:; object-src 'none'; base-uri 'none'";
@@ -519,6 +521,17 @@ fn build_main_window(app: &mut tauri::App, paths: &AppPaths) -> Result<(), Box<d
         // 让遮挡判定永远判"可见"。反节流开关（debug_browser_args）同此目的，双保险。
         .always_on_top(crate::selftest_on())
         .center();
+
+    // macOS：窗口按钮交给系统原生交通灯。Overlay 让网页铺满整个窗口（标题栏透明），
+    // hidden_title 去掉与自绘标题栏重复的窗口标题；拖动区仍是前端的
+    // data-tauri-drag-region。Windows / Linux 继续用 decorations(false) 的自绘按钮。
+    #[cfg(target_os = "macos")]
+    {
+        builder = builder
+            .decorations(true)
+            .title_bar_style(tauri::TitleBarStyle::Overlay)
+            .hidden_title(true);
+    }
 
     // WebView2 专属：Linux（WebKitGTK）没有这两条命令行参数。
     #[cfg(windows)]

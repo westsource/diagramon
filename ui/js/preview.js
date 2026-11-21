@@ -72,6 +72,8 @@ window.DGM = window.DGM || {};
     const val = $("#zoom-val");
     if (val) val.textContent = Math.round(view.scale * 100) + "%";
     state.ui.zoom = view.scale;
+    // 鹰眼只读视口：文本型每次 pan/zoom 都走这里（画布型由承载页的 __hostOverview 轮询）
+    if (DGM.minimap) DGM.minimap.setTextView(view);
     if (DGM.shell && DGM.shell.renderStatus) DGM.shell.renderStatus();
   }
 
@@ -260,6 +262,7 @@ window.DGM = window.DGM || {};
     const ct = $("#canvas-tools");
     if (ct) ct.classList.remove("is-canvas");
     if (DGM.canvas) DGM.canvas.hide();
+    if (DGM.minimap) DGM.minimap.clear();
   }
 
   function clearStage() {
@@ -283,6 +286,7 @@ window.DGM = window.DGM || {};
     stage.innerHTML = "";
     stage.appendChild(node);
     mountedDoc = null;
+    if (DGM.minimap) DGM.minimap.clear(); // 占位内容（加载/空/报错/护栏）没有可导航的图
     setPannable(false);
     parkTransform(); // 占位内容落在视口正中；用户视口在 view 里原样留着
   }
@@ -1270,6 +1274,8 @@ window.DGM = window.DGM || {};
     stage.appendChild(sanitized);
     const svg = stage.querySelector("svg");
     if (svg) normalizeSvg(svg);
+    // 鹰眼从当前渲染出的 SVG 取结构轮廓（不重跑引擎、不依赖源文格式）
+    if (svg && DGM.minimap) DGM.minimap.setText(svg, { scale: view.scale, x: view.x, y: view.y });
     // 导出（SVG 文件 / 位图栅格化的兜底）拿的是消毒后的这份；没挂上图就清空，别把上一份的留给人导出
     lastSvg = svg ? new XMLSerializer().serializeToString(svg) : "";
     mountedDoc = d.id;
@@ -1326,6 +1332,7 @@ window.DGM = window.DGM || {};
     canvasMode = true;
     lastFormat = d.format;
     lastSvg = "";
+    if (DGM.minimap) DGM.minimap.setCanvas(d.format);
 
     // 让承载面铺满：SVG 舞台收起来，容器不再居中/滚动（画布自己管视口）
     if (stage) stage.hidden = true;
@@ -1353,8 +1360,9 @@ window.DGM = window.DGM || {};
     if (ct) ct.hidden = !on;
     const zp = $(".zoom-pill");
     if (zp) zp.hidden = !on;
-    // 复制/导出已在预览顶栏，可见性跟缩放一致：没有可渲染内容就藏起来
-    for (const id of ["#btn-copy-img", "#btn-export"]) {
+    if (!on && DGM.minimap) DGM.minimap.clear();
+    // 复制/导出/鹰眼开关都在预览顶栏，可见性跟缩放一致：没有可渲染内容就藏起来
+    for (const id of ["#btn-copy-img", "#btn-export", "#btn-minimap"]) {
       const n = $(id);
       if (n) n.hidden = !on;
     }
@@ -1657,8 +1665,24 @@ window.DGM = window.DGM || {};
   /* ------------------------------------------------------------------ 对外 */
 
   DGM.bus.on("doc:changed", schedule);
-  // 主题变化要让 mermaid 重新按暗色/亮色渲染（渲染器主题不跟 CSS 变量走）
-  DGM.bus.on("settings:changed", schedule);
+  // 主题 / Mermaid 外观 / 连线配色 / 语言变化要让预览重跑；但 `settings:changed`
+  // 也会为纯视图偏好（例如鹰眼开关、字号）触发 —— 那些不该重排整张图。
+  // 用一个“渲染相关设置”的签名挡住：签名没变就不 schedule。
+  const renderSettingsKeyOf = (s) =>
+    JSON.stringify([
+      document.documentElement.dataset.theme || "",
+      s && s.theme,
+      s && s.mermaid,
+      s && s.palette_edges,
+      s && s.locale,
+    ]);
+  let renderSettingsKey = renderSettingsKeyOf(state.settings || {});
+  DGM.bus.on("settings:changed", () => {
+    const key = renderSettingsKeyOf(state.settings || {});
+    if (key === renderSettingsKey) return;
+    renderSettingsKey = key;
+    schedule();
+  });
   // 设置里改了 Mermaid 默认外观 → 顶栏按钮上的当前值要跟着变（渲染本身由上面的 schedule 兜住）
   DGM.bus.on("settings:changed", () => {
     optsKey = null;
@@ -1739,10 +1763,27 @@ window.DGM = window.DGM || {};
     },
   };
 
+  /** 鹰眼定位（文本型）：把内容坐标 (x,y) 移到视口正中。只改 view，不碰正文。 */
+  function centerOnContent(x, y) {
+    if (canvasMode) return false;
+    const { viewport } = nodes();
+    if (!viewport) return false;
+    const rect = viewport.getBoundingClientRect();
+    if (!rect.width || !rect.height) return false;
+    const cx = Number(x);
+    const cy = Number(y);
+    if (!Number.isFinite(cx) || !Number.isFinite(cy)) return false;
+    view.x = rect.width / 2 - cx * view.scale;
+    view.y = rect.height / 2 - cy * view.scale;
+    apply();
+    return true;
+  }
+
   DGM.preview = {
     render: renderActive,
     schedule,
     fit,
+    centerOnContent,
     zoomIn: () => zoomBy(1.2),
     zoomOut: () => zoomBy(1 / 1.2),
     resetZoom: () => (canvasMode ? fit() : resetView()),

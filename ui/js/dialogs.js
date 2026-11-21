@@ -907,6 +907,7 @@ window.DGM = window.DGM || {};
       ${switchRow(!!e.source_tint, t("set.editor.sourceTint"), "set.editor.sourceTintHint", "sourcetint")}
       ${switchRow(!!e.per_doc_view, t("set.editor.perDocView"), null, "perdoc")}
       ${switchRow(e.fit_on_resize !== false, t("set.editor.fitOnResize"), "set.editor.fitOnResizeHint", "fitresize")}
+      ${switchRow(e.minimap !== false, t("set.editor.minimap"), "set.editor.minimapHint", "minimap")}
       <div class="field-row">
         ${switchRow(!!e.autosave, t("set.autosave"), null, "autosave")}
         <div class="field narrow"><label>${esc(t("set.autosave.interval"))}</label><input type="number" min="500" max="60000" step="500" value="${e.autosave_ms || 5000}" id="e-autosave"></div>
@@ -1452,6 +1453,7 @@ window.DGM = window.DGM || {};
         if (a === "lint") state.patchSettings({ editor: { lint: on } });
         else if (a === "perdoc") state.patchSettings({ editor: { per_doc_view: on } });
         else if (a === "fitresize") state.patchSettings({ editor: { fit_on_resize: on } });
+        else if (a === "minimap") state.patchSettings({ editor: { minimap: on } });
         else if (a === "autosave") state.patchSettings({ editor: { autosave: on } });
         else if (a === "restrict") state.patchSettings({ editor: { restrict_to_workspace: on } });
         else if (a === "closetray") state.patchSettings({ close_to_tray: on });

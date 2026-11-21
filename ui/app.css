@@ -330,6 +330,10 @@ body.no-ai #ai-gutter { display: none; }
 .win-btn { width: 30px; height: 24px; display: grid; place-items: center; color: var(--muted); border-radius: var(--radius-sm); }
 .win-btn:hover { background: var(--surface-3); color: var(--ink); }
 .win-btn.close:hover { background: var(--err); color: #fff; }
+/* macOS 桌面版：红黄绿交通灯由系统绘制（TitleBarStyle::Overlay），
+   自绘按钮退场，标题栏左侧让出三颗灯的位置。 */
+html[data-platform="macos"] .win-btns { display: none; }
+html[data-platform="macos"] .titlebar { padding-left: 80px; }
 
 /* ---- 5. 活动栏 -------------------------------------------------------- */
 .activitybar {
@@ -649,7 +653,12 @@ body.no-ai #ai-gutter { display: none; }
 }
 
 /* 预览画布 */
-.pane-preview { background: var(--canvas-bg); position: relative; }
+.pane-preview {
+  background: var(--canvas-bg); position: relative;
+  /* 缩放条的底边距：画布型格式要给承载页自带 UI 让位（见 .canvas-tools.is-canvas），
+     鹰眼叠在它上方，所以两者必须共用这一个值，否则会互相遮挡。 */
+  --canvas-tools-bottom: 12px;
+}
 .canvas-viewport {
   flex: 1; min-height: 0; overflow: auto;
   background-image: radial-gradient(var(--canvas-dot) 1px, transparent 1px);
@@ -662,7 +671,7 @@ body.no-ai #ai-gutter { display: none; }
 .canvas-stage svg { display: block; max-width: none; }
 
 .canvas-tools {
-  position: absolute; right: 12px; bottom: 12px;
+  position: absolute; right: 12px; bottom: var(--canvas-tools-bottom, 12px);
   display: flex; align-items: center; gap: 6px;
 }
 .canvas-tools .row { display: flex; align-items: center; gap: 6px; }
@@ -680,6 +689,26 @@ body.no-ai #ai-gutter { display: none; }
 .zoom-pill button { width: 22px; height: 20px; display: grid; place-items: center; color: var(--muted); border-radius: 4px; }
 .zoom-pill button:hover { background: var(--surface-3); color: var(--ink); }
 .zoom-pill .val { min-width: 42px; font-size: var(--fs-xs); text-align: center; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+
+/* 鹰眼导航（只读总览）：叠在画布右下、缩放条上方；容器本身吃指针，画布手势不会穿透。 */
+.minimap {
+  /* 相对 .pane-preview（不是 viewport）：承载 iframe 的合成层盖不住它 */
+  /* 缩放条高度 30px + 10px 间隙；底边距随缩放条一起变（画布型 46 → 86） */
+  position: absolute; right: 12px; bottom: calc(var(--canvas-tools-bottom, 12px) + 40px);
+  width: 190px; height: 132px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--sh-1);
+  overflow: hidden;
+  z-index: 3;
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+.minimap[hidden] { display: none; }
+.minimap.dragging { cursor: grabbing; }
+.minimap-canvas { width: 100%; height: 100%; display: block; }
 
 /* SVG 图形通用样式（原型手绘的示意图） */
 .dg text { font-family: var(--font-ui); }
@@ -1885,8 +1914,10 @@ table.kv td .chip { vertical-align: middle; }
 .palette-item.dis { opacity: .55; }
 .palette-item.dis:hover { background: none; color: var(--ink-2); }
 
-/* 画布型格式的浮动工具条：让位给画布自带的 UI */
-.canvas-tools.is-canvas { bottom: 46px; }
+/* 画布型格式的浮动工具条：让位给画布自带的 UI。
+   变量挂在 .pane-preview 上（不挂在工具条自己身上），因为鹰眼是它的兄弟节点，
+   要跟着一起抬高；两边共用同一个值才不会互相遮挡。 */
+.pane-preview:has(.canvas-tools.is-canvas) { --canvas-tools-bottom: 46px; }
 
 /* 欢迎页里的行内布局（原型 HTML 片段） */
 .welcome .sp { flex: 1; }

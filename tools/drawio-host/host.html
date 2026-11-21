@@ -102,6 +102,8 @@
           } catch (e) {
             // 承载页还没完全起来：不清也不该影响载入
           }
+          // 换图/重载：鹰眼缓存必须作废（模型监听只覆盖编辑，覆盖不到整份文档替换）
+          invalidateOverview();
         }
       }
     } catch (e) {
@@ -318,6 +320,173 @@
   const FIT_MIN_SCALE = 0.2;   // 与 SVG 预览模式同口径（ui/js/preview.js 的 MIN_SCALE / MAX_SCALE）
   const FIT_MAX_SCALE = 30;
 
+  // ==========================================================================
+  // 鹰眼数据（ui/js/minimap.js 的 provider）。
+  //
+  // 坐标口径：**model 坐标**（未缩放、未平移）。state.x 的公式是
+  // `scale * (translate + origin)`（见 mxGraphView.js:1072），所以
+  //   model = state.x / scale - translate.x
+  // 这样缩放/滚动只改视口，不必重建轮廓缓存；编辑由 model 的 CHANGE 事件打脏。
+  // 顶点取 state 的渲染几何（含 swimlane/group），连线取 absolutePoints。
+  // ==========================================================================
+  const OVERVIEW_MAX_SHAPES = 4000;
+  let overviewRev = 0;
+  let overviewDirty = true;
+  let overviewGraph = null;
+  let overviewShapes = [];
+
+  function invalidateOverview() {
+    overviewDirty = true;
+    overviewRev += 1;
+  }
+
+  function watchGraph(graph) {
+    if (!graph || graph.__diagramonOverviewWatch) return;
+    try {
+      const win = frame();
+      const evt = (win.mxEvent && win.mxEvent.CHANGE) || 'change';
+      graph.model.addListener(evt, invalidateOverview);
+      graph.__diagramonOverviewWatch = true;
+    } catch (e) {
+      // 模型还没建好：下一次 liveGraph() 再试
+    }
+  }
+
+  function ovNum(v, fallback) {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : fallback;
+  }
+
+  function buildOverviewShapes(graph) {
+    const view = graph.view;
+    const scale = ovNum(view.scale, 1) || 1;
+    const tr = view.translate || { x: 0, y: 0 };
+    const win = frame();
+    const C = win.mxConstants || {};
+    const fillKey = C.STYLE_FILLCOLOR || 'fillColor';
+    const widthKey = C.STYLE_STROKEWIDTH || 'strokeWidth';
+    const shapeKey = C.STYLE_SHAPE || 'shape';
+    // drawio v31 的 mxGraphView 把状态表换成了 `states.map`（实测 keys 只有 "map"，
+    // 真正的 mxCellState 在 map 里）；旧版/原生 mxGraph 则是平表。两种都认。
+    const rawStates = view.states || {};
+    const states = rawStates.map && typeof rawStates.map === 'object' ? rawStates.map : rawStates;
+    const out = [];
+
+    for (const id in states) {
+      if (out.length >= OVERVIEW_MAX_SHAPES) break;
+      const st = states[id];
+      const cell = st && st.cell;
+      if (!cell || cell.visible === false) continue;
+      const style = st.style && typeof st.style === 'object' ? st.style : {};
+
+      if (typeof cell.isEdge === 'function' && cell.isEdge()) {
+        const pts = (st.absolutePoints || [])
+          .filter(Boolean)
+          .map((p) => [ovNum(p.x, 0) / scale - tr.x, ovNum(p.y, 0) / scale - tr.y])
+          .filter((p) => Number.isFinite(p[0]) && Number.isFinite(p[1]));
+        if (pts.length >= 2) out.push({ t: 'l', pts: pts, sw: ovNum(style[widthKey], 1) });
+        continue;
+      }
+      if (typeof cell.isVertex === 'function' && !cell.isVertex()) continue;
+
+      const x = ovNum(st.x, 0) / scale - tr.x;
+      const y = ovNum(st.y, 0) / scale - tr.y;
+      const w = ovNum(st.width, 0) / scale;
+      const h = ovNum(st.height, 0) / scale;
+      if (!(w > 0 && h > 0)) continue;
+
+      const fill = style[fillKey] || null;
+      const shape = String(style[shapeKey] || '');
+      if (shape.indexOf('ellipse') >= 0) {
+        out.push({ t: 'e', cx: x + w / 2, cy: y + h / 2, rx: w / 2, ry: h / 2, fill: fill, sw: ovNum(style[widthKey], 1) });
+      } else {
+        out.push({ t: 'r', x: x, y: y, w: w, h: h, fill: fill, sw: ovNum(style[widthKey], 1) });
+      }
+    }
+    return out;
+  }
+
+  window.__hostOverview = () => {
+    try {
+      const graph = liveGraph();
+      if (!graph) return null;
+
+      if (overviewGraph !== graph) {
+        overviewGraph = graph;
+        overviewDirty = true;
+        overviewRev += 1;
+        watchGraph(graph);
+      }
+
+      const view = graph.view;
+      const scale = ovNum(view.scale, 1) || 1;
+      const tr = view.translate || { x: 0, y: 0 };
+      const bounds = graph.getGraphBounds();
+      if (!(bounds.width > 0 && bounds.height > 0)) return null;
+
+      const container = graph.container;
+      if (!container) return null;
+      const vw = ovNum(container.clientWidth, 0);
+      const vh = ovNum(container.clientHeight, 0);
+      if (!(vw > 0 && vh > 0)) return null;
+
+      if (overviewDirty) {
+        overviewShapes = buildOverviewShapes(graph);
+        // 图已存在但 states 还没建好时先回空轮廓，保留 dirty 让下一次轮询重试 ——
+        // 否则一次过早的调用会把鹰眼永久钉在空图上（之后没有模型变更来重新打脏）。
+        overviewDirty = overviewShapes.length === 0;
+      }
+
+      return {
+        rev: overviewRev,
+        content: {
+          x: bounds.x / scale - tr.x,
+          y: bounds.y / scale - tr.y,
+          w: bounds.width / scale,
+          h: bounds.height / scale,
+        },
+        view: {
+          x: container.scrollLeft / scale - tr.x,
+          y: container.scrollTop / scale - tr.y,
+          w: vw / scale,
+          h: vh / scale,
+        },
+        shapes: overviewShapes,
+      };
+    } catch (e) {
+      return null;
+    }
+  };
+
+  // 鹰眼定位：把 model 坐标 (x,y) 放到画布容器正中。只改滚动，不改缩放、不改正文。
+  window.__hostCenterOn = (x, y) => {
+    try {
+      const graph = liveGraph();
+      if (!graph) return false;
+      const view = graph.view;
+      const scale = ovNum(view.scale, 1) || 1;
+      const tr = view.translate || { x: 0, y: 0 };
+      const container = graph.container;
+      if (!container) return false;
+
+      const cx = Number(x);
+      const cy = Number(y);
+      if (!Number.isFinite(cx) || !Number.isFinite(cy)) return false;
+
+      const vw = ovNum(container.clientWidth, 0);
+      const vh = ovNum(container.clientHeight, 0);
+      if (!(vw > 0 && vh > 0)) return false;
+      const maxLeft = Math.max(0, container.scrollWidth - vw);
+      const maxTop = Math.max(0, container.scrollHeight - vh);
+
+      container.scrollLeft = Math.max(0, Math.min(maxLeft, (cx + tr.x) * scale - vw / 2));
+      container.scrollTop = Math.max(0, Math.min(maxTop, (cy + tr.y) * scale - vh / 2));
+      return true;
+    } catch (e) {
+      return false;
+    }
+  };
+
   function isEditorGraph(graph) {
     const container = graph && graph.container;
     return !!(container && container.classList
@@ -338,6 +507,7 @@
         const bounds = original.apply(this, arguments);
         if (!win.__diagramonGraph && isEditorGraph(this)) {
           win.__diagramonGraph = this;
+          watchGraph(this);
           proto.getGraphBounds = original;   // 抓到手就卸钩
         }
         return bounds;
@@ -356,7 +526,9 @@
       const graph = win.__diagramonGraph;
       // isConnected：drawio 内部 reload（语言/主题切换）后旧实例会从文档里掉出来，
       // 这时宁可这一次适配失败（宿主如实报"没适配"），也不要对死实例操作。
-      return graph && graph.container && graph.container.isConnected ? graph : null;
+      if (!graph || !graph.container || !graph.container.isConnected) return null;
+      watchGraph(graph);
+      return graph;
     } catch (e) {
       return null;
     }

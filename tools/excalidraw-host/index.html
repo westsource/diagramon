@@ -107,6 +107,13 @@
   window.__hostEpoch = 0;
   window.__hostError = null;
 
+  // 鹰眼（ui/js/minimap.js 的 provider）：sceneRev 只在**内容真的变了**时 +1
+  // （用户在画布上改、外部 setScene/loadMermaid）。滚动/缩放不动它，所以轮廓缓存稳定。
+  let sceneRev = 0;
+  let overviewRev = -1;
+  let overviewShapes = [];
+  let overviewContent = null;
+
   // 缩放比例回报（宿主每 150ms 轮询，见 EmbeddedProtocol.ZoomProbeScript）：
   // Excalidraw 的缩放是页面状态，直接问 API 即可；拿不到时返回 0，宿主按"没有新值"处理。
   window.__hostZoom = () => {
@@ -208,6 +215,106 @@
   };
 
   // --------------------------------------------------------------------------
+  // 鹰眼数据 / 定位。
+  //
+  // content 用 scene 坐标（与元素 x/y 同一套）；view 用 Excalidraw 自己的
+  // viewportSceneBounds()（minX = -scrollX，maxX = -scrollX + width/zoom）。
+  // 轮廓只取几何，不画文字内容；文字元素留一块淡框，保证纯文字白板不是空的。
+  // --------------------------------------------------------------------------
+  function buildSceneShapes(elements) {
+    const out = [];
+    for (let i = 0; i < elements.length; i++) {
+      if (out.length >= 4000) break;
+      const e = elements[i];
+      if (!e || e.isDeleted) continue;
+      const x = isFinite(Number(e.x)) ? Number(e.x) : 0;
+      const y = isFinite(Number(e.y)) ? Number(e.y) : 0;
+      const w = isFinite(Number(e.width)) ? Number(e.width) : 0;
+      const h = isFinite(Number(e.height)) ? Number(e.height) : 0;
+      const sw = isFinite(Number(e.strokeWidth)) ? Number(e.strokeWidth) : 1;
+      const fill = e.backgroundColor && e.backgroundColor !== 'transparent' ? e.backgroundColor : null;
+
+      if (e.type === 'line' || e.type === 'arrow' || e.type === 'freedraw') {
+        const pts = Array.isArray(e.points)
+          ? e.points.map(function (p) { return [x + Number(p[0] || 0), y + Number(p[1] || 0)]; })
+          : [];
+        if (pts.length >= 2) out.push({ t: 'l', pts: pts, sw: sw });
+        continue;
+      }
+      if (!(w > 0 && h > 0)) continue;
+      if (e.type === 'ellipse') {
+        out.push({ t: 'e', cx: x + w / 2, cy: y + h / 2, rx: w / 2, ry: h / 2, fill: fill, sw: sw });
+      } else if (e.type === 'diamond') {
+        out.push({
+          t: 'p',
+          pts: [[x + w / 2, y], [x + w, y + h / 2], [x + w / 2, y + h], [x, y + h / 2]],
+          fill: fill,
+          sw: sw,
+        });
+      } else if (e.type === 'text') {
+        // 文字只留一块淡色块，不画描边 —— 否则一排文本框会像一堆矩形节点。
+        out.push({ t: 'text', x: x, y: y, w: w, h: h });
+      } else {
+        out.push({ t: 'r', x: x, y: y, w: w, h: h, fill: fill, sw: sw });
+      }
+    }
+    return out;
+  }
+
+  window.__hostOverview = function () {
+    try {
+      if (!out.api) return null;
+
+      // 外壳每 ~33ms 轮询一次：内容框与轮廓只在 sceneRev 变时重建，
+      // 视口（scroll/zoom）每次重算 —— 大场景下不要为了挪一下视口遍历所有元素。
+      if (overviewRev !== sceneRev) {
+        const elements = visibleElements();
+        const b = elements.length ? sceneContentBounds(elements) : null;
+        overviewContent = b && b.maxX > b.minX && b.maxY > b.minY
+          ? { x: b.minX, y: b.minY, w: b.maxX - b.minX, h: b.maxY - b.minY }
+          : null;
+        overviewShapes = overviewContent ? buildSceneShapes(elements) : [];
+        overviewRev = sceneRev;
+      }
+      if (!overviewContent) return null;
+
+      const v = viewportSceneBounds();
+      return {
+        rev: sceneRev,
+        content: overviewContent,
+        view: { x: v.minX, y: v.minY, w: v.maxX - v.minX, h: v.maxY - v.minY },
+        shapes: overviewShapes,
+      };
+    } catch (e) {
+      return null;
+    }
+  };
+
+  // 把 scene 坐标 (x,y) 放到视口正中：只改 scrollX/scrollY，不改 zoom、不碰元素。
+  window.__hostCenterOn = function (x, y) {
+    try {
+      if (!out.api) return false;
+      const cx = Number(x);
+      const cy = Number(y);
+      if (!isFinite(cx) || !isFinite(cy)) return false;
+      const st = out.api.getAppState() || {};
+      const zoom = st.zoom && isFinite(Number(st.zoom.value)) && Number(st.zoom.value) > 0 ? Number(st.zoom.value) : 1;
+      const w = isFinite(Number(st.width)) ? Number(st.width) : 0;
+      const h = isFinite(Number(st.height)) ? Number(st.height) : 0;
+      if (!(w > 0 && h > 0)) return false;
+      out.api.updateScene({
+        appState: {
+          scrollX: -(cx - w / (2 * zoom)),
+          scrollY: -(cy - h / (2 * zoom)),
+        },
+      });
+      return true;
+    } catch (e) {
+      return false;
+    }
+  };
+
+  // --------------------------------------------------------------------------
   // 画布内的应用级快捷键转发（与 drawio 承载页同一张词汇表）。
   // 画布持有焦点时 Avalonia 窗口的 KeyBindings 收不到键；这里在捕获阶段截住命中的组合键，
   // 顺带拦住 Excalidraw 自己的同名绑定（它的 Ctrl+S 会把场景当文件下载）。
@@ -289,6 +396,7 @@
         scrollY: 0
       });
       out.api.updateScene({ elements: elements, appState: app });
+      sceneRev += 1;                          // 外部载入 = 内容版本变了（鹰眼缓存要重建）
       // 附件走 addFiles（updateScene 不认 files，见文件头）。文档自带的附件在这里交给画布。
       applyFiles(scene.files || {});
       window.__excalidrawApi = out.api;
@@ -322,6 +430,7 @@
         const elements = converted.elements || [];
         messages.pending = { elements: elements };
         out.api.updateScene({ elements: elements });
+        sceneRev += 1;                        // Mermaid 导入 = 新内容（鹰眼缓存要重建）
         // 同样走 addFiles；`converted.files` 一定要带到：上游兜底成整张位图时，位图就在 files 里 ——
         // 漏了它，画布上只剩一个悬空 fileId 的 image 元素。
         applyFiles(converted.files || {});
@@ -565,6 +674,7 @@
     }
 
     baseline = signature;
+    sceneRev += 1;                           // 真实内容变更（滚动/选中不会走到这里）
     const payload = { elements: elements, appState: filterAppState(appState) };
     // 被引用附件集合变了才带 files（典型场景：用户往画布上粘了一张图）。
     // 内容按 id 不可变 ⇒ 集合相同就是没变，不必每个 onChange 重发一遍 base64。

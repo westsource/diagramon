@@ -675,6 +675,90 @@ def main() -> int:
         except Exception as e:
             fails.append(f"清空后粘贴的断言解析失败：{e} / {fit_clear}")
 
+        # ---- 断言 4b3：鹰眼（文本型）可见 / 点击能定位 / 开关能隐藏 ----
+        # 视觉细节不在这里断言（像素不可靠）；看模块自己的账本 + 真实点击后的 --pan。
+        prev_doc = ev("DGM.state.active")
+        minimap = ev(
+            "(async () => {"
+            "  const d = await DGM.state.newDoc('mermaid');"
+            "  if (DGM.state.active !== d.id) await DGM.state.activateDoc(d.id);"
+            "  const big = ['graph TD'];"
+            "  for (let i = 0; i < 30; i++) big.push('  N' + i + '[Node ' + i + '] --> N' + (i + 1) + '[Node ' + (i + 1) + ']');"
+            "  await DGM.state.setBodyNow(d.id, big.join('\\n'));"
+            "  DGM.editor.loadActive();"
+            "  await DGM.preview.render();"
+            "  await new Promise(r => setTimeout(r, 300));"
+            "  const mm = document.getElementById('minimap');"
+            "  const r = mm.getBoundingClientRect();"
+            "  const st = document.querySelector('#canvas-stage');"
+            "  return JSON.stringify({"
+            "    shown: DGM.minimap.debug().shown,"
+            "    hidden: mm.hidden,"
+            "    shapes: DGM.minimap.debug().shapes,"
+            "    btnHidden: document.getElementById('btn-minimap').hidden,"
+            "    rect: { x: r.x, y: r.y, w: r.width, h: r.height },"
+            "    pan: st ? st.style.getPropertyValue('--pan-y') : ''"
+            "  });"
+            "})()"
+        )
+        log(f"鹰眼（文本型）: {minimap}")
+        mm = {}
+        try:
+            mm = json.loads(minimap or "{}")
+            if not mm.get("shown") or mm.get("hidden"):
+                fails.append(f"有内容时鹰眼应显示，实际 {minimap}")
+            if int(mm.get("shapes") or 0) <= 0:
+                fails.append(f"鹰眼没提取到文本图的轮廓：{minimap}")
+            if mm.get("btnHidden"):
+                fails.append(f"有内容时鹰眼开关不应隐藏：{minimap}")
+        except Exception as e:
+            fails.append(f"鹰眼断言解析失败：{e} / {minimap}")
+
+        if mm.get("rect") and mm.get("shown"):
+            r = mm["rect"]
+            mx = int(r["x"] + r["w"] * 0.5)
+            my = int(r["y"] + r["h"] * 0.9)
+            cdp.call("Input.dispatchMouseEvent", {"type": "mousePressed", "x": mx, "y": my, "button": "left", "clickCount": 1}, timeout=15)
+            cdp.call("Input.dispatchMouseEvent", {"type": "mouseReleased", "x": mx, "y": my, "button": "left", "clickCount": 1}, timeout=15)
+            pan_after = ev("document.querySelector('#canvas-stage').style.getPropertyValue('--pan-y')")
+            if pan_after == mm.get("pan"):
+                fails.append(f"点击鹰眼没有改变文本视口（--pan-y 仍是 {pan_after}）")
+            else:
+                log(f"鹰眼点击定位: --pan-y {mm.get('pan')} → {pan_after}")
+
+        toggle = ev(
+            "(async () => {"
+            "  document.getElementById('btn-minimap').click();"
+            "  await new Promise(r => setTimeout(r, 250));"
+            "  const off = { pref: DGM.state.settings.editor.minimap, hidden: document.getElementById('minimap').hidden };"
+            "  document.getElementById('btn-minimap').click();"
+            "  await new Promise(r => setTimeout(r, 250));"
+            "  const on = { pref: DGM.state.settings.editor.minimap, hidden: document.getElementById('minimap').hidden };"
+            "  return JSON.stringify({ off, on });"
+            "})()"
+        )
+        try:
+            tgl = json.loads(toggle or "{}")
+            if tgl.get("off", {}).get("pref") is not False or not tgl.get("off", {}).get("hidden"):
+                fails.append(f"鹰眼开关关闭后没有隐藏/落设置：{toggle}")
+            if tgl.get("on", {}).get("pref") is not True or tgl.get("on", {}).get("hidden"):
+                fails.append(f"鹰眼开关重新打开后没有恢复：{toggle}")
+        except Exception as e:
+            fails.append(f"鹰眼开关断言解析失败：{e} / {toggle}")
+
+        # 收尾：关掉探针自己建的文档，恢复会话到断言前的那份并等它重渲染完
+        ev(
+            "(async () => {"
+            "  const prev = " + json.dumps(prev_doc) + ";"
+            "  const d = DGM.state.activeDoc();"
+            "  if (d) await DGM.state.closeDoc(d.id);"
+            "  if (prev && DGM.state.doc(prev)) await DGM.state.activateDoc(prev);"
+            "  await DGM.preview.render();"
+            "  await new Promise(r => setTimeout(r, 200));"
+            "  return true;"
+            "})()"
+        )
+
 
         # ---- 断言 4c：ELK 离线包启动预热（3.11.3 起 elk 是 Mermaid 的默认布局） ----
         # 那份 2.4MB ESM 是一次性且常驻的成本（实测 JS 堆 +7.7MB、进程工作集 +16MB、加载约 0.5s）：

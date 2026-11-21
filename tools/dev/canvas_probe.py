@@ -569,6 +569,47 @@ function doBegin(w, done) {
               say("空图：视图一动没动（缩放 " + Math.round((after ? after.scale : 0) * 100) + "%，scroll "
                 + (after ? after.sl + "," + after.st : "n/a") + "）", !untouched);
             });
+          })
+          .then(function () {
+            // ── 鹰眼 provider：内容框 / 视口框 / 轮廓 / 定位（ui/js/minimap.js 的数据源）──
+            // 坐标必须是 model 坐标：缩放只该改 view，content 不能跟着 zoom 漂。
+            say("承载页暴露 __hostOverview", typeof hostWin.__hostOverview !== "function");
+            say("承载页暴露 __hostCenterOn", typeof hostWin.__hostCenterOn !== "function");
+            if (typeof hostWin.__hostOverview !== "function" || typeof hostWin.__hostCenterOn !== "function") return;
+
+            return fitLoad(FIX.outside).then(function () {
+              var ov1 = hostWin.__hostOverview();
+              var ok = !!ov1 && !!ov1.content && ov1.content.w > 0 && ov1.content.h > 0
+                && Array.isArray(ov1.shapes) && ov1.shapes.length > 0
+                && !!ov1.view && ov1.view.w > 0 && ov1.view.h > 0;
+              say("鹰眼：内容框 / 视口框 / 轮廓可用（" + (ov1 && ov1.shapes ? ov1.shapes.length : 0)
+                + " 个形状）", !ok);
+              if (!ok) return;
+
+              hostWin.__hostZoomBy(3);
+              return pause().then(function () {
+                var ov2 = hostWin.__hostOverview();
+                var same = !!ov2 && !!ov2.content
+                  && Math.abs(ov2.content.x - ov1.content.x) < 0.5
+                  && Math.abs(ov2.content.y - ov1.content.y) < 0.5
+                  && Math.abs(ov2.content.w - ov1.content.w) < 0.5
+                  && Math.abs(ov2.content.h - ov1.content.h) < 0.5;
+                say("鹰眼：缩放后内容框稳定（model 坐标不随 zoom 漂）", !same);
+                if (!ov2) return;
+
+                var cont = dlDoc.querySelector(".geDiagramContainer");
+                var before = [cont.scrollLeft, cont.scrollTop];
+                var verdict = hostWin.__hostCenterOn(
+                  ov2.content.x + ov2.content.w / 2,
+                  ov2.content.y + ov2.content.h / 2
+                );
+                return pause().then(function () {
+                  var after = [cont.scrollLeft, cont.scrollTop];
+                  say("鹰眼：__hostCenterOn 能定位（scroll " + before.join(",") + " → " + after.join(",") + "）",
+                    !(verdict === true && (before[0] !== after[0] || before[1] !== after[1])));
+                });
+              });
+            });
           });
       })
       .then(function () {

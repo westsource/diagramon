@@ -20,12 +20,117 @@ window.DGM = window.DGM || {};
   let ready = false;
   /** 上次编译的缓存（同一份正文 + 布局的重渲染很多：敲字、切视图、换主题） */
   let last = { key: null, result: null };
+  /** 首次编译探测的超时上限（毫秒）—— 健康环境的冷启动实测 2–6s */
+  const PROBE_TIMEOUT_MS = 20000;
+
+  /**
+   * Safari 27 的 Web Worker 栈比主线程小：D2 的 Go/WASM 在 worker 里初始化时，
+   * goldmark 的正则编译递归会抛 RangeError，Go 程序没跑到注册 d2 就死了，而
+   * d2.js 仍照常回 `ready`（上游 d2lang/d2#2960；macOS 27.2 WKWebView 实测复现）。
+   *
+   * 退化路径：把 D2 自带的 `new Worker(blob, {type:"module"})` 换成**主线程 shim** ——
+   * 同一份 worker 代码照常跑，只是不放进独立线程（主线程栈更大）。仅当 worker
+   * 引擎首次编译失败时启用，正常平台的行为不变。
+   */
+  function MainThreadWorker(url) {
+    const main = this;
+    let handler = null;
+    let pending = [];
+    this.onmessage = null;
+    this.onerror = null;
+    this.terminate = () => {
+      handler = null;
+    };
+    // worker → 主线程：D2 的 setupMessageHandler 会给 onmessage 挂回调
+    const port = {
+      postMessage: (data) => {
+        queueMicrotask(() => {
+          if (main.onmessage) main.onmessage.call(main, { data });
+        });
+      },
+    };
+    // 主线程 → worker：shim 就绪前先排队（D2 构造完立刻会 post 一条 init）
+    this.postMessage = (data) => {
+      if (handler) handler({ data });
+      else pending.push(data);
+    };
+    fetch(url)
+      .then((r) => r.text())
+      .then((text) => {
+        // worker 源码是「wasm_exec.js + worker 主体」：去掉模块导出与自动启动那一行，
+        // 改成从 blob 模块 export 出来。CSP 只放开 script-src blob:，不走 eval。
+        const src = text
+          .replace("export function setupMessageHandler", "function setupMessageHandler")
+          .replace(
+            /setupMessageHandler\(false, self, initWasmBrowser\);\s*$/,
+            "export { setupMessageHandler, initWasmBrowser };",
+          );
+        const blobUrl = URL.createObjectURL(new Blob([src], { type: "text/javascript" }));
+        return import(blobUrl).finally(() => URL.revokeObjectURL(blobUrl));
+      })
+      .then((mod) => {
+        mod.setupMessageHandler(false, port, mod.initWasmBrowser);
+        handler = (e) => {
+          if (port.onmessage) port.onmessage(e);
+        };
+        const q = pending;
+        pending = [];
+        q.forEach((m) => main.postMessage(m));
+      })
+      .catch((err) => {
+        if (main.onerror) main.onerror({ message: (err && err.message) || String(err) });
+      });
+  }
+
+  /** 用主线程 shim 构造一个 D2 实例（`window.Worker` 只在构造期间替换）。 */
+  function engineOnMainThread(m) {
+    const Orig = window.Worker;
+    window.Worker = MainThreadWorker;
+    try {
+      return new m.D2();
+    } finally {
+      window.Worker = Orig;
+    }
+  }
+
+  /**
+   * 探测引擎真能编译：`new D2()` 只起 worker，不保证 wasm 初始化成功
+   * （坏的 worker 会照常回 ready，第一次编译才炸）。
+   */
+  async function probe(eng) {
+    let timer = null;
+    try {
+      await Promise.race([
+        eng.compile("a -> b"),
+        new Promise((_, reject) => {
+          timer = setTimeout(() => reject(new Error("D2 engine probe timed out")), PROBE_TIMEOUT_MS);
+        }),
+      ]);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
 
   function load() {
     if (!enginePromise) {
       enginePromise = import("/d2/index.js")
-        .then((m) => {
-          const eng = new m.D2();
+        .then(async (m) => {
+          let eng = null;
+          try {
+            eng = new m.D2();
+            await probe(eng);
+          } catch (err) {
+            if (eng) {
+              // 已经坏的引擎：dispose 失败无所谓，只是尽快收掉那个 worker
+              try {
+                await eng.dispose();
+              } catch (e) {
+                /* 忽略 */
+              }
+            }
+            eng = engineOnMainThread(m);
+            await probe(eng);
+          }
           ready = true;
           return eng;
         })

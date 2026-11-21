@@ -298,6 +298,27 @@ EXPR = """
     fit.content = contentBoxes();
     fit.moved = JSON.stringify(fit.before) !== JSON.stringify(fit.after);
 
+    // 鹰眼 provider：内容框 / 视口框 / 轮廓 / 定位。滚动只该动 scrollX/scrollY，
+    // 元素数组必须一字不差 —— 否则“点一下鹰眼”会被当成文档修改回写。
+    const ov = {
+      hasHook: typeof window.__hostOverview === 'function',
+      hasCenter: typeof window.__hostCenterOn === 'function',
+    };
+    if (ov.hasHook) {
+      const o1 = window.__hostOverview();
+      ov.content = o1 && o1.content;
+      ov.view = o1 && o1.view;
+      ov.shapes = o1 && Array.isArray(o1.shapes) ? o1.shapes.length : 0;
+      const els0 = JSON.stringify(window.__excalidrawApi.getSceneElements());
+      const st0 = viewState();
+      ov.centerVerdict = ov.hasCenter ? window.__hostCenterOn(700, 450) : null;
+      await sleep(600);
+      const st1 = viewState();
+      ov.scrollMoved = st0.scrollX !== st1.scrollX || st0.scrollY !== st1.scrollY;
+      ov.elsSame = els0 === JSON.stringify(window.__excalidrawApi.getSceneElements());
+    }
+    out.overview = ov;
+
     // 空文档：没有内容可适配 ⇒ false，且视图不动（归一由 ensureViewportVisible 负责）
     apply({ action: 'setScene', scene: JSON.stringify({ type: 'excalidraw', version: 2, elements: [], appState: {}, files: {} }) });
     await sleep(1600);
@@ -582,6 +603,25 @@ def main() -> int:
                 failures.append(f"E：空文档时 __hostFit() 应回 false，实际 {fit.get('emptyVerdict')!r}")
             if not fit.get("emptyUntouched"):
                 failures.append(f"E：空文档时视图被动了（{fit.get('emptyView')}）")
+
+        # ── E2：鹰眼 provider（内容框 / 轮廓 / 定位，且不改元素）──
+        ov = data.get("overview") or {}
+        if not ov.get("hasHook"):
+            failures.append("E2：承载页没暴露 __hostOverview（鹰眼没有数据源）")
+        elif not ov.get("hasCenter"):
+            failures.append("E2：承载页没暴露 __hostCenterOn（鹰眼点不动）")
+        else:
+            oc = ov.get("content") or {}
+            if not (float(oc.get("w") or 0) > 0 and float(oc.get("h") or 0) > 0):
+                failures.append(f"E2：鹰眼内容框为空（{oc}）")
+            if int(ov.get("shapes") or 0) < 4:
+                failures.append(f"E2：轮廓应有 4 个矩形，实际 {ov.get('shapes')} 个")
+            if ov.get("centerVerdict") is not True:
+                failures.append(f"E2：__hostCenterOn 应回 true，实际 {ov.get('centerVerdict')!r}")
+            if not ov.get("scrollMoved"):
+                failures.append(f"E2：__hostCenterOn 没改动视口（{ov.get('view')}）")
+            if not ov.get("elsSame"):
+                failures.append("E2：鹰眼定位改到了元素数组（只该改 scrollX/scrollY）")
 
         # ── F：loadMermaid 带 look 配置（外壳 → 引擎的配置链）──
         f_case = by.get("F loadMermaid 带 look 配置")
