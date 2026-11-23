@@ -675,7 +675,7 @@ def main() -> int:
         except Exception as e:
             fails.append(f"清空后粘贴的断言解析失败：{e} / {fit_clear}")
 
-        # ---- 断言 4b3：鹰眼（文本型）可见 / 点击能定位 / 开关能隐藏 ----
+        # ---- 断言 4b3：鹰眼（文本型）全图可见自动隐藏 / 内容出视口显示 / 点击定位 / 开关优先 ----
         # 视觉细节不在这里断言（像素不可靠）；看模块自己的账本 + 真实点击后的 --pan。
         prev_doc = ev("DGM.state.active")
         minimap = ev(
@@ -689,60 +689,126 @@ def main() -> int:
             "  await DGM.preview.render();"
             "  await new Promise(r => setTimeout(r, 300));"
             "  const mm = document.getElementById('minimap');"
-            "  const r = mm.getBoundingClientRect();"
-            "  const st = document.querySelector('#canvas-stage');"
             "  return JSON.stringify({"
             "    shown: DGM.minimap.debug().shown,"
             "    hidden: mm.hidden,"
             "    shapes: DGM.minimap.debug().shapes,"
-            "    btnHidden: document.getElementById('btn-minimap').hidden,"
-            "    rect: { x: r.x, y: r.y, w: r.width, h: r.height },"
-            "    pan: st ? st.style.getPropertyValue('--pan-y') : ''"
+            "    btnHidden: document.getElementById('btn-minimap').hidden"
             "  });"
             "})()"
         )
-        log(f"鹰眼（文本型）: {minimap}")
+        log(f"鹰眼（文本型·适应整图）: {minimap}")
         mm = {}
         try:
             mm = json.loads(minimap or "{}")
-            if not mm.get("shown") or mm.get("hidden"):
-                fails.append(f"有内容时鹰眼应显示，实际 {minimap}")
             if int(mm.get("shapes") or 0) <= 0:
                 fails.append(f"鹰眼没提取到文本图的轮廓：{minimap}")
+            if not mm.get("hidden") or mm.get("shown"):
+                fails.append(f"整幅图都在视口里时鹰眼应自动隐藏，实际 {minimap}")
             if mm.get("btnHidden"):
                 fails.append(f"有内容时鹰眼开关不应隐藏：{minimap}")
         except Exception as e:
             fails.append(f"鹰眼断言解析失败：{e} / {minimap}")
 
-        if mm.get("rect") and mm.get("shown"):
-            r = mm["rect"]
+        zoomed = ev(
+            "(async () => {"
+            "  for (let i = 0; i < 6; i++) DGM.preview.zoomIn();"
+            "  await new Promise(r => setTimeout(r, 300));"
+            "  const mm = document.getElementById('minimap');"
+            "  const r = mm.getBoundingClientRect();"
+            "  return JSON.stringify({"
+            "    shown: DGM.minimap.debug().shown,"
+            "    hidden: mm.hidden,"
+            "    rect: { x: r.x, y: r.y, w: r.width, h: r.height },"
+            "    pan: document.querySelector('#canvas-stage').style.getPropertyValue('--pan-y')"
+            "  });"
+            "})()"
+        )
+        log(f"鹰眼（文本型·放大后）: {zoomed}")
+        zm = {}
+        try:
+            zm = json.loads(zoomed or "{}")
+            if not zm.get("shown") or zm.get("hidden"):
+                fails.append(f"有元素被推出视口后鹰眼应自动显示，实际 {zoomed}")
+            if not zm.get("rect") or zm["rect"]["w"] <= 0:
+                fails.append(f"鹰眼显示时没有可点击的矩形：{zoomed}")
+        except Exception as e:
+            fails.append(f"鹰眼显示断言解析失败：{e} / {zoomed}")
+
+        if zm.get("rect") and zm.get("shown"):
+            r = zm["rect"]
             mx = int(r["x"] + r["w"] * 0.5)
             my = int(r["y"] + r["h"] * 0.9)
             cdp.call("Input.dispatchMouseEvent", {"type": "mousePressed", "x": mx, "y": my, "button": "left", "clickCount": 1}, timeout=15)
             cdp.call("Input.dispatchMouseEvent", {"type": "mouseReleased", "x": mx, "y": my, "button": "left", "clickCount": 1}, timeout=15)
             pan_after = ev("document.querySelector('#canvas-stage').style.getPropertyValue('--pan-y')")
-            if pan_after == mm.get("pan"):
+            if pan_after == zm.get("pan"):
                 fails.append(f"点击鹰眼没有改变文本视口（--pan-y 仍是 {pan_after}）")
             else:
-                log(f"鹰眼点击定位: --pan-y {mm.get('pan')} → {pan_after}")
+                log(f"鹰眼点击定位: --pan-y {zm.get('pan')} → {pan_after}")
+
+        fitted = ev(
+            "(async () => {"
+            "  DGM.preview.fit();"
+            "  await new Promise(r => setTimeout(r, 300));"
+            "  const mm = document.getElementById('minimap');"
+            "  return JSON.stringify({ shown: DGM.minimap.debug().shown, hidden: mm.hidden });"
+            "})()"
+        )
+        log(f"鹰眼（文本型·重新适应）: {fitted}")
+        try:
+            ft = json.loads(fitted or "{}")
+            if not ft.get("hidden") or ft.get("shown"):
+                fails.append(f"适应视图后全图回到视口内，鹰眼应再次自动隐藏：{fitted}")
+        except Exception as e:
+            fails.append(f"鹰眼重新隐藏断言解析失败：{e} / {fitted}")
+
+        shrunk = ev(
+            "(async () => {"
+            "  DGM.preview.fit();"
+            "  for (let i = 0; i < 3; i++) DGM.preview.zoomIn();"
+            "  await new Promise(r => setTimeout(r, 200));"
+            "  const midHidden = document.getElementById('minimap').hidden;"
+            "  for (let i = 0; i < 3; i++) DGM.preview.zoomOut();"
+            "  await new Promise(r => setTimeout(r, 300));"
+            "  const mm = document.getElementById('minimap');"
+            "  return JSON.stringify({ midHidden, shown: DGM.minimap.debug().shown, hidden: mm.hidden });"
+            "})()"
+        )
+        log(f"鹰眼（文本型·放大后再缩小）: {shrunk}")
+        try:
+            sh = json.loads(shrunk or "{}")
+            if sh.get("midHidden"):
+                fails.append(f"放大到内容出视口后鹰眼应显示：{shrunk}")
+            if not sh.get("hidden") or sh.get("shown"):
+                fails.append(f"缩小回全图可见后鹰眼应自动隐藏：{shrunk}")
+        except Exception as e:
+            fails.append(f"鹰眼缩小断言解析失败：{e} / {shrunk}")
 
         toggle = ev(
             "(async () => {"
-            "  document.getElementById('btn-minimap').click();"
+            "  const btn = document.getElementById('btn-minimap');"
+            "  const mm = document.getElementById('minimap');"
+            "  btn.click();"
             "  await new Promise(r => setTimeout(r, 250));"
-            "  const off = { pref: DGM.state.settings.editor.minimap, hidden: document.getElementById('minimap').hidden };"
-            "  document.getElementById('btn-minimap').click();"
+            "  const off = { pref: DGM.state.settings.editor.minimap, hidden: mm.hidden };"
+            "  for (let i = 0; i < 6; i++) DGM.preview.zoomIn();"
             "  await new Promise(r => setTimeout(r, 250));"
-            "  const on = { pref: DGM.state.settings.editor.minimap, hidden: document.getElementById('minimap').hidden };"
-            "  return JSON.stringify({ off, on });"
+            "  const offZoomed = { hidden: mm.hidden };"
+            "  btn.click();"
+            "  await new Promise(r => setTimeout(r, 250));"
+            "  const on = { pref: DGM.state.settings.editor.minimap, hidden: mm.hidden };"
+            "  return JSON.stringify({ off, offZoomed, on });"
             "})()"
         )
         try:
             tgl = json.loads(toggle or "{}")
             if tgl.get("off", {}).get("pref") is not False or not tgl.get("off", {}).get("hidden"):
                 fails.append(f"鹰眼开关关闭后没有隐藏/落设置：{toggle}")
+            if not tgl.get("offZoomed", {}).get("hidden"):
+                fails.append(f"鹰眼开关关闭时应保持隐藏（即使内容出视口）：{toggle}")
             if tgl.get("on", {}).get("pref") is not True or tgl.get("on", {}).get("hidden"):
-                fails.append(f"鹰眼开关重新打开后没有恢复：{toggle}")
+                fails.append(f"鹰眼开关重新打开后没有在内容出视口时恢复：{toggle}")
         except Exception as e:
             fails.append(f"鹰眼开关断言解析失败：{e} / {toggle}")
 

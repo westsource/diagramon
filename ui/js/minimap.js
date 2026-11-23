@@ -102,10 +102,47 @@ window.DGM = window.DGM || {};
     if (root) root.hidden = true;
   }
 
-  function reveal() {
-    const on = !!(enabled && content && content.w > 0 && content.h > 0 && shapes.length);
-    if (root) root.hidden = !on;
-    return on;
+  /** 内容框是否完整落在视口内（两边的坐标都来自同一个 provider）。 */
+  function fullyVisible(v, c) {
+    if (!v || !(v.w > 0) || !(v.h > 0) || !c) return false;
+    // 半像素容差：缩放/滚动在亚像素量级来回时，不要抖成“闪现”。
+    const eps = 0.5;
+    return (
+      v.x <= c.x + eps &&
+      v.y <= c.y + eps &&
+      v.x + v.w >= c.x + c.w - eps &&
+      v.y + v.h >= c.y + c.h - eps
+    );
+  }
+
+  /**
+   * 可见性 = 有内容 **且至少一个元素在视口外**。
+   *
+   * 全图都在视口里时鹰眼没有导航价值，还占着右下角：自动让位。
+   * 判据用内容框（文本型 = SVG viewBox，画布型 = 承载页给的 model/scene 内容框）：
+   * 它是所有元素的紧包围盒，`content ⊆ view` 与“每个元素都在视口内”等价，
+   * 又不必逐形状求交（形状上限 4000，轮询 30fps）。
+   */
+  function syncVisibility() {
+    const has = !!(enabled && content && content.w > 0 && content.h > 0 && shapes.length);
+    if (!has) {
+      hideRoot();
+      return false;
+    }
+    // 拖动途中不隐藏：用户可能正把视口框拖向全图可见的位置，半途消失会让手势失去落点。
+    // 松手后 `onUp` 会再算一次，该消失时立刻消失。
+    if (dragging) {
+      if (root) root.hidden = false;
+      scheduleDraw();
+      return true;
+    }
+    if (fullyVisible(viewportRect(), content)) {
+      hideRoot();
+      return false;
+    }
+    if (root) root.hidden = false;
+    scheduleDraw();
+    return true;
   }
 
   /* ------------------------------------------------------------------ 文本型 provider */
@@ -331,8 +368,7 @@ window.DGM = window.DGM || {};
           bgKey = "";
         }
         overview = ov;
-        reveal();
-        scheduleDraw();
+        syncVisibility();
       } else {
         // 画布还没起来 / 空文档：别把上一份的图留在屏幕上
         if (content || overview) {
@@ -639,6 +675,9 @@ window.DGM = window.DGM || {};
     const p = pending;
     pending = null;
     applyCenter(p);
+    // 拖动期间刻意不隐藏；松手后按新视口重算（文本型 applyCenter 已同步算过一次，
+    // 画布型的视口要等承载页下一帧，这里只是尽早收敛）。
+    syncVisibility();
   }
 
   function bind() {
@@ -665,7 +704,6 @@ window.DGM = window.DGM || {};
   /* ------------------------------------------------------------------ 设置 / 开关 */
 
   function applyEnabled() {
-    const was = enabled;
     enabled = !(state.settings && state.settings.editor && state.settings.editor.minimap === false);
 
     const btn = document.getElementById("btn-minimap");
@@ -686,6 +724,7 @@ window.DGM = window.DGM || {};
     }
     if (mode === "canvas") {
       startPoll();
+      syncVisibility();
     } else if (mode === "text" && textSvg) {
       if (!shapes.length) {
         try {
@@ -695,10 +734,10 @@ window.DGM = window.DGM || {};
           shapes = [];
         }
       }
-      reveal();
-      scheduleDraw();
+      syncVisibility();
+    } else {
+      hideRoot();
     }
-    if (was !== enabled && mode === "text") scheduleDraw();
   }
 
   function toggle() {
@@ -756,8 +795,7 @@ window.DGM = window.DGM || {};
       content = null;
       shapes = [];
     }
-    reveal();
-    scheduleDraw();
+    syncVisibility();
   }
 
   function setTextView(view) {
@@ -765,7 +803,7 @@ window.DGM = window.DGM || {};
     textView.scale = num(view.scale, 1) || 1;
     textView.x = num(view.x, 0);
     textView.y = num(view.y, 0);
-    if (mode === "text" && enabled && content && shapes.length) scheduleDraw();
+    if (mode === "text" && enabled && content && shapes.length) syncVisibility();
   }
 
   function setCanvas(fmt) {
@@ -804,7 +842,8 @@ window.DGM = window.DGM || {};
     DGM.bus.on("settings:changed", applyEnabled);
     window.addEventListener("resize", () => {
       bgKey = "";
-      scheduleDraw();
+      if (mode !== "none") syncVisibility();
+      else scheduleDraw();
     });
     applyEnabled();
   }
