@@ -26,7 +26,7 @@ members = [
 ]
 
 [workspace.package]
-version = "3.16.1"
+version = "3.16.2"
 edition = "2021"
 license = "Apache-2.0"
 repository = "https://github.com/westsource/diagramon"
