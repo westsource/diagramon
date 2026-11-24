@@ -1623,6 +1623,34 @@ struct D2Edge {
     op: &'static str,
 }
 
+/// 容器声明行的 id：`accessLayer: "接入层"` → `accessLayer`，`"a:b": {` → `a:b`。
+///
+/// 只切**引号外**的第一个冒号：D2 的 id 允许带冒号（引号里），而标签里也可能有冒号。
+fn d2_block_head_key(head: &str) -> String {
+    let mut in_quote = false;
+    let mut escaped = false;
+    let mut colon = None;
+    for (i, c) in head.char_indices() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        match c {
+            '\\' if in_quote => escaped = true,
+            '"' => in_quote = !in_quote,
+            ':' if !in_quote => {
+                colon = Some(i);
+                break;
+            }
+            _ => {}
+        }
+    }
+    head[..colon.unwrap_or(head.len())]
+        .trim()
+        .trim_matches('"')
+        .to_string()
+}
+
 /// 登记一个节点，返回它在 `out` 里的下标。
 ///
 /// 用 `idx_of` 做 O(1) 查重（审计 2026-11-03 M-22）：原来是 `out.iter().position(...)`，
@@ -1671,17 +1699,52 @@ fn d2_record_path(
     groups: &[String],
 ) {
     for seg in path {
-        d2_touch(out, idx_of, seg, line, groups);
+        if d2_find_node(out, idx_of, seg).is_none() {
+            d2_touch(out, idx_of, seg, line, groups);
+        }
     }
     let resolved: Vec<String> = path
         .iter()
-        .map(|s| out[idx_of[s.trim_matches('"')]].path.clone())
+        .map(|s| {
+            d2_find_node(out, idx_of, s)
+                .map(|i| out[i].path.clone())
+                .unwrap_or_else(|| crate::d2syntax::d2_id(s.trim_matches('"')))
+        })
         .collect();
     for (i, w) in resolved.windows(2).enumerate() {
         if let Some(op) = ops.get(i) {
             edges.push(D2Edge { from: w[0].clone(), to: w[1].clone(), op });
         }
     }
+}
+
+/// 把边端点解析到**已登记节点**：先按完整 id，再按规范化后的点号路径，最后按末段 id。
+///
+/// 转出来的边一律写在文件末尾（容器外），端点是 `组.节点`；旧实现把整段当成一个
+/// id 登记，写回样式时再整体加引号 —— D2 把 `"组.节点"` 当**一个普通节点名**，
+/// 真正的那条边不存在，于是 `(…)[0].style.stroke` 报 “indexed edge does not exist”。
+fn d2_find_node(
+    out: &[D2Node],
+    idx_of: &std::collections::HashMap<String, usize>,
+    seg: &str,
+) -> Option<usize> {
+    let bare = seg.trim_matches('"');
+    if let Some(&i) = idx_of.get(bare) {
+        return Some(i);
+    }
+    let normalized = if bare.contains('.') {
+        bare.split('.')
+            .map(|p| crate::d2syntax::d2_id(p.trim().trim_matches('"')))
+            .collect::<Vec<_>>()
+            .join(".")
+    } else {
+        crate::d2syntax::d2_id(bare)
+    };
+    if let Some(i) = out.iter().position(|n| n.path == normalized) {
+        return Some(i);
+    }
+    let last = bare.rsplit('.').next().unwrap_or(bare);
+    idx_of.get(last).copied()
 }
 
 fn d2_nodes(body: &str) -> D2Scan {
@@ -1726,12 +1789,17 @@ fn d2_nodes(body: &str) -> D2Scan {
             continue;
         }
         if line.ends_with('{') {
-            // `组名: {` / `组名 {` → 这是一个容器
+            // `组名: {` / `组名 {` / `组名: "标签" {` → 这是一个容器。
+            //
+            // 只取**第一个引号外的冒号**左边当 id：转出来的容器是
+            // `accessLayer: "接入层" {`，旧实现把整段 ``accessLayer: "接入层"``
+            // 当成组名，写回就成了 `"accessLayer: \"接入层".lb.style.fill`
+            // —— 一个不存在的节点路径，D2 编译直接失败。
             let head = line.trim_end_matches('{').trim();
-            let name = head.trim_end_matches(':').trim().trim_matches('"');
-            let is_def = matches!(name, "classes" | "style");
+            let name = d2_block_head_key(head);
+            let is_def = matches!(name.as_str(), "classes" | "style");
             if !name.is_empty() {
-                groups.push(name.to_string());
+                groups.push(name);
                 if is_def && def_depth == 0 {
                     def_depth = groups.len();
                 }
@@ -4068,5 +4136,62 @@ b -> c
         let b = nodes.iter().find(|n| n.id == "B").unwrap();
         assert_eq!(b.attrs.get("style").map(String::as_str), None, "边的 style 不该挂到 B 上");
         assert_eq!(b.attrs.get("shape").map(String::as_str), Some("diamond"));
+    }
+
+    /// 容器声明带标签（`accessLayer: "接入层" {`）时，节点路径必须只含容器 id。
+    /// 旧实现把整行 ``accessLayer: "接入层"`` 当组名，写回成
+    /// `"accessLayer: \"接入层".lb.style.fill` —— 不存在的节点，D2 编译失败。
+    #[test]
+    fn d2_container_labels_do_not_leak_into_node_paths() {
+        let src = "g: \"组\" {\n  a\n  b\n}\n";
+        let r = paint(src, FormatId::D2, "pine", false, PaletteMode::All).unwrap();
+        assert!(r.body.contains("g.a.style.fill:"), "{}", r.body);
+        assert!(r.body.contains("g.b.style.fill:"), "{}", r.body);
+        assert!(!r.body.contains("\"g: \\\"组\\\"\""), "{}", r.body);
+    }
+
+    /// 容器外的边用 `组.节点` 引用；写回样式时必须解析成**真实节点的 path**，
+    /// 不能整体加引号（那会变成另一个普通节点，`(...)[0]` 报 indexed edge does not exist）。
+    #[test]
+    fn d2_qualified_edges_resolve_to_nested_node_paths() {
+        let src = "g: \"组\" {\n  a\n}\ng.a -> b: \"x\"\n";
+        let r = paint(src, FormatId::D2, "pine", false, PaletteMode::All).unwrap();
+        assert!(r.body.contains("(g.a -> b)[0].style.stroke:"), "{}", r.body);
+        assert!(!r.body.contains("(\"g.a\""), "{}", r.body);
+    }
+
+    /// Mermaid 架构图（带标签容器、`classDef`、容器外边）转成 D2 后再上色：
+    /// 产物里不能出现把容器声明写进节点路径的行，边也要指向嵌套路径。
+    #[test]
+    fn converted_mermaid_architecture_survives_palette_repaint() {
+        let src = r#"flowchart LR
+    subgraph accessLayer[接入层]
+        lb[负载均衡<br>172.21.106.138]
+        apiProxy[API 代理]
+    end
+    subgraph serviceLayer[服务层]
+        dataApi[通用数据接口]
+    end
+    lb --> apiProxy
+    apiProxy --> dataApi
+    classDef lvl-data fill:#ecd5e6,stroke:#b34d99,color:#4d2343
+    class dataApi lvl-data
+    style accessLayer fill:#f2f4f5,stroke:#a2b8cd,color:#364759
+"#;
+        let d2 = crate::convert::mermaid_to_d2(src).expect("convert").body;
+        let r = paint(&d2, FormatId::D2, "indigo", false, PaletteMode::OnlyUncolored).unwrap();
+        assert!(r.body.contains("accessLayer.lb.style.fill:"), "{}", r.body);
+        assert!(r.body.contains("serviceLayer.dataApi.style.fill:"), "{}", r.body);
+        assert!(r.body.contains("(accessLayer.lb -> accessLayer.apiProxy)[0].style.stroke:"), "{}", r.body);
+        assert!(r.body.contains("(accessLayer.apiProxy -> serviceLayer.dataApi)[0].style.stroke:"), "{}", r.body);
+        assert!(!r.body.contains("\"accessLayer: \\\"接入层\\\"\""), "{}", r.body);
+    }
+
+    #[test]
+    fn d2_block_head_key_ignores_labels_and_quoted_colons() {
+        assert_eq!(d2_block_head_key("g: \"x:y\""), "g");
+        assert_eq!(d2_block_head_key("\"a:b\": \"标签\""), "a:b");
+        assert_eq!(d2_block_head_key("plain"), "plain");
+        assert_eq!(d2_block_head_key("classes:"), "classes");
     }
 }
