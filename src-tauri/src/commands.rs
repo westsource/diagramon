@@ -171,6 +171,12 @@ pub(crate) fn after_open_file(state: &AppState, id: &str) {
     state.remember_recent(&path, &name, format);
 }
 
+/// 取走第二个实例转交、前端尚未接手的文件（见 `AppState::pending_opens`）。
+#[tauri::command]
+pub fn take_pending_opens(state: State<'_, Arc<AppState>>) -> Vec<String> {
+    state.take_pending_open_paths()
+}
+
 #[tauri::command]
 pub fn doc_open_paths(state: State<'_, Arc<AppState>>, paths: Vec<String>) -> SessionPayload {
     // 只认注册过的图表扩展名（审计 2026-11-03 H-5）。

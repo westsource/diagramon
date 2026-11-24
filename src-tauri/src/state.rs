@@ -60,6 +60,13 @@ pub struct AppState {
     pub render_opts: Mutex<app_core::render_opts::Store>,
     /// 识图截屏的冻结帧（框选期间有效）
     pub vision: crate::vision::Frames,
+    /// 第二个实例转交进来、但前端还没接手的文件。
+    ///
+    /// 单实例回调里 `emit("open://paths")` 解决的是"界面已就绪"的情况；如果第二个实例
+    /// 恰好在首帧之前到（双击得早、更新后重启期间），事件没人订阅就直接丢了 ——
+    /// 用户看到的就是"应用起来了，刚才双击的文件没打开"。这里先入队，前端订阅完成后
+    /// 用 `take_pending_opens` 取走，事件与队列两条路至少有一条能送达。
+    pub pending_opens: Mutex<Vec<String>>,
 }
 
 /// 旧版只有 `ai.models`，每行自带 provider/base_url/密钥。
@@ -187,11 +194,30 @@ impl AppState {
             recovery_dir,
             render_opts: Mutex::new(render_opts),
             vision: crate::vision::Frames::new(),
+            pending_opens: Mutex::new(Vec::new()),
         }
     }
 
     pub fn session(&self) -> MutexGuard<'_, Session> {
         lock(&self.session)
+    }
+
+    /// 第二个实例送来的文件先入队（同一路径只留一份），等前端 `take_pending_opens` 取走。
+    pub fn queue_open_paths(&self, paths: Vec<String>) {
+        if paths.is_empty() {
+            return;
+        }
+        let mut q = lock(&self.pending_opens);
+        for p in paths {
+            if !q.iter().any(|x| x == &p) {
+                q.push(p);
+            }
+        }
+    }
+
+    /// 前端订阅完 `open://paths` 后调用：把"事件发出时还没人听"的路径取走。
+    pub fn take_pending_open_paths(&self) -> Vec<String> {
+        std::mem::take(&mut *lock(&self.pending_opens))
     }
 
     /// 取设置。**不可重入**：`std::sync::Mutex` 没有可重入语义，guard 还活着的同一段代码里

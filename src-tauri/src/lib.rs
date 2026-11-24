@@ -174,6 +174,11 @@ pub fn run() {
             // 开文档交给前端：那边才知道编辑器/预览/最近列表各自要做什么。
             // Rust 只负责"第二个进程想开这几个文件"这一件事。
             if !paths.is_empty() {
+                // 前端可能还没订阅事件（应用刚启动/更新后重启）。先入队，事件照常发；
+                // 前端首帧订阅完会 `take_pending_opens` 取走，避免"文件被事件黑洞吃掉"。
+                if let Some(st) = app.try_state::<Arc<AppState>>() {
+                    st.queue_open_paths(paths.clone());
+                }
                 let _ = app.emit(events::OPEN_PATHS, app_ipc::OpenPathsEvent { paths });
             }
             // 无论有没有带文件都要把主窗口唤起来：窗口可能正缩在托盘里
@@ -294,6 +299,7 @@ pub fn run() {
             commands::session_get,
             commands::doc_new,
             commands::doc_open_paths,
+            commands::take_pending_opens,
             commands::doc_activate,
             commands::doc_close,
             commands::doc_set_body,

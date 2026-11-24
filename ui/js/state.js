@@ -350,6 +350,17 @@ window.DGM = window.DGM || {};
     await loadWorkspace();
     bindEvents();
 
+    // 第二个实例的文件在"事件发出时前端还没订阅"的窗口里会丢（应用刚启动、更新后重启）。
+    // Rust 端已把它入队；这里在订阅完成后取走补开。事件那一路已接的会按路径去重。
+    // 只有桌面版有单实例入口；网页版没有这个命令，别去打后端。
+    if (!ipc.isWeb) {
+      try {
+        const pending = await ipc.invoke("take_pending_opens");
+        if (pending && pending.length) await openPaths(pending);
+      } catch (e) {
+        /* 老后端没有这个命令：事件那一路仍然工作 */
+      }
+    }
     applyThemeAttrs();
     emit("settings:changed");
     emit("session:changed");

@@ -841,6 +841,9 @@ digraph Pipeline {
           return this._clone(doc);
         }
 
+        case "take_pending_opens":
+          return [];
+
         case "doc_open_paths": {
           const paths = args.paths || [];
           for (const p of paths) {
