@@ -1832,6 +1832,9 @@ pub fn mermaid_to_d2(src: &str) -> Result<Conversion, String> {
     let mut stack: Vec<usize> = Vec::new();
     let mut edges: Vec<(String, String, Link)> = Vec::new();
     let mut node_styles: HashMap<String, Vec<(String, String)>> = HashMap::new();
+    // subgraph 的 `style`：D2 的容器本身也能带样式（写在容器块内的 `style.*`），
+    // 旧实现把它混进 node_styles，而容器不是节点，最后静默丢掉。
+    let mut container_styles: HashMap<usize, Vec<(String, String)>> = HashMap::new();
     let mut node_class: HashMap<String, String> = HashMap::new();
     // 一个节点写了多个内联类名（`A:::a,b`）时记下来：D2 的 `.class` 是单值，
     // 只取第一个，其余如实进 notes（不静默丢）。
@@ -1873,7 +1876,11 @@ pub fn mermaid_to_d2(src: &str) -> Result<Conversion, String> {
             }
             Stmt::StyleAssign { id, style } => {
                 let (kv, dropped, clamped) = style_to_d2(style);
-                node_styles.entry(id.clone()).or_default().extend(kv);
+                if let Some(&idx) = subgraph_idx.get(id) {
+                    container_styles.entry(idx).or_default().extend(kv);
+                } else {
+                    node_styles.entry(id.clone()).or_default().extend(kv);
+                }
                 dropped_keys.extend(dropped);
                 clamped_widths.extend(clamped);
             }
@@ -1933,6 +1940,7 @@ pub fn mermaid_to_d2(src: &str) -> Result<Conversion, String> {
         container_of,
         containers,
         node_styles,
+        container_styles,
         node_class,
         container_direction,
     };
@@ -2119,6 +2127,8 @@ struct D2Emit {
     container_of: HashMap<String, Option<usize>>,
     containers: Vec<Cluster>,
     node_styles: HashMap<String, Vec<(String, String)>>,
+    /// 容器（subgraph）自己的样式：Mermaid 的 `style <subgraphId> fill:…`
+    container_styles: HashMap<usize, Vec<(String, String)>>,
     node_class: HashMap<String, String>,
     /// 容器 → 容器内声明的局部 `direction`（D2 支持，DOT 不支持）
     container_direction: HashMap<usize, String>,
@@ -2191,6 +2201,12 @@ impl D2Emit {
         }
         if let Some(dir) = self.container_direction.get(&idx) {
             let _ = writeln!(out, "{pad}    direction: {dir}");
+        }
+        // 容器自己的样式：D2 的容器块内 `style.*` 作用于容器本身（不是子节点）。
+        if let Some(kv) = self.container_styles.get(&idx) {
+            for (k, v) in kv {
+                let _ = writeln!(out, "{pad}    style.{k}: {v}");
+            }
         }
         for id in order {
             if self.container_of.get(id).copied().flatten() == Some(idx) {
@@ -2992,6 +3008,22 @@ mod tests {
         assert!(c.body.contains("风控.L -> 风控.M"), "容器里的边用具名路径引用：{}", c.body);
         assert!(c.body.contains("A -> 风控.L"), "跨容器的边同样用点号路径：{}", c.body);
         assert!(c.body.find("风控: {").unwrap() < c.body.find("风控.L -> 风控.M").unwrap(), "边一律在末尾：{}", c.body);
+    }
+
+    /// subgraph 的 `style` 必须落到容器块里；旧实现混进 node_styles，而容器不是节点，
+    /// 会上色失败且一句提示都没有。
+    #[test]
+    fn d2_subgraph_style_lands_inside_container() {
+        let c = mermaid_to_d2(
+            "flowchart LR\n    subgraph accessLayer[接入层]\n        lb\n    end\n    style accessLayer fill:#f2f4f5,stroke:#a2b8cd,color:#364759\n",
+        )
+        .unwrap();
+        assert!(c.body.contains("accessLayer: \"接入层\" {"), "{}", c.body);
+        assert!(c.body.contains("style.fill: \"#f2f4f5\""), "{}", c.body);
+        assert!(c.body.contains("style.stroke: \"#a2b8cd\""), "{}", c.body);
+        assert!(c.body.contains("style.font-color: \"#364759\""), "{}", c.body);
+        // 别写成顶层节点样式（那会在 D2 里造一个同名普通节点）
+        assert!(!c.body.contains("accessLayer.style.fill:"), "{}", c.body);
     }
 
     #[test]
