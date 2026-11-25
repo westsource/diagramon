@@ -1542,6 +1542,17 @@ window.DGM = window.DGM || {};
     const split = $("#e-split");
     if (split) split.addEventListener("input", () => state.patchSettings({ panels: { split_src: Number(split.value) } }));
 
+    // 「字号」= 源码编辑器字号（`editor.font_size`），不是图表渲染字号。
+    // 这个输入框此前只有渲染、没有绑定 —— 改了不落设置，下次打开设置又被重建回 13。
+    const efs = $("#e-fs");
+    if (efs) {
+      efs.addEventListener("change", () => {
+        const n = Math.min(22, Math.max(10, Math.round(Number(efs.value) || 13)));
+        efs.value = String(n);
+        state.patchSettings({ editor: { font_size: n } });
+      });
+    }
+
     const dfs = $("#e-dfs");
     if (dfs) {
       dfs.addEventListener("change", () => {
