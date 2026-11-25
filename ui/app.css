@@ -2060,7 +2060,9 @@ html.full .doc-page { height: auto; overflow: visible; }
   background-size: 8px 4px;
 }
 .code-host .cm-editor { height: 100%; }
-.code-host .cm-content, .code-host .cm-gutters { font-family: var(--font-mono); }
+/* CM6 自带一层 `font-size: 13px`：只在 `.code-host` 上设 `--editor-fs` 会被它盖掉，
+   于是设置里的「源码字号」永远不生效。行号与正文一起跟变量走。 */
+.code-host .cm-content, .code-host .cm-gutters { font-family: var(--font-mono); font-size: var(--editor-fs, 13px); }
 .code-host .cm-editor.cm-focused { outline: none; }
 .code-host .cm-scroller { overflow: auto; }
 .code-host .cm-gutter { user-select: none; }
