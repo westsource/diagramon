@@ -236,6 +236,11 @@ impl Default for PanelPrefs {
 #[serde(default)]
 pub struct EditorPrefs {
     pub font_size: u32,
+    /// 图表渲染的统一字号（px）；`0` = 不干预，按各格式/文档自己的字号渲染。
+    ///
+    /// 只作用于文本格式（Mermaid / DOT / D2）的渲染副本：不写回正文、不改变导出源码，
+    /// 画布型（drawio / Excalidraw）的字号仍由画布自身的文本面板控制。
+    pub diagram_font_size: u16,
     pub debounce_ms: u32,
     pub lint: bool,
     pub per_doc_view: bool,
@@ -265,6 +270,7 @@ impl Default for EditorPrefs {
     fn default() -> Self {
         Self {
             font_size: 13,
+            diagram_font_size: 0,
             debounce_ms: 350,
             lint: true,
             per_doc_view: true,
@@ -1485,6 +1491,7 @@ mod tests {
         assert!(!e.source_tint, "source_tint 默认必须是 false");
         assert!(!e.autosave, "autosave 默认也必须是 false（写盘是不可逆副作用）");
         assert!(e.minimap, "minimap 默认开启（可关，但默认给导航能力）");
+        assert_eq!(e.diagram_font_size, 0, "图表字号默认不干预（0 = 按文档）");
     }
 
     use super::*;
