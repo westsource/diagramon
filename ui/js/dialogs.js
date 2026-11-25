@@ -902,6 +902,7 @@ window.DGM = window.DGM || {};
         <div class="field narrow"><label>${esc(t("set.editor.fontSize"))}</label><input type="number" min="10" max="22" value="${e.font_size || 13}" id="e-fs"></div>
         <div class="field"><label>${esc(t("set.editor.ratio"))}</label><input type="range" min="25" max="50" value="${(s.panels && s.panels.split_src) || 33}" id="e-split"><span class="hint">${esc(t("set.editor.ratioHint"))}</span></div>
       </div>
+      <div class="field"><label>${esc(t("set.editor.diagramFontSize"))}</label><input type="number" min="0" max="48" value="${e.diagram_font_size || 0}" id="e-dfs"><span class="hint">${esc(t("set.editor.diagramFontSizeHint"))}</span></div>
       <div class="field"><label>${esc(t("set.editor.debounce"))}</label><input type="number" min="0" max="2000" step="50" value="${e.debounce_ms || 350}" id="e-debounce"><span class="hint">${esc(t("set.editor.debounceHint"))}</span></div>
       ${switchRow(!!e.lint, t("set.editor.lint"), "set.editor.lintHint", "lint")}
       ${switchRow(!!e.source_tint, t("set.editor.sourceTint"), "set.editor.sourceTintHint", "sourcetint")}
@@ -1540,6 +1541,16 @@ window.DGM = window.DGM || {};
 
     const split = $("#e-split");
     if (split) split.addEventListener("input", () => state.patchSettings({ panels: { split_src: Number(split.value) } }));
+
+    const dfs = $("#e-dfs");
+    if (dfs) {
+      dfs.addEventListener("change", () => {
+        let n = Math.round(Number(dfs.value) || 0);
+        if (n !== 0) n = Math.min(48, Math.max(8, n));
+        dfs.value = String(n);
+        state.patchSettings({ editor: { diagram_font_size: n } });
+      });
+    }
 
     const auto = $("#e-autosave");
     if (auto) {

@@ -1069,6 +1069,71 @@ window.DGM = window.DGM || {};
     loadElk().catch(() => {});
   }
 
+  /** 统一图表字号（px）；`0` = 不干预，按文档/格式自己的字号。 */
+  function diagramFontSize() {
+    const e = (state.settings && state.settings.editor) || {};
+    const n = Number(e.diagram_font_size) || 0;
+    return n > 0 ? Math.min(48, n) : 0;
+  }
+
+  /** 找 DOT 第一个块起始 `{`：跳过字符串、行注释与块注释。 */
+  function firstDotBrace(src) {
+    let i = 0;
+    let lineStart = true; // `#` 只有行首才是注释
+    while (i < src.length) {
+      const c = src[i];
+      if (c === '"') {
+        i += 1;
+        while (i < src.length) {
+          if (src[i] === "\\") i += 2;
+          else if (src[i++] === '"') break;
+        }
+        lineStart = false;
+        continue;
+      }
+      if (c === "/" && src[i + 1] === "/") {
+        while (i < src.length && src[i] !== "\n") i += 1;
+        continue;
+      }
+      if (c === "/" && src[i + 1] === "*") {
+        i += 2;
+        while (i < src.length && !(src[i] === "*" && src[i + 1] === "/")) i += 1;
+        i += 2;
+        continue;
+      }
+      if (c === "#" && lineStart) {
+        while (i < src.length && src[i] !== "\n") i += 1;
+        continue;
+      }
+      if (c === "{") return i;
+      lineStart = c === "\n";
+      i += 1;
+    }
+    return -1;
+  }
+
+  /** 在**渲染副本**里给 DOT 注入默认字号；正文与导出源码都不变。 */
+  function dotWithFontSize(body, n) {
+    const at = firstDotBrace(body);
+    if (at < 0) return body;
+    const defs = `\n  graph [fontsize=${n}];\n  node [fontsize=${n}];\n  edge [fontsize=${n}];`;
+    return body.slice(0, at + 1) + defs + body.slice(at + 1);
+  }
+
+  /**
+   * D2 的 globs：给所有形状与连线标签一个默认字号；显式的 `style.font-size`
+   * 比 glob 更具体，仍然优先（用户手写的字号不会被覆盖）。
+   */
+  function d2WithFontSize(body, n) {
+    const globs = [
+      `**.style.font-size: ${n}`,
+      `(** -> **)[*].style.font-size: ${n}`,
+      `(** -- **)[*].style.font-size: ${n}`,
+      `(** <- **)[*].style.font-size: ${n}`,
+    ].join("\n");
+    return `${globs}\n${body}`;
+  }
+
   async function renderMermaid(body, mine, d) {
     if (typeof window.mermaid === "undefined") throw new Error(t("preview.mermaidUnavailable"));
     const dark = document.documentElement.dataset.theme === "dark";
@@ -1103,10 +1168,13 @@ window.DGM = window.DGM || {};
         layout = "dagre";
       }
     }
+    const fontPx = diagramFontSize();
     window.mermaid.initialize({
       startOnLoad: false,
       securityLevel: "strict",
       theme: dark ? "dark" : "default",
+      // 统一字号：只影响这次渲染，不改正文；文档里的 init 指令优先级更高。
+      ...(fontPx ? { themeVariables: { fontSize: `${fontPx}px` } } : {}),
       // Mermaid 12.2.0 的 line-hops（交叉处跳线）后处理会把经过交叉点的边重写成
       // `stroke-dasharray: 0 0 <len> <marker>`，**连 linkStyle 里的 stroke-dasharray
       // 一起覆盖** —— 用户 2026-10-27 报的就是这个：`-.->` 的边被画成实线。
@@ -1139,7 +1207,8 @@ window.DGM = window.DGM || {};
         t("preview.graphviz.unavailable", { msg: window.DGMGraphvizError || t("preview.graphviz.noLoader") })
       );
     }
-    return window.DGMGraphviz.layout(body, "svg", engine, {});
+    const fs = diagramFontSize();
+    return window.DGMGraphviz.layout(fs ? dotWithFontSize(body, fs) : body, "svg", engine, {});
   }
 
   /**
@@ -1154,7 +1223,8 @@ window.DGM = window.DGM || {};
       showLoading();
       setSub(t("preview.d2.init"));
     }
-    return DGM.d2.renderSvg(body, engine);
+    const fs = diagramFontSize();
+    return DGM.d2.renderSvg(fs ? d2WithFontSize(body, fs) : body, engine);
   }
 
   /** D2 的解析结果 → 与其它格式同一套报错面板文案（行号在前，用户能直接对到源码）。 */
@@ -1673,6 +1743,7 @@ window.DGM = window.DGM || {};
       document.documentElement.dataset.theme || "",
       s && s.theme,
       s && s.mermaid,
+      s && s.editor && s.editor.diagram_font_size,
       s && s.palette_edges,
       s && s.locale,
     ]);

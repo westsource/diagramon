@@ -825,6 +825,53 @@ def main() -> int:
             "})()"
         )
 
+        # ---- 断言 4b4：统一图表字号（设置 editor.diagram_font_size）只作用于渲染副本 ----
+        font_probe = ev(
+            "(async () => {"
+            "  const st = DGM.state;"
+            "  const old = (st.settings.editor && st.settings.editor.diagram_font_size) || 0;"
+            "  const out = { old };"
+            "  try {"
+            "    await st.patchSettings({ editor: { diagram_font_size: 30 } });"
+            "    const m = await st.newDoc('mermaid');"
+            "    const body = \"%%{init: {'themeVariables': {'lineColor': '#546678'}}}%%\\nflowchart LR\\n  A[大字体] --> B[统一字号]\";"
+            "    await st.setBodyNow(m.id, body);"
+            "    DGM.editor.loadActive();"
+            "    await DGM.preview.render();"
+            "    await new Promise(r => setTimeout(r, 500));"
+            "    const msvg = document.querySelector('#canvas-stage svg');"
+            "    const mm2 = msvg ? (msvg.outerHTML.match(/font-size:\\s*([0-9.]+)px/) || []) : [];"
+            "    out.mermaidFs = mm2[1] ? mm2[1] + 'px' : null;"
+            "    out.mermaidBodyClean = !String(st.doc(m.id).body).includes('font-size');"
+            "    await st.closeDoc(m.id);"
+            "    const d = await st.newDoc('dot');"
+            "    const dot = 'digraph G {\\n  A [label=\"大字体\"];\\n  B [label=\"统一字号\"];\\n  A -> B [label=\"边\"];\\n}';"
+            "    await st.setBodyNow(d.id, dot);"
+            "    DGM.editor.loadActive();"
+            "    await DGM.preview.render();"
+            "    await new Promise(r => setTimeout(r, 800));"
+            "    const dt = document.querySelector('#canvas-stage svg text');"
+            "    out.dotFs = dt ? getComputedStyle(dt).fontSize : null;"
+            "    out.dotBodyClean = !String(st.doc(d.id).body).includes('fontsize=30');"
+            "    await st.closeDoc(d.id);"
+            "  } finally {"
+            "    await st.patchSettings({ editor: { diagram_font_size: old } });"
+            "  }"
+            "  return JSON.stringify(out);"
+            "})()"
+        )
+        log(f"统一图表字号: {font_probe}")
+        try:
+            fp = json.loads(font_probe or "{}")
+            if fp.get("mermaidFs") != "30px":
+                fails.append(f"Mermaid 统一字号没生效（期望 30px）：{font_probe}")
+            if fp.get("dotFs") != "30px":
+                fails.append(f"DOT 统一字号没生效（期望 30px）：{font_probe}")
+            if not fp.get("mermaidBodyClean") or not fp.get("dotBodyClean"):
+                fails.append(f"统一字号改到了正文（应只影响渲染副本）：{font_probe}")
+        except Exception as e:
+            fails.append(f"统一字号断言解析失败：{e} / {font_probe}")
+
 
         # ---- 断言 4c：ELK 离线包启动预热（3.11.3 起 elk 是 Mermaid 的默认布局） ----
         # 那份 2.4MB ESM 是一次性且常驻的成本（实测 JS 堆 +7.7MB、进程工作集 +16MB、加载约 0.5s）：
