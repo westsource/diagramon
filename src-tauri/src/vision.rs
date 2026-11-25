@@ -222,7 +222,17 @@ fn cursor_pos() -> (i32, i32) {
     (p.x, p.y)
 }
 
-#[cfg(not(windows))]
+#[cfg(target_os = "macos")]
+fn cursor_pos() -> (i32, i32) {
+    // 与 xcap 的 MonitorInfo 同一套全局显示坐标（原点在主屏左上）。
+    // NSEvent::mouseLocation 是左下原点，直接换会选错屏。
+    let pos = objc2_core_graphics::CGEvent::new(None)
+        .map(|e| objc2_core_graphics::CGEvent::location(Some(&*e)));
+    let (x, y) = pos.map(|p| (p.x, p.y)).unwrap_or((0.0, 0.0));
+    (x as i32, y as i32)
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
 fn cursor_pos() -> (i32, i32) {
     (0, 0)
 }

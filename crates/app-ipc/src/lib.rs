@@ -745,6 +745,10 @@ pub struct Limits {
 pub struct AppInfo {
     pub version: String,
     pub platform: String,
+    /// 进程架构（`std::env::consts::ARCH`）。更新清单的平台键是 `{os}-{arch}`，
+    /// macOS 上尤其需要它区分 `darwin-aarch64` / `darwin-x86_64`。
+    #[serde(default)]
+    pub arch: String,
     pub formats: Vec<FormatInfo>,
     pub limits: Limits,
     pub dev: DevFlags,

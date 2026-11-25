@@ -20,6 +20,7 @@ members = [
     "crates/platform",
     "crates/platform-windows",
     "crates/platform-linux",
+    "crates/platform-macos",
     "crates/ai",
     "crates/core-wasm",
     "src-tauri",
@@ -38,6 +39,7 @@ assets = { path = "crates/assets" }
 platform = { path = "crates/platform" }
 platform-windows = { path = "crates/platform-windows" }
 platform-linux = { path = "crates/platform-linux" }
+platform-macos = { path = "crates/platform-macos" }
 ai = { path = "crates/ai" }
 ai-prompt = { path = "crates/ai-prompt" }
 

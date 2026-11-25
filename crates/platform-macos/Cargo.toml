@@ -1,0 +1,14 @@
+[package]
+name = "platform-macos"
+description = "Diagramon macOS 平台适配层：Keychain 凭据存储"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# 与非 macOS 平台彻底隔离：本 crate 在其它平台上编译成空 lib（lib.rs 的 `#![cfg]`），
+# 不该让 Windows/Linux 的 `cargo check --workspace` 去拉 keyring/security-framework。
+[target.'cfg(target_os = "macos")'.dependencies]
+platform = { workspace = true }
+# `apple-native` 走 Security.framework 的 Keychain（generic password），不落明文文件。
+keyring = { version = "3", default-features = false, features = ["apple-native"] }

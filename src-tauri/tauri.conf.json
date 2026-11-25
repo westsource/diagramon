@@ -80,6 +80,9 @@
       "../ui/": "ui/",
       "../assets/": "assets/"
     },
+    "macOS": {
+      "minimumSystemVersion": "12.3"
+    },
     "windows": {
       "webviewInstallMode": {
         "type": "downloadBootstrapper"

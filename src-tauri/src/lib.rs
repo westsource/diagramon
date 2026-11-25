@@ -380,8 +380,43 @@ pub fn run() {
             cloud::share_revoke,
             cloud::ai_gateway_models,
         ])
-        .run(tauri::generate_context!())
-        .expect("Diagramon 启动失败");
+        .build(tauri::generate_context!())
+        .expect("Diagramon 启动失败")
+        .run(|app_handle, event| {
+            // macOS 的「用 Diagramon 打开」走 Apple Event（RunEvent::Opened），
+            // 不进 argv —— 不处理它，Info.plist 里注册的文件关联就只是一张空头支票。
+            #[cfg(target_os = "macos")]
+            handle_opened(app_handle, event);
+            #[cfg(not(target_os = "macos"))]
+            let _ = (app_handle, event);
+        });
+}
+
+/// macOS：Finder 双击 / `open -a Diagramon <文件>` 把路径交给会话。
+///
+/// 与单实例那条路共用 `pending_opens`：启动早期前端可能还没订阅 `open://paths`，
+/// 先入队，前端首帧订阅完会 `take_pending_opens` 取走；事件那一路负责已就绪的界面。
+#[cfg(target_os = "macos")]
+fn handle_opened(app: &tauri::AppHandle, event: tauri::RunEvent) {
+    let tauri::RunEvent::Opened { urls } = event else { return; };
+    let paths: Vec<String> = urls
+        .iter()
+        .filter_map(|u| u.to_file_path().ok())
+        .map(|p| p.to_string_lossy().into_owned())
+        .filter(|p| is_open_path(p))
+        .collect();
+    if paths.is_empty() {
+        return;
+    }
+    if let Some(st) = app.try_state::<Arc<AppState>>() {
+        st.queue_open_paths(paths.clone());
+    }
+    let _ = app.emit(events::OPEN_PATHS, app_ipc::OpenPathsEvent { paths });
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.show();
+        let _ = w.unminimize();
+        let _ = w.set_focus();
+    }
 }
 
 /// 命令行参数里属于本应用的文件（第二个实例转交、以及"双击文件打开"都走这里）。
@@ -392,14 +427,17 @@ fn diagram_files(argv: &[String]) -> Vec<String> {
     argv.iter()
         .skip(1) // argv[0] 是 exe 自己
         .filter(|a| !a.starts_with('-'))
-        .filter(|a| {
-            Path::new(a)
-                .extension()
-                .map(|e| app_core::workspace::is_open_ext(&e.to_string_lossy()))
-                .unwrap_or(false)
-        })
+        .filter(|a| is_open_path(a))
         .cloned()
         .collect()
+}
+
+/// 是否是我们注册过的图表扩展名。argv、单实例与 macOS `Opened` 三条入口共用。
+fn is_open_path(path: &str) -> bool {
+    Path::new(path)
+        .extension()
+        .map(|e| app_core::workspace::is_open_ext(&e.to_string_lossy()))
+        .unwrap_or(false)
 }
 
 /// 把草稿仓里的未落盘文档收进会话（上次退出时没保存完的东西）。
@@ -731,6 +769,16 @@ fn debug_browser_args() -> Option<String> {
 fn credential_store(paths: &AppPaths) -> Arc<dyn CredentialStore> {
     #[cfg(windows)]
     let store: Arc<dyn CredentialStore> = Arc::new(platform_windows::store_in(&paths.config_dir));
+    #[cfg(target_os = "macos")]
+    let store: Arc<dyn CredentialStore> = {
+        // 与 Linux 同一个口径：明文兜底只给开发/受限环境，正式发布绝不静默降级。
+        if std::env::var_os("DGM_ALLOW_PLAINTEXT_CREDS").is_some() {
+            eprintln!("diagramon|warn|凭据使用明文兜底（DGM_ALLOW_PLAINTEXT_CREDS）—— 仅限开发环境");
+            Arc::new(platform::PlaintextStore::new(paths.credentials_dir()))
+        } else {
+            Arc::new(platform_macos::KeychainStore::new())
+        }
+    };
     #[cfg(target_os = "linux")]
     let store: Arc<dyn CredentialStore> = {
         // 明文兜底只用于开发/受限环境（WSL、CI：那里没有密钥环服务），必须显式开启。
@@ -743,7 +791,7 @@ fn credential_store(paths: &AppPaths) -> Arc<dyn CredentialStore> {
             Arc::new(platform_linux::SecretServiceStore::new())
         }
     };
-    #[cfg(not(any(windows, target_os = "linux")))]
+    #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
     let store: Arc<dyn CredentialStore> =
         Arc::new(platform::PlaintextStore::new(paths.credentials_dir()));
     store

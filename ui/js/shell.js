@@ -1873,6 +1873,35 @@ window.DGM = window.DGM || {};
 
   function updateMb(bytes) { return ((bytes || 0) / 1048576).toFixed(1); }
 
+  /** 更新清单里当前进程的平台键：`darwin-aarch64` / `windows-x86_64` / `linux-x86_64`。
+   *  macOS 的清单键是 `darwin-*`，而 `app_info.platform` 报的是 Rust 的 `macos`。 */
+  function updatePlatformKey() {
+    const info = (state && state.appInfo) || {};
+    const os = info.platform === "macos" ? "darwin" : info.platform;
+    const arch = info.arch || "x86_64"; // 旧后端没有 arch；x86_64 是唯一能猜的默认
+    return os && arch ? os + "-" + arch : "";
+  }
+
+  /** 取本平台的清单项；兼容旧清单的 os-only 写法（windows/linux）。 */
+  function updatePlatformEntry(rawJson) {
+    const platforms = rawJson && rawJson.platforms;
+    if (!platforms) return {};
+    const info = (state && state.appInfo) || {};
+    return platforms[updatePlatformKey()] || platforms[info.platform] || {};
+  }
+
+  /** 手动下载地址：macOS 的清单 url 是给更新器用的 `.app.tar.gz`，
+   *  普通用户要的是 DMG / Release 页。GitHub 与 Gitee 各自的 URL 形态都还原一次。 */
+  function manualUpdateUrl(entry) {
+    const url = String((entry && entry.url) || "");
+    if (!url || !state || !state.appInfo || state.appInfo.platform !== "macos") return url;
+    const gh = url.match(/^(https:\/\/github\.com\/[^/]+\/[^/]+\/releases)\/download\/[^/]+\//);
+    if (gh) return gh[1] + "/latest";
+    const gitee = url.match(/^(https:\/\/gitee\.com\/[^/]+\/[^/]+\/releases)\/download\/([^/]+)\//);
+    if (gitee) return gitee[1] + "/tag/" + gitee[2];
+    return url;
+  }
+
   /** 进度文案（状态栏那一项与更新窗口共用同一份文字）。 */
   function updateLabelText() {
     if (updateState === "stalled") return t("update.stalledLabel", { mb: updateMb(updateProgress && updateProgress.got) });
@@ -1990,7 +2019,7 @@ window.DGM = window.DGM || {};
     // 记录**清单里的下载源**：国内应看到 Gitee，其余地区应看到 GitHub。
     // updater 不告诉我们命中了哪个 endpoint，但 `url` 已经能说明问题。
     const rj = update.rawJson || {};
-    const plat = (rj.platforms && (rj.platforms["windows-x86_64"] || rj.platforms.windows)) || {};
+    const plat = updatePlatformEntry(rj);
     DGM.note(`update:found version=${update.version} url=${plat.url || "?"}`);
     status(t("update.available", { version: update.version }), "warn");
     if (quiet) renderStatus();
@@ -2020,8 +2049,8 @@ window.DGM = window.DGM || {};
   /** 卡住时的逃生口：用系统浏览器直接下安装包（`rawJson` 里就有本平台的 url）。 */
   function openUpdatePage() {
     const rj = pendingUpdate && pendingUpdate.rawJson;
-    const p = rj && rj.platforms && (rj.platforms["windows-x86_64"] || rj.platforms.windows);
-    const url = (p && p.url) || "";
+    const p = updatePlatformEntry(rj);
+    const url = manualUpdateUrl(p);
     DGM.note(`update:manual-open url=${url || "(rawJson 里没找到 url)"}`);
     if (!url) {
       toast({ icon: "alert", title: t("update.manualBtn"), sub: t("update.stalledTitle"), warn: true });

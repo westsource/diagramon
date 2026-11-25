@@ -56,5 +56,11 @@ tauri-plugin-updater = { version = "2.13.3", default-features = false, features 
 platform-windows = { workspace = true }
 windows-sys = { version = "0.61.2", features = ["Win32_UI_WindowsAndMessaging", "Win32_Foundation"] }
 
+[target.'cfg(target_os = "macos")'.dependencies]
+platform-macos = { workspace = true }
+# 全局鼠标位置（CGEventGetLocation）。坐标原点与 xcap 的 MonitorInfo 一致，
+# 不能换成 NSEvent::mouseLocation（左下原点，需要翻转）。
+objc2-core-graphics = { version = "0.3", features = ["CGEvent", "CGEventTypes"] }
+
 [target.'cfg(target_os = "linux")'.dependencies]
 platform-linux = { workspace = true }

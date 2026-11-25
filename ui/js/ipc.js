@@ -776,6 +776,7 @@ digraph Pipeline {
           return {
             version: "3.0.0-mock",
             platform: "mock",
+            arch: "x86_64",
             formats: this._clone(FORMATS),
             limits: { preview_max_lines: 5000, preview_max_bytes: 409600 },
             // 色系清单：**只给 id 与名字，roles 故意留空** —— 色值真源在
