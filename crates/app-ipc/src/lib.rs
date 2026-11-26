@@ -151,6 +151,11 @@ pub struct Doc {
     /// 与 `look` / `layout` 同一套：按文件记住，下次打开恢复。
     #[serde(default)]
     pub scheme: Option<String>,
+    /// 文档级图表字号（px）。`None` = 跟随设置里的 `editor.diagram_font_size`；
+    /// `Some(0)` = 不干预（用引擎自己的默认）；`Some(n)` = 本次渲染统一 n px。
+    /// 与 `look` / `layout` 同一套：按文件路径记住，下次打开恢复。
+    #[serde(default)]
+    pub font_size: Option<u16>,
 }
 
 /// 会话：打开的文档与当前活动文档。

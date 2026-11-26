@@ -11,7 +11,7 @@
  *
  * 返回值约定（契约未固定返回值时的补充，前端一律做成可容错）：
  *   - 列表型变更（doc_new / doc_open_paths / doc_close / doc_activate）→ Session{docs,active}
- *   - 单文档变更（doc_save / doc_save_as / doc_set_body / doc_set_view_mode / doc_set_layout / doc_set_look）→ Doc
+ *   - 单文档变更（doc_save / doc_save_as / doc_set_body / doc_set_view_mode / doc_set_layout / doc_set_look / doc_set_font_size）→ Doc
  *   - doc_set_caret / ai_model_key_set / ai_model_key_delete / ai_chat / ai_cancel → 无意义返回值
  *   - doc_issues → Issue[] · doc_outline → OutlineGroup[] · doc_scope → String
  *   前端 applyResult() 同时接受 Session 与 Doc，所以 Rust 侧两种都接得住。
@@ -579,10 +579,10 @@ digraph Pipeline {
         /* 无 location / 参数非法：忽略 */
       }
       this.docs = [
-        { id: "d1", path: "E:/OpenCode/diagramon/docs/flows/登录流程.mmd", kind: "file", name: "登录流程.mmd", format: "mermaid", body: MERMAID_SRC, dirty: true, view_mode: "split", caret_line: 9, caret_col: 12, layout: null },
-        { id: "d2", path: "E:/OpenCode/diagramon/docs/arch/渲染管线.dot", kind: "file", name: "渲染管线.dot", format: "dot", body: DOT_SRC, dirty: false, view_mode: "split", caret_line: 6, caret_col: 4, layout: "dot" },
-        { id: "d3", path: "E:/OpenCode/diagramon/docs/arch/服务拓扑.drawio", kind: "file", name: "服务拓扑.drawio", format: "drawio", body: DRAWIO_SRC, dirty: false, view_mode: "preview", caret_line: 8, caret_col: 1, layout: null },
-        { id: "d4", path: "E:/OpenCode/diagramon/scratch/白板草图.excalidraw", kind: "file", name: "白板草图.excalidraw", format: "excalidraw", body: EXCALIDRAW_SRC, dirty: true, view_mode: "preview", caret_line: 4, caret_col: 1, layout: null },
+        { id: "d1", path: "E:/OpenCode/diagramon/docs/flows/登录流程.mmd", kind: "file", name: "登录流程.mmd", format: "mermaid", body: MERMAID_SRC, dirty: true, view_mode: "split", caret_line: 9, caret_col: 12, layout: null, font_size: null },
+        { id: "d2", path: "E:/OpenCode/diagramon/docs/arch/渲染管线.dot", kind: "file", name: "渲染管线.dot", format: "dot", body: DOT_SRC, dirty: false, view_mode: "split", caret_line: 6, caret_col: 4, layout: "dot", font_size: null },
+        { id: "d3", path: "E:/OpenCode/diagramon/docs/arch/服务拓扑.drawio", kind: "file", name: "服务拓扑.drawio", format: "drawio", body: DRAWIO_SRC, dirty: false, view_mode: "preview", caret_line: 8, caret_col: 1, layout: null, font_size: null },
+        { id: "d4", path: "E:/OpenCode/diagramon/scratch/白板草图.excalidraw", kind: "file", name: "白板草图.excalidraw", format: "excalidraw", body: EXCALIDRAW_SRC, dirty: true, view_mode: "preview", caret_line: 4, caret_col: 1, layout: null, font_size: null },
       ];
       this.active = "d1";
       // mock 里默认就"打开着"这个示例工作区：否则浏览器原型永远是空树，
@@ -835,6 +835,7 @@ digraph Pipeline {
             caret_line: 1,
             caret_col: 1,
             layout: f.layouts.length ? f.layouts[0] : null,
+            font_size: null,
           };
           this.docs.push(doc);
           this.active = doc.id;
@@ -868,6 +869,7 @@ digraph Pipeline {
               caret_line: 1,
               caret_col: 1,
               layout: f.layouts.length ? f.layouts[0] : null,
+              font_size: null,
             };
             this.docs.push(doc);
             this.active = doc.id;
@@ -999,6 +1001,15 @@ digraph Pipeline {
           const d = this._doc(args.id);
           if (d) d.look = args.look;
           return d ? this._clone(d) : null;
+        }
+
+        case "doc_set_font_size": {
+          const d = this._doc(args.id);
+          if (!d) throw new Error("文档不存在");
+          const v = args.size === undefined ? null : args.size;
+          if (v !== null && (typeof v !== "number" || v < 0 || v > 48)) throw new Error(`字号超出 0–48：${v}`);
+          d.font_size = v;
+          return this._clone(d);
         }
 
         // 外部文件作为上下文：mock 不读盘，按路径造一份固定内容（形状与 app-ipc 契约一致）。

@@ -566,8 +566,8 @@ window.DGM = window.DGM || {};
           mm && "looks=" + mm.looks.join("/") + " layouts=" + mm.layouts.join("/"),
         );
         ok(
-          "顶栏控件对 Mermaid 出三颗（外观 / 布局 / 配色）",
-          document.querySelectorAll("#pv-opts .pv-opt").length === 3,
+          "顶栏控件对 Mermaid 出四颗（外观 / 布局 / 字号 / 配色）",
+          document.querySelectorAll("#pv-opts .pv-opt").length === 4,
           document.querySelectorAll("#pv-opts .pv-opt").length,
         );
         await invoke("doc_set_look", { id: doc.id, look: "handDrawn" });
@@ -596,6 +596,29 @@ window.DGM = window.DGM || {};
           await new Promise((r) => setTimeout(r, 100));
         }
         ok("ELK 布局端到端渲染", elkOk, elkOk ? "elk 离线包加载+注册+渲染全通" : "20s 内没等到 elk 渲染");
+
+        // ── 文档级字号：覆盖全局默认，且只作用于渲染副本（2026-11-26）──
+        {
+          if (st && st.setFontSize) await st.setFontSize(doc.id, 24);
+          else await invoke("doc_set_font_size", { id: doc.id, size: 24 });
+          DGM.preview.schedule();
+          let fsOk = false;
+          for (let i = 0; i < 200; i++) {
+            const svg = document.querySelector("#canvas-stage svg");
+            const m = svg ? svg.outerHTML.match(/font-size:\s*([0-9.]+)px/) : null;
+            fsOk = !!(m && Number(m[1]) === 24);
+            if (fsOk) break;
+            await new Promise((r) => setTimeout(r, 50));
+          }
+          ok("文档级字号生效（覆盖全局默认）", fsOk, fsOk ? "SVG 字号 24px" : "10s 内没等到 24px");
+          const live = st && st.doc ? st.doc(doc.id) : null;
+          ok("字号不改正文", !String((live && live.body) || "").includes("font-size"), "正文不含注入的 font-size");
+          // 恢复「跟随设置」，后面的泳道图断言不受影响
+          if (st && st.setFontSize) await st.setFontSize(doc.id, null);
+          else await invoke("doc_set_font_size", { id: doc.id, size: null });
+          DGM.preview.schedule();
+          await new Promise((r) => setTimeout(r, 100));
+        }
 
         // ── 泳道图（`swimlane-beta`）：真的画出泳道 + 不给布局控件（2026-11-02）──
         //  两个坑各自钉一条：
@@ -639,8 +662,8 @@ window.DGM = window.DGM || {};
             `泳道 ${lanes} / 节点 ${nodes} / 泳道名 ${labels ? "在" : "丢了"}`,
           );
           ok(
-            "泳道图不给布局控件（顶栏只剩外观 + 配色）",
-            document.querySelectorAll("#pv-opts .pv-opt").length === 2,
+            "泳道图不给布局控件（顶栏只剩外观 + 字号 + 配色）",
+            document.querySelectorAll("#pv-opts .pv-opt").length === 3,
             document.querySelectorAll("#pv-opts .pv-opt").length,
           );
           const swimIssues = await invoke("doc_issues", { id: doc.id });

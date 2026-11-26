@@ -28,7 +28,7 @@ use crate::format;
 /// 记录条数上限：一条几十字节，500 条约几十 KB。
 pub const MAX_DOCS: usize = 500;
 
-/// 单个文件记住的渲染选项。三项都为 `None` 表示"没记过"。
+/// 单个文件记住的渲染选项。全部为 `None` 表示"没记过"。
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct DocOpts {
@@ -38,11 +38,17 @@ pub struct DocOpts {
     pub layout: Option<String>,
     /// 自动配色的色系 id（`Some("")` = 这个文件明确不上自动色）
     pub scheme: Option<String>,
+    /// 文档级图表字号（px；`Some(0)` = 不干预，`None` = 没选过/跟随设置）
+    pub font_size: Option<u16>,
 }
+
+/// 文档级字号的合法上限。与设置里的「图表字号」同一区间（0–48）：
+/// 设置是全局默认，这里是单文件的覆盖，超出的值一律当作没写过。
+pub const MAX_FONT_SIZE: u16 = 48;
 
 impl DocOpts {
     pub fn is_empty(&self) -> bool {
-        self.look.is_none() && self.layout.is_none() && self.scheme.is_none()
+        self.look.is_none() && self.layout.is_none() && self.scheme.is_none() && self.font_size.is_none()
     }
 
     /// 按注册表过滤：该格式没有的项一律丢掉（`looks` / `layouts` 为空就等于那一项非法）。
@@ -56,6 +62,10 @@ impl DocOpts {
                 .scheme
                 .clone()
                 .filter(|v| v.is_empty() || (info.surface == app_ipc::Surface::Text && crate::palette::is_known(v))),
+            // 字号只对文本渲染格式有意义；画布型逐元素设字号，没有"统一字号"。
+            font_size: self
+                .font_size
+                .filter(|n| *n <= MAX_FONT_SIZE && info.surface == app_ipc::Surface::Text),
         }
     }
 }
@@ -204,6 +214,18 @@ mod tests {
         assert_eq!(partial, DocOpts { layout: Some("neato".into()), ..Default::default() });
         let mmd = DocOpts { look: Some("handDrawn".into()), layout: Some("elk".into()), ..Default::default() }.sanitized(FormatId::Mermaid);
         assert_eq!(mmd, DocOpts { look: Some("handDrawn".into()), layout: Some("elk".into()), ..Default::default() });
+    }
+
+    #[test]
+    fn sanitize_keeps_font_size_only_for_text_formats_within_range() {
+        let mmd = DocOpts { font_size: Some(20), ..Default::default() }.sanitized(FormatId::Mermaid);
+        assert_eq!(mmd.font_size, Some(20));
+        let dot = DocOpts { font_size: Some(MAX_FONT_SIZE), ..Default::default() }.sanitized(FormatId::Dot);
+        assert_eq!(dot.font_size, Some(MAX_FONT_SIZE), "上限本身合法");
+        let over = DocOpts { font_size: Some(MAX_FONT_SIZE + 1), ..Default::default() }.sanitized(FormatId::Mermaid);
+        assert_eq!(over, DocOpts::default(), "超出上限的值当作没写过");
+        let canvas = DocOpts { font_size: Some(16), ..Default::default() }.sanitized(FormatId::Drawio);
+        assert_eq!(canvas, DocOpts::default(), "画布型逐元素设字号，统一字号存了也没用");
     }
 
     #[test]

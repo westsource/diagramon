@@ -412,6 +412,7 @@ fn commit_render_opt(state: &AppState, id: &str) -> R<Doc> {
             look: doc.look.clone(),
             layout: doc.layout.clone(),
             scheme: doc.scheme.clone(),
+            font_size: doc.font_size,
         };
         state.remember_render_opts(None, &path, opts.sanitized(format));
     }
@@ -486,6 +487,18 @@ pub fn doc_set_look(state: State<'_, Arc<AppState>>, id: String, look: String) -
     // 同上：外观模式（auto / classic / neo / handDrawn）只在 Mermaid 上存在
     if !state.session().set_look(&id, look.clone()) {
         return Err(format!("这个格式没有外观模式「{look}」"));
+    }
+    commit_render_opt(state.inner(), &id)
+}
+
+/// 文档级图表字号：`size = null` → 跟随设置；`0` → 不干预；`1..=48` → 统一 px。
+///
+/// 与布局 / 外观同一套：文档级选择按文件路径记住（`render-opts.json`），
+/// 设置里的 `editor.diagram_font_size` 只是全局默认。
+#[tauri::command]
+pub fn doc_set_font_size(state: State<'_, Arc<AppState>>, id: String, size: Option<u16>) -> R<Doc> {
+    if !state.session().set_font_size(&id, size) {
+        return Err("这个格式没有文档级字号，或字号超出 0–48".to_string());
     }
     commit_render_opt(state.inner(), &id)
 }

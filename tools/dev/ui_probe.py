@@ -843,6 +843,19 @@ def main() -> int:
             "    const mm2 = msvg ? (msvg.outerHTML.match(/font-size:\\s*([0-9.]+)px/) || []) : [];"
             "    out.mermaidFs = mm2[1] ? mm2[1] + 'px' : null;"
             "    out.mermaidBodyClean = !String(st.doc(m.id).body).includes('font-size');"
+            "    await st.setFontSize(m.id, 24);"
+            "    await DGM.preview.render();"
+            "    await new Promise(r => setTimeout(r, 500));"
+            "    const msvg2 = document.querySelector('#canvas-stage svg');"
+            "    const mm3 = msvg2 ? (msvg2.outerHTML.match(/font-size:\\s*([0-9.]+)px/) || []) : [];"
+            "    out.docFs = mm3[1] ? mm3[1] + 'px' : null;"
+            "    out.docBodyClean = !String(st.doc(m.id).body).includes('font-size');"
+            "    await st.setFontSize(m.id, null);"
+            "    await DGM.preview.render();"
+            "    await new Promise(r => setTimeout(r, 500));"
+            "    const msvg3 = document.querySelector('#canvas-stage svg');"
+            "    const mm4 = msvg3 ? (msvg3.outerHTML.match(/font-size:\\s*([0-9.]+)px/) || []) : [];"
+            "    out.backFs = mm4[1] ? mm4[1] + 'px' : null;"
             "    await st.closeDoc(m.id);"
             "    const d = await st.newDoc('dot');"
             "    const dot = 'digraph G {\\n  A [label=\"大字体\"];\\n  B [label=\"统一字号\"];\\n  A -> B [label=\"边\"];\\n}';"
@@ -867,7 +880,11 @@ def main() -> int:
                 fails.append(f"Mermaid 统一字号没生效（期望 30px）：{font_probe}")
             if fp.get("dotFs") != "30px":
                 fails.append(f"DOT 统一字号没生效（期望 30px）：{font_probe}")
-            if not fp.get("mermaidBodyClean") or not fp.get("dotBodyClean"):
+            if fp.get("docFs") != "24px":
+                fails.append(f"文档级字号没有覆盖全局默认（期望 24px）：{font_probe}")
+            if fp.get("backFs") != "30px":
+                fails.append(f"清掉文档级字号后没有回到全局默认（期望 30px）：{font_probe}")
+            if not fp.get("mermaidBodyClean") or not fp.get("dotBodyClean") or not fp.get("docBodyClean"):
                 fails.append(f"统一字号改到了正文（应只影响渲染副本）：{font_probe}")
         except Exception as e:
             fails.append(f"统一字号断言解析失败：{e} / {font_probe}")
@@ -4958,15 +4975,15 @@ def main() -> int:
                     fails.append(f"脑图渲染落进报错面板：{m}")
                 if m.get("hasLayout"):
                     fails.append(f"脑图的 initialize 配置里不该有 layout：{m}")
-                if m.get("opts") != 2 or m.get("status"):
-                    fails.append(f"脑图不该有布局入口（顶栏 2 颗 = 外观+配色，状态栏隐藏）：{m}")
+                if m.get("opts") != 3 or m.get("status"):
+                    fails.append(f"脑图不该有布局入口（顶栏 3 颗 = 外观+字号+配色，状态栏隐藏）：{m}")
                 f = r.get("flow") or {}
                 if f.get("detected"):
                     fails.append("flowchart 被误判成脑图")
                 if f.get("layout") != "elk":
                     fails.append(f"flowchart 仍应拿到默认 elk 布局：{f}")
-                if f.get("opts") != 3 or not f.get("status"):
-                    fails.append(f"flowchart 的布局入口不该消失：{f}")
+                if f.get("opts") != 4 or not f.get("status"):
+                    fails.append(f"flowchart 的布局入口不该消失（顶栏应为 4 颗）：{f}")
                 a = r.get("arch") or {}
                 if not a.get("detected"):
                     fails.append("`architecture-beta` 头部没有被识别成架构图")
@@ -4976,8 +4993,8 @@ def main() -> int:
                     fails.append(f"架构图渲染落进报错面板：{a}")
                 if a.get("hasLayout"):
                     fails.append(f"架构图的 initialize 配置里不该有 layout：{a}")
-                if a.get("opts") != 2 or a.get("status"):
-                    fails.append(f"架构图不该有布局入口（顶栏 2 颗 = 外观+配色，状态栏隐藏）：{a}")
+                if a.get("opts") != 3 or a.get("status"):
+                    fails.append(f"架构图不该有布局入口（顶栏 3 颗 = 外观+字号+配色，状态栏隐藏）：{a}")
                 if "fcose" not in str(a.get("subtitle", "")):
                     fails.append(f"架构图副标题没有说明固定布局：{a}")
         except Exception as e:

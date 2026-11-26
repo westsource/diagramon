@@ -1467,6 +1467,26 @@ window.DGM = window.DGM || {};
     }
   }
 
+  /** 文档级图表字号：`null` = 跟随设置，`0` = 不干预，`1..=48` = 统一 px。
+   *
+   *  与 setLayout 同一套：先乐观改本地（弹层立即回显），后端拒绝就回滚；
+   *  Rust 侧按文件路径记进 `render-opts.json`，未保存的标签页没有路径、记不了。
+   */
+  async function setFontSize(id, size) {
+    const d = state.doc(id);
+    if (!d) return;
+    const prev = d.font_size;
+    d.font_size = size;
+    emit("doc:changed");
+    try {
+      const doc = await ipc.invoke("doc_set_font_size", { id, size });
+      if (doc && doc.id) upsertDoc(doc);
+    } catch (e) {
+      d.font_size = prev;
+      emit("doc:changed");
+    }
+  }
+
   /* ------------------------------------------------------------------ 自动配色 */
 
   /** 色系表里的一项（`null` = 这个 id 不认识，比如旧配置里的珊瑚）。 */
@@ -1717,6 +1737,7 @@ window.DGM = window.DGM || {};
     setViewMode,
     setLayout,
     setLook,
+    setFontSize,
     palette,
     schemeOf,
     setScheme,

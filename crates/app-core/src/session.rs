@@ -154,6 +154,7 @@ impl Session {
             layout: document::default_layout(format),
             look: None,
             scheme: None,
+            font_size: None,
         };
         let id = doc.id.clone();
         self.entries.push(Entry::born_dirty(doc));
@@ -270,6 +271,23 @@ impl Session {
         }
     }
 
+    /// 文档级图表字号：`None` = 跟随设置，`Some(0)` = 不干预，`Some(n)` = 统一 n px。
+    ///
+    /// 画布型（drawio / Excalidraw）**拒绝**：那边是逐元素字体，没有"统一字号"这个概念 ——
+    /// 与 `set_layout` 的"拒绝而不是静默改写"同一套约定。
+    pub fn set_font_size(&mut self, id: &str, size: Option<u16>) -> bool {
+        match self.entry_mut(id) {
+            Some(e)
+                if format::info(e.doc.format).surface == app_ipc::Surface::Text
+                    && size.map_or(true, |n| n <= crate::render_opts::MAX_FONT_SIZE) =>
+            {
+                e.doc.font_size = size;
+                true
+            }
+            _ => false,
+        }
+    }
+
     /// 自动配色的色系：`None` = 跟随设置里的默认，`Some("")` = 这份文档明确不上自动色。
     ///
     /// 画布型（drawio / Excalidraw）**拒绝**：那边没有稳定的节点角色，存了也用不上 ——
@@ -306,6 +324,9 @@ impl Session {
         if let Some(s) = opts.scheme.clone() {
             applied |= self.set_scheme(id, Some(s));
         }
+        if let Some(n) = opts.font_size {
+            applied |= self.set_font_size(id, Some(n));
+        }
         applied
     }
 
@@ -316,6 +337,7 @@ impl Session {
             look: d.look.clone(),
             layout: d.layout.clone(),
             scheme: d.scheme.clone(),
+            font_size: d.font_size,
         })
     }
 
@@ -564,6 +586,34 @@ mod tests {
         assert_eq!(d.look.as_deref(), Some("handDrawn"));
         assert_eq!(d.layout.as_deref(), Some("dagre"));
         assert!(!s.restore_render_opts("no-such-doc", &remembered), "文档不存在时不该谎报成功");
+    }
+
+    #[test]
+    fn font_size_is_doc_level_and_restored_per_file() {
+        let dir = std::env::temp_dir().join("diagramon-session-test");
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("font.mmd");
+        std::fs::write(&p, "flowchart TD\n").unwrap();
+
+        let mut s = Session::default();
+        let (opened, _) = s.open_paths(&[p.to_string_lossy().to_string()]);
+        let id = opened[0].clone();
+        assert_eq!(s.get(&id).unwrap().font_size, None, "刚打开是跟随设置");
+
+        assert!(s.set_font_size(&id, Some(0)));
+        assert_eq!(s.get(&id).unwrap().font_size, Some(0), "0 = 不干预，也要记住");
+        assert!(s.set_font_size(&id, Some(24)));
+        assert_eq!(s.render_opts(&id).unwrap().font_size, Some(24));
+
+        assert!(!s.set_font_size(&id, Some(crate::render_opts::MAX_FONT_SIZE + 1)), "超上限要拒绝");
+        assert_eq!(s.get(&id).unwrap().font_size, Some(24), "拒绝时不能改现值");
+
+        let restored = crate::render_opts::DocOpts { font_size: Some(18), ..Default::default() };
+        assert!(s.restore_render_opts(&id, &restored));
+        assert_eq!(s.get(&id).unwrap().font_size, Some(18));
+
+        let canvas = s.new_doc(FormatId::Drawio);
+        assert!(!s.set_font_size(&canvas.id, Some(16)), "画布型没有统一字号");
     }
 
     #[test]

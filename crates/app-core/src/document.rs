@@ -92,6 +92,7 @@ pub fn from_path(id: String, path: &Path) -> std::io::Result<Doc> {
         layout: default_layout(format),
         look: None,
         scheme: None,
+        font_size: None,
     })
 }
 
@@ -115,6 +116,8 @@ pub fn untitled(id: String, format: FormatId, seq: u32) -> Doc {
         // 新建的文档默认**不上色**：用户要的是"我先画/让 AI 画，颜色我自己定"。
         // 打开磁盘上的文件走另一条路（`from_path` 保持 `None`，由前端探测后填）。
         scheme: Some(String::new()),
+        // 字号默认跟随设置里的全局值；用户在这份文档里显式选过才覆盖。
+        font_size: None,
     }
 }
 

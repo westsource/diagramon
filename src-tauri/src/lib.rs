@@ -311,6 +311,7 @@ pub fn run() {
             commands::doc_set_view_mode,
             commands::doc_set_layout,
             commands::doc_set_look,
+            commands::doc_set_font_size,
             commands::doc_set_scheme,
             commands::palette_apply,
             commands::palette_clear,

@@ -421,7 +421,7 @@ window.DGM = window.DGM || {};
     const head = swimlane ? "sw" : mindmap ? "mm" : architecture ? "arch" : "";
     // 配色也进 key：换了色系按钮上的名字/圆点必须立刻跟上（否则显示还是旧的那档）
     const key = d
-      ? [d.id, d.format, d.look || "", d.layout || "", d.scheme === undefined || d.scheme === null ? "auto" : d.scheme, head].join("|")
+      ? [d.id, d.format, d.look || "", d.layout || "", d.font_size == null ? "" : d.font_size, d.scheme === undefined || d.scheme === null ? "auto" : d.scheme, head].join("|")
       : "";
     if (key === optsKey) return;
     optsKey = key;
@@ -433,9 +433,12 @@ window.DGM = window.DGM || {};
     // 画布型（drawio / Excalidraw）没有外观/布局，但**有配色**：原色与色系存在文件里。
     const canPalette = (state.isTextDoc(d) || d.format === "drawio" || d.format === "excalidraw")
       && (state.palettes || []).length > 0;
-    if (!looks.length && !layouts.length && !canPalette) return;
+    // 统一字号只对文本渲染格式有意义；画布型逐元素设字号，顶栏不放这颗按钮。
+    const canFont = state.isTextDoc(d);
+    if (!looks.length && !layouts.length && !canPalette && !canFont) return;
     if (looks.length) host.appendChild(buildOptBtn(d, "look", t("preview.look"), looks, optsCurLook(d)));
     if (layouts.length) host.appendChild(buildOptBtn(d, "layout", t("preview.layoutName"), layouts, d.layout || layouts[0]));
+    if (canFont) host.appendChild(buildFontBtn(d));
     if (canPalette) host.appendChild(buildPaletteBtn(d));
   }
 
@@ -833,6 +836,45 @@ window.DGM = window.DGM || {};
     return b;
   }
 
+  /** 顶栏字号下拉里给用户的常用档位；完整 0–48 仍在 设置 → 编辑器 → 图表字号。 */
+  const FONT_SIZES = [12, 14, 16, 18, 20, 24, 28, 32];
+
+  /** 按钮上显示的「当前生效字号」：文档级 > 全局设置 > 引擎默认。 */
+  function optsCurFont(d) {
+    const own = d && typeof d.font_size === "number" ? d.font_size : null;
+    if (own !== null) return own > 0 ? String(own) : t("preview.font.native");
+    const g = globalFontSize();
+    return g > 0 ? String(g) : t("preview.font.auto");
+  }
+
+  /** 文档级字号下拉：只改这份文档，按文件路径记住（与外观/布局同一套）。
+   *  选项是「跟随设置」+ 常用档位；不改正文，源码里写死的字号永远优先。 */
+  function buildFontBtn(d) {
+    const b = h("button", "mini-btn pv-opt pv-font");
+    b.title = t("preview.fontTip");
+    b.innerHTML =
+      `<span>${esc(t("preview.font"))} · <span class="pv-opt-val">${esc(optsCurFont(d))}</span></span>` +
+      icon("chevD", "ico-sm");
+    b.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const own = d && typeof d.font_size === "number" ? d.font_size : null;
+      const g = globalFontSize();
+      const follow = g > 0 ? `${t("preview.fontDefault")} · ${g}` : t("preview.fontDefault");
+      const items = [{ label: follow, check: true, on: own === null, v: null }, { sep: true }];
+      for (const v of FONT_SIZES) items.push({ label: String(v), check: true, on: own === v, v });
+      items.unshift({ label2: t("preview.fontMenu") });
+      items.push({ sep: true }, { label2: t("preview.fontFooter") });
+      const r = b.getBoundingClientRect();
+      DGM.pop.show(items, { x: r.left, y: r.bottom + 4 }, (it) => {
+        DGM.pop.hide();
+        if ((it.v === null && own === null) || it.v === own) return;
+        state.setFontSize(d.id, it.v);
+        schedule();
+      });
+    });
+    return b;
+  }
+
   /* ------------------------------------------------------------------ 渲染入口 */
 
   /**
@@ -979,9 +1021,9 @@ window.DGM = window.DGM || {};
       if (d.format === "mermaid") {
         svgText = await renderMermaid(paintBody, mine, d);
       } else if (d.format === "dot") {
-        svgText = await renderDot(paintBody, d.layout || "dot");
+        svgText = await renderDot(paintBody, d.layout || "dot", d);
       } else if (d.format === "d2") {
-        svgText = await renderD2(paintBody, d.layout || "dagre");
+        svgText = await renderD2(paintBody, d.layout || "dagre", d);
       } else {
         throw new Error(t("preview.noRender", { msg: d.format }));
       }
@@ -1069,11 +1111,18 @@ window.DGM = window.DGM || {};
     loadElk().catch(() => {});
   }
 
-  /** 统一图表字号（px）；`0` = 不干预，按文档/格式自己的字号。 */
-  function diagramFontSize() {
+  /** 全局默认图表字号（px）；`0` = 不干预，按文档/格式自己的字号。 */
+  function globalFontSize() {
     const e = (state.settings && state.settings.editor) || {};
     const n = Number(e.diagram_font_size) || 0;
     return n > 0 ? Math.min(48, n) : 0;
+  }
+
+  /** 这份文档实际使用的字号：文档级 > 设置里的全局默认（`0` = 不干预）。 */
+  function diagramFontSize(d) {
+    const own = d && typeof d.font_size === "number" ? d.font_size : null;
+    if (own !== null) return own > 0 ? Math.min(48, own) : 0;
+    return globalFontSize();
   }
 
   /** 找 DOT 第一个块起始 `{`：跳过字符串、行注释与块注释。 */
@@ -1168,7 +1217,7 @@ window.DGM = window.DGM || {};
         layout = "dagre";
       }
     }
-    const fontPx = diagramFontSize();
+    const fontPx = diagramFontSize(d);
     window.mermaid.initialize({
       startOnLoad: false,
       securityLevel: "strict",
@@ -1189,7 +1238,7 @@ window.DGM = window.DGM || {};
     return out.svg;
   }
 
-  async function renderDot(body, engine) {
+  async function renderDot(body, engine, d) {
     if (!window.DGMGraphviz) {
       if (window.DGMGraphvizReady) {
         try {
@@ -1207,7 +1256,7 @@ window.DGM = window.DGM || {};
         t("preview.graphviz.unavailable", { msg: window.DGMGraphvizError || t("preview.graphviz.noLoader") })
       );
     }
-    const fs = diagramFontSize();
+    const fs = diagramFontSize(d);
     return window.DGMGraphviz.layout(fs ? dotWithFontSize(body, fs) : body, "svg", engine, {});
   }
 
@@ -1217,13 +1266,13 @@ window.DGM = window.DGM || {};
    * 首次编译要几秒（11MB 的 wasm 要先解压实例化），期间把状态栏说清楚 ——
    * 不然看起来就是卡死。之后就复用实例（~30ms）。
    */
-  async function renderD2(body, engine) {
+  async function renderD2(body, engine, d) {
     if (!DGM.d2) throw new Error(t("preview.d2.unavailable", { msg: t("preview.d2.notLoaded") }));
     if (!DGM.d2.isReady()) {
       showLoading();
       setSub(t("preview.d2.init"));
     }
-    const fs = diagramFontSize();
+    const fs = diagramFontSize(d);
     return DGM.d2.renderSvg(fs ? d2WithFontSize(body, fs) : body, engine);
   }
 
