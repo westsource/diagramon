@@ -9,7 +9,7 @@ have open, writes back code you can diff, roll back and review, and gets the fai
 to repair when a render breaks. Rendering, validation and conversion all run on your machine, and content
 leaves it only when you use AI, only to the endpoint you chose.
 
-**Desktop**: Windows 10/11 (x64) · macOS 12.3+ (Universal) · Linux (x64, AppImage or deb) — **Web**: <https://app.diagramon.com>
+**Desktop**: Windows 10/11 (x64) · macOS 12.3+ (Universal / Apple Silicon) · Linux (x64, AppImage or deb) — **Web**: <https://app.diagramon.com>
 
 Download: <https://www.diagramon.com/download/> · Releases: <https://github.com/westsource/diagramon/releases>
 

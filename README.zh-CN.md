@@ -8,7 +8,7 @@
 渲染失败时把出错的行列回灌给它自己修。渲染、校验、转换全部在本机完成，只有你主动使用 AI 时，
 内容才会发往你自己选定的上游。
 
-**桌面端**：Windows 10/11（x64）· macOS 12.3+（Universal）· Linux（x64，AppImage 或 deb）—— **在线版**：<https://app.diagramon.com>
+**桌面端**：Windows 10/11（x64）· macOS 12.3+（Universal / Apple Silicon）· Linux（x64，AppImage 或 deb）—— **在线版**：<https://app.diagramon.com>
 
 下载：<https://www.diagramon.com/download/> · 发布记录：<https://github.com/westsource/diagramon/releases>
 
