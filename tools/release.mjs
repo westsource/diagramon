@@ -297,8 +297,16 @@ function deleteGiteeAttachment(releaseId, asset) {
 async function uploadGiteeAsset(releaseId, file) {
   const name = basename(file);
   if (opts.dryRun) { log(`  （--dry-run：上传 Gitee ${name}）`); return; }
+  // 断点续跑：已完整上传（同名且字节数一致）直接跳过。Gitee 配额只有 1 GiB，
+  // 重跑时把 360MB 的 macOS 附件全部删了再传一遍既慢又容易在中途撞配额。
+  const atts = giteeAttachments(releaseId);
+  const same = atts.find((x) => x.name === name);
+  if (same && same.size === statSync(file).size) {
+    log(`  ✓ Gitee 已存在且大小一致，跳过上传：${name}`);
+    return;
+  }
   // 重跑时先删同名残留：Gitee 同名附件会直接报错
-  for (const a of giteeAttachments(releaseId).filter((x) => x.name === name)) {
+  for (const a of atts.filter((x) => x.name === name)) {
     deleteGiteeAttachment(releaseId, a);
   }
   const mb = (statSync(file).size / 1048576).toFixed(2);
@@ -358,10 +366,20 @@ function writeCnManifest() {
  * 下一次上传直接 400「文件大小已超出仓库附件配额：1 GB」，而日志还写着"已清理"。 */
 function pruneGiteeInstallers() {
   if (opts.dryRun) { log(`  （--dry-run：Gitee 附件保留最近 ${GITEE_KEEP_INSTALLERS} 个）`); return; }
-  const releases = curlJson({
-    url: giteeUrl(`releases?per_page=100&access_token=${giteeToken()}`),
-    proxy: null,
-  }).json || [];
+  // 必须翻页：Gitee 的 releases 接口按**创建时间升序**返回，per_page=100 的第一页
+  // 只到很老的版本；只取一页会让 withSetup 永远看不到最新几条，清理等于空转
+  // （2026-11-26 发 3.17.0 实测：总量 991.6 MB / 1024 MB，v3.16.1 以前的安装包一个没删）。
+  const tok = giteeToken();
+  const releases = [];
+  for (let page = 1; ; page++) {
+    const batch = curlJson({
+      url: giteeUrl(`releases?per_page=100&page=${page}&access_token=${tok}`),
+      proxy: null,
+    }).json;
+    if (!Array.isArray(batch) || !batch.length) break;
+    releases.push(...batch);
+    if (batch.length < 100) break;
+  }
   const withSetup = [];
   for (const rel of releases) {
     let atts = [];
@@ -369,14 +387,20 @@ function pruneGiteeInstallers() {
     if (atts.some((a) => a.name.endsWith("-setup.exe"))) withSetup.push({ rel, atts });
   }
   withSetup.sort((a, b) => Date.parse(b.rel.created_at || 0) - Date.parse(a.rel.created_at || 0));
+  let deleted = 0;
+  let freed = 0;
   for (const { rel, atts } of withSetup.slice(GITEE_KEEP_INSTALLERS)) {
     for (const a of atts) {
       if (a.name.endsWith("-setup.exe") || a.name === "latest-cn.json") {
-        try { deleteGiteeAttachment(rel.id, a); } catch (e) { warn(`删 Gitee 附件失败（${a.name}）：${e.message}`); }
+        try {
+          deleteGiteeAttachment(rel.id, a);
+          deleted++;
+          freed += a.size || 0;
+        } catch (e) { warn(`删 Gitee 附件失败（${a.name}）：${e.message}`); }
       }
     }
   }
-  log(`  ✓ 已按保留 ${GITEE_KEEP_INSTALLERS} 个安装包清理 Gitee`);
+  log(`  ✓ 已按保留 ${GITEE_KEEP_INSTALLERS} 个安装包清理 Gitee（删除 ${deleted} 个附件，释放 ${(freed / 1048576).toFixed(1)} MB）`);
 }
 /** 回读 Gitee：附件存在、清单签名与本地一致、安装包字节数一致。 */
 function verifyGitee(releaseId) {
