@@ -9,7 +9,7 @@ have open, writes back code you can diff, roll back and review, and gets the fai
 to repair when a render breaks. Rendering, validation and conversion all run on your machine, and content
 leaves it only when you use AI, only to the endpoint you chose.
 
-**Desktop**: Windows 10/11 (x64) · Linux (x64, AppImage or deb) — **Web**: <https://app.diagramon.com>
+**Desktop**: Windows 10/11 (x64) · macOS 12.3+ (Universal) · Linux (x64, AppImage or deb) — **Web**: <https://app.diagramon.com>
 
 Download: <https://www.diagramon.com/download/> · Releases: <https://github.com/westsource/diagramon/releases>
 
@@ -60,7 +60,7 @@ actions; a lossy conversion lists what did not migrate and counts nodes and edge
 how many went missing.
 
 **5. Boundaries, cost and style are yours.** Members use the official gateway, or BYOK talks straight to your
-own model (OpenAI-compatible / Ollama / self-hosted). Keys live inside the Rust process only (DPAPI on Windows, Secret Service keyring on Linux)
+own model (OpenAI-compatible / Ollama / self-hosted). Keys live inside the Rust process only (DPAPI on Windows, Keychain on macOS, Secret Service keyring on Linux)
 and never reach the front end; content goes out only when you actively use AI and only to the
 endpoint you chose, with the payload shown before the first send; usage counts only tokens the provider
 actually reports. Want it to draw the way you do? Preferences go into long-term memory and only take effect
@@ -121,6 +121,12 @@ static picture.
 - **Source / split / preview** (`Ctrl+1/2/3`), with the source pane hideable
 - **One gesture vocabulary** — wheel to pan, `Shift+wheel` horizontally, `Ctrl+wheel` zooms anchored at the
   cursor, drag to pan, double-click to fit
+- **Overview map** — a whole-diagram overview plus the current viewport frame in the lower-right of the
+  preview; click or drag to navigate. It hides itself while the whole diagram fits and returns as soon as
+  anything is outside. It only moves the viewport, never the source, and never appears in exports
+- **Unified diagram font size** — Settings can set one render-time size (px; 0 = follow the document) for
+  Mermaid / DOT / D2. It affects preview and exports only, never the source; the source pane's own font
+  size is a separate setting
 - **"Fit" means content** — fitting uses the diagram's own bounding box in both dimensions (drawio's page
   frame is deliberately ignored); the view refits when panels, splitters or the window resize (can be
   turned off); the status bar shows the active view's zoom only
@@ -220,11 +226,11 @@ static picture.
   in-memory document model only; it never touches the filesystem, shell or network
 - **Usage is labelled with its source** — only tokens the provider reports are accumulated; unreported
   values show `—`, never `0`, never a local estimate
-- **Keys never reach the front end** — they live inside the Rust process (DPAPI on Windows, Secret Service keyring on Linux); the
+- **Keys never reach the front end** — they live inside the Rust process (DPAPI on Windows, Keychain on macOS, Secret Service keyring on Linux); the
   front end only ever sees `has_key` and a mask
 
 ### Cloud
-- **Login tokens go into the credential store** (DPAPI / Secret Service) and refresh silently, so a restart does not ask you
+- **Login tokens go into the credential store** (DPAPI / Keychain / Secret Service) and refresh silently, so a restart does not ask you
   to sign in again
 - **Account view** — email, display name, plan, role, storage usage, plus AI entitlement and credit balance
 - **Cloud documents** — folder tree (empty folders included), filter, open; the save dialog lets you pick a
@@ -249,24 +255,25 @@ static picture.
 | Way | What you get | Notes |
 |---|---|---|
 | **Windows** | installer (`Diagramon_<version>_x64-setup.exe`) or portable ZIP | built-in auto-update; needs the WebView2 runtime (pre-installed on Win 10/11) |
+| **macOS** | universal dmg (`Diagramon_<version>_universal.dmg`) or native Apple Silicon dmg (`Diagramon_<version>_aarch64.dmg`) | requires macOS 12.3+; the universal build covers Intel and Apple Silicon, the native one is smaller; in-app auto-update |
 | **Linux** | AppImage (single file, self-updating) or deb | needs WebKitGTK 4.1 (Ubuntu 22.04+ / Debian 12+); the deb has no in-app updater — download the new package to upgrade |
 | **Web** | <https://app.diagramon.com> | nothing to install; same account as the desktop app, sign in once in the browser |
 
-Every release ships Windows and Linux builds side by side; downloads, checksums and release notes are on
+Every release ships Windows, macOS and Linux builds side by side; downloads, checksums and release notes are on
 <https://www.diagramon.com/download/>. On Wayland the in-app screenshot is off by default (desktop
 compositors lack the screencopy protocol); X11 is unaffected.
 
 ## Tech Stack
 
 - **Language / framework**: Rust (edition 2021) + Tauri 2, running in the system WebView (WebView2 on
-  Windows, WebKitGTK on Linux)
+  Windows, WKWebView on macOS, WebKitGTK on Linux)
 - **Front end**: no framework, no build chain, no CDN; the editor is a bundled CodeMirror 6
 - **Rendering**: Mermaid (packaged JS) · Graphviz (WASM) · D2 (official wasm build) · drawio (pruned
   runtime) · Excalidraw (locally bundled) — all shipped in the installer and run locally
-- **AI**: `reqwest` + SSE streaming in Rust; credentials in DPAPI (Windows) or the Secret Service
-  keyring (Linux)
-- **Packaging**: NSIS installer (Windows) and AppImage / deb (Linux), with the rendering runtimes and
-  front-end assets bundled
+- **AI**: `reqwest` + SSE streaming in Rust; credentials in DPAPI (Windows), Keychain (macOS) or the
+  Secret Service keyring (Linux)
+- **Packaging**: NSIS installer (Windows), universal dmg (macOS) and AppImage / deb (Linux), with the
+  rendering runtimes and front-end assets bundled
 
 Architecture and design decisions (same-origin carriers and the custom protocol, the Rust/WebView split,
 where the thresholds come from, conversion semantics, AI architecture, release discipline) are not
@@ -276,6 +283,7 @@ expanded here; they live with the internal design documents and the repository's
 
 - **Windows**: 10 / 11 64-bit with the WebView2 runtime (normally pre-installed); no VC++ redistributable
   (the release build statically links the CRT)
+- **macOS**: 12.3+, with universal and native Apple Silicon builds; if the system blocks the first launch, allow it in System Settings → Privacy & Security
 - **Linux**: x64 with WebKitGTK 4.1 (Ubuntu 22.04+ / Debian 12+); AppImage needs nothing installed, the
   deb pulls its dependencies through the package manager
 - The rendering / canvas runtimes (about 110 MB) and the front-end assets are inside the package —

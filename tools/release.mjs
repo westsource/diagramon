@@ -897,6 +897,7 @@ function releaseBody() {
   // macOS 产物由对应平台单独构建/上传（universal dmg），发布脚本不打包它；
   // 说明里仍要给可点链接，Gitee 正文再换成镜像地址。
   const macUrl = `https://github.com/${CFG.repo}/releases/download/${TAG}/Diagramon_${VERSION}_universal.dmg`;
+  const macArmUrl = `https://github.com/${CFG.repo}/releases/download/${TAG}/Diagramon_${VERSION}_aarch64.dmg`;
   let body = readFileSync(notesFile(), "utf8")
     .replace(/^(?:摘要|summary)[:：].*$\n?/im, "")   // 「摘要：」只喂 latest.json 的 notes，不进 Release 正文
     .replaceAll("{{version}}", VERSION)
@@ -906,6 +907,7 @@ function releaseBody() {
     .replaceAll("{{appimage_url}}", appimageUrl)
     .replaceAll("{{deb_url}}", debUrl)
     .replaceAll("{{macos_url}}", macUrl)
+    .replaceAll("{{macos_arm64_url}}", macArmUrl)
     .replaceAll("{{setup_size_mb}}", existsSync(setupExe()) ? mb(setupExe()) : "?")
     .replaceAll("{{zip_size_mb}}", existsSync(portableZip()) ? mb(portableZip()) : "?")
     .replaceAll("{{appimage_size_mb}}", ai ? mb(ai) : "?")
@@ -936,6 +938,10 @@ function giteeReleaseBody(body) {
     .replaceAll(
       `https://github.com/${CFG.repo}/releases/download/${TAG}/Diagramon_${VERSION}_universal.dmg`,
       `https://gitee.com/${CFG.repo}/releases/download/${TAG}/Diagramon_${VERSION}_universal.dmg`,
+    )
+    .replaceAll(
+      `https://github.com/${CFG.repo}/releases/download/${TAG}/Diagramon_${VERSION}_aarch64.dmg`,
+      `https://gitee.com/${CFG.repo}/releases/download/${TAG}/Diagramon_${VERSION}_aarch64.dmg`,
     );
 }
 
