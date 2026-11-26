@@ -61,11 +61,11 @@ const CFG = {
 const UPLOAD_TIMEOUT_S = 1800;
 const UPLOAD_ATTEMPTS = 3;
 
-const STEPS = ["preflight", "prepack", "build", "linux", "portable", "manifest", "tag", "branches", "push", "publish", "verify"];
+const STEPS = ["preflight", "prepack", "build", "linux", "macos", "portable", "manifest", "tag", "branches", "push", "publish", "verify"];
 
 // ── 参数 ──────────────────────────────────────────────────────────────────
 const argv = process.argv.slice(2);
-const opts = { dryRun: false, skipGate: false, portable: true, linux: true, moveTag: false, bodyOnly: false, createIfMissing: false, branch: "main", keys: KEYS_DEFAULT, from: null, only: null };
+const opts = { dryRun: false, skipGate: false, portable: true, linux: true, macos: true, moveTag: false, bodyOnly: false, createIfMissing: false, branch: "main", keys: KEYS_DEFAULT, from: null, only: null };
 let rawVersion = null;
 for (const a of argv) {
   if (a === "--help" || a === "-h") { printHelp(); process.exit(0); }
@@ -74,6 +74,7 @@ for (const a of argv) {
   else if (a === "--skip-gate") opts.skipGate = true;
   else if (a === "--no-portable") opts.portable = false;
   else if (a === "--no-linux") opts.linux = false;
+  else if (a === "--no-macos") opts.macos = false;
   else if (a === "--move-tag") opts.moveTag = true;
   else if (a === "--body-only") opts.bodyOnly = true;
   else if (a === "--create-if-missing") opts.createIfMissing = true;
@@ -335,6 +336,16 @@ function writeCnManifest() {
   const sig = readFileSync(sigFile(), "utf8").trim();
   if (platform.signature !== sig) die("latest.json 的 signature 与本地 .sig 不一致");
   platform.url = cnSetupUrl();
+  if (opts.macos) {
+    const n = macosNames();
+    const giteeAsset = (name) => `https://gitee.com/${CFG.repo}/releases/download/${TAG}/${name}`;
+    const darwinArm = manifest.platforms?.["darwin-aarch64"];
+    const darwinX64 = manifest.platforms?.["darwin-x86_64"];
+    if (!darwinArm || !darwinX64) die("latest.json 缺少 darwin 条目 —— 先跑 macos / manifest 步");
+    // 更新包也走 Gitee（国内直连更快）；Linux 仍指 GitHub，因为 Gitee 不收 149MB 的 AppImage。
+    darwinArm.url = giteeAsset(n.armTar);
+    darwinX64.url = giteeAsset(n.universalTar);
+  }
   writeFileSync(cnManifestFile(), JSON.stringify(manifest, null, 2), "utf8");
   log(`  ✓ 生成 ${basename(cnManifestFile())}（url → Gitee）`);
   return manifest;
@@ -386,6 +397,25 @@ function verifyGitee(releaseId) {
     die("Gitee 清单的下载 URL 没有指向本次 tag");
   }
   log(`✓ Gitee 清单 version=${pulled.version}，signature 与本地 .sig 一致`);
+
+  if (opts.macos) {
+    const n = macosNames();
+    for (const f of macGiteeFiles()) {
+      if (!atts.some((a) => a.name === basename(f))) die(`Gitee 上缺 macOS 附件 ${basename(f)}`);
+    }
+    for (const [key, sigPath, tarName] of [
+      ["darwin-aarch64", macFile("armSig"), n.armTar],
+      ["darwin-x86_64", macFile("universalSig"), n.universalTar],
+    ]) {
+      const pl = pulled.platforms?.[key];
+      if (!pl) die(`Gitee 清单缺少 ${key}`);
+      if (pl.signature !== readFileSync(sigPath, "utf8").trim()) die(`Gitee 清单 ${key} 的 signature 与本地 .sig 不一致`);
+      if (!String(pl.url || "").includes(`/releases/download/${TAG}/`) || !String(pl.url).includes(tarName)) {
+        die(`Gitee 清单 ${key} 的 url 不对：${pl.url}`);
+      }
+    }
+    log("✓ Gitee macOS：附件齐全，darwin 签名与下载 URL 均指向本版");
+  }
 
   // Gitee 不支持 Range（会回 200 全文件），所以只取头：跟随重定向后取**最后一段**的 content-length
   const hdrFile = join(TMP_DIR, `gitee-head-${VERSION}.txt`);
@@ -468,6 +498,44 @@ function appImage() { return linuxFile(/\.AppImage$/i); }
 function appImageSig() { const a = appImage(); return a ? `${a}.sig` : null; }
 function debFile() { return linuxFile(/\.deb$/i); }
 
+/* ------------------------------ macOS 产物（外部 Mac 构建后拷入） ------------------------------
+ *
+ * macOS 只能在 macOS 上构建，发版机是 Windows。另一台 Mac 跑完
+ *   tauri build --target universal-apple-darwin --bundles app,dmg
+ *   tauri build --target aarch64-apple-darwin   --bundles app,dmg
+ * 后把 6 个文件拷进 `var/macos/<版本>/`（或 DGM_MACOS_DIR 指定的目录）：
+ *   Diagramon_<版本>_universal.dmg
+ *   Diagramon_<版本>_aarch64.dmg
+ *   Diagramon.app.tar.gz               + .sig   （Universal 更新包）
+ *   Diagramon_<版本>_aarch64.app.tar.gz + .sig   （Apple Silicon 更新包）
+ * 本脚本只做签名校验、写清单、上传，不尝试在 Windows 上编译 macOS。
+ */
+function macosDir() {
+  return process.env.DGM_MACOS_DIR ? resolve(process.env.DGM_MACOS_DIR) : join(ROOT, "var", "macos", VERSION);
+}
+function macosNames() {
+  return {
+    universalDmg: `Diagramon_${VERSION}_universal.dmg`,
+    armDmg: `Diagramon_${VERSION}_aarch64.dmg`,
+    universalTar: "Diagramon.app.tar.gz",
+    universalSig: "Diagramon.app.tar.gz.sig",
+    armTar: `Diagramon_${VERSION}_aarch64.app.tar.gz`,
+    armSig: `Diagramon_${VERSION}_aarch64.app.tar.gz.sig`,
+  };
+}
+function macFile(k) { return join(macosDir(), macosNames()[k]); }
+/** GitHub Release 要的 6 个 macOS 附件。 */
+function macGithubFiles() {
+  const n = macosNames();
+  return [n.universalDmg, n.armDmg, n.universalTar, n.universalSig, n.armTar, n.armSig].map((x) => join(macosDir(), x));
+}
+/** Gitee 只放用户能直接用/更新器要用的 5 个：两个 dmg、两个更新包、arm 的 .sig。
+ *  Universal 的 .sig 只内联进清单，Gitee 上不放（省 1 GiB 配额；客户端读清单里的签名）。 */
+function macGiteeFiles() {
+  const n = macosNames();
+  return [n.universalDmg, n.armDmg, n.universalTar, n.armTar, n.armSig].map((x) => join(macosDir(), x));
+}
+
 /** Windows 绝对路径 → WSL 挂载路径（只支持盘符路径，够发版机用）。 */
 function wslPath(p) {
   const abs = resolve(p).replaceAll("\\", "/");
@@ -520,6 +588,12 @@ async function preflight() {
     for (const need of ["{{appimage_url}}", "{{deb_url}}"]) {
       if (!notes.includes(need)) die(`发布说明缺少 ${need} —— Linux 包只在 GitHub Release 附件里，正文必须给直链`);
     }
+  }
+  if (opts.macos) {
+    for (const need of ["{{macos_url}}", "{{macos_arm64_url}}"]) {
+      if (!notes.includes(need)) die(`发布说明缺少 ${need} —— macOS dmg 只在 Release 附件里，正文必须给直链`);
+    }
+    log(`✓ macOS 产物目录：${macosDir().replace(ROOT, ".")}（外部 Mac 构建后拷入）`);
   }
   log(`✓ 发布说明存在且中英双语：docs/release-notes/${TAG}.md`);
 
@@ -725,6 +799,22 @@ ls -l ${dest}
   log(`✓ ${basename(appImage())} ${mb(appImage())} MB · ${basename(debFile())} ${mb(debFile())} MB`);
 }
 
+async function macosStep() {
+  step("macos · Universal + Apple Silicon 产物（外部 Mac 构建后拷入）");
+  if (!opts.macos) { warn("--no-macos：跳过 macOS 产物"); return; }
+  if (opts.dryRun) {
+    log(`  （--dry-run：检查 ${macosDir().replace(ROOT, ".")} 下 6 个文件，并用 pubkey 校验两个 app.tar.gz 的 .sig）`);
+    return;
+  }
+  const miss = macGithubFiles().filter((f) => !existsSync(f));
+  if (miss.length) {
+    die(`macOS 产物缺件（目录 ${macosDir()}）：\n  ${miss.map((f) => basename(f)).join("\n  ")}`);
+  }
+  assertSignature(macFile("universalTar"), macFile("universalSig"));
+  assertSignature(macFile("armTar"), macFile("armSig"));
+  log(`✓ macOS 产物齐全：${macGithubFiles().map((f) => basename(f)).join(" · ")}`);
+}
+
 async function portableStep() {
   step("portable · 便携版 ZIP");
   if (!opts.portable) { warn("--no-portable：跳过（公开发版不推荐）"); return; }
@@ -765,6 +855,16 @@ async function manifest() {
     if (!/\.AppImage$/i.test(aurl)) die(`Linux 清单 url 必须指向 .AppImage（收到 ${aurl}）`);
     platforms["linux-x86_64"] = { signature: readFileSync(asig, "utf8").trim(), url: aurl };
   }
+  if (opts.macos) {
+    const n = macosNames();
+    for (const f of [macFile("universalSig"), macFile("armSig")]) {
+      if (!existsSync(f)) die(`macOS 更新签名缺失：${f} —— 先跑 macos 步`);
+    }
+    const murl = (name) => `https://github.com/${CFG.repo}/releases/download/${TAG}/${name}`;
+    // darwin-x86_64 用 Universal 更新包（同时覆盖 Intel 与 Apple Silicon 的自动更新）。
+    platforms["darwin-aarch64"] = { signature: readFileSync(macFile("armSig"), "utf8").trim(), url: murl(n.armTar) };
+    platforms["darwin-x86_64"] = { signature: readFileSync(macFile("universalSig"), "utf8").trim(), url: murl(n.universalTar) };
+  }
   const m = {
     version: VERSION,
     notes: notes.startsWith("Diagramon") ? notes : `Diagramon ${VERSION}：${notes}`,
@@ -778,7 +878,12 @@ async function manifest() {
   if (opts.linux && back.platforms["linux-x86_64"].signature !== platforms["linux-x86_64"].signature) {
     die("清单回读不一致（linux-x86_64 签名）");
   }
-  log(`✓ latest.json 重新生成（pub_date ${m.pub_date}，Windows 签名 ${sig.length} 字符${opts.linux ? "，含 linux-x86_64" : ""}）`);
+  if (opts.macos) {
+    for (const [key, f] of [["darwin-aarch64", macFile("armSig")], ["darwin-x86_64", macFile("universalSig")]]) {
+      if (back.platforms[key]?.signature !== readFileSync(f, "utf8").trim()) die(`清单回读不一致（${key} 签名）`);
+    }
+  }
+  log(`✓ latest.json 重新生成（pub_date ${m.pub_date}，Windows 签名 ${sig.length} 字符${opts.linux ? "，含 linux-x86_64" : ""}${opts.macos ? "，含 darwin-aarch64 / darwin-x86_64" : ""}）`);
 }
 
 async function tag() {
@@ -891,13 +996,14 @@ function releaseBody() {
   const setupUrl = `https://github.com/${CFG.repo}/releases/download/${TAG}/${basename(setupExe())}`;
   const zipUrl = `https://github.com/${CFG.repo}/releases/download/${TAG}/${basename(portableZip())}`;
   const ai = appImage();
-  const appimageUrl = ai ? `https://github.com/${CFG.repo}/releases/download/${TAG}/${basename(ai)}` : "";
   const deb = debFile();
-  const debUrl = deb ? `https://github.com/${CFG.repo}/releases/download/${TAG}/${basename(deb)}` : "";
-  // macOS 产物由对应平台单独构建/上传（universal dmg），发布脚本不打包它；
-  // 说明里仍要给可点链接，Gitee 正文再换成镜像地址。
-  const macUrl = `https://github.com/${CFG.repo}/releases/download/${TAG}/Diagramon_${VERSION}_universal.dmg`;
-  const macArmUrl = `https://github.com/${CFG.repo}/releases/download/${TAG}/Diagramon_${VERSION}_aarch64.dmg`;
+  // dry-run（或还没跑 linux 步）时用 Tauri 的固定产物名拼计划 URL，避免"文件不存在 ⇒ 链接为空"误报
+  const appimageUrl = `https://github.com/${CFG.repo}/releases/download/${TAG}/${ai ? basename(ai) : `Diagramon_${VERSION}_amd64.AppImage`}`;
+  const debUrl = `https://github.com/${CFG.repo}/releases/download/${TAG}/${deb ? basename(deb) : `Diagramon_${VERSION}_amd64.deb`}`;
+  // macOS 产物由外部 Mac 构建后拷入，脚本只校验/上传（见 macos 步）；
+  // 说明里给可点链接，Gitee 正文再换成镜像地址。
+  const macUrl = `https://github.com/${CFG.repo}/releases/download/${TAG}/${macosNames().universalDmg}`;
+  const macArmUrl = `https://github.com/${CFG.repo}/releases/download/${TAG}/${macosNames().armDmg}`;
   let body = readFileSync(notesFile(), "utf8")
     .replace(/^(?:摘要|summary)[:：].*$\n?/im, "")   // 「摘要：」只喂 latest.json 的 notes，不进 Release 正文
     .replaceAll("{{version}}", VERSION)
@@ -911,7 +1017,9 @@ function releaseBody() {
     .replaceAll("{{setup_size_mb}}", existsSync(setupExe()) ? mb(setupExe()) : "?")
     .replaceAll("{{zip_size_mb}}", existsSync(portableZip()) ? mb(portableZip()) : "?")
     .replaceAll("{{appimage_size_mb}}", ai ? mb(ai) : "?")
-    .replaceAll("{{deb_size_mb}}", deb ? mb(deb) : "?");
+    .replaceAll("{{deb_size_mb}}", deb ? mb(deb) : "?")
+    .replaceAll("{{macos_size_mb}}", opts.macos && existsSync(macFile("universalDmg")) ? mb(macFile("universalDmg")) : "?")
+    .replaceAll("{{macos_arm64_size_mb}}", opts.macos && existsSync(macFile("armDmg")) ? mb(macFile("armDmg")) : "?");
   if (!body.includes("# 中文") || !body.includes("# English")) die("正文双语段缺失");
   if (!body.includes(setupUrl)) die("正文里没有安装包下载链接（模板里要写 {{setup_url}}）");
   // 便携包链接同样必须**可点**：Gitee 不传便携 ZIP，正文没链接等于拿不到便携版
@@ -924,6 +1032,10 @@ function releaseBody() {
   if (opts.linux) {
     if (!appimageUrl || !body.includes(appimageUrl)) die("正文里没有 AppImage 下载链接（模板里要写 {{appimage_url}}）");
     if (!debUrl || !body.includes(debUrl)) die("正文里没有 deb 下载链接（模板里要写 {{deb_url}}）");
+  }
+  if (opts.macos) {
+    if (!body.includes(macUrl)) die("正文里没有 macOS Universal 下载链接（模板里要写 {{macos_url}}）");
+    if (!body.includes(macArmUrl)) die("正文里没有 macOS Apple Silicon 下载链接（模板里要写 {{macos_arm64_url}}）");
   }
   return body;
 }
@@ -951,7 +1063,7 @@ async function publish() {
   if (opts.dryRun) {
     log(`  正文 ${body.length} 字符（含「# 中文」与「# English」，含安装包链接）`);
     if (opts.bodyOnly) log(`  计划（--body-only）：PATCH 两端 Release 的说明，不动附件、不改发布状态`);
-    else log(`  计划：GitHub 草稿 → 删同名旧附件 → 上传 ${opts.portable ? 4 : 3} 个 → Gitee 创建/更新 → 上传安装包 + latest-cn.json → 回读校验 → 清理旧附件（保留 ${GITEE_KEEP_INSTALLERS} 个）→ **最后** PATCH GitHub draft=false`);
+    else log(`  计划：GitHub 草稿 → 删同名旧附件 → 上传本次全部附件 → Gitee 创建/更新 → 上传安装包 + latest-cn.json（+ macOS）→ 回读校验 → 清理旧附件（保留 ${GITEE_KEEP_INSTALLERS} 个）→ **最后** PATCH GitHub draft=false`);
     log(`  计划：Gitee GET/PATCH /releases/tags/${TAG}（更新必须带 tag_name，正文不含附件）`);
     return;
   }
@@ -1009,6 +1121,7 @@ async function publish() {
     const files = [setupExe(), sigFile(), manifestFile()];
     if (opts.portable) files.push(portableZip());
     if (opts.linux) files.push(appImage(), appImageSig(), debFile());
+    if (opts.macos) files.push(...macGithubFiles());
     const mine = new Set(files.filter(Boolean).map((f) => basename(f)));
     const byName = new Map();
     const assets = curlJson({ url: `https://api.github.com/repos/${CFG.repo}/releases/${id}/assets`, token: ghToken(), proxy: CFG.ghProxy }).json || [];
@@ -1057,7 +1170,11 @@ async function publish() {
     writeCnManifest();
     await uploadGiteeAsset(giteeId, setupExe());
     await uploadGiteeAsset(giteeId, cnManifestFile());
+    // 先按策略清理旧安装包，给 macOS 附件腾配额（macOS 一套约 360 MB）
     pruneGiteeInstallers();
+    if (opts.macos) {
+      for (const f of macGiteeFiles()) await uploadGiteeAsset(giteeId, f);
+    }
     verifyGitee(giteeId);
     // ── 最后才把 GitHub 草稿切成已发布（红线：Gitee 未就绪时不能先发）
     curlJson({ method: "PATCH", url: `https://api.github.com/repos/${CFG.repo}/releases/${id}`, body: bodyFile, token: ghToken(), proxy: CFG.ghProxy });
@@ -1110,6 +1227,26 @@ async function verify() {
     else log(`✓ linux-x86_64：signature 一致、url 指向本次 AppImage、字节数与本地一致（${aiSize}）`);
   }
 
+  // macOS（updater 走 app.tar.gz）：darwin-aarch64 指 aarch64 包，darwin-x86_64 指 Universal 包。
+  if (opts.macos) {
+    for (const [key, sigPath, tar] of [
+      ["darwin-aarch64", macFile("armSig"), macFile("armTar")],
+      ["darwin-x86_64", macFile("universalSig"), macFile("universalTar")],
+    ]) {
+      const pl = pulled.platforms?.[key];
+      if (!pl) die(`更新源上没有 ${key} —— macOS 清单没写进去或 Release 不是本次那版`);
+      if (pl.signature !== readFileSync(sigPath, "utf8").trim()) die(`更新源 ${key} 的 signature 与本地 .sig 不一致`);
+      if (!String(pl.url || "").includes(`/releases/download/${TAG}/`) || !String(pl.url).includes(basename(tar))) {
+        die(`更新源 ${key} 的 url 不对（必须指向本次 ${basename(tar)}）：${pl.url}`);
+      }
+      const localMac = statSync(tar).size;
+      const remoteMac = remoteFileSize(pl.url, key);
+      if (remoteMac == null) warn(`拿不到远端 ${key} 长度，跳过字节数核对`);
+      else if (remoteMac !== localMac) die(`远端 ${key} ${remoteMac} 字节 ≠ 本地 ${localMac} 字节`);
+      else log(`✓ ${key}：signature 一致、url 指向本次更新包、字节数与本地一致（${localMac}）`);
+    }
+  }
+
   // 远端安装包的字节数：用 **Range 请求**取总长度 —— 206 的 content-range 里带着文件总大小，
   // 不必真下 54MB。
   // ⚠️ 不要用 `curl -I -L` 抓 content-length：跟随重定向时响应头是**逐段**打印的，第一段是
@@ -1132,6 +1269,7 @@ async function verify() {
   log(`  附件：${names.join("  ")}`);
   const want = [basename(setupExe()), basename(sigFile()), "latest.json", ...(opts.portable ? [basename(portableZip())] : [])];
   if (opts.linux) want.push(basename(appImage()), basename(appImageSig()), basename(debFile()));
+  if (opts.macos) want.push(...macGithubFiles().map((f) => basename(f)));
   for (const w of want) if (!(rel.json.assets || []).some((a) => a.name === w && a.state === "uploaded")) die(`附件缺失或未完成：${w}`);
   log(`✓ ${want.length} 个附件齐全且状态 uploaded`);
 
@@ -1176,6 +1314,7 @@ function printHelp() {
   --create-if-missing  配合 --body-only：Gitee 上还没有 Release 时顺手建一个
   --no-portable   不产便携 ZIP
   --no-linux      不产 Linux 产物（AppImage + deb；默认产，走 WSL 构建）
+  --no-macos      不发 macOS 产物（默认要求 var/macos/<版本>/ 下已拷入 Universal + Apple Silicon）
   --branch=<名>   主分支，默认 main
   --keys=<目录>   签名密钥目录，默认 ../keys
   --list-steps    列出步骤
@@ -1185,7 +1324,7 @@ function printHelp() {
 }
 
 // ── 主流程 ────────────────────────────────────────────────────────────────
-const IMPL = { preflight, prepack, build, linux: linuxStep, portable: portableStep, manifest, tag, branches, push, publish, verify };
+const IMPL = { preflight, prepack, build, linux: linuxStep, macos: macosStep, portable: portableStep, manifest, tag, branches, push, publish, verify };
 
 async function main() {
   log(`Diagramon 发布 ${TAG}${opts.dryRun ? "（--dry-run：不产生任何改动、不发任何请求）" : ""}`);

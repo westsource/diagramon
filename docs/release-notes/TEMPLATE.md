@@ -6,7 +6,9 @@
 >
 > 可用占位符（脚本会替换，别手写死版本号）：
 > `{{version}}` `{{date}}` `{{setup_url}}` `{{zip_url}}` `{{appimage_url}}` `{{deb_url}}`
+> `{{macos_url}}` `{{macos_arm64_url}}`
 > `{{setup_size_mb}}` `{{zip_size_mb}}` `{{appimage_size_mb}}` `{{deb_size_mb}}`
+> `{{macos_size_mb}}` `{{macos_arm64_size_mb}}`
 >
 > 第一行 `摘要：` 的内容会进 `latest.json` 的 `notes` 字段（更新对话框里显示的那句话），写一句话就够。
 
@@ -26,6 +28,8 @@
 |---|---|---|
 | **安装版**（推荐） | [`Diagramon_{{version}}_x64-setup.exe`]({{setup_url}})（约 {{setup_size_mb}} MiB） | 装完可用**内置自动更新**；缺 WebView2 时安装器会自动下载运行时 |
 | **便携版**（免安装） | [`Diagramon-{{version}}-win-x64.zip`]({{zip_url}})（约 {{zip_size_mb}} MB） | 解压到任意位置，双击 `diagramon.exe` 即用；卸载 = 删文件夹 |
+| **macOS（Universal）** | [下载 dmg]({{macos_url}})（约 {{macos_size_mb}} MB） | Intel 与 Apple Silicon 通用；拖入「应用程序」；支持应用内自动更新 |
+| **macOS（Apple Silicon 原生）** | [下载 dmg]({{macos_arm64_url}})（约 {{macos_arm64_size_mb}} MB） | Apple Silicon 原生构建，体积更小；Intel 机器请选 Universal 版 |
 | **Linux AppImage**（免安装） | [下载 AppImage]({{appimage_url}})（约 {{appimage_size_mb}} MB） | `chmod +x` 后直接运行；AppImage 支持应用内自动更新 |
 | **Linux deb**（Debian / Ubuntu） | [下载 deb]({{deb_url}})（约 {{deb_size_mb}} MB） | 系统包管理器安装；需 WebKitGTK 4.1；**不做**应用内自动更新 |
 
@@ -53,8 +57,9 @@ Diagramon 是一款**本地优先**的多格式图表编辑器：Mermaid / Graph
 
 ### 系统要求
 
-- Windows 10 / 11 64 位；或 Linux x64（Ubuntu 22.04+ / Debian 12+，需 WebKitGTK 4.1）
+- Windows 10 / 11 64 位；macOS 12.3+（Universal 或 Apple Silicon 原生）；或 Linux x64（Ubuntu 22.04+ / Debian 12+，需 WebKitGTK 4.1）
 - Windows：WebView2 运行时（通常已预装；缺失时安装器会现场下载）
+- macOS：若首次打开被系统拦截，请在「系统设置 → 隐私与安全性」允许
 - Linux：AppImage 免安装，或 deb 经系统包管理器安装；Wayland 下应用内截屏默认关闭（X11 正常）
 - **不需要** Node.js、Chrome 或 VC++ 运行库 —— 画布运行时与前端资源都随包分发
 
@@ -77,6 +82,8 @@ Diagramon 是一款**本地优先**的多格式图表编辑器：Mermaid / Graph
 |---|---|---|
 | **Installer** (recommended) | [`Diagramon_{{version}}_x64-setup.exe`]({{setup_url}}) (~{{setup_size_mb}} MiB) | Enables the **built-in auto-update**; if WebView2 is missing the installer downloads the runtime |
 | **Portable** (no install) | [`Diagramon-{{version}}-win-x64.zip`]({{zip_url}}) (~{{zip_size_mb}} MB) | Unzip anywhere and run `diagramon.exe`; uninstall = delete the folder |
+| **macOS (Universal)** | [Download dmg]({{macos_url}}) (~{{macos_size_mb}} MB) | Runs on Intel and Apple Silicon; drag it into Applications; supports in-app auto-update |
+| **macOS (Apple Silicon)** | [Download dmg]({{macos_arm64_url}}) (~{{macos_arm64_size_mb}} MB) | Native Apple Silicon build with a smaller download; Intel Macs should use the Universal one |
 | **Linux AppImage** (no install) | [Download AppImage]({{appimage_url}}) (~{{appimage_size_mb}} MB) | `chmod +x` and run; AppImage supports in-app auto-update |
 | **Linux deb** (Debian / Ubuntu) | [Download deb]({{deb_url}}) (~{{deb_size_mb}} MB) | Install with your package manager; needs WebKitGTK 4.1; **no** in-app auto-update |
 
@@ -106,8 +113,9 @@ Official website: <https://www.diagramon.com>
 
 ### Requirements
 
-- Windows 10 / 11 64-bit, or Linux x64 (Ubuntu 22.04+ / Debian 12+, WebKitGTK 4.1 required)
+- Windows 10 / 11 64-bit; macOS 12.3+ (Universal or native Apple Silicon); or Linux x64 (Ubuntu 22.04+ / Debian 12+, WebKitGTK 4.1 required)
 - Windows: WebView2 runtime (normally pre-installed; the installer downloads it if missing)
+- macOS: if the first launch is blocked, allow it in System Settings → Privacy & Security
 - Linux: AppImage (nothing to install) or deb via your package manager; in-app screenshot is off by default on Wayland (X11 is unaffected)
 - **No** Node.js, Chrome or VC++ redistributable needed — the canvas runtimes and front-end assets all
   ship inside the installer
