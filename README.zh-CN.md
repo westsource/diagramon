@@ -199,6 +199,7 @@ token 花在哪个环节说不清；写着真实服务名和内网域名的架�
 | **在线版** | <https://app.diagramon.com> | 免安装；与桌面端同一账号，在浏览器里登录一次即可 |
 
 每个版本同时提供 Windows、macOS 与 Linux 产物；下载、校验与发布说明都在 <https://www.diagramon.com/download/>。
+macOS 的两种构建（Universal 与 Apple Silicon 原生）都同时挂在 GitHub 与 Gitee 的 Release 附件里，国内网络可直接走 Gitee。
 Wayland 下应用内截屏默认关闭（桌面合成器缺 screencopy 协议），X11 不受影响。
 
 ## 技术栈

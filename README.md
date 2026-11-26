@@ -260,7 +260,7 @@ static picture.
 | **Web** | <https://app.diagramon.com> | nothing to install; same account as the desktop app, sign in once in the browser |
 
 Every release ships Windows, macOS and Linux builds side by side; downloads, checksums and release notes are on
-<https://www.diagramon.com/download/>. On Wayland the in-app screenshot is off by default (desktop
+<https://www.diagramon.com/download/>. Both macOS builds (Universal and native Apple Silicon) are attached to the GitHub and Gitee releases; the Gitee mirror is the easier path from mainland China. On Wayland the in-app screenshot is off by default (desktop
 compositors lack the screencopy protocol); X11 is unaffected.
 
 ## Tech Stack
